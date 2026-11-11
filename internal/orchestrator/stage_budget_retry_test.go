@@ -2,15 +2,19 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -105,5 +109,75 @@ pipeline:
 	opts := stageOptionsFromParams(StageRunParams{Stage: state.StageFeatureDev, StageBudgets: budgets})
 	if !reflect.DeepEqual(opts.StageBudgets, want) {
 		t.Errorf("StageOptions.StageBudgets = %+v, want the workspace's %+v", opts.StageBudgets, want)
+	}
+}
+
+// TestMergeQueueInfraExhaustedIsTerminalAndNeverEscalated is #3198: when
+// pr-merge has spent its infrastructure re-enqueues, recovery declines the
+// failure, and the scheduler must not escalate the model either: escalation
+// re-runs pr-merge, which spends another round of re-enqueues on the same
+// outage. pr-merge is dispatched once and the run ends merge_queue_infra_failed.
+func TestMergeQueueInfraExhaustedIsTerminalAndNeverEscalated(t *testing.T) {
+	root := gitWorkspace(t)
+	errText := pmstages.MergeQueueInfraExhaustedReason(pmstages.MergeGroupVerdict{
+		Class: pmstages.MergeGroupInfra, Job: "Playwright webview tests", Step: "Install Playwright OS dependencies",
+	}, pmstages.DefaultQueueInfraRetries)
+	if kind := ClassifyTerminalKind(errText); kind != TerminalKindMergeQueueInfraFailed {
+		t.Fatalf("the refusal %q classifies as %q, want %q", errText, kind, TerminalKindMergeQueueInfraFailed)
+	}
+	runner := &cliFailureStageRunner{failStage: state.StagePRMerge, errText: errText}
+	s := buildStallTestScheduler(t, root, runner)
+	// Escalation ENABLED, with a rung above pr-merge's opus, so "it did not
+	// escalate" means something.
+	s.retryEngine = NewRetryEngine(RetryConfig{
+		MaxBacktracks:          0,
+		MaxEscalationsPerStage: 1,
+		ModelLadder:            []string{"haiku", "sonnet", "opus", "fable"},
+	})
+	item := types.BoardItem{
+		Number: 3198,
+		Repo:   "nightgauge/nightgauge",
+		ID:     "item-3198",
+		Title:  "spent merge-queue infrastructure bound is terminal",
+		Labels: []string{"type:bug", "component:go-binary"},
+	}
+	// A previous run's merge-queue failure record and rewind ledger: the run
+	// end must delete both, so they bound only the run that wrote them.
+	leftovers := []string{pmstages.MergeQueueFailureFile(item.Number), fmt.Sprintf("merge-queue-code-rewinds-%d.json", item.Number)}
+	for _, name := range leftovers {
+		if _, err := layout.WriteClassFile(root, layout.ClassPipeline, name, strings.NewReader(`{"run_id":"old"}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.runPipeline(context.Background(), item)
+	dir, err := layout.PipelineStateDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range leftovers {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s outlived the run: %v", name, err)
+		}
+	}
+
+	var rec *state.V2RunRecord
+	for _, r := range readDailyJSONLRecords(t, root) {
+		if r.IssueNumber == item.Number {
+			r := r
+			rec = &r
+			break
+		}
+	}
+	if rec == nil {
+		t.Fatalf("no record for issue #%d", item.Number)
+	}
+	if rec.TerminalFailureKind != TerminalKindMergeQueueInfraFailed {
+		t.Errorf("terminal_failure_kind = %q, want %q", rec.TerminalFailureKind, TerminalKindMergeQueueInfraFailed)
+	}
+	if got := s.retryEngine.CurrentModel(string(state.StagePRMerge)); got != "" {
+		t.Errorf("pr-merge escalated to %q: a spent infrastructure bound must not be retried", got)
+	}
+	if runner.failStageCalls != 1 {
+		t.Errorf("pr-merge dispatched %d times, want 1", runner.failStageCalls)
 	}
 }

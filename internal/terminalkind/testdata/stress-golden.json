@@ -71,6 +71,21 @@
       "signal": ""
     },
     {
+      "input": "merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "MERGE-QUEUE-INFRA-EXHAUSTED",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -2876,6 +2891,11 @@
       "signal": "host_slept"
     },
     {
+      "input": "[host-slept] | merge-queue-infra-exhausted",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[host-slept] | stage_budget_exceeded:",
       "kind": "host_slept",
       "signal": "host_slept"
@@ -3147,6 +3167,11 @@
     },
     {
       "input": "[merge-conflict] | merge-queue-enqueue-exhausted",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | merge-queue-infra-exhausted",
       "kind": "merge_conflict",
       "signal": ""
     },
@@ -3426,6 +3451,11 @@
       "signal": ""
     },
     {
+      "input": "merge-queue-enqueue-exhausted | merge-queue-infra-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "merge-queue-enqueue-exhausted | stage_budget_exceeded:",
       "kind": "merge_queue_enqueue_failed",
       "signal": ""
@@ -3691,6 +3721,286 @@
       "signal": ""
     },
     {
+      "input": "merge-queue-infra-exhausted | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | stage_budget_exceeded:",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | network unavailable: extended github connectivity loss",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | adapter_incompatible",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [model-stream-stalled]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | stream idle timeout",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | overloaded",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | socket connection was closed",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [rate-limit-quota-exhausted]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [adapter-auth-failed]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [environment-halt]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [gate-plugin-missing]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | ai_apicallerror context_length_exceeded",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | not_found_error model",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | pipeline-start-failure issue-closed",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [blocked-dependency]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | architecture approval required",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | github-quota-low",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | github-network-outage",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | secondary rate limit",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [pr-merge-unmerged",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [stage:worktree-containment]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [not-pipeline-actionable]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [dev-produced-no-changes]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [dev-handoff-missing]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [dev-step-cap-reached]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [dev-step-progress-unproven]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [push-auth-failed]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | premature turn end",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | worktree_uncommitted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | budget_ceiling_hit",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [runaway-progress-exceeded]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [runaway-ceiling-exceeded]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [cost-cap-exceeded]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | stage-no-output-timeout",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [stage-cap-killed]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [stall-killed]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | pipeline_budget_exceeded",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | schema validation",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [no-changes-produced]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [review-cap-reached]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [validation-failed]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [validation-inconclusive]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [branch-forked]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [commit-orphaned]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [adapter-permission-rejected]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [permission-denied]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | stage_context_unreadable",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | dev_build_verification_missing",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | dev_build_verification_failed",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [dev-context-stale]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | dev_tests_failed",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | pr_merge_lookup_failed",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | subagent crash",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "stage_budget_exceeded: | [host-slept]",
       "kind": "host_slept",
       "signal": "host_slept"
@@ -3703,6 +4013,11 @@
     {
       "input": "stage_budget_exceeded: | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -3981,6 +4296,11 @@
       "signal": ""
     },
     {
+      "input": "network unavailable: extended github connectivity loss | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -4253,6 +4573,11 @@
     {
       "input": "adapter_incompatible | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -4531,6 +4856,11 @@
       "signal": ""
     },
     {
+      "input": "[model-stream-stalled] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "[model-stream-stalled] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -4803,6 +5133,11 @@
     {
       "input": "stream idle timeout | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "stream idle timeout | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -5081,6 +5416,11 @@
       "signal": ""
     },
     {
+      "input": "overloaded | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "overloaded | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -5353,6 +5693,11 @@
     {
       "input": "socket connection was closed | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "socket connection was closed | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -5631,6 +5976,11 @@
       "signal": ""
     },
     {
+      "input": "[rate-limit-quota-exhausted] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "[rate-limit-quota-exhausted] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -5903,6 +6253,11 @@
     {
       "input": "[adapter-auth-failed] | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-auth-failed] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -6181,6 +6536,11 @@
       "signal": ""
     },
     {
+      "input": "[environment-halt] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "[environment-halt] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -6453,6 +6813,11 @@
     {
       "input": "[gate-plugin-missing] | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[gate-plugin-missing] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -6731,6 +7096,11 @@
       "signal": ""
     },
     {
+      "input": "ai_apicallerror context_length_exceeded | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "ai_apicallerror context_length_exceeded | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -7003,6 +7373,11 @@
     {
       "input": "not_found_error model | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -7281,6 +7656,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline-start-failure issue-closed | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "pipeline-start-failure issue-closed | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -7553,6 +7933,11 @@
     {
       "input": "[blocked-dependency] | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -7831,6 +8216,11 @@
       "signal": ""
     },
     {
+      "input": "architecture approval required | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "architecture approval required | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -8103,6 +8493,11 @@
     {
       "input": "github-quota-low | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "github-quota-low | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -8381,6 +8776,11 @@
       "signal": ""
     },
     {
+      "input": "github-network-outage | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "github-network-outage | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -8653,6 +9053,11 @@
     {
       "input": "secondary rate limit | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -8931,6 +9336,11 @@
       "signal": ""
     },
     {
+      "input": "[pr-merge-unmerged | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "[pr-merge-unmerged | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -9203,6 +9613,11 @@
     {
       "input": "[stage:worktree-containment] | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[stage:worktree-containment] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -9481,6 +9896,11 @@
       "signal": ""
     },
     {
+      "input": "[not-pipeline-actionable] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "[not-pipeline-actionable] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -9753,6 +10173,11 @@
     {
       "input": "[dev-produced-no-changes] | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[dev-produced-no-changes] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -10031,6 +10456,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-handoff-missing] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "[dev-handoff-missing] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -10303,6 +10733,11 @@
     {
       "input": "[dev-step-cap-reached] | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -10581,6 +11016,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-step-progress-unproven] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "[dev-step-progress-unproven] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -10853,6 +11293,11 @@
     {
       "input": "[push-auth-failed] | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[push-auth-failed] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -11131,6 +11576,11 @@
       "signal": ""
     },
     {
+      "input": "premature turn end | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "premature turn end | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -11403,6 +11853,11 @@
     {
       "input": "worktree_uncommitted | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "worktree_uncommitted | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -11681,6 +12136,11 @@
       "signal": ""
     },
     {
+      "input": "budget_ceiling_hit | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "budget_ceiling_hit | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -11953,6 +12413,11 @@
     {
       "input": "[runaway-progress-exceeded] | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-progress-exceeded] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -12231,6 +12696,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-ceiling-exceeded] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "[runaway-ceiling-exceeded] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -12503,6 +12973,11 @@
     {
       "input": "[cost-cap-exceeded] | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -12781,6 +13256,11 @@
       "signal": ""
     },
     {
+      "input": "stage-no-output-timeout | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "stage-no-output-timeout | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -13053,6 +13533,11 @@
     {
       "input": "[stage-cap-killed] | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -13331,6 +13816,11 @@
       "signal": ""
     },
     {
+      "input": "[stall-killed] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "[stall-killed] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -13603,6 +14093,11 @@
     {
       "input": "pipeline_budget_exceeded | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "pipeline_budget_exceeded | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -13881,6 +14376,11 @@
       "signal": ""
     },
     {
+      "input": "schema validation | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "schema validation | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -14153,6 +14653,11 @@
     {
       "input": "[no-changes-produced] | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[no-changes-produced] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -14431,6 +14936,11 @@
       "signal": ""
     },
     {
+      "input": "[review-cap-reached] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "[review-cap-reached] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -14703,6 +15213,11 @@
     {
       "input": "[validation-failed] | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -14981,6 +15496,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-inconclusive] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "[validation-inconclusive] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -15253,6 +15773,11 @@
     {
       "input": "[branch-forked] | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[branch-forked] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -15531,6 +16056,11 @@
       "signal": ""
     },
     {
+      "input": "[commit-orphaned] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "[commit-orphaned] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -15803,6 +16333,11 @@
     {
       "input": "[adapter-permission-rejected] | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -16081,6 +16616,11 @@
       "signal": ""
     },
     {
+      "input": "[permission-denied] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "[permission-denied] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -16353,6 +16893,11 @@
     {
       "input": "stage_context_unreadable | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -16631,6 +17176,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_missing | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_missing | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -16903,6 +17453,11 @@
     {
       "input": "dev_build_verification_failed | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -17181,6 +17736,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-context-stale] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "[dev-context-stale] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -17453,6 +18013,11 @@
     {
       "input": "dev_tests_failed | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {
@@ -17731,6 +18296,11 @@
       "signal": ""
     },
     {
+      "input": "pr_merge_lookup_failed | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "pr_merge_lookup_failed | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -18003,6 +18573,11 @@
     {
       "input": "subagent crash | merge-queue-enqueue-exhausted",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
       "signal": ""
     },
     {

@@ -73,6 +73,24 @@
       "rationale": "An enqueue that exhausted its transient retries. The cause names a gateway status and a timeout; it must not read as network_unavailable or fall through to subagent_crash, or a green PR is stranded in In review."
     },
     {
+      "id": "synthetic-merge-queue-infra-exhausted",
+      "input": "pr-merge refused: merge-queue-infra-exhausted: infrastructure failure: job \"Playwright E2E\" step \"Install Playwright OS dependencies\" failed before the build or test ran; re-enqueued 2 time(s); the PR needs no change",
+      "expected": "merge_queue_infra_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "internal/orchestrator/stages/prmerge_queue_failure.go: MergeQueueInfraExhaustedReason (#3198)",
+      "rationale": "A merge group that failed before the build or test ran on every re-enqueue (#3191's DNS outage). The job and step names are free text; it must not read as a network, timeout or crash kind, or charge the circuit breaker."
+    },
+    {
+      "id": "synthetic-merge-queue-code-failure",
+      "input": "pr-merge refused: merge-queue-failed: merge-group code failure: job \"Go\" step \"Test\" failed in the repository's own check",
+      "expected": "",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "internal/orchestrator/stages/prmerge_queue_failure.go: MergeQueueCodeFailureReason (#3198)",
+      "rationale": "A merge group that failed in the repository's own check. It is a real failure of the PR: it must not take the non-fault merge_queue_infra_failed kind, and the recovery that sends it back to feature-dev matches it before any terminal kind is stamped."
+    },
+    {
       "id": "captured-api-overloaded",
       "input": "API Error: Overloaded",
       "expected": "api_overloaded",
