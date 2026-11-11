@@ -146,6 +146,8 @@ jobs:
         run: bash scripts/test-marketplace-channel.sh
       - name: Main build version regression suite
         run: bash scripts/test-main-build-version.sh
+      - name: Playwright OS deps regression suite
+        run: bash scripts/test-playwright-os-deps.sh
       - name: VSIX host-target regression suite
         run: bash scripts/test-vsix-host-target.sh
       - name: Release channel verification regression suite
