@@ -122,6 +122,11 @@ const (
 	// persisted request's Context, which is what the producer declared when it
 	// raised the card, so a resolving surface can neither name a repository nor
 	// name an issue. See ExecuteClearBlockedFinding, the verb's only executor.
+	//
+	// After a successful delete the daemon also releases the scheduler's
+	// operator-resume hold on that same issue and triggers a rescan (#3170), so
+	// the option's "unblock this issue" is true when the run's Failed entry was
+	// held for a human as well as deferred by the finding.
 	VerbBlockedFindingClear Verb = "blocked.clearFinding"
 
 	// VerbPRUpdateBranch merges the base branch into ONE pull request that is

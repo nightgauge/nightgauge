@@ -32,6 +32,9 @@ changelog, and the release workflow refuses a tag that does not.
   file name does not follow the convention.
 - **The Go toolchain is now go1.26.11**, which fixes GO-2026-6859 in `net/http`.
   govulncheck found it reachable on go1.26.10 and blocked every merge.
+- **Blocker resolved** on an out-of-scope blocker card now also releases the scheduler's
+  operator hold on the issue and triggers a rescan, so the issue actually runs again
+  instead of staying skipped as held for a human decision (#3170).
 - **`project sync-status`, `project add` and `hook post-merge` now write to
   the `--repo` target's board when the local config declares a board
   (#3166).** The config backfill no longer counts as an explicit `--project`,

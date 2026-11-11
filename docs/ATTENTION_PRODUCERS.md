@@ -294,6 +294,9 @@ would leave an issue that never runs again with no affordance to say otherwise.
 its target has TWO coordinates, and BOTH the repository and the issue come from
 the persisted request's `Context`, because a caller-supplied issue number would
 let any local process lift the hold on an issue nobody clicked on.
+After a successful delete the daemon also releases the scheduler's
+operator-resume hold on that same issue and rescans (#3170), so a run whose
+`Failed` entry was held for a human is unblocked by the same click.
 
 **The rule expiring is the normal case, not the exception — so state the
 capability, not the verdict.** `human-gate` (#1575) is the second producer to

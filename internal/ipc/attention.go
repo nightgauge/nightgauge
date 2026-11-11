@@ -421,8 +421,27 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		// getRunRepoRoot(); a daemon that deleted from the focused editor's repo
 		// instead would report success and leave the issue deferring forever,
 		// which is the multi-repo inertness #305 had to fix on the budget path.
-		return attention.ExecuteClearBlockedFinding(ctx, blockedFindingClearer{server: s},
-			req, opt, s.configuredRepos())
+		if err := attention.ExecuteClearBlockedFinding(ctx, blockedFindingClearer{server: s},
+			req, opt, s.configuredRepos()); err != nil {
+			// The finding may still be on disk, so the hold stays too: releasing
+			// it would dispatch the issue straight into a still-deferring finding.
+			return err
+		}
+		// "Blocker resolved — unblock this issue" has to mean it end to end
+		// (#3170). A run that stopped on this finding can also have left a
+		// scheduler Failed entry held for HoldOperatorResume (classified
+		// not_pipeline_actionable, or demoted to blocked_outcome_hold), and
+		// deleting the file alone left prioritize skipping the issue forever.
+		// Release that hold and rescan — the same two effects the review-cap
+		// card's Release gets from clearIssueFailures + autonomous.rescan. key
+		// is built from the card's own Context, never from args: the verb's
+		// empty arg surface stays intact. Lock order store → as.mu, as in the
+		// clearIssueFailures arm (#2528).
+		if s.autonomousScheduler != nil {
+			s.autonomousScheduler.ClearIssueFailures(key)
+			s.autonomousScheduler.TriggerRescan()
+		}
+		return nil
 
 	case attention.VerbPRUpdateBranch:
 		// The workspace root's configured set, the same one workspace.addRepo
@@ -809,7 +828,9 @@ func (a workspaceRepoAdder) AddWorkspaceRepo(_ context.Context, repo string) err
 }
 
 // blockedFindingClearer backs attention.VerbBlockedFindingClear by deleting the
-// recorded out-of-scope finding for one issue (#1147).
+// recorded out-of-scope finding for one issue (#1147). Releasing the
+// scheduler's operator hold on that issue is the ExecuteVerb arm's job, done
+// only after this returns nil (#3170).
 //
 // It holds the server rather than a path: the repository arrives from the
 // card's own Context.Repo through ExecuteClearBlockedFinding, and only then is
