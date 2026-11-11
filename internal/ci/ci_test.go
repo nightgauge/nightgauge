@@ -337,9 +337,9 @@ func TestClassifyFailureType(t *testing.T) {
 		{"something-else", "unknown"},
 	}
 	for _, c := range cases {
-		got := classifyFailureType(c.cmd)
+		got := ClassifyCommand(c.cmd)
 		if got != c.want {
-			t.Errorf("classifyFailureType(%q) = %q, want %q", c.cmd, got, c.want)
+			t.Errorf("ClassifyCommand(%q) = %q, want %q", c.cmd, got, c.want)
 		}
 	}
 }
@@ -612,5 +612,96 @@ func TestIsUnsafe_GitFetchPushWholeCommand(t *testing.T) {
 		if got := isUnsafe(line); got != want {
 			t.Errorf("isUnsafe(%q) = %v, want %v", line, got, want)
 		}
+	}
+}
+
+func TestClassifyRunBlock(t *testing.T) {
+	discovered := []string{"go build ./...", "npx eslint .", "bash scripts/playwright-os-deps.sh"}
+	for run, want := range map[string]StepKind{
+		"go build ./...": StepCheck,
+		"timeout 25m go test -json ./... > go-test.json &\nplain=$!\nwait \"$plain\"": StepCheck,
+		"":                                   StepSetup, // a uses: step
+		"npm ci":                             StepOther, // reads the PR's lockfile
+		"npm install":                        StepOther,
+		"pip install -r requirements.txt":    StepOther,
+		"bash scripts/playwright-os-deps.sh": StepSetup, // discovered, yet not a check
+		"git config --global user.name ci":   StepSetup,
+		"sudo apt-get install -y xvfb":       StepSetup,
+		"npx playwright install --with-deps chromium":       StepSetup,
+		"npx -w packages/e2e-tests playwright install-deps": StepSetup,
+		// A check always wins over a setup word (#3198 operator steer).
+		"eslint --cache .":                StepCheck,
+		"npx jest --no-cache":             StepCheck,
+		"go test ./internal/cache/...":    StepCheck,
+		"go build ./... && mkdir -p dist": StepCheck,
+		`echo "version=$(node -p "require('./p.json').devDependencies['@playwright/test']")" >> "$GITHUB_OUTPUT"`: StepCheck,
+		"python3 -m pip install --quiet pytest && python3 -m pytest x -q":                                         StepCheck,
+		"npm ci\nnpm run -w packages/x test":                                                                      StepCheck,
+		// Neither a check nor setup: other, which pr-merge treats as code.
+		"go vet ./...":                                        StepOther,
+		"bash scripts/check-something.sh":                     StepOther,
+		"npm ci\n./custom-verify":                             StepOther,
+		"sudo apt-get update && sudo apt-get install -y xvfb": StepSetup,
+		"echo hello":                                          StepOther,
+	} {
+		if got := ClassifyRunBlock(run, discovered); got != want {
+			t.Errorf("ClassifyRunBlock(%q) = %q, want %q", run, got, want)
+		}
+	}
+}
+
+func TestClassifyStep_UsesActions(t *testing.T) {
+	for uses, want := range map[string]StepKind{
+		"actions/checkout@v4":              StepSetup,
+		"actions/setup-go@v5":              StepSetup,
+		"actions/cache@v4":                 StepSetup,
+		"golangci/golangci-lint-action@v6": StepOther,
+		"github/codeql-action/analyze@v3":  StepOther,
+		"some-org/run-tests-action@v1":     StepOther,
+	} {
+		if got := ClassifyStep(uses, "", nil); got != want {
+			t.Errorf("ClassifyStep(%q) = %q, want %q", uses, got, want)
+		}
+	}
+	if got := ClassifyStep("", "go test ./...", nil); got != StepCheck {
+		t.Errorf("run step = %q, want check", got)
+	}
+}
+
+func TestClassifyRunBlock_DiscoveredCommandIsNeverSetup(t *testing.T) {
+	run := "bash scripts/verify.sh --cache-dir /tmp/v"
+	if got := ClassifyRunBlock(run, nil); got != StepSetup {
+		t.Fatalf("precondition: without discovery %q = %q, want setup", run, got)
+	}
+	if got := ClassifyRunBlock(run, []string{"bash scripts/verify.sh"}); got != StepOther {
+		t.Errorf("a discovered command carrying a setup word: %q = %q, want other", run, got)
+	}
+	// A discovered command that itself looks like setup keeps that reading.
+	if got := ClassifyRunBlock("bash scripts/playwright-os-deps.sh", []string{"bash scripts/playwright-os-deps.sh"}); got != StepSetup {
+		t.Errorf("discovered setup script = %q, want setup", got)
+	}
+}
+
+func TestListWorkflowSteps_KeepsEveryStepOfPRWorkflows(t *testing.T) {
+	dir := t.TempDir()
+	wfDir := filepath.Join(dir, ".github", "workflows")
+	if err := os.MkdirAll(wfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ci := "on: [pull_request, merge_group]\njobs:\n  go:\n    name: Go build & test\n    steps:\n" +
+		"      - uses: actions/checkout@v4\n      - name: Test\n        env:\n          X: ${{ secrets.X }}\n" +
+		"        run: |\n          go test ./...\n          echo done\n"
+	release := "on: push\njobs:\n  rel:\n    steps:\n      - run: go build ./...\n"
+	for name, body := range map[string]string{"ci.yml": ci, "release.yml": release} {
+		if err := os.WriteFile(filepath.Join(wfDir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := ListWorkflowSteps(dir)
+	if len(got) != 2 {
+		t.Fatalf("steps = %+v, want the two steps of ci.yml only", got)
+	}
+	if got[1].Job != "Go build & test" || got[1].Name != "Test" || ClassifyRunBlock(got[1].Run, nil) != StepCheck {
+		t.Errorf("runner-bound multi-line test step not kept: %+v", got[1])
 	}
 }

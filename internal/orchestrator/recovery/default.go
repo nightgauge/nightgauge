@@ -57,6 +57,11 @@ func Default(workspaceRoot string, prMergeRunner pmstages.PRMergeRunner, prCreat
 	}
 
 	actions = append(actions,
+		// A merge-queue removal caused by the PR's own check rewinds to
+		// feature-dev once per check (#3198). Its marker is specific, and it
+		// must precede skill-exited-without-merging and
+		// ci-check-transiently-failed, which match any pr-merge no-op.
+		NewMergeQueueCodeFailure(),
 		// Branch-out-of-date is MORE specific than the generic skill-no-op
 		// recovery: it requires BEHIND/DIRTY merge-state evidence (emitted by
 		// PrMergeGate), and it RE-VALIDATES — rebase → wait for CI on the

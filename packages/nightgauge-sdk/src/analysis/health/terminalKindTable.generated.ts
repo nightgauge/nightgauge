@@ -209,6 +209,17 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
       "why": "pr-merge's enqueue still failed after its transient-error retries (#2729); a permanent enqueue rejection keeps the `merge-queue-enqueue-failed` reason and its existing path. Matched before the network, timeout and crash heuristics because the wrapped forge cause is free text (`502`, `timeout`, `connection reset`) and must not move a green, unmerged PR to a retryable or crash kind."
     },
     {
+      "id": "merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": false,
+      "clauses": [
+        [
+          "merge-queue-infra-exhausted"
+        ]
+      ],
+      "why": "The merge group kept failing in a job step before the repository's own checks ran, through every re-enqueue pr-merge spent (#3198): an upstream outage, and the PR needs no change. Matched before the network, timeout and crash heuristics because the reason names a workflow job and step, free text such as `Install dependencies (network)`, and must not move a green, unmerged PR to a retryable or crash kind."
+    },
+    {
       "id": "stamped-stage-stop",
       "kind": "budget_exceeded",
       "signal": false,

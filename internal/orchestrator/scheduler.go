@@ -5419,6 +5419,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// applied to the V3 record. Used by adaptive stall-recovery (Issue #3005)
 	// to mark second-stall stages as `stall-killed-after-retry`.
 	stageFailureCategories := make(map[string]string)
+	// The merge-queue code-failure record and its rewind ledger are scoped to
+	// this run (#3198): a later run of the issue, or a different run that
+	// meets the same failing check, gets its own rewind. Deleted however the
+	// run ends.
+	defer func() {
+		for _, ws := range []string{stageWorkspace(runtime, workspaceRoot), workspaceRoot} {
+			if err := recovery.ClearMergeQueueFailureState(ws, item.Number); err != nil {
+				log.Printf("#%d: clearing the merge-queue failure state in %s failed: %v", item.Number, ws, err)
+			}
+		}
+	}()
 	// Publish the run's outcome to the caller. Registered BEFORE the terminal
 	// defer below so it runs AFTER it (defers are LIFO) and therefore observes
 	// the final values that defer settles — the #3542 rescue's reclassification
@@ -8239,6 +8250,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					IssueNumber:    item.Number,
 					Repo:           item.Repo,
 					AttemptOrdinal: recoveryAttemptsThisRun + 1,
+					RunID:          runtime.RunID,
 				}
 				if heldMergeLock != nil {
 					// A CI wait on an updated head yields the lock (#2980).
@@ -8483,6 +8495,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if budgetStopped {
 				terminalFailureKind = TerminalKindBudgetExceeded
 			}
+			// A spent merge-queue infrastructure bound (#3198): pr-merge
+			// already re-enqueued the PR as many times as it may. Re-running
+			// pr-merge on another model would spend another round of
+			// re-enqueues on the same outage, so the outcome is terminal.
+			queueInfraSpent := resolvedFailureKind == TerminalKindMergeQueueInfraFailed
+			if queueInfraSpent {
+				terminalFailureKind = TerminalKindMergeQueueInfraFailed
+			}
 			// USAGE-CAP RECOVERY (#42 descent, #1545 attribution + provider
 			// walk). One decision covers both cap kinds and both dispatch
 			// paths — see DecideCapRecovery for why the order is tier ladder →
@@ -8609,7 +8629,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				log.Printf("#%d: stage %s failed — NOT escalating model: it stalled after a quota warning, and a stronger tier spends more of that bucket",
 					item.Number, stage)
 			}
-			if !modelRejected && !capRejected && !authFailed && !catBlocked && !parked && !budgetStopped && !softQuotaStall {
+			if queueInfraSpent {
+				log.Printf("#%d: stage %s failed — NOT escalating model: the merge-queue infrastructure re-enqueues are spent (merge_queue_infra_failed); another run would spend them again",
+					item.Number, stage)
+			}
+			if !modelRejected && !capRejected && !authFailed && !catBlocked && !parked && !budgetStopped && !softQuotaStall && !queueInfraSpent {
 				escalation := s.retryEngine.EvaluateEscalation(string(stage), model)
 				if escalation.ShouldEscalate {
 					log.Printf("#%d: stage %s failed — escalating model to %s",
