@@ -28,7 +28,9 @@ changelog, and the release workflow refuses a tag that does not.
   binaries at `X.Y.Z`, `X.Y.Z-rc.(N+1)` and `X.Y.(Z+1)-rc.1`; any finding fails
   the RC. `release.yml` refuses a tag unless an RC on the same commit passed
   that scan with the release's own version string. Building from source now
-  needs Go 1.27.
+  needs Go 1.27, and `scripts/ci-local.sh` checks formatting with that
+  toolchain's `gofmt`, not the one first on `PATH`, because go1.27's `gofmt`
+  formats two existing files differently.
 - **Re-running an issue from the "not closed: PR left criteria unmet" card now
   scopes the run to those criteria in the VS Code extension too.** The
   extension's stage loop never applied the partial-delivery scope, so the

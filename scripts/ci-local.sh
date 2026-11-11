@@ -1757,8 +1757,14 @@ else
 run_group --wait "go test -race -count=1 ./..." \
   go test -race -count=1 -timeout "$GO_TEST_TIMEOUT" ./...
 fi
+# The gofmt of the toolchain go.mod selects, not the one first on PATH (#3192).
+# Formatting changes between Go releases: when go.mod moved to go1.27.4, CI's
+# gofmt (setup-go reads go.mod) rejected two files that go1.26.11's gofmt on the
+# operator's PATH accepted, and the gap first showed in the merge group, where
+# the heavy jobs run. `go env GOROOT` names the toolchain GOTOOLCHAIN=auto
+# switched to.
 run_step "gofmt -l ./internal ./cmd" \
-  bash -c '! gofmt -l ./internal ./cmd | grep .'
+  bash -c '! "$(go env GOROOT)/bin/gofmt" -l ./internal ./cmd | grep .'
 
 # 1b. branch-merged-check.sh regression suite — the shell-side decision
 #     procedure `git branch -D` reclaim decisions defer to (docs/GIT_WORKFLOW.md
