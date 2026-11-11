@@ -30,7 +30,9 @@ changelog, and the release workflow refuses a tag that does not.
   that scan with the release's own version string. Building from source now
   needs Go 1.27, and `scripts/ci-local.sh` checks formatting with that
   toolchain's `gofmt`, not the one first on `PATH`, because go1.27's `gofmt`
-  formats two existing files differently.
+  formats two existing files differently. It fails, naming both versions and
+  `GOTOOLCHAIN=<version>` as the fix, when `go env GOVERSION` is not the
+  toolchain `go.mod` selects, since a newer Go is never switched down to it.
 - **A merge-queue removal now says whether the merge group or the PR failed
   (#3198).** pr-merge reads the failed merge-group jobs' steps and compares them
   with the repository's workflow steps. It fails safe toward the PR's own code:
