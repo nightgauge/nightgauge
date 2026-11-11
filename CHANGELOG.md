@@ -16,6 +16,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The Go toolchain is now go1.26.11**, which fixes GO-2026-6859 in `net/http`.
+  govulncheck found it reachable on go1.26.10 and blocked every merge.
 - **`project sync-status`, `project add` and `hook post-merge` now write to
   the `--repo` target's board when the local config declares a board
   (#3166).** The config backfill no longer counts as an explicit `--project`,
