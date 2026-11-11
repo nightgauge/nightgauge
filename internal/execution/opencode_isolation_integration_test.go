@@ -110,10 +110,11 @@ func realOpenCode(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("opencode --version: %v", err)
 	}
-	v := strings.TrimSpace(string(out))
+	printed := strings.TrimSpace(string(out))
+	v, ok := adapters.ParseOpenCodeVersion(printed)
 	if os.Getenv(nightgaugeCanaryEnv) == "true" {
-		if !openCodeVersionRE.MatchString(v) {
-			t.Fatalf("opencode --version printed %q, not a MAJOR.MINOR.PATCH version", v)
+		if !ok {
+			t.Fatalf("opencode --version printed %q, not a MAJOR.MINOR.PATCH version", printed)
 		}
 		if v != openCodeIntegrationVersion {
 			t.Logf("opencode %s is installed (canary: pin relaxed from the %s baseline observed for ADR-022)", v, openCodeIntegrationVersion)

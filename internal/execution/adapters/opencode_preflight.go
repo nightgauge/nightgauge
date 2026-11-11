@@ -372,8 +372,24 @@ func (b *openCodeProbeBuffer) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 
-// openCodeVersionRE is the shape of what `opencode --version` prints.
-var openCodeVersionRE = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)[0-9A-Za-z.+-]*$`)
+// openCodeVersionRE is every shape `opencode --version` prints: `X.Y.Z` and
+// `vX.Y.Z` (1.x), and `opencode vX.Y.Z` (2.x), each with an optional
+// pre-release or build suffix. Group 4 is the version without the prefix.
+var openCodeVersionRE = regexp.MustCompile(
+	`^(?:opencode\s+)?v?(([0-9]+)\.([0-9]+)\.([0-9]+)[0-9A-Za-z.+-]*)$`)
+
+// ParseOpenCodeVersion reads one line of `opencode --version` output and
+// returns the version as `X.Y.Z[suffix]`, with any `opencode ` and `v`
+// prefix removed. ok is false for a line that carries no version. It is the
+// only parser of that output, so the adapter's floor check and the usage fold
+// cannot disagree about what a version is.
+func ParseOpenCodeVersion(line string) (version string, ok bool) {
+	m := openCodeVersionRE.FindStringSubmatch(strings.TrimSpace(line))
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
 
 // OpenCodeVersionOf runs `bin --version` as a probe under ctx and returns the
 // version it prints. The output is never quoted back: a binary that prints
@@ -393,18 +409,19 @@ func OpenCodeVersionOf(ctx context.Context, bin string) (string, error) {
 	}
 	line, _, _ := strings.Cut(strings.TrimSpace(string(res.Stdout)), "\n")
 	line = strings.TrimSpace(line)
-	if !openCodeVersionRE.MatchString(line) {
+	v, ok := ParseOpenCodeVersion(line)
+	if !ok {
 		return "", fmt.Errorf("`%s --version` printed no version", bin)
 	}
-	return strings.TrimPrefix(line, "v"), nil
+	return v, nil
 }
 
 // compareOpenCodeVersions compares the MAJOR.MINOR.PATCH of two versions
-// openCodeVersionRE accepts, -1, 0 or 1. A pre-release or build suffix does
+// ParseOpenCodeVersion accepts, -1, 0 or 1. A pre-release or build suffix does
 // not count.
 func compareOpenCodeVersions(a, b string) int {
 	pa, pb := openCodeVersionRE.FindStringSubmatch(a), openCodeVersionRE.FindStringSubmatch(b)
-	for i := 1; i <= 3; i++ {
+	for i := 2; i <= 4; i++ {
 		var x, y int
 		if pa != nil {
 			x, _ = strconv.Atoi(pa[i])
