@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`project sync-status`, `project add` and `hook post-merge` now write to
+  the `--repo` target's board when the local config declares a board
+  (#3166).** The config backfill no longer counts as an explicit `--project`,
+  so a sibling repository's issue stops landing on the local board.
 - **The macOS binaries are now one universal (Intel + Apple silicon) file
   (#3161).** Microsoft's scanner flagged the signed Intel-only binary
   (`Trojan:Script/Wacatac.B!ml`). The signed universal build was clean at

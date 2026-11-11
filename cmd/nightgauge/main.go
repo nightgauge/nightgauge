@@ -579,6 +579,21 @@ func explicitWorkspaceRoot(cmd *cobra.Command) string {
 	return ""
 }
 
+// backfillFlagDefault sets a flag's value from config without marking it
+// Changed, so Changed("name") still means the user typed it (#3166). A command
+// that does not register the flag is left alone.
+func backfillFlagDefault(cmd *cobra.Command, name, value string) {
+	f := cmd.Flags().Lookup(name)
+	if f == nil {
+		return
+	}
+	_ = f.Value.Set(value) // a config value that fails to parse leaves the default
+}
+
+// boardResolvedHook is a test seam: it receives the board a command resolved
+// before any GitHub call. A non-nil error aborts the command (#3166).
+var boardResolvedHook = func(command string, board int) error { return nil }
+
 // clientFromConfig creates a GitHub client using the full resolution chain.
 // There is no argv tier: the root --token flag was removed because a token on
 // the command line is visible through `ps` (ADR-024 § 5, #2031).
@@ -980,11 +995,15 @@ func rootCmd() *cobra.Command {
 		if cfg == nil {
 			return nil
 		}
+		// Backfill through Value.Set, not FlagSet.Set: FlagSet.Set marks the
+		// flag Changed, and a backfilled board then reads as a user-typed
+		// --project, so `--repo <sibling>` resolved to the local board (#3166).
+		// Changed must keep meaning "the user supplied it".
 		if !cmd.Flags().Changed("project") && cfg.ProjectNumber != 0 {
-			_ = cmd.Flags().Set("project", fmt.Sprintf("%d", cfg.ProjectNumber)) // cobra flag.Set never errors for known flags
+			backfillFlagDefault(cmd, "project", fmt.Sprintf("%d", cfg.ProjectNumber))
 		}
 		if !cmd.Flags().Changed("owner-type") && cfg.OwnerType != "" {
-			_ = cmd.Flags().Set("owner-type", cfg.OwnerType) // cobra flag.Set never errors for known flags
+			backfillFlagDefault(cmd, "owner-type", cfg.OwnerType)
 		}
 		// Per-repo GitHub identity: export the configured (github_user-scoped)
 		// token as GH_TOKEN/GITHUB_TOKEN so every `gh` subprocess this command
@@ -4019,6 +4038,9 @@ func projectAddCmd() *cobra.Command {
 					projectNumber = resolved
 				}
 			}
+			if err := boardResolvedHook("project add", projectNumber); err != nil {
+				return err
+			}
 
 			client, err := clientFromConfig()
 			if err != nil {
@@ -4173,6 +4195,9 @@ writes nothing and exits non-zero with a "yielding <status>" error.`,
 					}
 					projectNumber = resolved
 				}
+			}
+			if err := boardResolvedHook("project sync-status", projectNumber); err != nil {
+				return err
 			}
 
 			client, err := clientFromConfig()
@@ -7165,6 +7190,9 @@ cause the command to exit non-zero.`,
 			// stage sync no longer writes over it (#2706).
 			cfg, cfgErr := config.Load(workdir)
 			projectNumber = hookBoardProject(os.Stderr, cmd.Flags().Changed("project"), projectNumber, cfg, cfgErr, ownerPart, repoPart, workdir)
+			if err := boardResolvedHook("hook post-merge", projectNumber); err != nil {
+				return err
+			}
 
 			// Board syncer is only wired when a project is configured; the hook
 			// no-ops the board-Done sync (#3981) when it is nil.
