@@ -10,6 +10,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Each Step 2.7.3 review round re-prints the `ci-parity-check` phase marker
+  (#3168).** The progress monitor counts it as productive, so a multi-round
+  review with fixes is no longer killed as churn.
+
 - **Step 6.0 records a `pr_note` for a criterion that asks for PR-description
   content (#3154).** pr-create renders it under `## Notes for acceptance
 criteria`, so "the PR records the cause" can be met instead of always

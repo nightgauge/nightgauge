@@ -584,7 +584,13 @@ reviewers does not remove it. It applies the passes in
 StageGates" precedent in [docs/STAGE_GATES.md](../../../docs/STAGE_GATES.md).
 `pipeline.adversarial_review.enabled: false` turns it off.
 
+Every round runs the `review prepare` block below (or the `review run` block,
+which prepares itself), including the round after each `catch` fix. Its first
+line re-prints this phase's marker: that is the productive signal that keeps
+the progress monitor from reading the fix-and-re-review loop as churn (#3168).
+
 ```bash
+printf '<!-- phase:start name="ci-parity-check" index=12 total=22 stage="feature-validate" -->\n'
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 "$BINARY" review prepare --issue "$ISSUE_NUMBER" --json
@@ -618,6 +624,7 @@ Act on the JSON:
   session log:
 
   ```bash
+  printf '<!-- phase:start name="ci-parity-check" index=12 total=22 stage="feature-validate" -->\n'
   ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
   : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
   "$BINARY" review run --issue "$ISSUE_NUMBER"

@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **feature-validate's independent review rounds no longer trip the churn
+  detector (#3168).** Each round re-prints its phase marker, a productive
+  signal, so a three-round review with fixes is not killed as a no-progress
+  churn. The churn threshold is unchanged.
+
 - **The OpenCode adapter accepts OpenCode 2.x again (#3172).** OpenCode 2.x
   prints `opencode vX.Y.Z` for `--version`, which both version parsers
   rejected, so every 2.x install was refused as `adapter_incompatible`. One
