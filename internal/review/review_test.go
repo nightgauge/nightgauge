@@ -16,6 +16,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/scaffold"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -674,5 +675,125 @@ func TestReuseBelowTheCapAndPassAtTheCap(t *testing.T) {
 	}
 	if rec, err := LatestCap(root, s.Issue); err != nil || rec != nil {
 		t.Fatalf("no cap record expected: %+v, %v", rec, err)
+	}
+}
+
+func TestClaimCriterionIsDerivedForPlanComplianceOnly(t *testing.T) {
+	for _, tc := range []struct {
+		pass, claim string
+		want        int
+	}{
+		{"plan-compliance", "Criterion 2: the test is missing", 2},
+		{"plan-compliance", "acceptance criterion 10 - not delivered", 10},
+		{"plan-compliance", "criterion 3. absent", 3},
+		{"plan-compliance", "The change misses criterion 2", 0},
+		{"plan-compliance", "Criterion two: absent", 0},
+		{"security", "Criterion 2: the token leaks", 0},
+		{"correctness", "Criterion 1: wrong", 0},
+	} {
+		if got := claimCriterion(tc.pass, tc.claim); got != tc.want {
+			t.Errorf("%s %q: got %d, want %d", tc.pass, tc.claim, got, tc.want)
+		}
+	}
+}
+
+// TestFindingsSchemaStaysClosedToACriterionKey: the criterion link is derived
+// from the claim, so neither a criterion nor a criterion_text key is accepted,
+// and the derived value never leaves in JSON (#3186).
+func TestFindingsSchemaStaysClosedToACriterionKey(t *testing.T) {
+	ok := `{"pass":"plan-compliance","file":"a.go","line":1,"claim":"Criterion 1: x","severity":"major","fix":"f"`
+	for _, extra := range []string{`,"criterion":1}`, `,"criterion_text":"x"}`, `,"Criterion":1}`} {
+		if _, err := Parse([]byte(`{"schema":1,"findings":[` + ok + extra + `]}`)); err == nil {
+			t.Errorf("accepted the key in %s", extra)
+		}
+	}
+	got, err := Parse([]byte(`{"schema":1,"findings":[` + ok + `}]}`))
+	if err != nil || len(got) != 1 || got[0].Criterion != 1 {
+		t.Fatalf("%+v, %v", got, err)
+	}
+	out, _ := json.Marshal(got[0])
+	var keys map[string]any
+	if err := json.Unmarshal(out, &keys); err != nil {
+		t.Fatal(err)
+	}
+	for k := range keys {
+		if strings.Contains(strings.ToLower(k), "criterion") {
+			t.Fatalf("the derived criterion was serialised: %s", out)
+		}
+	}
+}
+
+func writeIssueContext(t *testing.T, root string, criteria ...string) {
+	t.Helper()
+	dir, err := layout.PipelineStateDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := json.Marshal(map[string]any{
+		"title": "t", "requirements": map[string]any{"acceptance_criteria": criteria},
+	})
+	if err := os.WriteFile(filepath.Join(dir, "issue-7.json"), doc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func planFinding(claim string) string {
+	return `{"pass":"plan-compliance","file":"m.json","line":3,"claim":"` + claim +
+		`","severity":"major","fix":"f"}`
+}
+
+// TestRecordLinksTheNamedCriterionAndTheRun: a plan-compliance major naming
+// criterion 2 carries that criterion's text and the checkout's run id; one
+// naming no criterion, or one out of range, carries none.
+func TestRecordLinksTheNamedCriterionAndTheRun(t *testing.T) {
+	root := repo(t)
+	writeIssueContext(t, root, "First criterion.", "  `opencode.json` records the\n newest tested version. ")
+	checkout, err := layout.CheckoutDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs, err := runstate.MarkRunning(checkout, runstate.MarkRunningOptions{IssueNumber: 7, Branch: "feat/7-x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := session(root, "t0")
+	if _, err := Record(s, "t0", writeFindings(t,
+		planFinding("Criterion 2: max_tested was not bumped"),
+		planFinding("Criterion 9: out of range"),
+		planFinding("scope creep in m.json")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]discoveredwork.Record{}
+	for _, r := range filed(t, root) {
+		got[r.Summary] = r
+	}
+	if len(got) != 3 {
+		t.Fatalf("records: %+v", got)
+	}
+	for summary, want := range map[string]string{
+		"plan-compliance: Criterion 2: max_tested was not bumped": "`opencode.json` records the newest tested version.",
+		"plan-compliance: Criterion 9: out of range":              "",
+		"plan-compliance: scope creep in m.json":                  "",
+	} {
+		r := got[summary]
+		if r.Criterion != want {
+			t.Errorf("%s: criterion %q, want %q", summary, r.Criterion, want)
+		}
+		if r.RunID == nil || *r.RunID != rs.RunID {
+			t.Errorf("%s: run id %v, want %s", summary, r.RunID, rs.RunID)
+		}
+	}
+}
+
+// TestRecordWithoutAnIssueContextLinksNoCriterion files as before.
+func TestRecordWithoutAnIssueContextLinksNoCriterion(t *testing.T) {
+	root := repo(t)
+	s := session(root, "t0")
+	if _, err := Record(s, "t0", writeFindings(t, planFinding("Criterion 1: absent")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	recs := filed(t, root)
+	if len(recs) != 1 || recs[0].Criterion != "" || recs[0].RunID != nil {
+		t.Fatalf("%+v", recs)
 	}
 }

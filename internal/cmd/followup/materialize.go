@@ -12,8 +12,14 @@ package followup
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/cmd/discoveredwork"
@@ -51,7 +57,183 @@ const (
 	OutcomeWouldFile     = "would-file"
 	OutcomeRefused       = "refused"
 	OutcomeInvalid       = "invalid"
+	// OutcomeTrackedByParent is a review record restating one of the issue's
+	// own acceptance criteria that this run's PR holds unmet: the parent
+	// already tracks it, so no issue is filed (#3186).
+	OutcomeTrackedByParent = "tracked-by-parent"
+	// OutcomeDuplicate is a review record naming the gap another producer
+	// recorded for the same issue and run (#3186).
+	OutcomeDuplicate = "duplicate"
 )
+
+// reviewProducer is the independent review's source stage
+// (internal/review). Only its records are suppressed.
+const reviewProducer = "producer:independent-review"
+
+// ACUnmetStatus is pr-create's verdict status for an unmet criterion
+// (stages.ACUnmet); a test in stages pins the two together.
+const ACUnmetStatus = "unmet"
+
+// Tracking is what this run's pr-{N}.json says the parent issue already
+// tracks: the run it was written by and the criteria its PR holds unmet, by
+// NormalizeTitle'd text. The zero value tracks nothing, so every record files.
+type Tracking struct {
+	RunID string
+	Unmet map[string]bool
+}
+
+// LoadTracking reads pr-{issue}.json from runDir. A missing, unreadable or
+// foreign file tracks nothing. An unmet verdict is tracked by its own text and,
+// when issue-{issue}.json in runDir lists the issue's criteria, by the text of
+// the criterion at its index: a review record carries the issue's wording,
+// which a verdict may paraphrase.
+func LoadTracking(runDir string, issue int) Tracking {
+	data, err := os.ReadFile(filepath.Join(runDir, "pr-"+strconv.Itoa(issue)+".json"))
+	if err != nil {
+		return Tracking{}
+	}
+	var pr struct {
+		IssueNumber int    `json:"issue_number"`
+		RunID       string `json:"run_id"`
+		Criteria    []struct {
+			Index  *int   `json:"index"`
+			Text   string `json:"text"`
+			Status string `json:"status"`
+		} `json:"acceptance_criteria"`
+	}
+	if json.Unmarshal(data, &pr) != nil || pr.IssueNumber != issue {
+		return Tracking{}
+	}
+	issueCriteria := loadIssueCriteria(runDir, issue)
+	t := Tracking{RunID: pr.RunID, Unmet: map[string]bool{}}
+	for _, c := range pr.Criteria {
+		if c.Status != ACUnmetStatus {
+			continue
+		}
+		if strings.TrimSpace(c.Text) != "" {
+			t.Unmet[NormalizeTitle(c.Text)] = true
+		}
+		if c.Index != nil && *c.Index >= 0 && *c.Index < len(issueCriteria) &&
+			strings.TrimSpace(issueCriteria[*c.Index]) != "" {
+			t.Unmet[NormalizeTitle(issueCriteria[*c.Index])] = true
+		}
+	}
+	return t
+}
+
+// loadIssueCriteria is the acceptance criteria issue-{issue}.json in runDir
+// lists, in order, or nil.
+func loadIssueCriteria(runDir string, issue int) []string {
+	data, err := os.ReadFile(filepath.Join(runDir, "issue-"+strconv.Itoa(issue)+".json"))
+	if err != nil {
+		return nil
+	}
+	var ic struct {
+		IssueNumber  int `json:"issue_number"`
+		Requirements struct {
+			AcceptanceCriteria []string `json:"acceptance_criteria"`
+		} `json:"requirements"`
+	}
+	if json.Unmarshal(data, &ic) != nil || (ic.IssueNumber != 0 && ic.IssueNumber != issue) {
+		return nil
+	}
+	return ic.Requirements.AcceptanceCriteria
+}
+
+func runIDOf(rec discoveredwork.Record) string {
+	if rec.RunID == nil {
+		return ""
+	}
+	return *rec.RunID
+}
+
+// trackedByParent reports whether rec is a review record whose criterion this
+// run's PR holds unmet. Absent run ids match each other.
+func trackedByParent(rec discoveredwork.Record, t Tracking) bool {
+	return rec.SourceStage == reviewProducer && rec.Criterion != "" &&
+		runIDOf(rec) == t.RunID && t.Unmet[NormalizeTitle(rec.Criterion)]
+}
+
+// Code identifiers (#3186): a backticked span, a path:line token, or a
+// letter-led token with an internal '_' or '.' (max_tested, opencode.json).
+// Bare numbers (404) and ordinals (2nd) cannot match; e.g. and i.e. are
+// stop-listed.
+var (
+	backtickRe = regexp.MustCompile("`([^`\n]+)`")
+	pathLineRe = regexp.MustCompile(`[\w./-]*[A-Za-z][\w./-]*:\d+`)
+	bareRe     = regexp.MustCompile(`[A-Za-z][A-Za-z0-9]*(?:[_.][A-Za-z0-9]+)+`)
+	stopIdents = map[string]bool{"e.g": true, "i.e": true}
+)
+
+// identifiers is the code identifiers in texts, less those found in exclude.
+func identifiers(texts []string, exclude map[string]bool) map[string]bool {
+	out := map[string]bool{}
+	for _, t := range texts {
+		for _, m := range backtickRe.FindAllStringSubmatch(t, -1) {
+			out[strings.TrimSpace(m[1])] = true
+		}
+		for _, m := range pathLineRe.FindAllString(t, -1) {
+			out[m] = true
+		}
+		for _, m := range bareRe.FindAllString(t, -1) {
+			out[m] = true
+		}
+	}
+	for id := range out {
+		if id == "" || stopIdents[strings.ToLower(id)] || exclude[id] {
+			delete(out, id)
+		}
+	}
+	return out
+}
+
+// duplicateOf returns the id of a record from another producer that rec, a
+// review record, restates, or "". The match: same issue, same run (absent
+// matches absent), a shared candidate file, and at least one shared code
+// identifier in the summaries and evidence once the shared files' paths, and
+// the identifiers inside them, are left out. A location alone never matches.
+func duplicateOf(rec discoveredwork.Record, others []discoveredwork.Record) string {
+	if rec.SourceStage != reviewProducer {
+		return ""
+	}
+	files := map[string]bool{}
+	for _, f := range rec.CandidateTargetFiles {
+		files[path.Clean(f)] = true
+	}
+	for _, o := range others {
+		if o.SourceStage == rec.SourceStage || o.IssueNumber != rec.IssueNumber || runIDOf(o) != runIDOf(rec) {
+			continue
+		}
+		exclude := map[string]bool{}
+		for _, f := range o.CandidateTargetFiles {
+			f = path.Clean(f)
+			if !files[f] {
+				continue
+			}
+			exclude[f] = true
+			for id := range identifiers([]string{f}, nil) {
+				exclude[id] = true
+			}
+		}
+		if len(exclude) == 0 {
+			continue
+		}
+		mine := identifiers(append([]string{rec.Summary}, rec.Evidence...), exclude)
+		for id := range identifiers(append([]string{o.Summary}, o.Evidence...), exclude) {
+			if mine[id] {
+				return o.ID
+			}
+		}
+	}
+	return ""
+}
+
+// valid reports whether rec would be filed rather than refused as invalid.
+func valid(rec discoveredwork.Record) bool {
+	r := rec
+	return discoveredwork.Validate(&r) == nil &&
+		filing.ValidateFields(rec.SuggestedType, rec.SuggestedPriority, rec.SuggestedSize) == nil
+}
 
 // Item is the result for one record.
 type Item struct {
@@ -78,14 +260,16 @@ type Result struct {
 }
 
 // Consumed reports whether the record with id leaves the capture file:
-// filed, already filed, deduped onto an open issue, or reported. Refused,
+// filed, already filed, deduped onto an open issue, reported, tracked by the
+// parent or a duplicate of another producer's record. Refused,
 // invalid and undecided records (a run that errored part-way) stay for a
 // later run.
 func (r *Result) Consumed(id string) bool {
 	for _, it := range r.Items {
 		if it.ID == id {
 			switch it.Outcome {
-			case OutcomeFiled, OutcomeAlreadyExists, OutcomeDeduped, OutcomeWouldFile:
+			case OutcomeFiled, OutcomeAlreadyExists, OutcomeDeduped, OutcomeWouldFile,
+				OutcomeTrackedByParent, OutcomeDuplicate:
 				return true
 			}
 			return false
@@ -139,7 +323,12 @@ func CommentBody(rec discoveredwork.Record) string {
 // skipped, records matching an open issue's title become a provenance
 // comment, and at most gate.Cap issues are created: the rest are refused and
 // a *filing.CapError is returned with the result.
-func Materialize(ctx context.Context, capture *discoveredwork.Capture, gate filing.Gate, authorTrusted bool, f Filer) (*Result, error) {
+//
+// Before any of that, in either mode, a review record is not filed when track
+// says this run's PR holds its criterion unmet (tracked-by-parent), or when it
+// restates a valid record another producer wrote for the same issue and run
+// (duplicate). Both are reported and consumed, never dropped silently (#3186).
+func Materialize(ctx context.Context, capture *discoveredwork.Capture, gate filing.Gate, authorTrusted bool, track Tracking, f Filer) (*Result, error) {
 	res := &Result{Gate: gate, Items: []Item{}}
 	if capture == nil || len(capture.Records) == 0 {
 		return res, nil
@@ -152,6 +341,13 @@ func Materialize(ctx context.Context, capture *discoveredwork.Capture, gate fili
 		reason = "issue author is not trusted (follow_up_filing.allow_untrusted_authors is false)"
 	}
 	res.ReportOnly, res.Reason = reportOnly, reason
+
+	var others []discoveredwork.Record // valid records a review record may duplicate
+	for _, rec := range capture.Records {
+		if rec.SourceStage != reviewProducer && valid(rec) {
+			others = append(others, rec)
+		}
+	}
 
 	var toCreate []int // indexes into res.Items
 	recs := map[int]discoveredwork.Record{}
@@ -166,6 +362,17 @@ func Materialize(ctx context.Context, capture *discoveredwork.Capture, gate fili
 		}
 		if err := filing.ValidateFields(rec.SuggestedType, rec.SuggestedPriority, rec.SuggestedSize); err != nil {
 			it.Outcome, it.Detail = OutcomeInvalid, err.Error()
+			res.Items = append(res.Items, it)
+			continue
+		}
+		if trackedByParent(rec, track) {
+			it.Outcome = OutcomeTrackedByParent
+			it.Detail = fmt.Sprintf("criterion unmet on #%d; the PR says Refs", rec.IssueNumber)
+			res.Items = append(res.Items, it)
+			continue
+		}
+		if id := duplicateOf(rec, others); id != "" {
+			it.Outcome, it.Detail = OutcomeDuplicate, "duplicates "+id
 			res.Items = append(res.Items, it)
 			continue
 		}

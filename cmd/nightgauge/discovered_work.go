@@ -9,7 +9,6 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/cmd/discoveredwork"
 	"github.com/nightgauge/nightgauge/internal/layout"
-	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/spf13/cobra"
 )
 
@@ -44,23 +43,13 @@ func discoveredWorkRunDir(cmd *cobra.Command) (string, error) {
 	return layout.PipelineStateDir(cwd)
 }
 
-// discoveredWorkRunID is the checkout's live run id for issue, or nil when no
-// run-state names that issue. A caller never invents one.
+// discoveredWorkRunID is the checkout's live run id for issue, or nil.
 func discoveredWorkRunID(issue int) *string {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil
 	}
-	dir, err := layout.CheckoutDir(cwd)
-	if err != nil {
-		return nil
-	}
-	rs, err := runstate.Load(dir)
-	if err != nil || rs == nil || rs.IssueNumber != issue || rs.RunID == "" {
-		return nil
-	}
-	id := rs.RunID
-	return &id
+	return discoveredwork.LiveRunID(cwd, issue)
 }
 
 func discoveredWorkRecordCmd() *cobra.Command {

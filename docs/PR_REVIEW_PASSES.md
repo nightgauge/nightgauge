@@ -50,6 +50,14 @@ not praise it.
 `plan-compliance` uses the bodies of the issues the pull request closes. When
 it closes none, the pass reports nothing.
 
+When a `plan-compliance` finding says one of the issue's own acceptance criteria
+is unmet, begin its `claim` with `Criterion N:`, where N is that criterion's
+1-based position in the issue's list. Only the pipeline's review
+(`nightgauge review record`) resolves the prefix: it links the finding to that
+criterion's text, and `followup materialize` does not file it while this run's
+pull request holds the criterion unmet. The CI review (`scripts/pr-review.mjs`)
+has no issue file, so there the prefix is claim text and suppresses nothing.
+
 ## Severity
 
 The scale is the one in `skills/nightgauge-adversarial-review/SKILL.md`. Both use

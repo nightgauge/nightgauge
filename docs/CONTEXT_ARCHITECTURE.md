@@ -1368,6 +1368,13 @@ The SDK schema is `DiscoveredWorkContextSchema`; the Go peer is
 | `suggested_size`         | `XS\|S\|M\|L\|XL`                                                               |
 | `candidate_target_files` | 0–20 repository-relative paths, no `..`, NUL or leading `-`; never opened       |
 | `recorded_at`            | RFC 3339 UTC, set by the binary                                                 |
+| `criterion`              | Optional, one trimmed line of at most 2000 characters; see below                |
+
+`criterion` is set only by the independent review (`nightgauge review record`,
+#3186): it is the text of the issue's own acceptance criterion a plan-compliance
+finding says is unmet. `followup materialize` does not file such a record while the
+same run's `pr-{N}.json` holds that criterion unmet. The `discovered-work record` CLI
+does not set it.
 
 Unknown keys are refused. A refused record exits non-zero, names the field, and leaves the
 file unchanged. Re-recording the same discovery prints `already recorded` and exits 0.

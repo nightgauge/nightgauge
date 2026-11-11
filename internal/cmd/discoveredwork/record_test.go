@@ -12,6 +12,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
 var now = time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
@@ -479,5 +483,65 @@ func TestReplaceProducerRefusesAStage(t *testing.T) {
 	}
 	if c, err := Load(dir, 7); err != nil || len(c.Records) != 1 {
 		t.Fatalf("capture = %+v, %v", c, err)
+	}
+}
+
+func TestValidateCriterion(t *testing.T) {
+	for name, tc := range map[string]struct {
+		criterion string
+		ok        bool
+	}{
+		"absent":       {"", true},
+		"one line":     {"`opencode.json` records the newest tested version.", true},
+		"untrimmed":    {" padded", false},
+		"multiline":    {"a\nb", false},
+		"bidi":         {"a‮b", false},
+		"control":      {"a\u0007b", false},
+		"at the cap":   {strings.Repeat("x", MaxCriterion), true},
+		"over the cap": {strings.Repeat("x", MaxCriterion+1), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := validRecord(7)
+			rec.Criterion = tc.criterion
+			rec.ID = ID(rec.SourceStage, rec.Summary)
+			rec.RecordedAt = "2026-11-11T00:00:00Z"
+			err := Validate(&rec)
+			if (err == nil) != tc.ok {
+				t.Fatalf("Validate = %v, want ok=%v", err, tc.ok)
+			}
+			if err != nil && !strings.HasPrefix(err.Error(), "criterion:") {
+				t.Fatalf("error does not name the field: %v", err)
+			}
+		})
+	}
+}
+
+// TestCriterionIsOmittedWhenEmpty: a record with no criterion keeps the v1
+// key set the SDK and older captures carry.
+func TestCriterionIsOmittedWhenEmpty(t *testing.T) {
+	out, _ := json.Marshal(validRecord(7))
+	if strings.Contains(string(out), `"criterion"`) {
+		t.Fatalf("empty criterion serialised: %s", out)
+	}
+}
+
+func TestLiveRunID(t *testing.T) {
+	root := gittest.InitRepo(t, t.TempDir(), "-q")
+	if got := LiveRunID(root, 7); got != nil {
+		t.Fatalf("no run-state, got %s", *got)
+	}
+	checkout, err := layout.CheckoutDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs, err := runstate.MarkRunning(checkout, runstate.MarkRunningOptions{IssueNumber: 7, Branch: "feat/7-x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := LiveRunID(root, 7); got == nil || *got != rs.RunID {
+		t.Fatalf("got %v, want %s", got, rs.RunID)
+	}
+	if got := LiveRunID(root, 8); got != nil {
+		t.Fatalf("another issue's run-state, got %s", *got)
 	}
 }

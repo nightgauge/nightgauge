@@ -4581,6 +4581,10 @@ directory, where it outlives the bundle. `record`
 validates the findings and prints `{verdict, summary, counts, fix, discovered}`.
 Each finished round replaces the records of `producer:independent-review` in the
 capture with its own `discovered`, so only the last finished round is filed.
+Each record carries the checkout's run id. A plan-compliance claim that begins
+`Criterion N:` also carries the text of the issue's criterion N (`criterion`,
+#3186); an out-of-range N or an unreadable issue context sets none. The findings
+schema is unchanged: the link is derived from the claim.
 Findings for a tree that moved, a missing or rejected file and a failed spawn all
 record `catch` with no ledger event, so the next attempt reviews again. Outcomes
 live in `gate-runs.jsonl` as kind `review`, which the local-gate answers ignore.
@@ -5025,8 +5029,24 @@ issue with the same normalized title gets a provenance comment (`deduped`);
 otherwise the issue is created with `type:<t>`, Priority, Size, Status=Backlog
 and `Discovered in #N (run R, stage S)` (`filed`). Report mode, the kill switch
 or an untrusted issue author make every record `would-file` with no forge call.
-Filed, deduped, existing and reported records are removed from the capture;
-refused and invalid ones stay.
+
+Before that, in either mode, a `producer:independent-review` record is not filed
+when another record already tracks it (#3186):
+
+- `tracked-by-parent`: its `criterion` is one this run's `pr-<N>.json` lists with
+  status `unmet` (compared case-folded, whitespace collapsed), and its run id
+  equals that file's `run_id` (absent equals absent). The parent issue stays open
+  through that verdict and the PR says `Refs #N`.
+- `duplicate` (detail `duplicates <id>`): a valid record from another source stage
+  has the same issue and run id, shares a candidate file, and shares at least one
+  code identifier in the summaries and evidence: a backticked span, a `path:line`
+  token, or a letter-led token with an internal `_` or `.` (`max_tested`,
+  `opencode.json`). The shared files' paths, and identifiers inside them, do not
+  count; `e.g.`, `i.e.`, bare numbers and ordinals never qualify.
+
+A met, missing or unnamed criterion, another run, or no `pr-<N>.json` files the
+record as before. Filed, deduped, existing, reported, tracked and duplicate records
+are removed from the capture; refused and invalid ones stay.
 
 Exit `0` on success, including a silent no-op when the capture is absent or
 empty; exit `3` when the per-run cap refused records (`refused: K of T`);

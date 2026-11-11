@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The independent review no longer files a follow-up for the reviewed issue's
+  own unmet criterion, or for a gap another stage already recorded (#3186).** A
+  plan-compliance finding that begins `Criterion N:` is linked to that criterion;
+  `followup materialize` reports it as `tracked-by-parent` instead of filing it
+  while the same run's PR holds the criterion unmet. A review record that shares a
+  candidate file and a code identifier (a backticked span, `path:line`, or a token
+  such as `max_tested`) with another stage's record for the same issue and run is
+  reported as `duplicate`. Everything else is filed as before. `pr-<N>.json` now
+  records the `run_id`, and discovered-work records may carry a `criterion`.
 - **An inherited required-check failure now ends `ci wait` as FAILURE
   (#3179).** A required check whose latest run failed is decisive even while
   other required checks (such as `lint` or `cla`, which never post on a PR

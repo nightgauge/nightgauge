@@ -88,7 +88,8 @@ exit "$STATUS"
 
 `followup-materialize-{N}.json` in the pipeline state directory: the gate,
 `report_only`, `reason`, `refused`, and one item per record with `outcome`
-(`filed`, `already-exists`, `deduped`, `would-file`, `refused`, `invalid`).
+(`filed`, `already-exists`, `deduped`, `would-file`, `tracked-by-parent`,
+`duplicate`, `refused`, `invalid`).
 Nothing is written when the capture held no records.
 
 ## Author

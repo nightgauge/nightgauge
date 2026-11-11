@@ -2,12 +2,18 @@ package stages
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/cmd/discoveredwork"
+	"github.com/nightgauge/nightgauge/internal/cmd/followup"
 	"github.com/nightgauge/nightgauge/internal/deliverable"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
 // richSnap returns a minimal snapshot that the decision matrix accepts —
@@ -764,5 +770,52 @@ func TestRenderBody_ACNotes(t *testing.T) {
 	snap.ACVerdicts[0].PRNote = ""
 	if strings.Contains(RenderBody(snap), ACNotesHeading) {
 		t.Error("no note, no section")
+	}
+}
+
+// TestWritePRContext_RunIDIsTheCheckoutsRun: pr-{N}.json carries the run id
+// from the same run-state discovered-work records are stamped from, and omits
+// it when no run-state names the issue (#3186).
+func TestWritePRContext_RunIDIsTheCheckoutsRun(t *testing.T) {
+	read := func(dir string) map[string]any {
+		data, err := os.ReadFile(pipelineContextPath(dir, "pr-5.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc map[string]any
+		_ = json.Unmarshal(data, &doc)
+		return doc
+	}
+	dir := initRepo(t)
+	if err := defaultWritePRContext(dir, prContextPayload{IssueNumber: 5, PRNumber: 6}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := read(dir)["run_id"]; ok {
+		t.Errorf("no run-state, yet run_id = %v", got)
+	}
+	checkout, err := layout.CheckoutDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs, err := runstate.MarkRunning(checkout, runstate.MarkRunningOptions{IssueNumber: 5, Branch: "feat/5-x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := defaultWritePRContext(dir, prContextPayload{IssueNumber: 5, PRNumber: 6}); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(dir)["run_id"]; got != rs.RunID {
+		t.Errorf("run_id = %v, want %s", got, rs.RunID)
+	}
+	if want := discoveredwork.LiveRunID(dir, 5); want == nil || *want != rs.RunID {
+		t.Errorf("records would carry %v, not %s", want, rs.RunID)
+	}
+}
+
+// TestACUnmetMatchesFollowup: followup materialize reads this status from
+// pr-{N}.json without importing stages.
+func TestACUnmetMatchesFollowup(t *testing.T) {
+	if ACUnmet != followup.ACUnmetStatus {
+		t.Fatalf("stages.ACUnmet %q, followup.ACUnmetStatus %q", ACUnmet, followup.ACUnmetStatus)
 	}
 }

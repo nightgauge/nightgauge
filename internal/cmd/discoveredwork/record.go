@@ -30,6 +30,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/atomicfile"
 	"github.com/nightgauge/nightgauge/internal/filing"
 	"github.com/nightgauge/nightgauge/internal/flock"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
 // SchemaVersion is the capture file envelope version.
@@ -55,6 +57,11 @@ type Record struct {
 	SuggestedSize        string   `json:"suggested_size"`
 	CandidateTargetFiles []string `json:"candidate_target_files"`
 	RecordedAt           string   `json:"recorded_at"`
+	// Criterion is the text of the issue's own acceptance criterion a record
+	// says is unmet (#3186). Only the independent review sets it; followup
+	// materialize compares it with the run's PR verdicts. Empty when the record
+	// names no criterion.
+	Criterion string `json:"criterion,omitempty"`
 }
 
 // Capture is the discovered-work-{N}.json envelope.
@@ -86,6 +93,8 @@ const (
 	maxEvidenceSz = 2000
 	maxFiles      = 20
 	maxFileLen    = 256
+	// MaxCriterion bounds Record.Criterion, in characters.
+	MaxCriterion = 2000
 )
 
 // ID is the deterministic record id: re-recording the same discovery from the
@@ -93,6 +102,23 @@ const (
 func ID(sourceStage, summary string) string {
 	sum := sha256.Sum256([]byte(sourceStage + "\x00" + summary))
 	return "dw-" + hex.EncodeToString(sum[:])[:12]
+}
+
+// LiveRunID is the run id the checkout at root records for issue, or nil when
+// no run-state names that issue. A caller never invents one. Every producer of
+// a record, and pr-create's pr-{N}.json, read it from here, so records and the
+// PR verdicts of one run carry the same id (#3186).
+func LiveRunID(root string, issue int) *string {
+	dir, err := layout.CheckoutDir(root)
+	if err != nil {
+		return nil
+	}
+	rs, err := runstate.Load(dir)
+	if err != nil || rs == nil || rs.IssueNumber != issue || rs.RunID == "" {
+		return nil
+	}
+	id := rs.RunID
+	return &id
 }
 
 // Validate checks rec against the v1 contract. Errors name the field first
@@ -155,6 +181,17 @@ func Validate(rec *Record) error {
 	for i, f := range rec.CandidateTargetFiles {
 		if err := validateTargetPath(f); err != nil {
 			return fmt.Errorf("candidate_target_files[%d]: %v", i, err)
+		}
+	}
+	if c := rec.Criterion; c != "" {
+		if c != strings.TrimSpace(c) || strings.ContainsAny(c, "\r\n") {
+			return errors.New("criterion: must be one trimmed line")
+		}
+		if err := checkPrintable(c, false); err != nil {
+			return fmt.Errorf("criterion: %w", err)
+		}
+		if n := len([]rune(c)); n > MaxCriterion {
+			return fmt.Errorf("criterion: must be at most %d characters (got %d)", MaxCriterion, n)
 		}
 	}
 	if !idRe.MatchString(rec.ID) {

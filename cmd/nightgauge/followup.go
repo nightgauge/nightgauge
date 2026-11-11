@@ -50,7 +50,11 @@ record as an issue with its type label, Priority, Size, Status=Backlog and a
 provenance line, under the follow_up_filing gate (fail closed to report-only,
 per-run cap, untrusted-author check). Records already filed are skipped;
 records matching an open issue's title become a provenance comment instead.
-Filed, deduped and reported records are removed from the capture file.
+A review record is not filed when this run's pr-<N>.json holds the criterion it
+names unmet (tracked-by-parent), or when it restates another producer's record
+for the same issue and run (duplicate); both are reported.
+Filed, deduped, reported, tracked and duplicate records are removed from the
+capture file.
 
 Exit 0: done (including zero records, reported as an empty capture). Exit 3: the per-run
 cap refused records; they stay in the capture file. Exit 1: error.`,
@@ -108,7 +112,8 @@ cap refused records; they stay in the capture file. Exit 1: error.`,
 				trusted = followup.AuthorTrusted(cmd.Context(), client, workdir, ownerPart, repoPart, number)
 			}
 
-			res, matErr := followup.Materialize(cmd.Context(), capture, gate, trusted, filer)
+			track := followup.LoadTracking(runDir, number)
+			res, matErr := followup.Materialize(cmd.Context(), capture, gate, trusted, track, filer)
 			if matErr != nil && !followup.IsCapRefusal(matErr) {
 				// Consume what was decided before the error so a retry does
 				// not redo it; undecided records stay.
@@ -156,7 +161,7 @@ func renderFollowupHuman(w io.Writer, res *followup.Result) {
 		switch it.Outcome {
 		case followup.OutcomeFiled, followup.OutcomeAlreadyExists, followup.OutcomeDeduped:
 			fmt.Fprintf(w, "  %-14s %s  #%d %s\n", it.Outcome, it.ID, it.IssueNumber, it.Title)
-		case followup.OutcomeInvalid:
+		case followup.OutcomeInvalid, followup.OutcomeTrackedByParent, followup.OutcomeDuplicate:
 			fmt.Fprintf(w, "  %-14s %s  %s (%s)\n", it.Outcome, it.ID, it.Title, it.Detail)
 		default:
 			fmt.Fprintf(w, "  %-14s %s  [%s %s %s] %s\n", it.Outcome, it.ID, it.Type, it.Priority, it.Size, it.Title)
