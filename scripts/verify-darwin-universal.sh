@@ -14,15 +14,19 @@
 # .goreleaser.yml copy hook then package. This check fails when any of those
 # copies is a thin binary or a different build.
 #
-# For the one *-darwin-arm64.vsix and the one *-darwin-x64.vsix in VSIX_DIR,
-# extracts extension/dist/bin/nightgauge and requires that `lipo -archs` prints
+# `vsce package --target <t>` names each file nightgauge-<t>-<version>.vsix
+# and records <t> as TargetPlatform in its extension.vsixmanifest (#3174). For
+# the one nightgauge-darwin-arm64-*.vsix and the one nightgauge-darwin-x64-*.vsix
+# in VSIX_DIR, requires the manifest to name that target, extracts
+# extension/dist/bin/nightgauge and requires that `lipo -archs` prints
 # exactly `x86_64 arm64` and that its sha256 equals the universal file's. Both
 # darwin bin/ binaries must equal it too.
 #
 # Exit codes:
 #   0  every darwin VSIX binary and darwin bin/ binary is the universal file
 #   1  at least one is thin or differs (each is named)
-#   2  HARNESS ERROR: a VSIX, binary or tool is missing, so nothing was asserted
+#   2  HARNESS ERROR: a VSIX, binary or tool is missing, or a darwin VSIX is not
+#      named the way vsce names it, so nothing was asserted
 
 set -uo pipefail
 
@@ -78,11 +82,46 @@ for arch in amd64 arm64; do
 done
 
 shopt -s nullglob
+
+# The one place the vsce file naming lives (#3174).
+vsix_name() { echo "nightgauge-$1-<version>.vsix"; }
+vsix_glob() { echo "nightgauge-$1-"; }
+
+# platform VSIX: the TargetPlatform the VSIX's manifest records, or empty.
+platform() {
+  local manifest
+  manifest="$(unzip -p "$1" extension.vsixmanifest 2>/dev/null)"
+  [[ "$manifest" =~ TargetPlatform=\"([^\"]*)\" ]] && echo "${BASH_REMATCH[1]}"
+}
+
+present() {
+  local all=("$VSIX_DIR"/*.vsix) f out=""
+  for f in "${all[@]}"; do out+=" $(basename "$f")"; done
+  echo "${out:- none}"
+}
+
+# Rename tripwire: every darwin-targeted VSIX must carry the vsce name, so a
+# change in naming fails loudly here instead of selecting nothing.
+for vsix in "$VSIX_DIR"/*.vsix; do
+  plat="$(platform "$vsix")"
+  case "$plat" in
+    darwin-*)
+      case "$(basename "$vsix")" in
+        "$(vsix_glob "$plat")"*.vsix) ;;
+        *) harness "$(basename "$vsix") targets $plat but is not named $(vsix_name "$plat")" ;;
+      esac ;;
+  esac
+done
+
 for target in darwin-arm64 darwin-x64; do
-  vsixes=("$VSIX_DIR"/*-"$target".vsix)
+  vsixes=("$VSIX_DIR/$(vsix_glob "$target")"*.vsix)
   (( ${#vsixes[@]} == 1 )) ||
-    harness "expected one *-$target.vsix in $VSIX_DIR, found ${#vsixes[@]}"
+    harness "expected one $(vsix_name "$target") in $VSIX_DIR, found ${#vsixes[@]}; present:$(present)"
   vsix="${vsixes[0]}"
+  plat="$(platform "$vsix")"
+  [[ -n "$plat" ]] || harness "no TargetPlatform in the extension.vsixmanifest of $vsix"
+  [[ "$plat" == "$target" ]] ||
+    harness "$(basename "$vsix") is named for $target but its manifest targets $plat"
   mkdir -p "$WORK/$target"
   unzip -q -o "$vsix" extension/dist/bin/nightgauge -d "$WORK/$target" 2>/dev/null ||
     harness "no extension/dist/bin/nightgauge inside $vsix"
