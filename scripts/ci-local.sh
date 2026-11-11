@@ -478,6 +478,9 @@ REQUIRED_FILES=(
   scripts/test-workflow-refs-check.sh
   scripts/test-marketplace-channel.sh
   scripts/test-release-channel-wiring.sh
+  scripts/release-margin-builds.sh
+  scripts/release-rc-margin-check.sh
+  scripts/test-release-margin.sh
   scripts/verify-registry-pat.sh
   scripts/main-build-version.sh
   scripts/test-main-build-version.sh
@@ -2059,6 +2062,9 @@ run_step "visibility-prose reintroduction gate" python3 scripts/check-visibility
 run_group "Workflow-reference gate regression suite" bash scripts/test-workflow-refs-check.sh
 run_group "Marketplace channel regression suite" bash scripts/test-marketplace-channel.sh
 run_group "Release channel wiring suite" bash scripts/test-release-channel-wiring.sh
+# The margin scan (#3192): RC margin builds and the release gate that requires a
+# margin-clean RC on the tag's commit, against stub make/sign/gh.
+run_group "Release margin scan suite" bash scripts/test-release-margin.sh
 run_group "Main build version regression suite" bash scripts/test-main-build-version.sh
 run_group "Playwright OS deps regression suite" bash scripts/test-playwright-os-deps.sh
 run_group "VSIX host-target regression suite" bash scripts/test-vsix-host-target.sh

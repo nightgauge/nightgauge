@@ -15,7 +15,9 @@
 # An RC tag push also runs the `rc-scan` job: a multi-engine VirusTotal scan of
 # the RC's archives and VSIXs, and every binary and bundle inside them (#3064).
 # A finding fails the RC, so a flagged build never reaches the soak. Main
-# builds are not scanned.
+# builds are not scanned. The scan also covers the margin builds: the shipped
+# binaries at three neighbouring version strings (#3192). Its clean record,
+# rc-margin-scan-<tag>, is what release.yml requires before promoting the RC.
 name: Staging (RC dry-run)
 
 on:
@@ -62,7 +64,9 @@ jobs:
     # runner such as macos-14-xlarge, which is billed even on public repos.
     # Do not copy this pattern into a private repository without re-checking.
     runs-on: macos-latest
-    timeout-minutes: 30
+    # 45, not 30: an RC tag also builds, signs and packs the margin binaries
+    # at three more version strings (#3192).
+    timeout-minutes: 45
     outputs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
@@ -144,6 +148,43 @@ jobs:
           bash scripts/sign-macos-binaries.sh bin/nightgauge-darwin-universal
           cp bin/nightgauge-darwin-universal bin/nightgauge-darwin-amd64
           cp bin/nightgauge-darwin-universal bin/nightgauge-darwin-arm64
+
+      # The margin scan (#3192). The Linux amd64 binary sits at the threshold
+      # of Microsoft's model and its verdict flips with the version string, so
+      # one clean scan at the RC's string proves nothing. Build the shipped
+      # binaries (Linux amd64 and the signed universal darwin file) at X.Y.Z,
+      # X.Y.Z-rc.(N+1) and X.Y.(Z+1)-rc.1 with the RC's own Makefile targets;
+      # rc-scan scans them with the RC's files and fails on any finding. They
+      # go in their own artifact and are never published. RC tag pushes only,
+      # the same condition as rc-scan: a main build is not scanned. The DWARF
+      # check proves the margin bytes are built like the RC's.
+      - name: Build the margin scan binaries (docs/RELEASE_BINARIES.md)
+        if: startsWith(github.ref, 'refs/tags/v') && inputs.version == ''
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # No notarization secrets: notarizing cannot change a bare Mach-O's
+          # bytes, and these builds are scan inputs only, never shipped.
+        run: |
+          set -euo pipefail
+          bash scripts/release-margin-builds.sh "$VERSION" "$RUNNER_TEMP/margin"
+          go build -o "$RUNNER_TEMP/release-dwarf-check" ./cmd/release-dwarf-check
+          "$RUNNER_TEMP/release-dwarf-check" "$RUNNER_TEMP"/margin/nightgauge-margin_*.tar.gz
+
+      # 90 days: release.yml reads the scanned manifest (rc-margin-scan-*,
+      # uploaded by rc-scan) when the RC is promoted, and a soak can be long.
+      - name: Upload margin scan inputs
+        if: startsWith(github.ref, 'refs/tags/v') && inputs.version == ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rc-margin-${{ steps.version.outputs.tag }}
+          path: |
+            ${{ runner.temp }}/margin/nightgauge-margin_*.tar.gz
+            ${{ runner.temp }}/margin/margin-manifest.txt
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Build SDK + extension
         run: npm run build
@@ -440,7 +481,9 @@ jobs:
     # the skipped workflow_call job never requests it from a branch ref.
     environment: production
     runs-on: ubuntu-latest
-    timeout-minutes: 80
+    # 100: the six margin archives (#3192) add about 36 requests, nine more
+    # minutes at the free key's 4 requests/min.
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -451,6 +494,15 @@ jobs:
         with:
           name: rc-artifacts-${{ needs.dry-run.outputs.tag }}
           path: ${{ runner.temp }}/rc
+
+      # The margin builds (#3192, docs/RELEASE_BINARIES.md): the RC's shipped
+      # binaries at three neighbouring version strings. They are scanned with
+      # the RC's files, so a finding at any string fails the RC.
+      - name: Download margin scan inputs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rc-margin-${{ needs.dry-run.outputs.tag }}
+          path: ${{ runner.temp }}/margin
 
       - name: Scan every archive and VSIX
         env:
@@ -464,8 +516,31 @@ jobs:
           shopt -s nullglob
           FILES=("$RUNNER_TEMP"/rc/packages/nightgauge/*.vsix "$RUNNER_TEMP"/rc/dist/*.tar.gz)
           [ "${#FILES[@]}" -gt 0 ] || { echo "::error::no .vsix or .tar.gz in rc-artifacts"; ls -R "$RUNNER_TEMP/rc"; exit 1; }
+          MARGIN=("$RUNNER_TEMP"/margin/nightgauge-margin_*.tar.gz)
+          [ "${#MARGIN[@]}" -eq 6 ] && [ -s "$RUNNER_TEMP/margin/margin-manifest.txt" ] || {
+            echo "::error::rc-margin holds ${#MARGIN[@]} margin archives and no manifest or an empty one; the margin scan needs 6 and the manifest (docs/RELEASE_BINARIES.md)"
+            ls -R "$RUNNER_TEMP/margin"
+            exit 1
+          }
           bash scripts/release-scan-gate.sh local \
-            --report "$RUNNER_TEMP/vt-scan-report-rc.json" "${FILES[@]}"
+            --report "$RUNNER_TEMP/vt-scan-report-rc.json" "${FILES[@]}" "${MARGIN[@]}"
+          # The record artifact roots at the upload paths' common ancestor, so
+          # the manifest must sit beside the report: release-rc-margin-check.sh
+          # reads both from the artifact's top level.
+          cp "$RUNNER_TEMP/margin/margin-manifest.txt" "$RUNNER_TEMP/margin-manifest.txt"
+
+      # Only after a clean scan: this artifact is the record release.yml's
+      # margin gate reads (scripts/release-rc-margin-check.sh). 90 days, so a
+      # long soak can still be promoted; after that, cut a new RC.
+      - name: Upload the margin scan record
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rc-margin-scan-${{ needs.dry-run.outputs.tag }}
+          path: |
+            ${{ runner.temp }}/margin-manifest.txt
+            ${{ runner.temp }}/vt-scan-report-rc.json
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Upload VirusTotal report
         if: always()

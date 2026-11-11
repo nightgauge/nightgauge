@@ -36,7 +36,7 @@ Supports both Apple Silicon (arm64) and Intel (amd64) Macs.
 go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest
 ```
 
-Requires Go 1.26+. The binary is installed to `$GOPATH/bin/nightgauge`.
+Requires Go 1.27+. The binary is installed to `$GOPATH/bin/nightgauge`.
 
 ### npm postinstall (SDK — in-repo builds only)
 

@@ -1,22 +1,28 @@
 // Command release-dwarf-check proves that every Go binary a release ships
-// carries DWARF debug information.
+// carries DWARF debug information, uncompressed.
 //
 // Release binaries ship unstripped (docs/RELEASE_BINARIES.md): Microsoft
 // Defender's model flagged the stripped Go ELF. DWARF is the best available
-// lever, not a guarantee: v0.8.4 was flagged with DWARF present. This tool reads the packaged bytes, not the linker flags, so it also
-// catches a binary stripped by any later step.
+// lever, not a guarantee: v0.8.4 was flagged with DWARF present. The release
+// builds also keep DWARF uncompressed (-compressdwarf=false): the Linux ELF sits
+// at that model's threshold, and uncompressed DWARF on go1.27.3 was its
+// lowest-rate build (#3192), and the signed universal darwin file was measured
+// the same way (#3161). This tool reads the packaged bytes, not the linker
+// flags, so it also catches a binary stripped or rebuilt by any later step.
 //
 //	release-dwarf-check PATH...
 //
 // Each PATH is a .tar.gz/.tgz archive, a .vsix/.zip archive, or a raw binary.
 // Inside an archive, every regular entry that is an ELF or Mach-O Go binary is
 // checked; other entries are ignored. A fat Mach-O must carry DWARF in every
-// architecture slice.
+// architecture slice. Compressed DWARF is an ELF .debug_* section flagged
+// SHF_COMPRESSED (or a legacy .zdebug_* section), or a Mach-O __zdebug_*
+// section.
 //
 // Exit codes:
 //
-//	0  every Go binary found carries DWARF
-//	1  at least one Go binary lacks DWARF
+//	0  every Go binary found carries uncompressed DWARF
+//	1  at least one Go binary lacks DWARF or carries it compressed
 //	2  nothing was asserted: no arguments, an unreadable path, a path that is
 //	   not a Go binary, or an archive holding no Go binary (a HARNESS ERROR line
 //	   says which)
@@ -50,6 +56,7 @@ type verdict int
 const (
 	verdictOK verdict = iota
 	verdictMissing
+	verdictCompressed
 	verdictHarness
 )
 
@@ -70,7 +77,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch worst {
 	case verdictOK:
 		return 0
-	case verdictMissing:
+	case verdictMissing, verdictCompressed:
 		return 1
 	default:
 		return 2
@@ -223,6 +230,15 @@ func checkEntry(label string, r io.Reader, stdout, stderr io.Writer) (bool, verd
 		fmt.Fprintf(stdout, "::error::%s has no DWARF debug information; release binaries ship unstripped (see %s)\n", label, record)
 		return true, verdictMissing
 	}
+	section, err := compressedDWARF(kind, tmp.Name())
+	if err != nil {
+		fmt.Fprintf(stderr, "HARNESS ERROR: %s: %v\n", label, err)
+		return true, verdictHarness
+	}
+	if section != "" {
+		fmt.Fprintf(stdout, "::error::%s carries compressed DWARF (%s); release binaries are built with -compressdwarf=false (see %s)\n", label, section, record)
+		return true, verdictCompressed
+	}
 	fmt.Fprintf(stdout, "ok   %s\n", label)
 	return true, verdictOK
 }
@@ -297,4 +313,60 @@ func dwarfPresent(d *dwarf.Data, err error) bool {
 	}
 	e, err := d.Reader().Next()
 	return err == nil && e != nil
+}
+
+// compressedDWARF returns the name of the first compressed DWARF section in
+// the binary, or "" when its DWARF is stored uncompressed. A fat Mach-O is
+// compressed when any architecture slice is.
+func compressedDWARF(kind binKind, path string) (string, error) {
+	switch kind {
+	case kindELF:
+		f, err := elf.Open(path)
+		if err != nil {
+			return "", err
+		}
+		defer f.Close()
+		return elfCompressedDWARF(f), nil
+	case kindMachO:
+		f, err := macho.Open(path)
+		if err != nil {
+			return "", err
+		}
+		defer f.Close()
+		return machoCompressedDWARF(f), nil
+	case kindFat:
+		ff, err := macho.OpenFat(path)
+		if err != nil {
+			return "", err
+		}
+		defer ff.Close()
+		for _, a := range ff.Arches {
+			if name := machoCompressedDWARF(a.File); name != "" {
+				return name, nil
+			}
+		}
+		return "", nil
+	}
+	return "", fmt.Errorf("unsupported binary kind %d", kind)
+}
+
+func elfCompressedDWARF(f *elf.File) string {
+	for _, s := range f.Sections {
+		if strings.HasPrefix(s.Name, ".zdebug_") {
+			return s.Name
+		}
+		if strings.HasPrefix(s.Name, ".debug_") && s.Flags&elf.SHF_COMPRESSED != 0 {
+			return s.Name
+		}
+	}
+	return ""
+}
+
+func machoCompressedDWARF(f *macho.File) string {
+	for _, s := range f.Sections {
+		if strings.HasPrefix(s.Name, "__zdebug_") {
+			return s.Name
+		}
+	}
+	return ""
 }

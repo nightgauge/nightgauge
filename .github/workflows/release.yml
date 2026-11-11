@@ -135,6 +135,7 @@ jobs:
       contents: write # create releases
       id-token: write # artifact attestations (OIDC)
       attestations: write # artifact attestations
+      actions: read # the margin gate reads the RC's staging run and artifact
 
     steps:
       # `state` ran first, but a `gh run rerun --failed` reuses its old answer.
@@ -167,6 +168,18 @@ jobs:
           # ("running against a shallow clone") and breaks previous-tag detection
           # and changelog generation.
           fetch-depth: 0
+
+      # #3192: the Linux amd64 binary sits at the threshold of Microsoft's
+      # model, and its verdict flips with the version string. An RC on this
+      # commit must have passed rc-scan with its margin builds, one of them at
+      # this release's own string, or nothing is built. No override: an
+      # expired record means a new RC (docs/RELEASE_BINARIES.md).
+      - name: Require an RC on this commit with a clean margin scan (docs/RELEASE_BINARIES.md)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: bash scripts/release-rc-margin-check.sh "$TAG" "$GITHUB_SHA" "$REPO"
 
       - name: Ensure full working tree
         run: |
