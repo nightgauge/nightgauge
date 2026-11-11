@@ -22,6 +22,11 @@ changelog, and the release workflow refuses a tag that does not.
   all five version strings measured. Both macOS VSIXs, both macOS archives
   and the Homebrew cask ship it, so each is about twice its former size. A
   release step fails if a macOS VSIX or binary is not that file.
+- **The review-cap card says where the work really is.** It used to claim the work was
+  uncommitted in the run's worktree even after cleanup had removed it. The card now checks at
+  raise time whether the worktree exists and how many uncommitted paths it holds, and how many
+  commits the issue branch holds beyond the base branch, and says no work was found when there
+  is none. The parked-issue remediation points to the card instead (#3059).
 - **The opencode plugin's gates no longer deny tool calls on a loaded
   machine.** Each gate verb may now run for 15 seconds instead of 5 before
   the call is blocked closed, and a timed-out gate's error names how long it

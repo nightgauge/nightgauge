@@ -514,7 +514,7 @@ func (as *AutonomousScheduler) raiseReviewCapReached(repo string, issue int, tit
 		"This issue is parked; the rest of the repository keeps dispatching.\n\n", key, title, review.MaxRounds)
 	if rec != nil {
 		fingerprint = "review-cap:" + rec.RunID
-		writeReviewCapRecord(&body, rec)
+		writeReviewCapRecord(&body, rec, probeReviewCapLocation(as.steerRootFor(repo), rec.Worktree, issue))
 	} else {
 		fmt.Fprintf(&body, "No review record was found: %s\n\n", detail)
 	}
@@ -621,8 +621,9 @@ func (as *AutonomousScheduler) retractResumeNoOp(repo string, issue int) {
 	as.retractCard(producerResumeNoOp, keyResumeNoOp(repo, issue))
 }
 
-// writeReviewCapRecord lists the last catch's findings and the worktree.
-func writeReviewCapRecord(b *strings.Builder, rec *review.CapRecord) {
+// writeReviewCapRecord lists the last catch's findings and where the work is,
+// as probed when the card is raised (#3059).
+func writeReviewCapRecord(b *strings.Builder, rec *review.CapRecord, loc reviewCapLocation) {
 	if len(rec.Outcome.Fix) == 0 {
 		b.WriteString("The last review recorded no findings to fix.\n\n")
 	} else {
@@ -637,10 +638,7 @@ func writeReviewCapRecord(b *strings.Builder, rec *review.CapRecord) {
 		}
 		b.WriteString("\n")
 	}
-	if rec.Worktree != "" {
-		fmt.Fprintf(b, "The work is uncommitted in %s. Nothing was pushed.\n\n",
-			attention.CodeSpan(rec.Worktree))
-	}
+	writeReviewCapLocation(b, loc)
 }
 
 // keyUntrustedAuthorSkip builds the sticky (producer, idempotency_key)
