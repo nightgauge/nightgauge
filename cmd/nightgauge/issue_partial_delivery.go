@@ -13,6 +13,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/hooks"
+	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
 
 // partialDeliveryReaderFactory builds the reader `issue partial-delivery` uses;
@@ -88,7 +89,13 @@ func runIssuePartialDelivery(ctx context.Context, stdout, stderr io.Writer, owne
 		return 2
 	}
 	if outputJSON {
-		data, err := json.MarshalIndent(status, "", "  ")
+		// prompt_blocks: the extension's stage loop appends these to the
+		// feature-planning and feature-dev prompts, so a run it starts on an
+		// issue with a pending remainder is scoped like the Go path's (#3095).
+		data, err := json.MarshalIndent(struct {
+			hooks.PartialDeliveryStatus
+			PromptBlocks map[string]string `json:"prompt_blocks,omitempty"`
+		}{status, orchestrator.PartialRerunPromptBlocks(status)}, "", "  ")
 		if err != nil {
 			fmt.Fprintf(stderr, "issue partial-delivery: %v\n", err)
 			return 2
