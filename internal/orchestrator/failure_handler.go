@@ -704,8 +704,9 @@ const (
 	// TerminalKindReviewCapReached: feature-validate's independent review reached
 	// its round cap with findings standing (#2865). It parks: the fault, if any,
 	// is one issue's, so it must not stop the repository, and a retry of the same
-	// tree buys the same review. The work stays uncommitted in the run's worktree
-	// and the Action Center card names it, with the findings. It is not
+	// tree buys the same review. The Action Center card lists the findings and
+	// says where the work is when the card is raised: the worktree, the issue
+	// branch, or nowhere (#3059). It is not
 	// TerminalKindNotPipelineActionable, whose claim is that no lap can produce
 	// the deliverable and whose path labels the issue owner-action.
 	TerminalKindReviewCapReached = "review_cap_reached"
@@ -767,8 +768,8 @@ func TerminalKindRemediation(kind string) string {
 			"not judged on the old one; file a pipeline-gap issue with the run's evidence, delete or regenerate the " +
 			"stale dev-N.json in the pipeline state directory, " + parkedReleaseStep
 	case TerminalKindReviewCapReached:
-		return "the independent review reached its round cap with findings standing, and the work is uncommitted in " +
-			"the run's worktree; the Action Center card lists both. Finish the fixes there or narrow the issue, " +
+		return "the independent review reached its round cap with findings standing; the Action Center card lists " +
+			"them and says where the work is (worktree, branch, or none). Finish the fixes where the card points or narrow the issue, " +
 			parkedReleaseStep + " — a release re-runs the pipeline with a fresh round count"
 	case TerminalKindResumeNoOp:
 		return "a run resumed at pr-merge and found the PR already merged, so nothing was delivered; check the " +

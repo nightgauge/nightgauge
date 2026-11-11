@@ -1535,7 +1535,7 @@ func TestProducerReviewCapNamesTheFindingsAndTheWorktree(t *testing.T) {
 	if !strings.Contains(r.Title, "Review cap") || r.Context.Blocker != TerminalKindReviewCapReached {
 		t.Errorf("the card must name the cap: title=%q blocker=%q", r.Title, r.Context.Blocker)
 	}
-	for _, want := range []string{"a.go:12", "nil deref on empty slice", "/tmp/wt-2865", "uncommitted"} {
+	for _, want := range []string{"a.go:12", "nil deref on empty slice", "/tmp/wt-2865", "no longer exists"} {
 		if !strings.Contains(r.Body, want) {
 			t.Errorf("body lacks %q:\n%s", want, r.Body)
 		}
@@ -1705,10 +1705,10 @@ func TestReviewCapRecordRendersPathsAsCodeSpans(t *testing.T) {
 		}}},
 	}
 	var b strings.Builder
-	writeReviewCapRecord(&b, rec)
+	writeReviewCapRecord(&b, rec, reviewCapLocation{Worktree: rec.Worktree, Base: "origin/main"})
 	body := b.String()
 	for _, want := range []string{
-		"The work is uncommitted in ``/tmp/a_b/*c*/d`e``. Nothing was pushed.",
+		"The run's worktree ``/tmp/a_b/*c*/d`e`` no longer exists, so the work is not there.",
 		"- high correctness, `x_y/*z*.go:7`: bad\\_thing\n",
 	} {
 		if !strings.Contains(body, want) {
