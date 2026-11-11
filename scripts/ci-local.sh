@@ -481,6 +481,8 @@ REQUIRED_FILES=(
   scripts/verify-registry-pat.sh
   scripts/main-build-version.sh
   scripts/test-main-build-version.sh
+  scripts/playwright-os-deps.sh
+  scripts/test-playwright-os-deps.sh
   scripts/test-vsix-host-target.sh
   packages/nightgauge/scripts/vsix-host-target.sh
   scripts/test-verify-release-channels.sh
@@ -2058,6 +2060,7 @@ run_group "Workflow-reference gate regression suite" bash scripts/test-workflow-
 run_group "Marketplace channel regression suite" bash scripts/test-marketplace-channel.sh
 run_group "Release channel wiring suite" bash scripts/test-release-channel-wiring.sh
 run_group "Main build version regression suite" bash scripts/test-main-build-version.sh
+run_group "Playwright OS deps regression suite" bash scripts/test-playwright-os-deps.sh
 run_group "VSIX host-target regression suite" bash scripts/test-vsix-host-target.sh
 run_group "Release channel verification regression suite" bash scripts/test-verify-release-channels.sh
 run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-refs.py

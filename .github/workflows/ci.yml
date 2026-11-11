@@ -528,9 +528,10 @@ jobs:
       # The browser binary (not the npm package) is the expensive part of
       # `playwright install`, so it is cached by Playwright's own version —
       # a version bump invalidates the cache and re-downloads, exactly what
-      # is wanted. `install-deps` (apt-level OS libraries) is NOT cached: the
-      # runner image is ephemeral per job regardless of cache-hit, so it must
-      # run every time — only the browser binary download is conditional.
+      # is wanted. The apt-level OS libraries are NOT cached: the runner
+      # image is ephemeral per job, so scripts/playwright-os-deps.sh runs every
+      # time. It tolerates an unreachable apt mirror when the cached headless
+      # Chromium still launches (#3199) — the image already carries its libs.
       - name: Get Playwright version
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         id: playwright-version
@@ -544,10 +545,10 @@ jobs:
           key: playwright-browsers-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
       - name: Install Playwright browser (chromium, cache miss)
         if: ${{ needs.changes.outputs.run_heavy != 'false' && steps.playwright-cache.outputs.cache-hit != 'true' }}
-        run: npx -w packages/nightgauge playwright install --with-deps chromium
-      - name: Install Playwright OS dependencies (cache hit)
-        if: ${{ needs.changes.outputs.run_heavy != 'false' && steps.playwright-cache.outputs.cache-hit == 'true' }}
-        run: npx -w packages/nightgauge playwright install-deps chromium
+        run: npx -w packages/nightgauge playwright install chromium
+      - name: Install Playwright OS dependencies
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        run: bash scripts/playwright-os-deps.sh
       # test:e2e generates the real dashboard HTML fixture
       # (DashboardInteractions.playwright.ts loads it from /tmp) before
       # running the suite — a bare `playwright test` skips that prerequisite
