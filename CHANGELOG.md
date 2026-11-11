@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **An unreachable apt mirror no longer fails the Playwright CI job (#3199).**
+  `scripts/playwright-os-deps.sh` installs Chromium's OS dependencies and, when
+  that install fails, launches the cached headless Chromium once: a successful
+  launch continues with a warning naming the failed install, a failed launch
+  fails the job with the launch error. The browser download is no longer bundled
+  with the apt install.
 - **The independent review no longer files a follow-up for the reviewed issue's
   own unmet criterion, or for a gap another stage already recorded (#3186).** A
   plan-compliance finding that begins `Criterion N:` is linked to that criterion;
