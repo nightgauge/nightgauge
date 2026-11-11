@@ -52,7 +52,7 @@ func snapshotKey(runID string) string {
 // rewrite a later stage's SKILL.md (or an include, or skills/_shared) and change
 // what that stage executes: a privilege boundary between stages that held only
 // by convention. The snapshot lives in git-dir checkout state, outside the
-// worktree, so no stage's tools touch it, and its files are read-only on disk.
+// worktree, so no stage's tools touch it, and its tree (files and directories) is read-only on disk.
 //
 // The snapshot is keyed by the persisted run ID, so a resumed run in a new
 // process reuses the copy taken at run start instead of copying an edited tree.
@@ -106,19 +106,19 @@ func runSkillSnapshot(workspaceRoot, liveRoot string, issueNumber int, runID str
 	}
 	if src == "" {
 		if err := os.Mkdir(filepath.Join(tmp, "skills"), 0o755); err != nil {
-			_ = os.RemoveAll(tmp)
+			_ = removeSnapshotTree(tmp)
 			return "", err
 		}
 	} else if err := copySkillTree(src, filepath.Join(tmp, "skills")); err != nil {
-		_ = os.RemoveAll(tmp)
+		_ = removeSnapshotTree(tmp)
 		return "", fmt.Errorf("copy %s: %w", src, err)
 	}
 	if err := freezeTree(tmp); err != nil {
-		_ = os.RemoveAll(tmp)
+		_ = removeSnapshotTree(tmp)
 		return "", err
 	}
-	if err := os.Rename(tmp, dst); err != nil {
-		_ = os.RemoveAll(tmp)
+	if err := renameFrozen(tmp, dst); err != nil {
+		_ = removeSnapshotTree(tmp)
 		// A concurrent stage of the same run won the race: keep its copy.
 		if info, statErr := os.Stat(filepath.Join(dst, "skills")); statErr == nil && info.IsDir() {
 			return dst, nil
@@ -169,16 +169,76 @@ func copyRegularFile(src, dst string) error {
 	return out.Close()
 }
 
-// freezeTree makes every file 0444. Directories stay owner-writable so any
-// cleanup of checkout state (RemoveAll) can still delete the snapshot; the
-// protection is the location outside the worktree, the mode is a backstop.
+// freezeTree makes every regular file 0444 and every directory, including
+// root itself, 0555 (#3088). Unlinking or renaming an entry needs write
+// permission on its parent directory, so frozen files alone would still let a
+// stage remove or rename-replace SKILL.md. Directories are chmodded after
+// their contents (post-order) because the walk must still read them. The
+// protection is the location outside the worktree; the mode is a backstop.
+// Remove a frozen tree with removeSnapshotTree and rename it with renameFrozen.
 func freezeTree(root string) error {
-	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+	var dirs []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
 			return err
+		}
+		if d.IsDir() {
+			dirs = append(dirs, path)
+			return nil
 		}
 		return os.Chmod(path, 0o444)
 	})
+	if err != nil {
+		return err
+	}
+	for i := len(dirs) - 1; i >= 0; i-- {
+		if err := os.Chmod(dirs[i], 0o555); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// thawDirs makes every directory under root (root included) owner-writable so
+// its entries can be removed. WalkDir visits a directory before reading it, so
+// a pre-order chmod reaches every level. Files need no chmod: unlinking needs
+// only write permission on the parent directory.
+func thawDirs(root string) {
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if path == root {
+				return err
+			}
+			return nil
+		}
+		if d.IsDir() {
+			if err := os.Chmod(path, 0o700); err != nil && path == root {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// removeSnapshotTree removes path, a snapshot or a directory of snapshots,
+// whose directories freezeTree made read-only.
+func removeSnapshotTree(path string) error {
+	thawDirs(path)
+	return os.RemoveAll(path)
+}
+
+// renameFrozen renames a frozen snapshot root. Some platforms (darwin)
+// require write permission on a directory being moved to a new parent entry,
+// so the root is thawed for the rename and re-frozen afterwards.
+func renameFrozen(oldPath, newPath string) error {
+	if err := os.Chmod(oldPath, 0o700); err != nil {
+		return err
+	}
+	if err := os.Rename(oldPath, newPath); err != nil {
+		_ = os.Chmod(oldPath, 0o555)
+		return err
+	}
+	return os.Chmod(newPath, 0o555)
 }
 
 // pruneSkillSnapshots removes every snapshot in one issue's directory that
@@ -194,7 +254,7 @@ func pruneSkillSnapshots(base, keep string) {
 		if e.Name() == keep || strings.HasPrefix(e.Name(), keep+".tmp-") {
 			continue
 		}
-		_ = os.RemoveAll(filepath.Join(base, e.Name()))
+		_ = removeSnapshotTree(filepath.Join(base, e.Name()))
 	}
 }
 
@@ -221,7 +281,7 @@ func resetSkillSnapshotForRun(workspaceRoot string, issueNumber int, runID strin
 		return
 	}
 	if !resumed {
-		_ = os.RemoveAll(base)
+		_ = removeSnapshotTree(base)
 		return
 	}
 	adoptSkillSnapshot(base, snapshotKey(runID))
@@ -255,7 +315,7 @@ func adoptSkillSnapshot(base, key string) {
 	if pick == "" {
 		return
 	}
-	if err := os.Rename(filepath.Join(base, pick), filepath.Join(base, key)); err != nil {
+	if err := renameFrozen(filepath.Join(base, pick), filepath.Join(base, key)); err != nil {
 		return
 	}
 	pruneSkillSnapshots(base, key)
@@ -269,7 +329,7 @@ func dropSkillSnapshot(workspaceRoot string, issueNumber int) {
 		return
 	}
 	if base, ok := skillSnapshotIssueDir(workspaceRoot, issueNumber); ok {
-		_ = os.RemoveAll(base)
+		_ = removeSnapshotTree(base)
 	}
 }
 

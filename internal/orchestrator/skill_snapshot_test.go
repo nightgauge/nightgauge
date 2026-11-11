@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 func TestRunSkillSnapshotCopiesOnceAndReuses(t *testing.T) {
 	root := t.TempDir()
+	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
 	live := t.TempDir()
 	skill := filepath.Join(live, "skills", "nightgauge-x", "SKILL.md")
@@ -39,6 +41,7 @@ func TestRunSkillSnapshotCopiesOnceAndReuses(t *testing.T) {
 
 func TestRunSkillSnapshotSkipsSymlinks(t *testing.T) {
 	root := t.TempDir()
+	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
 	live := t.TempDir()
 	writeTestFile(t, filepath.Join(live, "skills", "a", "SKILL.md"), "a")
@@ -56,6 +59,7 @@ func TestRunSkillSnapshotSkipsSymlinks(t *testing.T) {
 
 func TestRunSkillSnapshotPrunesOtherRuns(t *testing.T) {
 	root := t.TempDir()
+	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
 	live := t.TempDir()
 	writeTestFile(t, filepath.Join(live, "skills", "a", "SKILL.md"), "a")
@@ -73,6 +77,7 @@ func TestRunSkillSnapshotPrunesOtherRuns(t *testing.T) {
 
 func TestRunSkillSnapshotNoSkillsAndBadRunID(t *testing.T) {
 	root := t.TempDir()
+	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
 	live := t.TempDir()
 	dst, err := runSkillSnapshot(root, live, 7, "run-x")
@@ -109,6 +114,7 @@ func TestRunSkillSnapshotNoSkillsAndBadRunID(t *testing.T) {
 // checkout is shared, the snapshot directories are not (#2813 review).
 func TestRunSkillSnapshotKeepsOtherIssuesSnapshots(t *testing.T) {
 	root := t.TempDir()
+	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
 	live := t.TempDir()
 	writeTestFile(t, filepath.Join(live, "skills", "a", "SKILL.md"), "a")
@@ -131,6 +137,7 @@ func TestRunSkillSnapshotKeepsOtherIssuesSnapshots(t *testing.T) {
 // resume of the same run keeps its frozen copy (#2813 review).
 func TestResetSkillSnapshotForRunDropsInheritedCopies(t *testing.T) {
 	root := t.TempDir()
+	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
 	live := t.TempDir()
 	skill := filepath.Join(live, "skills", "a", "SKILL.md")
@@ -164,6 +171,7 @@ func TestResetSkillSnapshotForRunDropsInheritedCopies(t *testing.T) {
 // (#2813).
 func TestResetSkillSnapshotKeepsResumeWhileAnotherIssueOwnsRunState(t *testing.T) {
 	root := t.TempDir()
+	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
 	live := t.TempDir()
 	skill := filepath.Join(live, "skills", "a", "SKILL.md")
@@ -191,6 +199,7 @@ func TestResetSkillSnapshotKeepsResumeWhileAnotherIssueOwnsRunState(t *testing.T
 // (#2813 review: MarkRunning mints its own ID).
 func TestResetSkillSnapshotResumeAdoptsCopyUnderAnotherID(t *testing.T) {
 	root := t.TempDir()
+	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
 	live := t.TempDir()
 	skill := filepath.Join(live, "skills", "a", "SKILL.md")
@@ -217,6 +226,7 @@ func TestResetSkillSnapshotResumeAdoptsCopyUnderAnotherID(t *testing.T) {
 // A run that ends without a resume removes its snapshot; other issues keep theirs.
 func TestDropSkillSnapshotRemovesOnlyThatIssue(t *testing.T) {
 	root := t.TempDir()
+	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
 	live := t.TempDir()
 	writeTestFile(t, filepath.Join(live, "skills", "a", "SKILL.md"), "a")
@@ -241,6 +251,7 @@ func TestDropSkillSnapshotRemovesOnlyThatIssue(t *testing.T) {
 // key, and renders the current skills (#2813).
 func TestResetSkillSnapshotNotResumedDropsOtherCopies(t *testing.T) {
 	root := t.TempDir()
+	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
 	live := t.TempDir()
 	skill := filepath.Join(live, "skills", "a", "SKILL.md")
@@ -271,6 +282,7 @@ func TestResetSkillSnapshotNotResumedDropsOtherCopies(t *testing.T) {
 func TestPlatformRunResumingPausedRecordRendersFromSnapshot(t *testing.T) {
 	t.Setenv(skillrender.SkillsRootEnv, "")
 	root := layouttest.Repo(t)
+	thawOnCleanup(t, root)
 	skill := filepath.Join(root, "skills", "nightgauge-feature-dev", "SKILL.md")
 	writeTestFile(t, skill, "---\nname: feature-dev\n---\nrun-start body\n")
 	render := func(runID string) string {
@@ -313,5 +325,60 @@ func TestPlatformRunResumingPausedRecordRendersFromSnapshot(t *testing.T) {
 	resetSkillSnapshotForRun(root, 7, "remote-3", lc3.resumed)
 	if got := render("remote-3"); !strings.Contains(got, "INJECTED") {
 		t.Errorf("fresh render = %q, want the current skill", got)
+	}
+}
+
+// thawOnCleanup makes every directory under dir owner-writable before
+// t.TempDir's own cleanup removes it: frozen snapshot directories are 0555
+// (#3088), so that removal would otherwise fail. t.Cleanup is LIFO, so call
+// this after the t.TempDir that created dir.
+func thawOnCleanup(t *testing.T, dir string) {
+	t.Helper()
+	t.Cleanup(func() { thawDirs(dir) })
+}
+
+func TestRunSkillSnapshotFreezesDirectories(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	root := t.TempDir()
+	thawOnCleanup(t, root)
+	layouttest.MkCheckoutDir(t, root)
+	live := t.TempDir()
+	writeTestFile(t, filepath.Join(live, "skills", "nightgauge-x", "SKILL.md"), "v1")
+
+	dst, err := runSkillSnapshot(root, live, 7, "run-a")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	skillDir := filepath.Join(dst, "skills", "nightgauge-x")
+	skill := filepath.Join(skillDir, "SKILL.md")
+	for _, d := range []string{dst, filepath.Join(dst, "skills"), skillDir} {
+		info, err := os.Stat(d)
+		if err != nil {
+			t.Errorf("stat %s: %v", d, err)
+		} else if info.Mode().Perm() != 0o555 {
+			t.Errorf("%s mode = %v; want 0555", d, info.Mode().Perm())
+		}
+	}
+	attempts := map[string]error{
+		"remove SKILL.md": os.Remove(skill),
+		"rename SKILL.md": os.Rename(skill, skill+".x"),
+		"create entry":    os.WriteFile(filepath.Join(skillDir, "NEW.md"), []byte("x"), 0o600),
+		"rename skills/":  os.Rename(filepath.Join(dst, "skills"), filepath.Join(dst, "skills2")),
+	}
+	for name, err := range attempts {
+		if !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("%s: err = %v, want permission denied", name, err)
+		}
+	}
+	if data, err := os.ReadFile(skill); err != nil || string(data) != "v1" {
+		t.Errorf("SKILL.md = %q, %v; want v1 unchanged", data, err)
+	}
+
+	// Cleanup still removes the frozen tree.
+	dropSkillSnapshot(root, 7)
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Errorf("snapshot survived drop: %v", err)
 	}
 }
