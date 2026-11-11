@@ -41,6 +41,7 @@ func newIpcTestHarnessWithSkills(t *testing.T) (*ipcTestHarness, string) {
 	t.Helper()
 
 	workDir := layouttest.Repo(t)
+	thawSkillSnapshotsOnCleanup(t, workDir)
 	configDir := filepath.Join(workDir, ".nightgauge")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
@@ -828,6 +829,7 @@ func TestE2E_QueueSurvivesRestart(t *testing.T) {
 
 	// Create shared workspace directory (persists across binary restarts)
 	workDir := layouttest.Repo(t)
+	thawSkillSnapshotsOnCleanup(t, workDir)
 	configDir := filepath.Join(workDir, ".nightgauge")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
@@ -1258,4 +1260,20 @@ func TestE2E_ConcurrentPipelines(t *testing.T) {
 			}
 		}
 	}
+}
+
+// thawSkillSnapshotsOnCleanup makes every directory under dir writable before
+// t.TempDir's cleanup removes it: the daemon freezes its run's skill snapshot
+// under dir/.git with read-only directories (#3088). t.Cleanup is LIFO, so call
+// this right after the t.TempDir that created dir.
+func thawSkillSnapshotsOnCleanup(t *testing.T, dir string) {
+	t.Helper()
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+			if err == nil && d.IsDir() {
+				_ = os.Chmod(path, 0o700)
+			}
+			return nil
+		})
+	})
 }

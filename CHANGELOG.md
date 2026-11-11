@@ -25,6 +25,12 @@ changelog, and the release workflow refuses a tag that does not.
   such as `max_tested`) with another stage's record for the same issue and run is
   reported as `duplicate`. Everything else is filed as before. `pr-<N>.json` now
   records the `run_id`, and discovered-work records may carry a `criterion`.
+- **Skill snapshots now freeze their directories, not just their files
+  (#3088).** A run's skill snapshot made files read-only but left directories
+  writable, so a stage could delete or rename-replace a frozen `SKILL.md`.
+  Snapshot directories are now read-only too, and snapshot cleanup thaws them
+  before removal.
+
 - **An inherited required-check failure now ends `ci wait` as FAILURE
   (#3179).** A required check whose latest run failed is decisive even while
   other required checks (such as `lint` or `cla`, which never post on a PR
