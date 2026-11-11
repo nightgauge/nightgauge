@@ -281,6 +281,7 @@ func writeTestFile(t *testing.T, path, content string) {
 func TestStageSkillRootsSearchesTheRunsWorktree(t *testing.T) {
 	t.Setenv(skillrender.SkillsRootEnv, "")
 	root := t.TempDir()
+	thawOnCleanup(t, root)
 	worktree := t.TempDir()
 	writeTestFile(t, filepath.Join(worktree, "skills", "nightgauge-feature-dev", "SKILL.md"), "worktree\n")
 	writeTestFile(t, filepath.Join(root, "skills", "nightgauge-feature-dev", "SKILL.md"), "repository\n")
@@ -315,6 +316,7 @@ func TestStageSkillRootsSearchesTheRunsWorktree(t *testing.T) {
 func TestStageSkillRootsIgnoresWorktreeEditsBetweenStages(t *testing.T) {
 	t.Setenv(skillrender.SkillsRootEnv, "")
 	root := t.TempDir()
+	thawOnCleanup(t, root)
 	worktree := t.TempDir()
 	skill := filepath.Join(worktree, "skills", "nightgauge-feature-dev", "SKILL.md")
 	shared := filepath.Join(worktree, "skills", "_shared", "NOTE.md")
@@ -557,6 +559,7 @@ func TestResolveDispatchModel_CacheAffinity(t *testing.T) {
 func TestStageSkillRootsFreezesWithoutMatchingRunState(t *testing.T) {
 	t.Setenv(skillrender.SkillsRootEnv, "")
 	root := t.TempDir()
+	thawOnCleanup(t, root)
 	skill := filepath.Join(root, "skills", "nightgauge-feature-dev", "SKILL.md")
 	writeTestFile(t, skill, "---\nname: feature-dev\n---\noriginal body\n")
 	saveSkillRunState(t, root, t.TempDir(), 9999, "run-9999")
