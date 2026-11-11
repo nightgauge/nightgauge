@@ -86,3 +86,15 @@ func TestBlockedFindingPathIsUnderASubdirectoryOfPipeline(t *testing.T) {
 			"every *-<issue>.json there into history/<runID>/ and skips directories")
 	}
 }
+
+// TestOutOfScopeBlockerBodyStatesTheHoldRelease: the card must say what its
+// primary option does end to end — delete the finding AND release the
+// scheduler hold, then rescan (#3170).
+func TestOutOfScopeBlockerBodyStatesTheHoldRelease(t *testing.T) {
+	req := BuildOutOfScopeBlocker("o/r", 7, "run-1", "feature-planning")
+	for _, want := range []string{"deletes the finding", "releases any scheduler hold on #7", "rescan"} {
+		if !strings.Contains(req.Body, want) {
+			t.Errorf("body missing %q:\n%s", want, req.Body)
+		}
+	}
+}

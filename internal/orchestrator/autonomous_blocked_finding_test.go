@@ -94,3 +94,34 @@ func TestPrioritize_BlockedFinding_InvalidFilesDoNotBlock(t *testing.T) {
 		})
 	}
 }
+
+// TestPrioritize_HeldBlockedIssue_EligibleAfterClear reproduces #3170: a run
+// that stopped on an out-of-scope finding can also leave a Failed entry held
+// for HoldOperatorResume. Deleting the finding alone left the issue skipped
+// forever; releasing the hold (what blocked.clearFinding now also does in the
+// daemon) re-admits it.
+func TestPrioritize_HeldBlockedIssue_EligibleAfterClear(t *testing.T) {
+	root := layouttest.Repo(t)
+	as := &AutonomousScheduler{config: AutonomousConfig{}, workspaceRoot: root,
+		state: &AutonomousState{Failed: []FailedItem{{
+			Repo: "O/app", Number: 1255, Kind: TerminalKindNotPipelineActionable, AttemptCount: 1,
+		}}}}
+	g := blockedFindingGraph()
+
+	path := writeBlockedFindingFile(t, root, 1255, validFinding1255)
+	if isCandidate(as.prioritize(context.Background(), g), "O/app", 1255) {
+		t.Fatal("held issue with a finding was a candidate")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if isCandidate(as.prioritize(context.Background(), g), "O/app", 1255) {
+		t.Fatal("removing only the finding re-admitted the issue; the operator hold must still skip it")
+	}
+	if n, _ := as.ClearIssueFailures("O/app#1255"); n != 1 {
+		t.Fatalf("ClearIssueFailures released %d issues, want 1", n)
+	}
+	if !isCandidate(as.prioritize(context.Background(), g), "O/app", 1255) {
+		t.Fatal("issue not re-admitted after its finding was cleared and its hold released")
+	}
+}

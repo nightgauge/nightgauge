@@ -1944,7 +1944,9 @@ func BlockedFindingPath(repoRoot string, issue int) string {
 // stall if nothing could retract it. `blocked.clearFinding` deletes the
 // recorded finding under the card's OWN Context.Repo with an empty arg surface,
 // the same bounded shape as dependabot.enableAlerts and workspace.addRepo. The
-// deliberate omission is a requeue: re-dispatching before a human has dealt
+// daemon then releases the scheduler's operator-resume hold on the issue and
+// rescans (#3170): without that, a run whose Failed entry was held for a human
+// stayed skipped after the finding was gone. The deliberate omission is a requeue: re-dispatching before a human has dealt
 // with the blocker would walk straight back into the same wall, and offering it
 // would be the button-that-does-nothing ADR-015 Invariant 3 forbids.
 func BuildOutOfScopeBlocker(repo string, issue int, runID, stage string) attention.DecisionRequest {
@@ -1972,8 +1974,11 @@ func BuildOutOfScopeBlocker(repo string, issue int, runID, stage string) attenti
 				"guessing issue numbers out of prose to mutate a real dependency graph can defer "+
 				"an issue forever behind an edge nobody meant. Read the comment, add the edges by "+
 				"hand with `nightgauge issue add-blocked-by %d <blocker>` if they are genuine, "+
-				"then clear the finding here.",
-			issue, BlockedFindingsDirName, issue, issue, issue),
+				"then clear the finding here.\n\n"+
+				"**Blocker resolved** deletes the finding, releases any scheduler hold on #%d "+
+				"(the same release as the review-cap card's Release) and triggers an immediate "+
+				"rescan, so the next cycle can dispatch it.",
+			issue, BlockedFindingsDirName, issue, issue, issue, issue),
 		Producer: ProducerOutOfScopeBlocker,
 		Context: attention.Context{
 			Repo: repo, Issue: issue, RunID: runID, Stage: stage,
