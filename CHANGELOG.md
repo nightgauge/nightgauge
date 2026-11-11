@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `nightgauge doctor`'s orphaned-process check now names a `ps` or `lsof` scan that
+  timed out on a loaded host, instead of describing it as a failed or unexpected-shape
+  scan. Its real-process-table test no longer fails as "parser drift" under gate load.
+  (#3097)
+
 - **The independent review no longer files a follow-up for the reviewed issue's
   own unmet criterion, or for a gap another stage already recorded (#3186).** A
   plan-compliance finding that begins `Criterion N:` is linked to that criterion;
