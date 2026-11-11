@@ -68,23 +68,25 @@ func TestResolvePRMergeCIWait(t *testing.T) {
 }
 
 // TestResolvePRMergeTimeout is #2835: the pr-merge CLI default covers one CI
-// wait, the mergeability backoff and the queue wait, plus the margin.
+// wait, the mergeability backoff and the queue wait, plus the margin; and
+// #3198: one more queue wait and retry delay per infrastructure re-enqueue.
 func TestResolvePRMergeTimeout(t *testing.T) {
 	queue := func(d time.Duration) *Config {
 		return &Config{Pipeline: &PipelineConfig{MergeQueue: &MergeQueueConfig{WaitTimeout: YAMLDuration(d)}}}
 	}
 	backoff := 126 * time.Second
+	retries := func(q time.Duration) time.Duration { return 2 * (5*time.Minute + q) }
 	cases := []struct {
 		name string
 		cfg  *Config
 		env  string
 		want time.Duration
 	}{
-		{"nil config", nil, "", 117*time.Minute + 6*time.Second},
-		{"queue 30m", queue(30 * time.Minute), "", 15*time.Minute + backoff + 30*time.Minute + 10*time.Minute},
-		{"queue 3h", queue(3 * time.Hour), "", 15*time.Minute + backoff + 3*time.Hour + 10*time.Minute},
-		{"ci_check_timeout replaces CI term", &Config{PR: &PRConfig{CICheckTimeout: 1800}}, "", 30*time.Minute + backoff + 90*time.Minute + 10*time.Minute},
-		{"env ci timeout", queue(5 * time.Minute), "60", time.Minute + backoff + 5*time.Minute + 10*time.Minute},
+		{"nil config", nil, "", 307*time.Minute + 6*time.Second},
+		{"queue 30m", queue(30 * time.Minute), "", 15*time.Minute + backoff + 30*time.Minute + retries(30*time.Minute) + 10*time.Minute},
+		{"queue 3h", queue(3 * time.Hour), "", 15*time.Minute + backoff + 3*time.Hour + retries(3*time.Hour) + 10*time.Minute},
+		{"ci_check_timeout replaces CI term", &Config{PR: &PRConfig{CICheckTimeout: 1800}}, "", 30*time.Minute + backoff + 90*time.Minute + retries(90*time.Minute) + 10*time.Minute},
+		{"env ci timeout", queue(5 * time.Minute), "60", time.Minute + backoff + 5*time.Minute + retries(5*time.Minute) + 10*time.Minute},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

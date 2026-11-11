@@ -62,12 +62,14 @@ type workflowYAML struct {
 }
 
 type jobYAML struct {
+	Name  string            `yaml:"name"`
 	Env   map[string]string `yaml:"env"`
 	Steps []stepYAML        `yaml:"steps"`
 }
 
 type stepYAML struct {
 	Name string            `yaml:"name"`
+	Uses string            `yaml:"uses"`
 	Run  string            `yaml:"run"`
 	Env  map[string]string `yaml:"env"`
 }
@@ -187,7 +189,7 @@ func CheckParity(_ context.Context, workdir string, commands []string) (ParityRe
 			result.Passed = false
 			result.Failures = append(result.Failures, ParityFail{
 				Command:     cmdStr,
-				FailureType: classifyFailureType(cmdStr),
+				FailureType: ClassifyCommand(cmdStr),
 				Output:      out,
 				ExitCode:    exitCode,
 			})
@@ -278,6 +280,245 @@ func parseWorkflowChecks(wfPath string, requirePR bool) []Check {
 		}
 	}
 	return checks
+}
+
+// WorkflowStep is one step of a workflow job as written: its job's display
+// name (the job key when it has none), the step's name, its run: block and
+// its uses: action.
+// Unlike DiscoverCommands it keeps every step, including runner-bound ones a
+// developer machine cannot run, because it answers a different question: what
+// the steps of a CI job were (#3198).
+type WorkflowStep struct {
+	Workflow string
+	Job      string
+	Name     string
+	Run      string
+	Uses     string
+}
+
+// ListWorkflowSteps returns every step of every job in workdir's
+// .github/workflows that runs on pull_request or merge_group, in file, job
+// and step order.
+func ListWorkflowSteps(workdir string) []WorkflowStep {
+	var paths []string
+	for _, pattern := range []string{"*.yml", "*.yaml"} {
+		matches, _ := filepath.Glob(filepath.Join(workdir, ".github", "workflows", pattern))
+		paths = append(paths, matches...)
+	}
+	sort.Strings(paths)
+	var out []WorkflowStep
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var wf workflowYAML
+		if err := yaml.Unmarshal(data, &wf); err != nil || !triggersOnPR(&wf.On) {
+			continue
+		}
+		jobKeys := make([]string, 0, len(wf.Jobs))
+		for k := range wf.Jobs {
+			jobKeys = append(jobKeys, k)
+		}
+		sort.Strings(jobKeys)
+		for _, k := range jobKeys {
+			job := wf.Jobs[k]
+			jobName := job.Name
+			if jobName == "" {
+				jobName = k
+			}
+			for _, st := range job.Steps {
+				out = append(out, WorkflowStep{Workflow: filepath.Base(p), Job: jobName, Name: st.Name, Run: st.Run, Uses: st.Uses})
+			}
+		}
+	}
+	return out
+}
+
+// StepKind is what a workflow step does, judged from its run: block.
+type StepKind string
+
+const (
+	// StepCheck runs at least one of the repository's own checks (format,
+	// lint, typecheck, build or test). A check anywhere in the block decides
+	// it, whatever setup surrounds it.
+	StepCheck StepKind = "check"
+	// StepSetup only prepares the environment: a known environment action
+	// (ClassifyStep), or a block whose every segment is recognised setup (a package
+	// install, a cache key, runner configuration) and none a check.
+	StepSetup StepKind = "setup"
+	// StepOther is anything else: a command neither rule recognises (`go
+	// vet`, a custom script). A failure in it is treated as the PR's own,
+	// never as infrastructure (#3198).
+	StepOther StepKind = "other"
+)
+
+// setupSegmentPatterns identify a command segment that prepares the
+// environment rather than checking the code. Matched case-insensitively, and
+// only on a segment no check rule matched.
+var setupSegmentPatterns = []string{
+	"install", "deps", "dependencies", "apt-get", "brew ", "git config",
+	"$github_output", "${github_output}", "$github_env", "${github_env}",
+	"$github_path", "${github_path}", "mkdir ", "cache",
+}
+
+// manifestInstallPatterns are package-manager installs that read the
+// repository's own manifest or lockfile. A PR can break those files, so a
+// failure here is never infrastructure: the segment is other (#3198 review).
+var manifestInstallPatterns = []string{
+	"npm ci", "npm install", "npm i ", "yarn install", "pnpm install", "bun install",
+	"pip install -r", "pip install -e", "pip install .", "pip3 install -r",
+	"poetry install", "uv sync", "pipenv install", "bundle install",
+	"go mod download", "cargo fetch", "composer install", "flutter pub get",
+	"dart pub get",
+}
+
+// setupActionPrefixes are uses: actions that only prepare the runner. Any
+// other action (golangci-lint-action, codeql analyze, a test action) may run
+// a check, so it is other, never setup (#3198 review).
+var setupActionPrefixes = []string{
+	"actions/checkout@", "actions/setup-", "actions/cache@", "actions/cache/",
+	"actions/download-artifact@", "actions/upload-artifact@",
+	"actions/create-github-app-token@", "docker/setup-", "docker/login-action@",
+	"pnpm/action-setup@", "dtolnay/rust-toolchain@", "subosito/flutter-action@",
+}
+
+// ClassifyStep classifies one workflow step. A uses: step with no run: block
+// is setup only when its action is a known environment action; otherwise it
+// is other, so a failure in it counts as the PR's own.
+func ClassifyStep(uses, run string, discovered []string) StepKind {
+	if strings.TrimSpace(run) == "" && strings.TrimSpace(uses) != "" {
+		if hasAnyPrefix(strings.ToLower(strings.TrimSpace(uses)), setupActionPrefixes) {
+			return StepSetup
+		}
+		return StepOther
+	}
+	return ClassifyRunBlock(run, discovered)
+}
+
+// neutralSegmentPrefixes are shell bookkeeping that says nothing either way.
+var neutralSegmentPrefixes = []string{"echo ", "set ", "export ", "cd ", "printf "}
+
+// ClassifyRunBlock classifies a run: block, segment by segment: each logical
+// line split on && and ||. It fails safe toward "the repository's own
+// check" (#3198):
+//
+//  1. a segment ClassifyCommand names a check (`eslint --cache`,
+//     `jest --no-cache`, `go test ./internal/cache/...`), or that is such a
+//     command from discovered, with or without more arguments (the repository's commands,
+//     ci.DiscoverCommands), is a check, and one check segment makes the
+//     block StepCheck. The one exception is `playwright install`, which
+//     downloads browsers;
+//  2. a segment that is another discovered command, with or without more
+//     arguments, is never setup,
+//     unless that discovered command itself looks like setup;
+//  3. only a segment that matches neither, and carries a setup pattern, is
+//     setup. The block is
+//
+// StepSetup only when it is empty (a uses: step) or every non-neutral segment
+// is setup. Anything else is StepOther.
+func ClassifyRunBlock(run string, discovered []string) StepKind {
+	if strings.TrimSpace(run) == "" {
+		return StepSetup
+	}
+	// The discovered segments that are the repository's own: a check, or a
+	// command with no setup pattern (`bash scripts/check-licenses.sh`). A
+	// discovered segment that looks like setup (`bash
+	// scripts/playwright-os-deps.sh`) keeps its setup reading.
+	var ownChecks, ownOther []string
+	for _, d := range discovered {
+		for _, line := range splitLogicalCommands(d) {
+			for _, seg := range splitShellChain(line) {
+				lower := strings.ToLower(seg)
+				switch {
+				case seg == "" || hasAnyPrefix(lower, neutralSegmentPrefixes):
+				case ClassifyCommand(seg) != "unknown":
+					ownChecks = append(ownChecks, lower)
+				case !shouldSkip(seg) && !containsAny(lower, setupSegmentPatterns):
+					ownOther = append(ownOther, lower)
+				}
+			}
+		}
+	}
+	check, setup, other := false, false, false
+	for _, line := range splitLogicalCommands(run) {
+		if line == "" || line[0] == '#' {
+			continue
+		}
+		for _, seg := range splitShellChain(line) {
+			lower := strings.ToLower(seg)
+			switch {
+			case strings.Contains(lower, "playwright install"):
+				// `playwright install[-deps]` downloads browsers or OS
+				// packages; a workspace path such as `-w packages/e2e-tests`
+				// must not make it a test.
+				setup = true
+			case hasCommandPrefix(lower, ownChecks) || ClassifyCommand(seg) != "unknown":
+				check = true
+			case containsAny(lower+" ", manifestInstallPatterns):
+				// Reads a manifest the PR may have changed: never setup.
+				other = true
+			case hasCommandPrefix(lower, ownOther):
+				// A discovered command is never setup, whatever flag it
+				// carries (`bash scripts/verify.sh --cache-dir x`).
+				other = true
+			case seg == "" || hasAnyPrefix(lower, neutralSegmentPrefixes) &&
+				!strings.Contains(lower, "github_"):
+			case shouldSkip(seg) || containsAny(lower, setupSegmentPatterns):
+				setup = true
+			default:
+				other = true
+			}
+		}
+	}
+	switch {
+	case check:
+		return StepCheck
+	case setup && !other:
+		return StepSetup
+	default:
+		return StepOther
+	}
+}
+
+func splitShellChain(line string) []string {
+	var out []string
+	for _, a := range strings.Split(line, "&&") {
+		for _, b := range strings.Split(a, "||") {
+			out = append(out, strings.TrimSpace(b))
+		}
+	}
+	return out
+}
+
+// hasCommandPrefix reports whether seg is one of cmds, or one of them followed
+// by more arguments. A whole-command match, so a short discovered fragment
+// (`fi`, `exit 1`) never matches inside another command.
+func hasCommandPrefix(seg string, cmds []string) bool {
+	for _, c := range cmds {
+		if seg == c || strings.HasPrefix(seg, c+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAny(s string, subs []string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // blockCommands turns one run: block into commands. A block with any unsafe
@@ -448,7 +689,11 @@ func nodeCommands(workdir string) []string {
 	return commands
 }
 
-func classifyFailureType(cmd string) string {
+// ClassifyCommand names the kind of check a command runs: "format", "lint",
+// "typecheck", "build", "test", or "unknown" for anything else (an install
+// script, a cache step). pr-merge uses it to tell the repository's own checks
+// from environment setup in a merge-group job (#3198).
+func ClassifyCommand(cmd string) string {
 	lower := strings.ToLower(cmd)
 	switch {
 	case strings.Contains(lower, "format") || strings.Contains(lower, "prettier") ||

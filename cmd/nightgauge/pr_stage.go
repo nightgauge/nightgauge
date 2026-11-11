@@ -420,7 +420,8 @@ func prMergeQueueWait(workspace string) time.Duration {
 
 // prMergeDefaultTimeoutSec returns the pr-merge verb's default --timeout:
 // config.ResolvePRMergeTimeout, the sum of one CI wait, the mergeability
-// backoff and the merge-queue wait, plus ten minutes' margin (#2214, #2835).
+// backoff, the merge-queue wait and each infrastructure re-enqueue's delay and
+// queue wait, plus ten minutes' margin (#2214, #2835, #3198).
 func prMergeDefaultTimeoutSec(workspace string) int {
 	cfg, err := config.Load(workspace)
 	if err != nil {

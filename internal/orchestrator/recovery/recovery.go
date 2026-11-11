@@ -42,6 +42,9 @@ type StageFailure struct {
 	Repo           string
 	Workspace      string
 	AttemptOrdinal int // 1-based — increases per attempt within a run
+	// RunID is the pipeline run the failure belongs to. Per-run bounds key
+	// on it, so a later run of the same issue starts fresh (#3198).
+	RunID string
 
 	// YieldMergeLock, when set, releases the caller's per-repo merge lock and
 	// returns a func that re-takes it. A CI wait on an updated head yields the
@@ -160,6 +163,13 @@ func (r *Registry) MaxAttemptsPerRun() int {
 // through to the terminal failure path.
 func (r *Registry) TryRecover(ctx context.Context, failure StageFailure, attemptsSoFar int) (RecoveryResult, bool) {
 	if r == nil || len(r.actions) == 0 {
+		return RecoveryResult{}, false
+	}
+	// pr-merge already spent its re-enqueue bound on a merge-group
+	// infrastructure failure (#3198). Every generic pr-merge no-op recovery
+	// would re-run the merge runner and start a second round, so none runs:
+	// the failure ends in its non-fault terminal kind.
+	if isMergeQueueInfraExhausted(failure) {
 		return RecoveryResult{}, false
 	}
 	for _, action := range r.actions {

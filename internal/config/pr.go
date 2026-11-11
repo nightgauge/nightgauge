@@ -81,11 +81,23 @@ func (c *Config) ResolvePRMergeCIWait() time.Duration {
 // keeps above its phase budget.
 const PRMergeTimeoutMargin = 10 * time.Minute
 
+// Merge-queue infrastructure retries (#3198): after a merge-group removal
+// whose failing job stopped while preparing its environment, pr-merge
+// re-enqueues the PR up to MergeQueueInfraRetries times, waiting
+// MergeQueueInfraRetryDelay before each, so a short upstream outage has passed
+// when the merge group is rebuilt.
+const (
+	MergeQueueInfraRetries    = 2
+	MergeQueueInfraRetryDelay = 5 * time.Minute
+)
+
 // ResolvePRMergeTimeout is the pr-merge verb's default CLI timeout: one CI
 // wait (pr.ci_check_timeout, else github.DefaultCIPollInterval x
 // DefaultCIPollMax, as the runner sizes it), plus the mergeability backoff
-// budget, plus the merge-queue wait, plus PRMergeTimeoutMargin (#2835). The
-// default is 15m + 2m06s + 90m + 10m = 117m06s. Safe on a nil receiver.
+// budget, plus the merge-queue wait, plus one more merge-queue wait and retry
+// delay for each infrastructure re-enqueue (#3198), plus PRMergeTimeoutMargin
+// (#2835). The default is 15m + 2m06s + 90m + 2 x (5m + 90m) + 10m =
+// 307m06s. Safe on a nil receiver.
 func (c *Config) ResolvePRMergeTimeout() time.Duration {
 	var pipeline *PipelineConfig
 	var pr *PRConfig
@@ -96,8 +108,9 @@ func (c *Config) ResolvePRMergeTimeout() time.Duration {
 	if ciWait <= 0 {
 		ciWait = github.DefaultCIPollInterval * github.DefaultCIPollMax
 	}
-	return ciWait + github.MergeabilityWaitBudget() +
-		pipeline.ResolveMergeQueueWaitTimeout() + PRMergeTimeoutMargin
+	queueWait := pipeline.ResolveMergeQueueWaitTimeout()
+	retries := time.Duration(MergeQueueInfraRetries) * (MergeQueueInfraRetryDelay + queueWait)
+	return ciWait + github.MergeabilityWaitBudget() + queueWait + retries + PRMergeTimeoutMargin
 }
 
 func positiveEnvInt(key string) int {

@@ -16,6 +16,31 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A merge-queue removal now says whether the merge group or the PR failed
+  (#3198).** pr-merge reads the failed merge-group jobs' steps and compares them
+  with the repository's workflow steps. It fails safe toward the PR's own code:
+  a step that runs any check (build, test, lint, format, typecheck), or one of
+  the commands CI discovery finds, is a check even when it carries a setup word
+  (`eslint --cache`, `go test ./internal/cache/...`). A step is setup only when
+  it is a known environment action (checkout, `setup-*`, cache, artifacts) or
+  every command in it is an OS-package, cache or runner configuration step. An
+  install that reads the repository's own manifest (`npm ci`, `pip install -r`)
+  and any other action (a lint or analysis action) count as the PR's own. Infrastructure needs a job that failed in a setup step
+  and skipped the checks after it (an install step hitting an upstream outage):
+  pr-merge re-enqueues the PR twice, five minutes apart, naming the job and step
+  each time, then ends the run as `merge_queue_infra_failed`. That kind is
+  terminal and non-fault: it neither trips the circuit breaker nor counts toward
+  the issue's failure cap, the model is not escalated to re-run pr-merge, and
+  the issue report says the PR needs no change. A pr-merge stopped mid-retry
+  ends the same way. pr-merge's default timeout now covers every re-enqueue's
+  delay and queue wait. Any other failed step, including one the classifier
+  cannot name, is a code failure: the run goes back to `feature-dev` once with
+  that step's own log section (never the job's tail), and a second removal for
+  the same job and step in the same run fails the run. One code failure decides
+  a removal that also failed the infrastructure way; a cancelled job decides
+  nothing. A PR ended as `merge_queue_infra_failed` stays In review rather than
+  returning to Ready, so a lasting outage cannot loop. A removal whose job data
+  cannot be read keeps the plain `merge-queue-failed` refusal.
 - **Re-running an issue from the "not closed: PR left criteria unmet" card now
   scopes the run to those criteria in the VS Code extension too.** The
   extension's stage loop never applied the partial-delivery scope, so the
