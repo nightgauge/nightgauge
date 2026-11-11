@@ -16,6 +16,23 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The Linux amd64 release binary is built the way that measured cleanest,
+  and every RC now proves its margin (#3192).** v0.8.6-rc.3's Linux binary was
+  flagged by Microsoft's model. Across 86 measured builds its verdict flips
+  with the version string alone, so no single clean scan is evidence. Release
+  binaries now build on go1.27.4 with uncompressed DWARF
+  (`-compressdwarf=false`; on go1.27.3 this was flagged at 1 of 18 version
+  strings against 3 of 6 before, and go1.27.4 adds the fix for the `net/http`
+  vulnerability GO-2026-6859), and `release-dwarf-check` rejects a shipped binary whose DWARF is
+  compressed. Each RC also builds and scans its Linux and universal darwin
+  binaries at `X.Y.Z`, `X.Y.Z-rc.(N+1)` and `X.Y.(Z+1)-rc.1`; any finding fails
+  the RC. `release.yml` refuses a tag unless an RC on the same commit passed
+  that scan with the release's own version string. Building from source now
+  needs Go 1.27, and `scripts/ci-local.sh` checks formatting with that
+  toolchain's `gofmt`, not the one first on `PATH`, because go1.27's `gofmt`
+  formats two existing files differently. It fails, naming both versions and
+  `GOTOOLCHAIN=<version>` as the fix, when `go env GOVERSION` is not the
+  toolchain `go.mod` selects, since a newer Go is never switched down to it.
 - **A merge-queue removal now says whether the merge group or the PR failed
   (#3198).** pr-merge reads the failed merge-group jobs' steps and compares them
   with the repository's workflow steps. It fails safe toward the PR's own code:

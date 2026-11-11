@@ -62,7 +62,7 @@ building:
 
 | Requirement                          | Why                                                                             |
 | ------------------------------------ | ------------------------------------------------------------------------------- |
-| **Go ≥ 1.26** (see `go.mod`)         | The deterministic core is a compiled Go binary (`cmd/nightgauge/`, `internal/`) |
+| **Go ≥ 1.27** (see `go.mod`)         | The deterministic core is a compiled Go binary (`cmd/nightgauge/`, `internal/`) |
 | **Node.js 24** (pinned in `.nvmrc`)  | VSCode extension, SDK, and generated-type tooling                               |
 | **git** + **gh CLI** (authenticated) | Branching, forks, and pull requests                                             |
 

@@ -23,7 +23,7 @@ and binary-backed hooks do nothing without it.
 
 ```bash
 brew install --cask nightgauge/tap/nightgauge    # macOS
-# or, with Go 1.26+ and $GOPATH/bin on PATH:
+# or, with Go 1.27+ and $GOPATH/bin on PATH:
 go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest
 ```
 

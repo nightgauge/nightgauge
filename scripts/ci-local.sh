@@ -478,6 +478,11 @@ REQUIRED_FILES=(
   scripts/test-workflow-refs-check.sh
   scripts/test-marketplace-channel.sh
   scripts/test-release-channel-wiring.sh
+  scripts/release-margin-builds.sh
+  scripts/release-rc-margin-check.sh
+  scripts/test-release-margin.sh
+  scripts/check-gofmt.sh
+  scripts/test-check-gofmt.sh
   scripts/verify-registry-pat.sh
   scripts/main-build-version.sh
   scripts/test-main-build-version.sh
@@ -1754,8 +1759,15 @@ else
 run_group --wait "go test -race -count=1 ./..." \
   go test -race -count=1 -timeout "$GO_TEST_TIMEOUT" ./...
 fi
-run_step "gofmt -l ./internal ./cmd" \
-  bash -c '! gofmt -l ./internal ./cmd | grep .'
+# The gofmt of the toolchain go.mod selects, not the one first on PATH (#3192).
+# Formatting changes between Go releases: when go.mod moved to go1.27.4, CI's
+# gofmt (setup-go reads go.mod) rejected two files that go1.26.11's gofmt on the
+# operator's PATH accepted, and the gap first showed in the merge group, where
+# the heavy jobs run. `go env GOROOT` names the toolchain GOTOOLCHAIN=auto
+# switched to, which fixes an older Go on PATH but not a newer one (auto never
+# downgrades), so scripts/check-gofmt.sh fails first when `go env GOVERSION` is
+# not go.mod's toolchain.
+run_step "gofmt -l ./internal ./cmd" bash scripts/check-gofmt.sh
 
 # 1b. branch-merged-check.sh regression suite — the shell-side decision
 #     procedure `git branch -D` reclaim decisions defer to (docs/GIT_WORKFLOW.md
@@ -2059,6 +2071,10 @@ run_step "visibility-prose reintroduction gate" python3 scripts/check-visibility
 run_group "Workflow-reference gate regression suite" bash scripts/test-workflow-refs-check.sh
 run_group "Marketplace channel regression suite" bash scripts/test-marketplace-channel.sh
 run_group "Release channel wiring suite" bash scripts/test-release-channel-wiring.sh
+# The margin scan (#3192): RC margin builds and the release gate that requires a
+# margin-clean RC on the tag's commit, against stub make/sign/gh.
+run_group "Release margin scan suite" bash scripts/test-release-margin.sh
+run_group "gofmt toolchain check suite" bash scripts/test-check-gofmt.sh
 run_group "Main build version regression suite" bash scripts/test-main-build-version.sh
 run_group "Playwright OS deps regression suite" bash scripts/test-playwright-os-deps.sh
 run_group "VSIX host-target regression suite" bash scripts/test-vsix-host-target.sh

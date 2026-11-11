@@ -52,6 +52,8 @@ visibility-prose reintroduction gate
 Workflow-reference gate regression suite
 Marketplace channel regression suite
 Release channel wiring suite
+Release margin scan suite
+gofmt toolchain check suite
 Main build version regression suite
 Playwright OS deps regression suite
 VSIX host-target regression suite

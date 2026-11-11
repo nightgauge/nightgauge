@@ -630,7 +630,25 @@ build never reaches the soak; read `vt-scan-report-rc` from the run.
   `v*` tag policy admits RC tags. A missing key fails the RC closed rather than
   skipping the scan.
 - An RC scan and a release scan cost about 260 of the 500 daily requests
-  together. Main builds are not scanned.
+  together, plus about 36 for the RC's margin builds. Main builds are not
+  scanned.
+
+### The margin scan and the release gate
+
+The RC's `rc-scan` also scans its margin builds: the Linux amd64 binary and the
+signed universal darwin file at `X.Y.Z`, `X.Y.Z-rc.(N+1)` and `X.Y.(Z+1)-rc.1`
+(#3192). A finding in any of them fails the RC; fix the build, never the version
+number ([RELEASE_BINARIES.md](RELEASE_BINARIES.md#linux-amd64-margin-and-the-margin-scan-3192)).
+
+- Before tagging `vX.Y.Z`: an RC tag `vX.Y.Z-rc.N` sits on the same commit, and
+  its staging run's `rc-scan` succeeded within the last 90 days, so its
+  `rc-margin-scan-vX.Y.Z-rc.N` artifact still exists.
+- `release.yml` checks exactly that before it builds anything
+  (`scripts/release-rc-margin-check.sh`) and has no override. If the record has
+  expired, or the RC was cut on another commit, cut a new RC on the release
+  commit and let its `rc-scan` pass.
+- When closing a release issue, quote the `rc-scan` summary line, margin
+  archives included.
 
 ## What this checklist is not
 

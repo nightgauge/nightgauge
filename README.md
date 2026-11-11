@@ -15,7 +15,7 @@ with a quality gate at every stage between the issue and the merge.
 [![Open VSX](https://img.shields.io/open-vsx/v/nightgauge/nightgauge?label=Open%20VSX)](https://open-vsx.org/extension/nightgauge/nightgauge)
 [![Open VSX downloads](https://img.shields.io/open-vsx/dt/nightgauge/nightgauge?label=downloads)](https://open-vsx.org/extension/nightgauge/nightgauge)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
-[![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Go 1.27](https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white)](go.mod)
 
 [Website](https://nightgauge.dev) ·
 [Quick start](#quick-start) ·
@@ -116,7 +116,7 @@ without it a slash command fails at its first `nightgauge` call.
 
 ```bash
 brew install --cask nightgauge/tap/nightgauge    # macOS
-# or, with Go 1.26+ and $GOPATH/bin on PATH:
+# or, with Go 1.27+ and $GOPATH/bin on PATH:
 go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest
 ```
 
