@@ -33,6 +33,10 @@ type CheckStatus struct {
 	// a caller that proceeds can SAY what it proceeded past. Nothing reads
 	// this to gate a merge — `RequiredPassed` remains the only gate input.
 	AdvisoryFailedNames []string `json:"advisoryFailedNames,omitempty"`
+	// MissingRequiredNames are required check names absent from the last
+	// poll (#3179). A ruleset can require a check that never posts on a PR
+	// head; naming it lets a TIMEOUT or PENDING verdict say what it waited on.
+	MissingRequiredNames []string `json:"missingRequiredNames,omitempty"`
 }
 
 // CheckDetail represents a single CI check.

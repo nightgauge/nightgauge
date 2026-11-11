@@ -132,6 +132,11 @@ func runIsNewer(a, b CheckDetail) bool {
 // concluded, and none failed" (evaluateAllChecksComplete), the same shape as
 // the pre-#1540 total>0/pending==0/bad==0 idiom, so an unprotected branch
 // still gets a real verdict instead of a permanent NOT-YET.
+//
+// Decisive-failure rule (#3179): a required name whose latest run concluded
+// non-passing returns ChecksIncomplete even while other required names are
+// absent or pending — rulesets can require checks that never post on a PR
+// head, and waiting on them would hide a failure until the wait times out.
 func EvaluateChecksComplete(checks []CheckDetail, requiredNames []string) (ChecksCompleteVerdict, []string) {
 	checks = LatestCheckRuns(checks)
 	present := make(map[string][]CheckDetail, len(checks))
@@ -170,18 +175,24 @@ func EvaluateChecksComplete(checks []CheckDetail, requiredNames []string) (Check
 	}
 
 	var reasons []string
+	if len(failed) > 0 {
+		reasons = append(reasons, fmt.Sprintf("required check(s) failed: %s", strings.Join(failed, ", ")))
+	}
 	if len(missing) > 0 {
 		reasons = append(reasons, fmt.Sprintf("required check(s) absent from rollup: %s", strings.Join(missing, ", ")))
 	}
 	if len(pending) > 0 {
 		reasons = append(reasons, fmt.Sprintf("required check(s) still running: %s", strings.Join(pending, ", ")))
 	}
+	// A concluded failure on the latest run of a required name is decisive
+	// (#3179): no absent or pending check can redeem it. A re-run creates a
+	// newer run of the same name, which LatestCheckRuns selects, so a re-run
+	// is still honoured. Without failures, absent/pending stays NOT-YET (#1540).
+	if len(failed) > 0 {
+		return ChecksIncomplete, reasons
+	}
 	if len(missing) > 0 || len(pending) > 0 {
 		return ChecksNotYet, reasons
-	}
-	if len(failed) > 0 {
-		reasons = append(reasons, fmt.Sprintf("required check(s) failed: %s", strings.Join(failed, ", ")))
-		return ChecksIncomplete, reasons
 	}
 	if len(requiredNames) == 0 {
 		return evaluateAllChecksComplete(checks)

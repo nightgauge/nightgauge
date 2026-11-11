@@ -16,6 +16,7 @@ import type { PipelineStateService } from "../../src/services/PipelineStateServi
 import type { Logger } from "../../src/utils/logger";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
+import * as fs from "fs";
 
 // #4044: the live adapter auth gate now injects a real preflight runner, so it
 // probes CLI auth (codex login status / claude auth status). These pr-merge-path
@@ -480,5 +481,94 @@ describe("reconcileCompletionSideEffects closing keyword (#2689)", () => {
     const closes = issueCloseArgs();
     expect(closes).toHaveLength(1);
     expect(closes[0].join(" ")).toContain("Commit: abc1234 fix: thing");
+  });
+});
+
+// #3179: the stage's own non_retryable blocker record outranks the static
+// ruleset precheck, which cannot see a failing check.
+describe("HeadlessOrchestrator post-merge verification honours a non-retryable blocker (#3179)", () => {
+  let mockLogger: Logger;
+  let classify: ReturnType<typeof vi.fn>;
+
+  function withPrContext(ctx: Record<string, unknown>) {
+    vi.mocked(fs.readFileSync).mockImplementation(((p: string) =>
+      typeof p === "string" && p.includes("pr-") ? JSON.stringify(ctx) : "{}") as any);
+  }
+
+  async function run() {
+    const orchestrator = new HeadlessOrchestrator(createMockStateService(), mockLogger, {
+      contextFileWaitMs: 0,
+    });
+    vi.mocked(runStageSkillHeadless).mockImplementation((_stage, _issueNumber, callbacks) => {
+      Promise.resolve().then(() => {
+        void callbacks?.onComplete?.({ success: true, exitCode: 0 } as SkillRunResult);
+      });
+      return { kill: vi.fn(), process: null } as any;
+    });
+    const runPromise = orchestrator.runPipeline(3132);
+    await drainTimers(30);
+    await runPromise;
+    const prMergeRuns = vi
+      .mocked(runStageSkillHeadless)
+      .mock.calls.filter((args) => args[0] === "pr-merge").length;
+    return { orchestrator: orchestrator as any, prMergeRuns };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    prViewCallCount.value = 0;
+    prViewMergeAfter.value = Infinity;
+    mergedPrs.value = null;
+    gitLog.value = "";
+    issueStateClosed.value = false;
+    mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any;
+    vi.spyOn(HeadlessOrchestrator.prototype as any, "forgePrState").mockResolvedValue("OPEN");
+    vi.spyOn(HeadlessOrchestrator.prototype as any, "readMergedPrNumber").mockReturnValue(999);
+    classify = vi.fn().mockResolvedValue({ retryable: true });
+    vi.spyOn(
+      HeadlessOrchestrator.prototype as any,
+      "classifyMergeBlockerRetryability"
+    ).mockImplementation(classify as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.mocked(fs.readFileSync).mockImplementation(((p: string) =>
+      typeof p === "string" && p.includes("pr-")
+        ? JSON.stringify({ pr_number: 999 })
+        : "{}") as any);
+  });
+
+  it("ends blocked without a retry when the record is non_retryable", async () => {
+    withPrContext({
+      pr_number: 999,
+      blocker: {
+        classification: "inherited-ci-failure: Security & license gates",
+        remediation: "wait for the base fix to land, then re-run",
+        non_retryable: true,
+      },
+    });
+    const { orchestrator, prMergeRuns } = await run();
+    expect(prMergeRuns).toBe(1);
+    expect(classify).not.toHaveBeenCalled();
+    expect(orchestrator.blockedTerminalState).toMatchObject({
+      blocker: "inherited-ci-failure: Security & license gates",
+      remediation: "wait for the base fix to land, then re-run",
+      prNumber: 999,
+    });
+  });
+
+  it.each([
+    ["absent", { pr_number: 999 }],
+    [
+      "not non_retryable",
+      { pr_number: 999, blocker: { classification: "x", non_retryable: false } },
+    ],
+  ])("still retries once through the classifier when the record is %s", async (_label, ctx) => {
+    withPrContext(ctx);
+    const { prMergeRuns } = await run();
+    expect(classify).toHaveBeenCalledTimes(1);
+    expect(prMergeRuns).toBe(2);
   });
 });
