@@ -612,7 +612,8 @@ finds every file in the draft clean on VirusTotal (#2946). Before a tag:
 
 After the run, read `vt-scan-report.json` as in
 [GIT_WORKFLOW.md step 9a](GIT_WORKFLOW.md#cutting-a-release--step-by-step).
-A finding leaves the draft for an owner decision. Never publish a draft with
+A finding is fixed at its cause and ships in the next patch; nothing publishes the
+held draft. Never publish a draft with
 `gh release edit --draft=false` to get past a harness error: re-run the scan.
 `bash scripts/test-vt-scan.sh` and `bash scripts/test-release-scan-gate.sh`
 exercise every path offline.

@@ -268,7 +268,7 @@ if [ "$SCAN_RC" -ne 0 ]; then
     gh release upload "$TAG" "$REPORT" --clobber -R "$REPO" >/dev/null 2>&1 ||
       echo "::warning::could not attach $REPORT_ASSET to draft $TAG" >&2
   fi
-  echo "::error::release-scan-gate: $TAG stays a DRAFT (vt-scan exit $SCAN_RC). Read $REPORT_ASSET; publishing is an owner decision." >&2
+  echo "::error::release-scan-gate: $TAG stays a DRAFT (vt-scan exit $SCAN_RC). Read $REPORT_ASSET; fix the finding at its cause and ship the next patch; nothing publishes this draft." >&2
   exit "$SCAN_RC"
 fi
 

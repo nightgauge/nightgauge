@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The release checklist and the scan gate's held-draft error no longer call a
+  scan finding an owner decision (#3098).** Both now state the release rule: a
+  finding is fixed at its cause and ships in the next patch; nothing publishes the
+  held draft.
 - **The independent review no longer files a follow-up for the reviewed issue's
   own unmet criterion, or for a gap another stage already recorded (#3186).** A
   plan-compliance finding that begins `Criterion N:` is linked to that criterion;
