@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- Post-merge verification no longer retries pr-merge when the stage recorded
+  a non-retryable blocker; the run ends blocked with that record's
+  classification and remediation (#3179).
 - The macOS extensions now bundle one universal (Intel + Apple silicon)
   `nightgauge` binary. Microsoft's scanner flagged the Intel-only one
   (#3161). The macOS VSIX is about twice its former size.

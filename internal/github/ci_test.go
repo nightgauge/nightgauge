@@ -333,6 +333,61 @@ func TestGetRequiredOnlyStatusWithChecks_MissingRequiredCheckStaysPending(t *tes
 	}
 }
 
+// TestGetRequiredOnlyStatusWithChecks_DecisiveFailureWithAbsentRequired is
+// the #3179 guard at the ci-wait level: required checks that never post on a
+// PR head must not hold a concluded required failure at PENDING.
+func TestGetRequiredOnlyStatusWithChecks_DecisiveFailureWithAbsentRequired(t *testing.T) {
+	status, err := (&CIService{}).getRequiredOnlyStatusWithChecks([]CheckDetail{
+		{Name: "Security & license gates", Status: "COMPLETED", Conclusion: "FAILURE"},
+		{Name: "build", Status: "IN_PROGRESS"},
+	}, []string{"lint", "cla", "Security & license gates", "build"}, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.State != "FAILURE" || !status.IsTerminal {
+		t.Fatalf("State=%q IsTerminal=%v, want FAILURE/terminal", status.State, status.IsTerminal)
+	}
+	found := false
+	for _, c := range status.Checks {
+		if c.Name == "Security & license gates" && c.Required {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Checks = %+v, want the failed check present with Required=true", status.Checks)
+	}
+	if strings.Join(status.MissingRequiredNames, ",") != "lint,cla" {
+		t.Errorf("MissingRequiredNames = %v, want [lint cla]", status.MissingRequiredNames)
+	}
+}
+
+// TestWaitForChecks_TimeoutCarriesLastPoll is the #3179 guard: a TIMEOUT
+// verdict must carry the last observed poll, not a zero struct.
+func TestWaitForChecks_TimeoutCarriesLastPoll(t *testing.T) {
+	required := []string{"build", "cla"}
+	poll := func() (*CheckStatus, error) {
+		return (&CIService{}).getRequiredOnlyStatusWithChecks([]CheckDetail{
+			{Name: "build", Status: "COMPLETED", Conclusion: "SUCCESS"},
+			{Name: "advisory", Status: "COMPLETED", Conclusion: "FAILURE"},
+		}, required, 42)
+	}
+	status, err := waitForChecksWith(context.Background(), WaitConfig{
+		Timeout: 30 * time.Millisecond, PollInterval: 10 * time.Millisecond,
+	}, true, poll)
+	if err == nil {
+		t.Fatal("want a timeout error")
+	}
+	if status.State != "TIMEOUT" || !status.IsTerminal || status.RequiredPassed {
+		t.Fatalf("State=%q IsTerminal=%v RequiredPassed=%v, want TIMEOUT/terminal/false", status.State, status.IsTerminal, status.RequiredPassed)
+	}
+	if status.PRNumber != 42 || status.Failed < 1 || len(status.Checks) != 2 {
+		t.Errorf("PRNumber=%d Failed=%d Checks=%d, want 42/>=1/2", status.PRNumber, status.Failed, len(status.Checks))
+	}
+	if len(status.RequiredCheckNames) != 2 || strings.Join(status.MissingRequiredNames, ",") != "cla" {
+		t.Errorf("RequiredCheckNames=%v MissingRequiredNames=%v", status.RequiredCheckNames, status.MissingRequiredNames)
+	}
+}
+
 func TestWaitForChecks_RequiredOnly_WaitsWhenRequiredPending(t *testing.T) {
 	status, err := (&CIService{}).getRequiredOnlyStatusWithChecks([]CheckDetail{
 		{Name: "CI", Status: "IN_PROGRESS", Conclusion: ""},

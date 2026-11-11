@@ -405,3 +405,63 @@ func TestReconcileStuckInReview_EnqueueFailedCleanPR_RespectsCap(t *testing.T) {
 		t.Fatalf("capped PR must be left alone: attempts=%d status=%s", as.inReviewRecoveryAttempts[key], g.Nodes[key].BoardStatus)
 	}
 }
+
+// TestRefreshBlockedReadyPRs_InheritedFailureResumesOnMovedBase pins #3179:
+// a PR parked by an inherited CI failure is dispatched once the base branch
+// has moved past the base_sha pr-merge recorded, and stays parked otherwise.
+func TestRefreshBlockedReadyPRs_InheritedFailureResumesOnMovedBase(t *testing.T) {
+	cases := []struct {
+		name       string
+		record     prBlockerRecord
+		hasRecord  bool
+		baseHead   string
+		dispatched bool
+		lookups    int
+	}{
+		{"base moved: dispatched", prBlockerRecord{Classification: "inherited-ci-failure: gates", BaseSHA: "aaa"}, true, "bbb", true, 1},
+		{"base unchanged: parked", prBlockerRecord{Classification: "inherited-ci-failure: gates", BaseSHA: "aaa"}, true, "aaa", false, 1},
+		{"no base_sha: parked", prBlockerRecord{Classification: "inherited-ci-failure: gates"}, true, "bbb", false, 0},
+		{"not inherited: parked", prBlockerRecord{Classification: "required-check-config-mismatch:x", BaseSHA: "aaa"}, true, "bbb", false, 0},
+		{"no record: parked", prBlockerRecord{}, false, "bbb", false, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
+				if !ghArgsContain(args, "list") {
+					return []byte("[]"), nil
+				}
+				return []byte(`[{"number":10,"headRefName":"feat/1-x","baseRefName":"main","mergeStateStatus":"BLOCKED"}]`), nil
+			})
+			origRead, origHead := reconcileReadPrBlocker, reconcileBaseHead
+			t.Cleanup(func() { reconcileReadPrBlocker, reconcileBaseHead = origRead, origHead })
+			reconcileReadPrBlocker = func(_ *AutonomousScheduler, issue, prNumber int) (prBlockerRecord, bool) {
+				if issue != 1 || prNumber != 10 {
+					t.Errorf("record read for issue %d PR %d, want 1/10", issue, prNumber)
+				}
+				return tc.record, tc.hasRecord
+			}
+			lookups := 0
+			reconcileBaseHead = func(_ context.Context, repo, base string) (string, error) {
+				lookups++
+				if repo != "O/app" || base != "main" {
+					t.Errorf("base lookup %s@%s, want O/app@main", repo, base)
+				}
+				return tc.baseHead, nil
+			}
+
+			as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
+			g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
+				"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: "Ready"},
+			}}
+			as.refreshBlockedReadyPRs(context.Background(), g)
+
+			_, dispatched := as.readyOpenPRs["O/app#1"]
+			if dispatched != tc.dispatched || as.blockedReadyPRIssues["O/app#1"] == tc.dispatched {
+				t.Errorf("dispatched=%v blocked=%v, want dispatched=%v", dispatched, as.blockedReadyPRIssues["O/app#1"], tc.dispatched)
+			}
+			if lookups != tc.lookups {
+				t.Errorf("base lookups = %d, want %d", lookups, tc.lookups)
+			}
+		})
+	}
+}

@@ -568,12 +568,17 @@ print_info() {
 }
 
 notyet=()
-[[ $(jq '.missing | length' <<<"$head_j") -gt 0 ]] &&
-  notyet+=("PR #$PR_NUMBER head ${HEAD_SHA:0:8}: required check(s) absent: $(jq -r '.missing | join(", ")' <<<"$head_j")")
+# A failed required check on the head is decisive (#3179, parity with
+# EvaluateChecksComplete): a required check absent from, or still running on,
+# the head cannot redeem it, so those lines do not hold the verdict at NOT-YET.
+if [[ $(jq '.failed | length' <<<"$head_j") -eq 0 ]]; then
+  [[ $(jq '.missing | length' <<<"$head_j") -gt 0 ]] &&
+    notyet+=("PR #$PR_NUMBER head ${HEAD_SHA:0:8}: required check(s) absent: $(jq -r '.missing | join(", ")' <<<"$head_j")")
+  [[ $(jq '.pending | length' <<<"$head_j") -gt 0 ]] &&
+    notyet+=("PR #$PR_NUMBER head ${HEAD_SHA:0:8}: still running: $(jq -r '.pending | join(", ")' <<<"$head_j")")
+fi
 [[ "$REQ" == null && $(jq '.total' <<<"$head_j") -eq 0 ]] &&
   notyet+=("PR #$PR_NUMBER head ${HEAD_SHA:0:8}: no checks at all")
-[[ $(jq '.pending | length' <<<"$head_j") -gt 0 ]] &&
-  notyet+=("PR #$PR_NUMBER head ${HEAD_SHA:0:8}: still running: $(jq -r '.pending | join(", ")' <<<"$head_j")")
 [[ $(jq '.pending | length' <<<"$merge_j") -gt 0 ]] &&
   notyet+=("merge commit ${SHA:0:8}: still running: $(jq -r '.pending | join(", ")' <<<"$merge_j")")
 if [[ "$merge_seen" -eq 0 ]] && [[ $(merge_age) -lt "$GRACE_SECONDS" ]] && push_may_run; then

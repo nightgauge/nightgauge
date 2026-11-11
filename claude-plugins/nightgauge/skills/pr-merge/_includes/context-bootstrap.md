@@ -84,12 +84,21 @@ file):
 ```bash
 # CLASSIFICATION example: "required-check-config-mismatch:Sentry Smoke (integration)"
 # REMEDIATION example: "remove 'Sentry Smoke' from required checks or drop continue-on-error"
+# A required check that fails on the base branch too (inherited, not caused by
+# this PR) uses a CLASSIFICATION starting "inherited-ci-failure", e.g.
+# "inherited-ci-failure:Security & license gates": a re-run rebuilds the same
+# merge ref, so only a base move can clear it.
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 CONTEXT_FILE="$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)"
+# base_sha: the base branch head when the record is written (#3179). The
+# scheduler re-dispatches an inherited-ci-failure blocker once the base moves.
+BASE_REF=$(jq -r '.base_branch // "main"' "$CONTEXT_FILE" 2>/dev/null)
+git fetch origin "$BASE_REF" >/dev/null 2>&1 || true
+BASE_SHA=$(git rev-parse "origin/$BASE_REF" 2>/dev/null || echo "")
 CONTEXT_FILE_TMP=$(mktemp)
-jq --arg cls "$CLASSIFICATION" --arg rem "$REMEDIATION" \
-  '.blocker = {classification: $cls, remediation: $rem, non_retryable: true}' \
+jq --arg cls "$CLASSIFICATION" --arg rem "$REMEDIATION" --arg base "$BASE_SHA" \
+  '.blocker = {classification: $cls, remediation: $rem, non_retryable: true, base_sha: $base}' \
   "$CONTEXT_FILE" > "$CONTEXT_FILE_TMP" &&
   nightgauge layout write pipeline "pr-${ISSUE_NUMBER}.json" --from "$CONTEXT_FILE_TMP" >/dev/null
 rm -f "$CONTEXT_FILE_TMP"

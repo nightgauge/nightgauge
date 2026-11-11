@@ -359,12 +359,6 @@ func (s *CIService) WaitForChecks(ctx context.Context, owner, repo string, prNum
 		cfg.PollInterval = 30 * time.Second
 	}
 
-	start := time.Now()
-	ticker := time.NewTicker(cfg.PollInterval)
-	defer ticker.Stop()
-
-	deadline := time.After(cfg.Timeout)
-
 	requiredOnly := len(cfg.RequiredCheckNames) > 0
 	pollFn := func() (*CheckStatus, error) {
 		if requiredOnly {
@@ -372,6 +366,17 @@ func (s *CIService) WaitForChecks(ctx context.Context, owner, repo string, prNum
 		}
 		return s.GetCheckStatus(ctx, owner, repo, prNumber)
 	}
+	return waitForChecksWith(ctx, cfg, requiredOnly, pollFn)
+}
+
+// waitForChecksWith is WaitForChecks' poll loop over an injected poll
+// function, so the confirmation and timeout rules are testable without HTTP.
+func waitForChecksWith(ctx context.Context, cfg WaitConfig, requiredOnly bool, pollFn func() (*CheckStatus, error)) (*CheckStatus, error) {
+	start := time.Now()
+	ticker := time.NewTicker(cfg.PollInterval)
+	defer ticker.Stop()
+
+	deadline := time.After(cfg.Timeout)
 
 	// #1540 hardening (plan §3): the required-only path's rollup was observed
 	// to report a false-terminal verdict transiently, so a single terminal
@@ -426,12 +431,14 @@ func (s *CIService) WaitForChecks(ctx context.Context, owner, repo string, prNum
 			}
 
 		case <-deadline:
-			return &CheckStatus{
-				PRNumber:    prNumber,
-				State:       "TIMEOUT",
-				IsTerminal:  true,
-				ElapsedSecs: int(time.Since(start).Seconds()),
-			}, fmt.Errorf("CI checks timed out after %s", cfg.Timeout)
+			// #3179: carry the last observed poll so the TIMEOUT verdict
+			// still names the checks, counts and missing required names.
+			timedOut := *status
+			timedOut.State = "TIMEOUT"
+			timedOut.IsTerminal = true
+			timedOut.RequiredPassed = false
+			timedOut.ElapsedSecs = int(time.Since(start).Seconds())
+			return &timedOut, fmt.Errorf("CI checks timed out after %s", cfg.Timeout)
 
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -524,6 +531,9 @@ func (s *CIService) getRequiredOnlyStatusWithChecks(checks []CheckDetail, requir
 		Checks:              annotatedChecks,
 		RequiredCheckNames:  requiredNames,
 		AdvisoryFailedNames: advisoryFailedNames,
+	}
+	if missing := MissingRequiredChecks(checks, requiredNames); len(missing) > 0 {
+		status.MissingRequiredNames = missing
 	}
 
 	// #1540: the terminal decision is "every name in requiredNames is

@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **An inherited required-check failure now ends `ci wait` as FAILURE
+  (#3179).** A required check whose latest run failed is decisive even while
+  other required checks (such as `lint` or `cla`, which never post on a PR
+  head) are absent or running; the post-merge evaluator and
+  `scripts/post-merge-check.sh` read such a head red. A `ci wait` TIMEOUT now
+  carries the last poll's checks and counts, plus `missingRequiredNames`. The
+  scheduler re-dispatches a PR parked by an `inherited-ci-failure` blocker
+  once its base branch moves past the `base_sha` pr-merge recorded.
 - **feature-validate's independent review rounds no longer trip the churn
   detector (#3168).** Each round re-prints its phase marker, a productive
   signal, so a three-round review with fixes is not killed as a no-progress

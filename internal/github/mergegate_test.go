@@ -41,6 +41,9 @@ func TestEvaluateMergedCommit(t *testing.T) {
 		{"tree equal, head required green, push green", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksComplete, ""},
 		{"a failing advisory check on the head does not make the merge red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksComplete, ""},
 		{"PR head's required check red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headRed, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksIncomplete, "PR #7 head"},
+		// #3179: a decisive required failure on the head is red even while
+		// another required check never posted there.
+		{"head required failed while another required is absent: red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headRed[:1], MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksIncomplete, "build"},
 		{"a required check absent from the head is not-yet", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen[:1], MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksNotYet, "lint"},
 		{"push job still running", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushRunning, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksNotYet, "publish"},
 		{"push job red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushRed, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksIncomplete, "merge commit"},

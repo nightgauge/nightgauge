@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	gitpkg "github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // maxInReviewRecoveryAttempts bounds how many times the scheduler will re-run
@@ -225,6 +228,11 @@ func (as *AutonomousScheduler) refreshBlockedReadyPRs(ctx context.Context, graph
 			if reason == "" {
 				// Mergeable, or only retry-clearable problems — dispatch it,
 				// carrying the PR number so the run resumes at pr-merge (#2541).
+				readyOpen[key] = pr.Number
+				continue
+			}
+			if cause, cleared := as.inheritedFailureCleared(ctx, repo, node.Number, pr); cleared {
+				log.Printf("autonomous: %s OPEN PR #%d cannot merge (%s), but its blocker is an inherited CI failure (%s) and %s has moved since — dispatching to pr-merge", key, pr.Number, reason, cause, pr.BaseRef)
 				readyOpen[key] = pr.Number
 				continue
 			}
@@ -620,4 +628,80 @@ func (as *AutonomousScheduler) isEnqueueFailedCleanPR(repo string, number int, m
 		}
 	}
 	return false
+}
+
+// inheritedBlockerPrefix marks a pr-merge blocker record whose failing
+// required check was inherited from the base branch, not caused by the PR
+// (#3179). Matched by prefix: the classification is agent-written.
+const inheritedBlockerPrefix = "inherited-ci-failure"
+
+// prBlockerRecord is the subset of pr-{N}.json's blocker the reconcile reads.
+type prBlockerRecord struct {
+	Classification string `json:"classification"`
+	BaseSHA        string `json:"base_sha"`
+}
+
+// reconcileReadPrBlocker returns the blocker record pr-merge wrote for
+// issue's PR prNumber, searching each registered repo root's pipeline state
+// directory. A record naming a different PR is not this PR's. Overridable in
+// tests.
+var reconcileReadPrBlocker = func(as *AutonomousScheduler, issue, prNumber int) (prBlockerRecord, bool) {
+	roots := []string{as.workspaceRoot}
+	if as.scheduler != nil {
+		roots = as.scheduler.repoScanRoots()
+	}
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		dir, err := layout.PipelineStateDir(root)
+		if err != nil {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("pr-%d.json", issue)))
+		if err != nil {
+			continue
+		}
+		var ctx struct {
+			PRNumber int              `json:"pr_number"`
+			Blocker  *prBlockerRecord `json:"blocker"`
+		}
+		if json.Unmarshal(data, &ctx) != nil || ctx.PRNumber != prNumber || ctx.Blocker == nil {
+			continue
+		}
+		return *ctx.Blocker, true
+	}
+	return prBlockerRecord{}, false
+}
+
+// reconcileBaseHead returns the current head SHA of repo's branch base.
+// Overridable in tests.
+var reconcileBaseHead = func(ctx context.Context, repo, base string) (string, error) {
+	out, err := reconcileExecGh(ctx, "api", fmt.Sprintf("repos/%s/git/ref/heads/%s", repo, base), "--jq", ".object.sha")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// inheritedFailureCleared reports whether a PR the guard would park is
+// blocked only by an inherited CI failure that a moved base can clear
+// (#3179). Re-running the failing job rebuilds the old merge ref, so only a
+// base move can fix it; pr-merge records the base head it saw as base_sha.
+// A record without base_sha, or any read failure, stays parked (fail
+// closed). The base lookup runs only for inherited records, so every other
+// PR costs no extra API call.
+func (as *AutonomousScheduler) inheritedFailureCleared(ctx context.Context, repo string, issue int, pr openPR) (string, bool) {
+	record, ok := reconcileReadPrBlocker(as, issue, pr.Number)
+	if !ok || !strings.HasPrefix(record.Classification, inheritedBlockerPrefix) || record.BaseSHA == "" {
+		return "", false
+	}
+	if !isWellFormedRepo(repo) || !isWellFormedBranch(pr.BaseRef) {
+		return "", false
+	}
+	head, err := reconcileBaseHead(ctx, repo, pr.BaseRef)
+	if err != nil || head == "" || head == record.BaseSHA {
+		return "", false
+	}
+	return record.Classification, true
 }

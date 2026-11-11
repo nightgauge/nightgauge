@@ -2986,9 +2986,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * when it hits a non-retryable merge blocker; the orchestrator reads it to
    * populate the blocked terminal state. Returns null when absent/unreadable.
    */
-  private readPrBlockerRecord(
-    issueNumber: number
-  ): { classification?: string; remediation?: string; prNumber?: number } | null {
+  private readPrBlockerRecord(issueNumber: number): {
+    classification?: string;
+    remediation?: string;
+    prNumber?: number;
+    nonRetryable: boolean;
+  } | null {
     try {
       const prContextPath = this.getContextPath("pr", issueNumber);
       if (!fs.existsSync(prContextPath)) {
@@ -2996,7 +2999,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
       const prContext = JSON.parse(fs.readFileSync(prContextPath, "utf-8")) as {
         pr_number?: number;
-        blocker?: { classification?: string; remediation?: string };
+        blocker?: { classification?: string; remediation?: string; non_retryable?: boolean };
       };
       if (!prContext.blocker) {
         return null;
@@ -3005,6 +3008,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         classification: prContext.blocker.classification,
         remediation: prContext.blocker.remediation,
         prNumber: prContext.pr_number,
+        nonRetryable: prContext.blocker.non_retryable === true,
       };
     } catch {
       return null;
@@ -13528,28 +13532,52 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               // rebuild the same prompt, re-run the same checks, and hit the
               // same rejection (the dogfood pr-merge deadlock: ~16 min and 2×
               // tokens burned).
-              const blockerClass = await this.classifyMergeBlockerRetryability(
-                issueNumber,
-                this.pinnedWorkspaceRoot ?? this.getWorkingDirectory()
-              );
-              if (!blockerClass.retryable) {
-                const blockedError = new Error(
-                  `pr-merge BLOCKED by repository configuration (non-retryable): ` +
-                    `${blockerClass.reason}. ${mergeVerifyError.message}`
-                );
+              // #3179: the stage's own blocker record outranks the static
+              // ruleset precheck — it can see a failing check the precheck
+              // cannot. A record marked non_retryable ends the run blocked.
+              const blockerRecord = this.readPrBlockerRecord(issueNumber);
+              let blocked: { message: string; blocker: string; remediation?: string } | null = null;
+              if (blockerRecord?.nonRetryable) {
                 this.logger.error(
-                  "Post-merge verification: repo-config blocker — skipping retry, escalating",
-                  { issueNumber, reason: blockerClass.reason }
+                  "Post-merge verification: pr-merge wrote a non-retryable blocker record — skipping retry",
+                  { issueNumber, classification: blockerRecord.classification }
                 );
-                // First-class blocked terminal state (#190) — the structured
-                // pr-{N}.json blocker record (when the stage wrote one)
-                // carries the most precise remediation.
-                const blockerRecord = this.readPrBlockerRecord(issueNumber);
+                blocked = {
+                  message:
+                    `pr-merge BLOCKED (non-retryable blocker record): ` +
+                    `${blockerRecord.classification ?? "unclassified"}. ${mergeVerifyError.message}`,
+                  blocker: blockerRecord.classification ?? "pr-merge: non-retryable blocker",
+                  remediation: blockerRecord.remediation,
+                };
+              } else {
+                const blockerClass = await this.classifyMergeBlockerRetryability(
+                  issueNumber,
+                  this.pinnedWorkspaceRoot ?? this.getWorkingDirectory()
+                );
+                if (!blockerClass.retryable) {
+                  this.logger.error(
+                    "Post-merge verification: repo-config blocker — skipping retry, escalating",
+                    { issueNumber, reason: blockerClass.reason }
+                  );
+                  // First-class blocked terminal state (#190) — the structured
+                  // pr-{N}.json blocker record (when the stage wrote one)
+                  // carries the most precise remediation.
+                  blocked = {
+                    message:
+                      `pr-merge BLOCKED by repository configuration (non-retryable): ` +
+                      `${blockerClass.reason}. ${mergeVerifyError.message}`,
+                    blocker:
+                      blockerRecord?.classification ??
+                      `repo-config: ${blockerClass.reason ?? "branch protection"}`,
+                    remediation: blockerRecord?.remediation ?? blockerClass.reason,
+                  };
+                }
+              }
+              if (blocked) {
+                const blockedError = new Error(blocked.message);
                 this.blockedTerminalState = {
-                  blocker:
-                    blockerRecord?.classification ??
-                    `repo-config: ${blockerClass.reason ?? "branch protection"}`,
-                  remediation: blockerRecord?.remediation ?? blockerClass.reason,
+                  blocker: blocked.blocker,
+                  remediation: blocked.remediation,
                   prNumber: blockerRecord?.prNumber,
                 };
                 if (this.stateService) {

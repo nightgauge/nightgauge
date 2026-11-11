@@ -318,3 +318,39 @@ func TestEvaluateChecksComplete_LatestRunDecides(t *testing.T) {
 		})
 	}
 }
+
+// TestEvaluateChecksComplete_DecisiveRequiredFailure is the #3179 regression
+// guard, shaped like PR #3178: the ruleset requires `lint` and `cla`, which
+// never post on a PR head, while a present required check has concluded
+// failing. The failure must be decisive, not NOT-YET until the wait times out.
+func TestEvaluateChecksComplete_DecisiveRequiredFailure(t *testing.T) {
+	required := []string{"lint", "cla", "Security & license gates", "build", "test"}
+	checks := []CheckDetail{
+		{Name: "Security & license gates", Status: "COMPLETED", Conclusion: "FAILURE"},
+		{Name: "build", Status: "COMPLETED", Conclusion: "SUCCESS"},
+		{Name: "test", Status: "IN_PROGRESS"},
+	}
+	verdict, reasons := EvaluateChecksComplete(checks, required)
+	if verdict != ChecksIncomplete {
+		t.Fatalf("verdict = %q (%v), want %q", verdict, reasons, ChecksIncomplete)
+	}
+	if len(reasons) == 0 || !strings.Contains(reasons[0], "Security & license gates") {
+		t.Errorf("first reason = %v, want it to name the failed check", reasons)
+	}
+	joined := strings.Join(reasons, "; ")
+	if !strings.Contains(joined, "lint, cla") || !strings.Contains(joined, "test") {
+		t.Errorf("reasons = %q, want absent and running names kept as context", joined)
+	}
+}
+
+// A failed run superseded by a newer pending run of the same name is a
+// re-run in flight: NOT-YET, not decisive.
+func TestEvaluateChecksComplete_SupersededFailureIsNotDecisive(t *testing.T) {
+	checks := []CheckDetail{
+		{Name: "api", Status: "COMPLETED", Conclusion: "FAILURE", App: "github-actions", HeadSHA: "abc", ID: 1, StartedAt: "2026-11-11T10:00:00Z"},
+		{Name: "api", Status: "IN_PROGRESS", App: "github-actions", HeadSHA: "abc", ID: 2, StartedAt: "2026-11-11T10:05:00Z"},
+	}
+	if verdict, reasons := EvaluateChecksComplete(checks, []string{"api", "cla"}); verdict != ChecksNotYet {
+		t.Fatalf("verdict = %q (%v), want %q", verdict, reasons, ChecksNotYet)
+	}
+}

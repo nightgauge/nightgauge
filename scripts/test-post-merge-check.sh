@@ -324,6 +324,14 @@ stub_gh "$PUSH_GREEN"
 stub_pr tree-a "$HEAD_GREEN"
 expect "a required check absent from the PR head is NOT-YET" 2 "required check(s) absent: cla"
 
+# #3179: a failed required check on the head is decisive even while another
+# required check (cla) never posted there.
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a '{"check_runs": [
+  {"name": "build", "status": "completed", "conclusion": "failure", "html_url": "https://example.invalid/run/9"}
+]}'
+expect "a red required head check with another required absent is RED" 1 "required check(s) failed on PR #42 head"
+
 stub_gh '{"check_runs": [
   {"name": "publish",    "status": "in_progress", "conclusion": null},
   {"name": "cache-warm", "status": "completed",   "conclusion": "success"}
