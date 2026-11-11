@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The macOS binaries are now one universal (Intel + Apple silicon) file
+  (#3161).** Microsoft's scanner flagged the signed Intel-only binary
+  (`Trojan:Script/Wacatac.B!ml`). The signed universal build was clean at
+  all five version strings measured. Both macOS VSIXs, both macOS archives
+  and the Homebrew cask ship it, so each is about twice its former size. A
+  release step fails if a macOS VSIX or binary is not that file.
 - **The review-cap card says where the work really is.** It used to claim the work was
   uncommitted in the run's worktree even after cleanup had removed it. The card now checks at
   raise time whether the worktree exists and how many uncommitted paths it holds, and how many

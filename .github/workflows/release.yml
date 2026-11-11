@@ -319,13 +319,20 @@ jobs:
 
       # Cross-compile every target binary up front so each platform-specific
       # .vsix can bundle the matching one. The extension loads its Go binary from
-      # the bundled dist/bin/ (no runtime download), so a single universal .vsix
-      # would ship one arch and break on the others. `make build-all` emits
-      # bin/nightgauge-{darwin-arm64,darwin-amd64,linux-amd64}.
+      # the bundled dist/bin/ (no runtime download), so the VSIXs stay
+      # per-target: the linux one carries the linux binary. `make build-all`
+      # emits bin/nightgauge-{darwin-arm64,darwin-amd64,linux-amd64}.
       - name: Build all Go binaries (per-target VSIX bundling)
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: make build-all VERSION="$VERSION"
+
+      # Both darwin targets ship one universal (x86_64 + arm64) Mach-O: the
+      # signed thin darwin/amd64 build was flagged by Microsoft's model, and the
+      # signed universal file was clean at every version measured (#3161,
+      # docs/RELEASE_BINARIES.md).
+      - name: Join the darwin binaries into one universal Mach-O
+        run: make darwin-universal
 
       # Sign before anything packages these binaries. The VSIX freezes whatever
       # is in dist/bin/, and GoReleaser copies bin/ into the archives and the
@@ -333,7 +340,9 @@ jobs:
       # unsigned copy while reporting success. Signing is REQUIRED here
       # (#3064): missing Apple secrets, or a binary without the team's
       # Developer ID and the hardened runtime, fail this step, so a secretless
-      # re-run fails here, before the draft exists.
+      # re-run fails here, before the draft exists. The universal file is
+      # signed ONCE and copied over both darwin paths, so both darwin VSIXs,
+      # both darwin archives and the cask carry identical bytes.
       - name: Sign the macOS binaries
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
@@ -344,7 +353,9 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           bash scripts/sign-macos-binaries.sh --require-team RZJPN7Y7BG \
-            bin/nightgauge-darwin-arm64 bin/nightgauge-darwin-amd64
+            bin/nightgauge-darwin-universal
+          cp bin/nightgauge-darwin-universal bin/nightgauge-darwin-amd64
+          cp bin/nightgauge-darwin-universal bin/nightgauge-darwin-arm64
 
       # Build EVERY workspace before testing, not just the SDK. The VSCode suite
       # has an integration test (tests/integration/failureTaxonomyPackaging.test.ts)
@@ -525,6 +536,13 @@ jobs:
             echo "OK: $VSIX"
           done
           [[ "$COUNT" -eq 3 ]] || { echo "ERROR: expected 3 per-target VSIXs, found $COUNT"; exit 1; }
+
+      # Both darwin VSIXs and both darwin bin/ binaries must be the one signed
+      # universal Mach-O (#3161). A thin darwin/amd64 binary is the build
+      # Microsoft's model flagged. GoReleaser copies bin/ into the archives and
+      # the cask, and verify-archive-binaries.sh proves those match bin/.
+      - name: Verify the darwin binaries are the universal file
+        run: bash scripts/verify-darwin-universal.sh packages/nightgauge bin
 
       # Malware-scan every artifact BEFORE anything is attested or published.
       # v0.4.4 reached the Marketplace unscanned by us and was flagged there

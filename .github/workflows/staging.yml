@@ -119,10 +119,19 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: make build-all VERSION="$VERSION"
 
+      # Both darwin targets ship one universal (x86_64 + arm64) Mach-O: the
+      # signed thin darwin/amd64 build was flagged by Microsoft's model, and the
+      # signed universal file was clean at every version measured (#3161,
+      # docs/RELEASE_BINARIES.md).
+      - name: Join the darwin binaries into one universal Mach-O
+        run: make darwin-universal
+
       # Sign before anything packages these binaries. The VSIX freezes whatever
       # is in dist/bin/, so signing afterwards would ship an unsigned copy while
       # reporting success. No-ops with a notice when the Apple secrets are
-      # absent, so a fork or a secretless re-run still completes.
+      # absent, so a fork or a secretless re-run still completes. The universal
+      # file is signed ONCE and copied over both darwin paths, so both darwin
+      # VSIXs carry identical bytes (two signatures would differ).
       - name: Sign the macOS binaries
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
@@ -132,8 +141,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
-          bash scripts/sign-macos-binaries.sh \
-            bin/nightgauge-darwin-arm64 bin/nightgauge-darwin-amd64
+          bash scripts/sign-macos-binaries.sh bin/nightgauge-darwin-universal
+          cp bin/nightgauge-darwin-universal bin/nightgauge-darwin-amd64
+          cp bin/nightgauge-darwin-universal bin/nightgauge-darwin-arm64
 
       - name: Build SDK + extension
         run: npm run build
@@ -278,6 +288,13 @@ jobs:
             echo "OK: $VSIX"
           done
           [[ "$COUNT" -eq 3 ]] || { echo "ERROR: expected 3 VSIXs, found $COUNT"; exit 1; }
+
+      # Both darwin VSIXs and both darwin bin/ binaries must be the one signed
+      # universal Mach-O (#3161). A thin darwin/amd64 binary is the build
+      # Microsoft's model flagged. GoReleaser copies bin/ into the archives and
+      # the cask, and verify-archive-binaries.sh proves those match bin/.
+      - name: Verify the darwin binaries are the universal file
+        run: bash scripts/verify-darwin-universal.sh packages/nightgauge bin
 
       # The RC is the build a release is promoted FROM, so it is the one most
       # worth scanning -- catching a problem here costs a retag, catching it
