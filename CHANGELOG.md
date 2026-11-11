@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The darwin universal-binary check finds the VSIXs again (#3174).** It
+  looked for `nightgauge-<version>-<target>.vsix`, but `vsce` names them
+  `nightgauge-<target>-<version>.vsix`, so `main`'s build and every release
+  stopped there. It now selects each darwin VSIX by that name, requires its
+  manifest to name the same target, and fails naming any darwin VSIX whose
+  file name does not follow the convention.
 - **The Go toolchain is now go1.26.11**, which fixes GO-2026-6859 in `net/http`.
   govulncheck found it reachable on go1.26.10 and blocked every merge.
 - **`project sync-status`, `project add` and `hook post-merge` now write to
