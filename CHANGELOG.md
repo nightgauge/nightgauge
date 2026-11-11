@@ -22,8 +22,10 @@ changelog, and the release workflow refuses a tag that does not.
   a step that runs any check (build, test, lint, format, typecheck), or one of
   the commands CI discovery finds, is a check even when it carries a setup word
   (`eslint --cache`, `go test ./internal/cache/...`). A step is setup only when
-  it is an action or every command in it is an install, cache or runner
-  configuration step. Infrastructure needs a job that failed in a setup step
+  it is a known environment action (checkout, `setup-*`, cache, artifacts) or
+  every command in it is an OS-package, cache or runner configuration step. An
+  install that reads the repository's own manifest (`npm ci`, `pip install -r`)
+  and any other action (a lint or analysis action) count as the PR's own. Infrastructure needs a job that failed in a setup step
   and skipped the checks after it (an install step hitting an upstream outage):
   pr-merge re-enqueues the PR twice, five minutes apart, naming the job and step
   each time, then ends the run as `merge_queue_infra_failed`. That kind is
@@ -39,6 +41,15 @@ changelog, and the release workflow refuses a tag that does not.
   nothing. A PR ended as `merge_queue_infra_failed` stays In review rather than
   returning to Ready, so a lasting outage cannot loop. A removal whose job data
   cannot be read keeps the plain `merge-queue-failed` refusal.
+- **Re-running an issue from the "not closed: PR left criteria unmet" card now
+  scopes the run to those criteria in the VS Code extension too.** The
+  extension's stage loop never applied the partial-delivery scope, so the
+  card's re-plan option started an ordinary full run there. Feature-planning
+  and feature-dev now carry the same `## Partial-Delivery Re-run Scope` block
+  as on the Go path, read from the newest trusted partial-delivery comment
+  when the stage starts; `nightgauge issue partial-delivery --json` reports it
+  as `prompt_blocks`. The option now reads "Re-run: plan only the criteria
+  PR #N left unmet" (#3095).
 - **An unreachable apt mirror no longer fails the Playwright CI job (#3199).**
   `scripts/playwright-os-deps.sh` installs Chromium's OS dependencies and, when
   that install fails, launches the cached headless Chromium once: a successful
