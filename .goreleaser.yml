@@ -46,10 +46,15 @@ builds:
     flags:
       - -trimpath
     # Unstripped on purpose: no -s, no -w. Defender's model flagged the stripped
-    # Go ELF, and DWARF debug information is what keeps it clean. A test fails
-    # if either flag returns. See docs/RELEASE_BINARIES.md.
+    # Go ELF, and DWARF debug information is what keeps it clean. DWARF is also
+    # left uncompressed, matching the Makefile's RELEASE_LDFLAGS: the Linux ELF
+    # sits at that model's threshold, and go1.27.3 with uncompressed DWARF was
+    # the lowest-rate build of 86 measured (#3192). The shipped bytes come from
+    # bin/ (hooks.post below); this keeps the two build paths the same. A test
+    # fails if a strip flag returns or -compressdwarf=false goes. See
+    # docs/RELEASE_BINARIES.md.
     ldflags:
-      - -X main.version={{.Version}} -X "main.vendor=Edibu, LLC"
+      - -compressdwarf=false -X main.version={{.Version}} -X "main.vendor=Edibu, LLC"
     # #3064: the archives and the Homebrew cask must carry the SAME binaries the
     # VSIXs bundle: the ones `make build-all` produced and release.yml signed
     # with the Developer ID. GoReleaser's own build is unsigned, so it is

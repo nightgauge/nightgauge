@@ -1106,6 +1106,8 @@ func TestTransientFailuresNeverTripTheCircuitBreaker(t *testing.T) {
 		TerminalKindBlockedDependency,
 		TerminalKindBranchForked,
 		TerminalKindPrMergeUnmerged,
+		TerminalKindMergeQueueEnqueueFailed,
+		TerminalKindMergeQueueInfraFailed,
 	}
 
 	for _, kind := range nonFaultKinds {

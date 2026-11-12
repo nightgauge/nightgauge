@@ -24,8 +24,9 @@ import (
 // on a model request does. It declares an idle-stream bound through the
 // StreamIdleBound hook.
 type endpointFakeAdapter struct {
-	url   string
-	bound time.Duration
+	url        string
+	bound      time.Duration
+	sessionDir string // the watchdog's session directory: see heartbeatGate
 }
 
 func (endpointFakeAdapter) Name() string { return "endpoint-fake" }
@@ -36,13 +37,64 @@ func (a endpointFakeAdapter) BuildCommand(adapters.RunOptions) (string, []string
 func (endpointFakeAdapter) UsesStdin() bool { return false }
 func (endpointFakeAdapter) Agentic() bool   { return true }
 func (a endpointFakeAdapter) StreamIdleBound(adapters.RunOptions) (string, time.Duration, string, bool) {
-	return "fake-endpoint", a.bound, "", true
+	return "fake-endpoint", a.bound, a.sessionDir, true
 }
 
 func requireCurl(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("curl"); err != nil {
 		t.Skip("curl not on PATH")
+	}
+}
+
+// heartbeatGate holds the watchdog's idle clock shut until the fake endpoint
+// is reached (#2635). Spawn, exec and connect can take longer than the bound
+// under load. Past the bound, the watchdog reads the session heartbeat
+// (#2184) as progress, so a goroutine keeps that heartbeat fresh and the
+// watchdog cannot fire. open(at) stops the refresher and pins the heartbeat
+// to at, so the bound runs from at and from nothing earlier. The heartbeat
+// is never dated in the future: check() would carry a future mtime into
+// lastEvent, and the watchdog would then never fire.
+func heartbeatGate(t *testing.T) (dir string, open func(at time.Time) error) {
+	t.Helper()
+	dir = t.TempDir()
+	hb := filepath.Join(dir, streamHeartbeatFile)
+	if err := os.WriteFile(hb, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	opened := false
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(50 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				mu.Lock()
+				if !opened {
+					now := time.Now()
+					_ = os.Chtimes(hb, now, now)
+				}
+				mu.Unlock()
+			}
+		}
+	}()
+	var once sync.Once
+	halt := func() { once.Do(func() { close(stop); <-done }) }
+	t.Cleanup(halt)
+	return dir, func(at time.Time) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if opened {
+			return nil
+		}
+		opened = true
+		return os.Chtimes(hb, at, at)
 	}
 }
 
@@ -76,7 +128,9 @@ func TestRunStage_ModelStreamStalled_EndpointNeverAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accepted := make(chan struct{}, 1)
+	sessionDir, openGate := heartbeatGate(t)
+	accepted := make(chan time.Time, 1)
+	gateErr := make(chan error, 1)
 	var mu sync.Mutex
 	var conns []net.Conn
 	go func() {
@@ -88,8 +142,15 @@ func TestRunStage_ModelStreamStalled_EndpointNeverAnswers(t *testing.T) {
 			mu.Lock()
 			conns = append(conns, c) // held open, never answered
 			mu.Unlock()
+			at := time.Now()
+			if err := openGate(at); err != nil {
+				select {
+				case gateErr <- err:
+				default:
+				}
+			}
 			select {
-			case accepted <- struct{}{}:
+			case accepted <- at:
 			default:
 			}
 		}
@@ -104,12 +165,24 @@ func TestRunStage_ModelStreamStalled_EndpointNeverAnswers(t *testing.T) {
 	})
 
 	bound := time.Second
-	result, elapsed := runEndpointStage(t, endpointFakeAdapter{url: "http://" + ln.Addr().String() + "/v1/chat/completions", bound: bound}, 2176)
+	result, elapsed := runEndpointStage(t, endpointFakeAdapter{url: "http://" + ln.Addr().String() + "/v1/chat/completions", bound: bound, sessionDir: sessionDir}, 2176)
+	stopped := time.Now()
 
+	// The gate opens only on accept, so the stop cannot precede it. The
+	// deadline is a guard, not a race.
+	var acceptedAt time.Time
 	select {
-	case <-accepted:
-	default:
+	case acceptedAt = <-accepted:
+	case <-time.After(5 * time.Second):
 		t.Fatal("the fake endpoint never saw the request")
+	}
+	select {
+	case err := <-gateErr:
+		t.Fatalf("opening the heartbeat gate: %v", err)
+	default:
+	}
+	if d := stopped.Sub(acceptedAt); d < bound {
+		t.Fatalf("stopped %v after the endpoint accepted, want at least the %v bound", d, bound)
 	}
 	if result.ExitCode == 0 {
 		t.Fatal("ExitCode = 0, want a failure for a stalled model request")
@@ -136,7 +209,15 @@ func TestRunStage_ModelStreamStalled_EndpointNeverAnswers(t *testing.T) {
 func TestRunStage_ModelStreamStalled_SlowStreamIsNotStopped(t *testing.T) {
 	requireCurl(t)
 	bound := time.Second
+	sessionDir, openGate := heartbeatGate(t)
+	gateErr := make(chan error, 1)
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := openGate(time.Now()); err != nil {
+			select {
+			case gateErr <- err:
+			default:
+			}
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		fl := w.(http.Flusher)
@@ -156,7 +237,12 @@ func TestRunStage_ModelStreamStalled_SlowStreamIsNotStopped(t *testing.T) {
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { srv.Close() })
 
-	result, elapsed := runEndpointStage(t, endpointFakeAdapter{url: "http://" + ln.Addr().String() + "/v1/chat/completions", bound: bound}, 2177)
+	result, elapsed := runEndpointStage(t, endpointFakeAdapter{url: "http://" + ln.Addr().String() + "/v1/chat/completions", bound: bound, sessionDir: sessionDir}, 2177)
+	select {
+	case err := <-gateErr:
+		t.Fatalf("opening the heartbeat gate: %v", err)
+	default:
+	}
 	if result.ExitCode != 0 || strings.Contains(result.Stderr, ModelStreamStalledMarker) {
 		t.Fatalf("exit %d, stderr = %q, want a slow but streaming stage left alone", result.ExitCode, result.Stderr)
 	}

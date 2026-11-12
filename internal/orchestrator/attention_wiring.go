@@ -2035,9 +2035,10 @@ func BuildPartialDeliveryCloseRefused(repo string, issue int, runID string, pr i
 				"partial delivery on it and no PR that closes the issue has merged since. The "+
 				"pipeline refused to close the issue and ended the run `blocked`.\n\n"+
 				"Remaining acceptance criteria:\n\n%s\n"+
-				"Close the issue if planning's evidence really meets them, or re-plan so the "+
-				"remaining criteria become the run's focus.",
-			issue, pr, list.String()),
+				"Close the issue if planning's evidence really meets them, or re-run it: the "+
+				"re-run re-reads the remaining criteria from PR #%d's partial-delivery comment "+
+				"when it starts, and plans and implements only those.",
+			issue, pr, list.String(), pr),
 		Producer: ProducerPartialDeliveryCloseRefused,
 		Context: attention.Context{
 			Repo: repo, Issue: issue, RunID: runID, Stage: "feature-planning",
@@ -2045,7 +2046,7 @@ func BuildPartialDeliveryCloseRefused(repo string, issue int, runID string, pr i
 			TraceRef: runTraceRef(runID),
 		},
 		Options: []attention.Option{
-			{ID: "replan", Label: "Re-plan with the remaining criteria as focus_acs",
+			{ID: "replan", Label: fmt.Sprintf("Re-run: plan only the criteria PR #%d left unmet", pr),
 				Verb:  attention.VerbQueueAdd,
 				Args:  map[string]any{"owner": owner, "repo": name, "issueNumber": issue},
 				Style: attention.StylePrimary},

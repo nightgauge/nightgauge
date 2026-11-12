@@ -943,12 +943,12 @@ func TestVerifyACAgainstDiff_Issue3033(t *testing.T) {
 // #3049: an unchanged word routes only when it is about a named path or heading.
 func TestACUnchangedAboutTarget(t *testing.T) {
 	for raw, want := range map[string]bool{
-		"`p.go` is unchanged.":                                                      true,
-		"`p.go` stays untouched.":                                                   true,
-		"The change leaves `p.go` unchanged.":                                       true,
-		"Ship it with `p.go` untouched.":                                            true,
-		"`p.go` is not modified.":                                                   true,
-		"The root `CHANGELOG.md` entry is unchanged.":                               true,
+		"`p.go` is unchanged.":                        true,
+		"`p.go` stays untouched.":                     true,
+		"The change leaves `p.go` unchanged.":         true,
+		"Ship it with `p.go` untouched.":              true,
+		"`p.go` is not modified.":                     true,
+		"The root `CHANGELOG.md` entry is unchanged.": true,
 		"The `### Added` / `### Changed` sections in `[Unreleased]` are unchanged.": true,
 		"`t.js` covers: unchanged when short enough.":                               false,
 		"`t.js` covers the boundary (`a === b` is unchanged).":                      false,

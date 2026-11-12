@@ -4,11 +4,12 @@ ci-local.sh machine-dependency contract
 ci-local.sh change-scoping contract
 ci-local.sh dependency bootstrap decision
 ci-local.sh go test pass record
+go test cache and always-uncached list
 ci-local.sh gate ledger reuse
 state-backstop.sh regression suite
 go build ./...
-go test ./... -count=1 (with skip accounting)
-go test -race -count=1 ./...
+go test ./... (with skip accounting)
+go test -race ./...
 gofmt -l ./internal ./cmd
 branch-merged-check.sh regression suite
 post-merge-check.sh regression suite
@@ -52,7 +53,10 @@ visibility-prose reintroduction gate
 Workflow-reference gate regression suite
 Marketplace channel regression suite
 Release channel wiring suite
+Release margin scan suite
+gofmt toolchain check suite
 Main build version regression suite
+Playwright OS deps regression suite
 VSIX host-target regression suite
 Release channel verification regression suite
 nonexistent-workflow-reference gate

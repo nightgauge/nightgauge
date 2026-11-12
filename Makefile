@@ -1,5 +1,6 @@
 .PHONY: generate generate-go generate-ts install-codegen \
-	build-cli test-go test-integration vet lint-go build-all darwin-universal \
+	build-cli test-go test-integration vet lint-go build-all build-release-targets \
+	darwin-universal \
 	generate-ipc-client \
 	generate-platform-operations check-platform-operations require-openapi-spec \
 	generate-terminal-kind-table check-terminal-kind-table \
@@ -92,11 +93,16 @@ VENDOR ?= Edibu, LLC
 # flag returns. See docs/RELEASE_BINARIES.md.
 LDFLAGS := -ldflags "-X main.version=$(VERSION) -X 'main.vendor=$(VENDOR)'"
 
-# The darwin builds also keep DWARF uncompressed. Signed darwin/amd64 builds
+# Every release target keeps DWARF uncompressed. Signed darwin/amd64 builds
 # with compressed DWARF were flagged by Microsoft's model at some version
 # strings (#3161); the signed universal file below, built this way, was clean
-# at all five measured. See docs/RELEASE_BINARIES.md.
-DARWIN_LDFLAGS := -ldflags "-compressdwarf=false -X main.version=$(VERSION) -X 'main.vendor=$(VENDOR)'"
+# at all five measured. The Linux amd64 ELF sits at the same model's threshold:
+# on go1.27.3 with uncompressed DWARF it was flagged at 1 of 18 version
+# strings, the lowest rate of 86 measured builds (#3192). Each RC also builds
+# and scans three neighbouring version strings to prove the margin. A test
+# fails if a release target loses -compressdwarf=false. build-cli, the native
+# dev build, keeps LDFLAGS. See docs/RELEASE_BINARIES.md.
+RELEASE_LDFLAGS := -ldflags "-compressdwarf=false -X main.version=$(VERSION) -X 'main.vendor=$(VENDOR)'"
 
 # -trimpath removes local filesystem paths from the binary, so a build of a
 # given commit is reproducible by anyone rather than carrying the builder's
@@ -123,10 +129,14 @@ build-cli:
 	go build $(GOFLAGS_BUILD) $(LDFLAGS) -o $(BIN_DIR)/nightgauge ./cmd/nightgauge
 
 # Build CLI for all target platforms
-build-all: build-cli
-	GOOS=darwin GOARCH=arm64 go build $(GOFLAGS_BUILD) $(DARWIN_LDFLAGS) -o $(BIN_DIR)/nightgauge-darwin-arm64 ./cmd/nightgauge
-	GOOS=darwin GOARCH=amd64 go build $(GOFLAGS_BUILD) $(DARWIN_LDFLAGS) -o $(BIN_DIR)/nightgauge-darwin-amd64 ./cmd/nightgauge
-	GOOS=linux GOARCH=amd64 go build $(GOFLAGS_BUILD) $(LDFLAGS) -o $(BIN_DIR)/nightgauge-linux-amd64 ./cmd/nightgauge
+build-all: build-cli build-release-targets
+
+# The three release binaries alone. scripts/release-margin-builds.sh calls this
+# with another VERSION and BIN_DIR, so the margin builds use these exact flags.
+build-release-targets:
+	GOOS=darwin GOARCH=arm64 go build $(GOFLAGS_BUILD) $(RELEASE_LDFLAGS) -o $(BIN_DIR)/nightgauge-darwin-arm64 ./cmd/nightgauge
+	GOOS=darwin GOARCH=amd64 go build $(GOFLAGS_BUILD) $(RELEASE_LDFLAGS) -o $(BIN_DIR)/nightgauge-darwin-amd64 ./cmd/nightgauge
+	GOOS=linux GOARCH=amd64 go build $(GOFLAGS_BUILD) $(RELEASE_LDFLAGS) -o $(BIN_DIR)/nightgauge-linux-amd64 ./cmd/nightgauge
 
 # Join the two darwin builds into one universal (fat) Mach-O. Both darwin VSIXs,
 # both darwin archives and the cask ship this one file: the workflows sign it

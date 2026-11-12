@@ -167,10 +167,33 @@ func splicePartialDelivery(workspaceRoot string, issueNumber int, planningFile s
 // feature-dev prompts.
 const partialRerunPromptHeading = "## Partial-Delivery Re-run Scope"
 
+// PartialRerunPromptBlocks renders the scope block for each stage that
+// carries one, keyed by stage name, for the extension's stage loop (#3095):
+// `nightgauge issue partial-delivery --json` hands it over so the text has one
+// source. Nil when the remainder is not pending or lists no criteria.
+func PartialRerunPromptBlocks(status hooks.PartialDeliveryStatus) map[string]string {
+	if !status.Pending || status.Unlisted || len(status.Criteria) == 0 {
+		return nil
+	}
+	scope := &state.PartialRerun{PR: status.PR, Criteria: status.Criteria}
+	return map[string]string{
+		string(state.StageFeaturePlanning): renderPartialRerunPromptBlock(state.StageFeaturePlanning, scope, false),
+		string(state.StageFeatureDev):      renderPartialRerunPromptBlock(state.StageFeatureDev, scope, false),
+	}
+}
+
 // partialRerunPromptBlock is the prompt trailer for a partial re-run's
 // planning and feature-dev stages. "" when scope is nil, so an unscoped
 // run's prompt stays byte-identical.
 func partialRerunPromptBlock(stage state.PipelineStage, scope *state.PartialRerun) string {
+	return renderPartialRerunPromptBlock(stage, scope, true)
+}
+
+// renderPartialRerunPromptBlock renders the block. goPath adds the two
+// sentences only the Go scheduler keeps: it splices the record into the
+// planning context and stops a no-diff feature-dev before feature-validate.
+// The extension's stage loop does neither, so its block omits them (#3095).
+func renderPartialRerunPromptBlock(stage state.PipelineStage, scope *state.PartialRerun, goPath bool) string {
 	if scope == nil || len(scope.Criteria) == 0 {
 		return ""
 	}
@@ -188,11 +211,18 @@ func partialRerunPromptBlock(stage state.PipelineStage, scope *state.PartialReru
 	b.WriteString("\n")
 	switch stage {
 	case state.StageFeaturePlanning:
-		b.WriteString("Plan only these criteria: use them as `focus_acs` and do not re-plan the rest of the issue. " +
-			"The planning context records them under `partial_delivery`.\n")
+		b.WriteString("Plan only these criteria: use them as `focus_acs` and do not re-plan the rest of the issue.")
+		if goPath {
+			b.WriteString(" The planning context records them under `partial_delivery`.")
+		}
+		b.WriteString("\n")
 	case state.StageFeatureDev:
 		b.WriteString("Implement only these criteria and change nothing else. If they are already met on this " +
-			"branch, write no code: the run then ends after this stage, without feature-validate.\n")
+			"branch, write no code")
+		if goPath {
+			b.WriteString(": the run then ends after this stage, without feature-validate")
+		}
+		b.WriteString(".\n")
 	}
 	return b.String()
 }

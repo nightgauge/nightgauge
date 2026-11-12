@@ -333,9 +333,9 @@ list_rc=$?
 check "\`--list-steps --changed\` exits 0 — got $list_rc" $?
 diff -q scripts/ci-local-steps.txt "$scoped_list" >/dev/null 2>&1
 check "the scoped inventory is IDENTICAL to the unscoped checked-in inventory" $?
-grep -qF 'go test -race -count=1 ./...' "$scoped_list"
+grep -qF 'go test -race ./...' "$scoped_list"
 check "the race suite is still listed even when it would be skipped" $?
-grep -qF 'go test ./... -count=1 (with skip accounting)' "$scoped_list"
+grep -qF 'go test ./... (with skip accounting)' "$scoped_list"
 check "the plain Go suite is still listed even when it would be skipped" $?
 
 # ── (12) the #983 guard still goes red if a step DISAPPEARS ────────────────
@@ -367,7 +367,7 @@ check "the doctored copy could be produced (arm 12 is not vacuous)" $?
 if [ "$doctor_rc" -eq 0 ]; then
   doctored_list="$TMP/doctored-list.txt"
   bash "$DOCTORED" --list-steps > "$doctored_list" 2>/dev/null
-  ! grep -qF 'go test -race -count=1 ./...' "$doctored_list"
+  ! grep -qF 'go test -race ./...' "$doctored_list"
   check "a DELETED step really is absent from the doctored inventory" $?
   ! diff -q scripts/ci-local-steps.txt "$doctored_list" >/dev/null 2>&1
   check "the #983 guard's comparison goes RED when a step disappears entirely" $?

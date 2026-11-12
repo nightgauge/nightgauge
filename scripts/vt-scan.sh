@@ -32,7 +32,18 @@
 #     skill scripts and bundles its RC carried byte for byte, and the RC scan
 #     analysed them hours earlier: re-analysing them spent two thirds of every
 #     release scan (session 86).
-#   - VirusTotal knows it, but its last analysis is older: POST
+#   - It is a text file, VirusTotal analysed it within VT_REUSE_MAX_AGE_TEXT
+#     (default 14 days), that analysis lists at least VT_MIN_ENGINES engines,
+#     and it carries no finding by the rules below: its report is judged. 1
+#     request. rc.3 spent 63 of its 108 requests re-analysing 21 unchanged,
+#     clean hooks and scripts last analysed 37 hours earlier (#3202). A file is
+#     text unless its bytes say otherwise: an ELF, Mach-O, PE, zip or gzip
+#     header, or a NUL byte in its first 8 KiB, makes it a binary, and so does
+#     a .vsix, .zip, .tar.gz, .tgz or .exe name. Binaries, VSIXes and archives
+#     keep the 24-hour window: a classifier verdict on them (Microsoft's !ml)
+#     moves without a byte changing on our side. A report with a finding is
+#     never reused under the long window; it is re-analysed.
+#   - VirusTotal knows it, but neither window reuses it: POST
 #     /files/{sha256}/analyse re-analyses it without a re-upload. 3 requests:
 #     lookup, reanalysis, and at least one poll.
 #   - VirusTotal does not know it (404): it is uploaded. 3 requests, or 4 over
@@ -40,10 +51,28 @@
 #
 # A submitted file is polled with GET /files/{sha256} until its
 # last_analysis_date is later than the one the lookup saw. That one answer
-# carries the engine results, the crowdsourced YARA matches and Code insights,
-# so no separate GET /analyses/{id} is spent. VirusTotal writes the file's
-# last_analysis_* fields when the analysis completes, and a report listing
-# fewer than VT_MIN_ENGINES engines is refused as incomplete (exit 2).
+# carries the engine results, the crowdsourced YARA matches and Code insights.
+# VirusTotal writes the file's last_analysis_* fields when the analysis
+# completes, and a report listing fewer than VT_MIN_ENGINES engines is refused
+# as incomplete (exit 2).
+#
+# A report counts as reanalysed only when its last_analysis_date is later than
+# the lookup's AND within the window that applies to the file: 24 hours for a
+# binary, VSIX or archive, or for any report with a finding; the long text
+# window only for a clean text file. The lookup's own report is never judged as
+# the reanalysis, whatever its age. A file poll that shows no newer date is
+# followed by GET /analyses/{id}. When that answers `completed` with a date no
+# later than the lookup's report (or no date), VirusTotal finished without a
+# newer report: on 2026-11-11 such a poll ran to VT_ANALYSIS_TIMEOUT (#3202).
+# The scan now stops at once with exit 2, so the step is re-run. A completed
+# analysis with a newer date means the file object lags behind it, so the file
+# is polled until its date moves or the timeout ends; the old report is never
+# judged. `queued` and `in-progress` keep polling; any other status is exit 2.
+#
+# Every run ends with one line counting its requests by class: lookups (the
+# first GET of each file), uploads (upload_url and POST /files), reanalyses
+# (POST .../analyse) and polls (every later GET). The report carries the same
+# counts as requests_by_class.
 #
 # This script spaces its own requests to stay under 4/min, backs off between
 # polls of one analysis, and stops at VT_MAX_REQUESTS requests per run so one
@@ -100,7 +129,10 @@
 #                          HARNESS ERROR, not a retry. Default 150.
 #   VT_REUSE_MAX_AGE       Seconds within which VirusTotal's last analysis of a
 #                          file is judged instead of re-analysed. Default 86400.
-#                          0 re-analyses every file.
+#                          0 re-analyses every file, whatever its kind.
+#   VT_REUSE_MAX_AGE_TEXT  The same for a text file whose last analysis carries
+#                          no finding. Default 1209600 (14 days). 0 turns the
+#                          long window off; otherwise at least VT_REUSE_MAX_AGE.
 #   VT_MIN_ENGINES         Fewest engines a judged report may list. Default 40.
 #
 # Exit: 0 every file clean; 1 any finding; 2 HARNESS ERROR.
@@ -116,6 +148,7 @@ HTTP_TIMEOUT="${VT_HTTP_TIMEOUT:-600}"
 POLL_MAX_INTERVAL="${VT_POLL_MAX_INTERVAL:-300}"
 MAX_REQUESTS="${VT_MAX_REQUESTS:-150}"
 REUSE_MAX_AGE="${VT_REUSE_MAX_AGE:-86400}"
+REUSE_MAX_AGE_TEXT="${VT_REUSE_MAX_AGE_TEXT:-1209600}"
 MIN_ENGINES="${VT_MIN_ENGINES:-40}"
 LARGE_FILE_BYTES=33554432 # 32 MB: above this, POST /files refuses the upload.
 # VirusTotal answers GET /files/upload_url with a URL on this host. It is the
@@ -137,6 +170,18 @@ REPORT_STATUS="error"
 REPORT_ERROR=""
 ENTRIES="[]"
 REQUESTS=0 # API requests sent this run, failed ones included: each spends quota.
+# The same requests by class. Each caller names the class of its next request
+# in REQ_CLASS; vt_request counts it and clears it, so the four always sum to
+# REQUESTS.
+REQ_LOOKUP=0
+REQ_UPLOAD=0
+REQ_REANALYSIS=0
+REQ_POLL=0
+REQ_CLASS=""
+
+print_summary() {
+  echo "vt-scan: $REQUESTS requests (lookups $REQ_LOOKUP, uploads $REQ_UPLOAD, reanalyses $REQ_REANALYSIS, polls $REQ_POLL)"
+}
 
 write_report() {
   [ -n "$REPORT" ] || return 0
@@ -148,9 +193,13 @@ write_report() {
     --argjson files "$ENTRIES" \
     --argjson requests "$REQUESTS" \
     --argjson reuse "$REUSE_MAX_AGE" \
+    --argjson reuse_text "$REUSE_MAX_AGE_TEXT" \
+    --argjson lookup "$REQ_LOOKUP" --argjson upload "$REQ_UPLOAD" \
+    --argjson reanalysis "$REQ_REANALYSIS" --argjson poll "$REQ_POLL" \
     '{tool: "vt-scan.sh", api: $api, scanned_at: $at, status: $status,
       error: (if $error == "" then null else $error end), requests: $requests,
-      reuse_max_age: $reuse,
+      requests_by_class: {lookup: $lookup, upload: $upload, reanalysis: $reanalysis, poll: $poll},
+      reuse_max_age: $reuse, reuse_max_age_text: $reuse_text,
       sources: ($files | group_by(.source) | map({key: .[0].source, value: length}) | from_entries),
       files: $files}' \
     >"$REPORT" 2>/dev/null || echo "WARNING: could not write $REPORT" >&2
@@ -167,6 +216,9 @@ harness() {
   REPORT_ERROR="$*"
   echo "HARNESS ERROR: $*" >&2
   write_report
+  # stderr: harness can run inside a command substitution, whose stdout is
+  # captured, and the summary must still reach the log.
+  print_summary >&2
   exit 2
 }
 
@@ -194,6 +246,9 @@ done
 [[ "$MAX_REQUESTS" =~ ^[0-9]{1,6}$ ]] && [ "$MAX_REQUESTS" -gt 0 ] ||
   harness "VT_MAX_REQUESTS must be a whole number above 0"
 [[ "$REUSE_MAX_AGE" =~ ^[0-9]{1,7}$ ]] || harness "VT_REUSE_MAX_AGE must be a whole number of seconds"
+[[ "$REUSE_MAX_AGE_TEXT" =~ ^[0-9]{1,8}$ ]] || harness "VT_REUSE_MAX_AGE_TEXT must be a whole number of seconds"
+[ "$REUSE_MAX_AGE_TEXT" -eq 0 ] || [ "$REUSE_MAX_AGE_TEXT" -ge "$REUSE_MAX_AGE" ] ||
+  harness "VT_REUSE_MAX_AGE_TEXT ($REUSE_MAX_AGE_TEXT) is below VT_REUSE_MAX_AGE ($REUSE_MAX_AGE); set it to 0 to turn the text window off"
 [[ "$MIN_ENGINES" =~ ^[0-9]{1,3}$ ]] && [ "$MIN_ENGINES" -gt 0 ] ||
   harness "VT_MIN_ENGINES must be a whole number above 0"
 # A cap below the floor would poll faster than the 4/min spacing allows.
@@ -239,6 +294,14 @@ vt_request() {
   where="${where%%\?*}"
   [ "$REQUESTS" -lt "$MAX_REQUESTS" ] ||
     harness "request budget spent: VT_MAX_REQUESTS=$MAX_REQUESTS reached before $method $where; re-run later or raise it"
+  case "$REQ_CLASS" in
+  lookup) REQ_LOOKUP=$((REQ_LOOKUP + 1)) ;;
+  upload) REQ_UPLOAD=$((REQ_UPLOAD + 1)) ;;
+  reanalysis) REQ_REANALYSIS=$((REQ_REANALYSIS + 1)) ;;
+  poll) REQ_POLL=$((REQ_POLL + 1)) ;;
+  *) harness "internal: $method $where has no request class" ;;
+  esac
+  REQ_CLASS=""
   now="$(date +%s)"
   wait=$((LAST_REQUEST + NEXT_GAP - now))
   [ "$wait" -gt 0 ] && sleep "$wait"
@@ -270,25 +333,46 @@ vt_request() {
   jq -e . "$BODY" >/dev/null 2>&1 || harness "$method $where: the answer is not JSON"
 }
 
+# kind_of PATH — "binary" or "text", from the bytes first. A file is binary
+# when it starts with an ELF, Mach-O (thin or fat), PE, zip (VSIX) or gzip
+# header, holds a NUL byte in its first 8 KiB, or is named as an archive or
+# executable. Everything else is text. Errors lean to binary, the short window.
+kind_of() {
+  local head
+  case "$1" in *.vsix | *.zip | *.tar.gz | *.tgz | *.exe) echo binary; return ;; esac
+  head="$(LC_ALL=C head -c 8 "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n')" || { echo binary; return; }
+  case "$head" in
+  7f454c46* | feedface* | feedfacf* | cefaedfe* | cffaedfe* | cafebabe* | 4d5a* | 504b0304* | 1f8b*)
+    echo binary; return ;;
+  esac
+  if [ "$(LC_ALL=C head -c 8192 "$1" 2>/dev/null | tr -d '\000' | wc -c | tr -d ' ')" != \
+    "$(LC_ALL=C head -c 8192 "$1" 2>/dev/null | wc -c | tr -d ' ')" ]; then
+    echo binary
+    return
+  fi
+  echo text
+}
+
 # --- Deduplicate by digest ----------------------------------------------------
-# Lines of "sha256<TAB>size<TAB>path"; the first path for a digest is scanned,
-# every path is reported.
+# Lines of "sha256<TAB>size<TAB>path<TAB>kind"; the first path for a digest is
+# scanned, every path is reported.
 INDEX="$WORK/index.tsv"
 : >"$INDEX"
 for f in "${FILES[@]}"; do
   [ -f "$f" ] && [ -r "$f" ] || harness "not a readable file: $f"
-  case "$f" in *'"'* | *$'\n'* | *';'*) harness "unsupported character in file name: $f" ;; esac
+  case "$f" in *'"'* | *$'\n'* | *$'\t'* | *';'*) harness "unsupported character in file name: $f" ;; esac
   sha="$(sha256_of "$f")"
   [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || harness "cannot hash $f"
-  printf '%s\t%s\t%s\n' "$sha" "$(size_of "$f")" "$f" >>"$INDEX"
+  printf '%s\t%s\t%s\t%s\n' "$sha" "$(size_of "$f")" "$f" "$(kind_of "$f")" >>"$INDEX"
 done
 UNIQUE="$(cut -f1 "$INDEX" | awk '!seen[$0]++')"
 echo "vt-scan: ${#FILES[@]} file(s), $(printf '%s\n' "$UNIQUE" | wc -l | tr -d ' ') unique by sha256"
 
-# vt_file SHA — GET /files/{sha256}; a 404 NotFoundError is an answer
-# (HTTP_STATUS=404), not an error.
+# vt_file SHA CLASS — GET /files/{sha256}, counted as CLASS (lookup or poll);
+# a 404 NotFoundError is an answer (HTTP_STATUS=404), not an error.
 vt_file() {
   ALLOW_404=1
+  REQ_CLASS="$2"
   vt_request GET "$API_BASE/files/$1"
   ALLOW_404=0
 }
@@ -307,16 +391,18 @@ file_facts() {
 
 utc() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
 
+# expect_analysis WHAT — the analysis id in $BODY, in ANALYSIS_ID.
+ANALYSIS_ID=""
 expect_analysis() {
-  local aid
-  aid="$(jq -r 'if .data.type == "analysis" and (.data.id | type) == "string" then .data.id else empty end' "$BODY")"
-  [[ "$aid" =~ ^[A-Za-z0-9=_:+/-]+$ ]] || harness "$1 returned no analysis id"
+  ANALYSIS_ID="$(jq -r 'if .data.type == "analysis" and (.data.id | type) == "string" then .data.id else empty end' "$BODY")"
+  [[ "$ANALYSIS_ID" =~ ^[A-Za-z0-9=_:+/-]+$ ]] || harness "$1 returned no analysis id"
 }
 
 # upload PATH SIZE — POST the bytes; over 32 MB through upload_url.
 upload() {
   local path="$1" size="$2" target="$API_BASE/files"
   if [ "$size" -gt "$LARGE_FILE_BYTES" ]; then
+    REQ_CLASS=upload
     vt_request GET "$API_BASE/files/upload_url"
     target="$(jq -r 'if (.data | type) == "string" then .data else empty end' "$BODY")"
     # The key goes to this URL, so it must be the API's own host or
@@ -326,6 +412,7 @@ upload() {
     *) harness "upload_url for $path is not on $API_ORIGIN or $VT_UPLOAD_ORIGIN" ;;
     esac
   fi
+  REQ_CLASS=upload
   vt_request POST "$target" -F "file=@\"$path\""
   expect_analysis "POST /files for $path"
 }
@@ -333,11 +420,13 @@ upload() {
 ALLOW_JSON="$(printf '%s\n' "${YARA_ALLOWLIST[@]}" | jq -R . | jq -sc .)"
 FINDINGS=0
 
-# judge SHA SOURCE — judge the file object in $BODY: its last analysis's
-# engines, its crowdsourced YARA matches and its Code insights. Every source
-# (reused, reanalysed, uploaded) is judged by the same rules.
-judge() {
-  local sha="$1" source="$2" path paths_json size verdict entry n allowed facts adate engines yara_note
+# verdict_of SHA SOURCE — the report entry for the file object in $BODY: its
+# last analysis's engines, its crowdsourced YARA matches and its Code insights,
+# with .findings listing every one that counts. Prints the entry and records
+# nothing, so the reuse decision can ask whether a report is clean by the same
+# rules that judge it. A report in an unknown shape is exit 2.
+verdict_of() {
+  local sha="$1" source="$2" path paths_json size verdict facts adate engines
   path="$(awk -F'\t' -v s="$sha" '$1 == s { print $3; exit }' "$INDEX")"
   paths_json="$(awk -F'\t' -v s="$sha" '$1 == s { print $3 }' "$INDEX" | jq -R . | jq -sc .)"
   size="$(awk -F'\t' -v s="$sha" '$1 == s { print $2; exit }' "$INDEX")"
@@ -369,12 +458,12 @@ judge() {
        code_insights: $ci}' "$BODY" 2>/dev/null)" ||
     harness "file object for $path ($sha) has its analysis, YARA or Code insights results in an unknown shape"
 
-  entry="$(jq -cn --argjson allow "$ALLOW_JSON" \
+  jq -cn --argjson allow "$ALLOW_JSON" \
     --arg file "$path" --arg sha "$sha" --argjson size "$size" --argjson files "$paths_json" \
-    --arg source "$source" --arg at "$(utc "$adate")" --argjson total "$engines" \
+    --arg source "$source" --arg at "$(utc "$adate")" --argjson adate "$adate" --argjson total "$engines" \
     --argjson v "$verdict" '
     {file: $file, files: $files, sha256: $sha, size: $size,
-     source: $source, analysed_at: $at, engines_total: $total,
+     source: $source, analysed_at: $at, analysed_epoch: $adate, engines_total: $total,
      malicious: $v.malicious, suspicious: $v.suspicious, engines: $v.engines,
      yara: [$v.yara[] | select(("\(.rule_name)|\(.source)" | IN($allow[])) | not)],
      yara_allowlisted: [$v.yara[] | select("\(.rule_name)|\(.source)" | IN($allow[]))],
@@ -386,8 +475,56 @@ judge() {
         + [.yara[] | "YARA rule \(.rule_name) (\(.ruleset_name // "?"))"]
         + (if (.code_insights | type) == "array"
            then [.code_insights[] | select(.verdict != "benign") | "Code insights (\(.source)): \(.verdict)"]
-           else [] end))')"
-  ENTRIES="$(jq -c --argjson e "$entry" '. + [$e]' <<<"$ENTRIES")"
+           else [] end))'
+}
+
+# window_of SHA — the reuse window this file's kind gets, as
+# "<kind><TAB><seconds>": text files the long one, binaries the short one.
+window_of() {
+  local kind
+  kind="$(awk -F'\t' -v s="$1" '$1 == s { print $4; exit }' "$INDEX")"
+  if [ "$kind" = text ] && [ "$REUSE_MAX_AGE" -gt 0 ] && [ "$REUSE_MAX_AGE_TEXT" -gt 0 ]; then
+    printf 'text\t%s\n' "$REUSE_MAX_AGE_TEXT"
+  else
+    printf '%s\t%s\n' "${kind:-binary}" "$REUSE_MAX_AGE"
+  fi
+}
+
+# reanalysis_window SHA — the oldest a newer report in $BODY may be and still
+# count as reanalysed: the long text window only for a clean text file, else
+# 24 hours (VT_REUSE_MAX_AGE, or 24 hours when reuse is off).
+reanalysis_window() {
+  local sha="$1" short="$REUSE_MAX_AGE" win entry
+  [ "$short" -gt 0 ] || short=86400
+  win="$(window_of "$sha")"
+  if [ "${win%%$'\t'*}" = text ] && [ "${win##*$'\t'}" -gt "$short" ]; then
+    entry="$(verdict_of "$sha" reanalysed)" || exit 2
+    if [ "$(jq -r '.findings | length' <<<"$entry")" -eq 0 ]; then
+      printf '%s\n' "${win##*$'\t'}"
+      return
+    fi
+  fi
+  printf '%s\n' "$short"
+}
+
+# judge SHA SOURCE [APPLIED [EXTRA_JSON]] — judge the file object in $BODY and
+# record it. Every source (reused, reanalysed, uploaded) is judged by the same
+# rules. APPLIED names the reuse window that let a reused report stand ("short"
+# or "long"); EXTRA_JSON is merged into the entry.
+judge() {
+  local sha="$1" source="$2" applied="${3:-}" extra="${4:-"{}"}" entry n allowed path adate engines win max_age yara_note
+  path="$(awk -F'\t' -v s="$sha" '$1 == s { print $3; exit }' "$INDEX")"
+  entry="$(verdict_of "$sha" "$source")" || exit 2
+  win="$(window_of "$sha")"
+  max_age="${win##*$'\t'}"
+  [ "$applied" != short ] || max_age="$REUSE_MAX_AGE"
+  entry="$(jq -c --arg kind "${win%%$'\t'*}" --arg applied "$applied" --argjson max "$max_age" \
+    --argjson extra "$extra" '
+    . + {reuse_window: {kind: $kind, applied: (if $applied == "" then null else $applied end),
+                        max_age: $max}} + $extra' <<<"$entry")"
+  ENTRIES="$(jq -c --argjson e "$entry" '. + [$e | del(.analysed_epoch)]' <<<"$ENTRIES")"
+  adate="$(jq -r '.analysed_epoch' <<<"$entry")"
+  engines="$(jq -r '.engines_total' <<<"$entry")"
 
   n="$(jq -r '.findings | length' <<<"$entry")"
   allowed="$(jq -r '[.yara_allowlisted[] | "\(.rule_name) (\(.source))"] | join(", ")' <<<"$entry")"
@@ -405,17 +542,18 @@ judge() {
 
 # --- 1. Look up every unique file; judge a fresh report, submit the rest -----
 # Submissions are made in this pass, so analyses run while later files are
-# looked up. Lines of "sha256<TAB>last_analysis_date before<TAB>source".
+# looked up. Lines of
+# "sha256<TAB>last_analysis_date before<TAB>source<TAB>analysis id".
 SUBMITTED="$WORK/submitted.tsv"
 : >"$SUBMITTED"
 for sha in $UNIQUE; do
   line="$(awk -F'\t' -v s="$sha" '$1 == s { print; exit }' "$INDEX")"
   size="$(cut -f2 <<<"$line")"
-  path="$(cut -f3- <<<"$line")"
-  vt_file "$sha"
+  path="$(cut -f3 <<<"$line")"
+  vt_file "$sha" lookup
   if [ "$HTTP_STATUS" = "404" ]; then
     upload "$path" "$size"
-    printf '%s\t0\tuploaded\n' "$sha" >>"$SUBMITTED"
+    printf '%s\t0\tuploaded\t%s\n' "$sha" "$ANALYSIS_ID" >>"$SUBMITTED"
     echo "  uploaded $path ($sha): VirusTotal did not know it"
     continue
   fi
@@ -425,12 +563,26 @@ for sha in $UNIQUE; do
   age=$(($(date +%s) - adate))
   if [ "$REUSE_MAX_AGE" -gt 0 ] && [ "$adate" -gt 0 ] && [ "$age" -le "$REUSE_MAX_AGE" ] &&
     [ "$engines" -ge "$MIN_ENGINES" ]; then
-    judge "$sha" reused
+    judge "$sha" reused short
     continue
   fi
+  win="$(window_of "$sha")"
+  # The long window: a text file whose report is complete and carries no
+  # finding. A report with a finding is re-analysed, never reused here.
+  if [ "${win%%$'\t'*}" = text ] && [ "$REUSE_MAX_AGE" -gt 0 ] && [ "$REUSE_MAX_AGE_TEXT" -gt 0 ] &&
+    [ "$adate" -gt 0 ] && [ "$age" -le "${win##*$'\t'}" ] &&
+    [ "$engines" -ge "$MIN_ENGINES" ]; then
+    entry="$(verdict_of "$sha" reused)" || exit 2
+    if [ "$(jq -r '.findings | length' <<<"$entry")" -eq 0 ]; then
+      judge "$sha" reused long
+      continue
+    fi
+    echo "  $path ($sha): its ${age}s-old report carries a finding, so it is re-analysed, not reused"
+  fi
+  REQ_CLASS=reanalysis
   vt_request POST "$API_BASE/files/$sha/analyse"
   expect_analysis "POST /files/$sha/analyse for $path"
-  printf '%s\t%s\treanalysed\n' "$sha" "$adate" >>"$SUBMITTED"
+  printf '%s\t%s\treanalysed\t%s\n' "$sha" "$adate" "$ANALYSIS_ID" >>"$SUBMITTED"
   if [ "$adate" -gt 0 ]; then
     echo "  reanalysing $path ($sha): last analysed $(utc "$adate"), ${age}s ago"
   else
@@ -438,35 +590,90 @@ for sha in $UNIQUE; do
   fi
 done
 
+# File reads allowed after a completed, newer analysis before the scan stops.
+LAG_FILE_POLLS=3
+
 # --- 2. Per submitted file: poll its report until the new analysis lands -----
-while IFS=$'\t' read -r sha before source; do
+# The first poll reads the file. If its date has not moved, the analysis object
+# is polled alone until it completes (VirusTotal can complete an analysis
+# without moving the file's date), then the file again: one request per poll.
+while IFS=$'\t' read -r sha before source aid; do
   path="$(awk -F'\t' -v s="$sha" '$1 == s { print $3; exit }' "$INDEX")"
   deadline=$(($(date +%s) + ANALYSIS_TIMEOUT))
   gap="$MIN_INTERVAL"
+  next="file"
+  analysis_newer=0
+  lag_polls=0
   while :; do
     # Exponential backoff: MIN, 2*MIN, 4*MIN ... capped at POLL_MAX_INTERVAL.
     NEXT_GAP="$gap"
-    echo "  polling analysis of $path after ${gap}s"
-    vt_file "$sha"
+    if [ "$next" = file ]; then
+      echo "  polling analysis of $path after ${gap}s"
+      vt_file "$sha" poll
+    else
+      echo "  polling analysis object of $path after ${gap}s"
+      REQ_CLASS=poll
+      vt_request GET "$API_BASE/analyses/$(jq -rn --arg a "$aid" '$a | @uri')"
+    fi
     gap=$((gap * 2))
     [ "$gap" -le "$POLL_MAX_INTERVAL" ] || gap="$POLL_MAX_INTERVAL"
-    if [ "$HTTP_STATUS" = "200" ]; then
-      facts="$(file_facts "$sha" "$path")" || exit 2
-      [ "${facts%%$'\t'*}" -gt "$before" ] && break
+    if [ "$next" = file ]; then
+      if [ "$HTTP_STATUS" = "200" ]; then
+        facts="$(file_facts "$sha" "$path")" || exit 2
+        pdate="${facts%%$'\t'*}"
+        if [ "$pdate" -gt "$before" ]; then
+          if [ $(($(date +%s) - pdate)) -le "$(reanalysis_window "$sha")" ]; then
+            judge "$sha" "$source"
+            break
+          fi
+          echo "  $path ($sha): its report dated $(utc "$pdate") is newer than the lookup's but outside its window; still polling"
+        fi
+      fi
+      if [ "$analysis_newer" = 1 ]; then
+        # The analysis completed with a newer date, yet the file has not moved.
+        # VirusTotal dates an analysis when it is created, so a folded one looks
+        # newer too: read the file a bounded number of times, then stop.
+        lag_polls=$((lag_polls + 1))
+        [ "$lag_polls" -lt "$LAG_FILE_POLLS" ] ||
+          harness "VirusTotal completed the analysis of $path ($sha) but its report stayed at $(utc "$before") after $LAG_FILE_POLLS file reads; that report is not accepted as a reanalysis"
+      else
+        next="analysis"
+      fi
+    else
+      status="$(jq -r 'if .data.type == "analysis" and (.data.attributes.status | type) == "string"
+        then .data.attributes.status else empty end' "$BODY")"
+      case "$status" in
+      completed)
+        # A newer analysis means the file object lags behind it: keep polling
+        # the file, never judge the old report. One no newer than the lookup's
+        # report (or undated) produced no new report: stop now, never judge it.
+        adate="$(jq -r 'if (.data.attributes.date | type) == "number"
+          then .data.attributes.date | floor else empty end' "$BODY")"
+        if [ -n "$adate" ] && [ "$adate" -gt "$before" ]; then
+          analysis_newer=1
+          next="file"
+        else
+          harness "VirusTotal completed the analysis of $path ($sha) without a report newer than the lookup's ($(utc "$before")); that report is not accepted as a reanalysis"
+        fi
+        ;;
+      queued | in-progress) ;;
+      *) harness "analysis of $path ($sha) answered status '${status:-none}', not queued, in-progress or completed" ;;
+      esac
     fi
     [ "$(date +%s)" -lt "$deadline" ] ||
       harness "analysis of $path ($sha) did not complete within ${ANALYSIS_TIMEOUT}s"
   done
-  judge "$sha" "$source"
 done <"$SUBMITTED"
 
 if [ "$FINDINGS" -gt 0 ]; then
   REPORT_STATUS="findings"
   write_report
+  print_summary
   echo "vt-scan: $FINDINGS finding(s). Nothing may publish until the owner decides." >&2
   exit 1
 fi
 REPORT_STATUS="clean"
 write_report
+print_summary
 echo "vt-scan: every file clean"
 exit 0

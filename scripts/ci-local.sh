@@ -478,9 +478,16 @@ REQUIRED_FILES=(
   scripts/test-workflow-refs-check.sh
   scripts/test-marketplace-channel.sh
   scripts/test-release-channel-wiring.sh
+  scripts/release-margin-builds.sh
+  scripts/release-rc-margin-check.sh
+  scripts/test-release-margin.sh
+  scripts/check-gofmt.sh
+  scripts/test-check-gofmt.sh
   scripts/verify-registry-pat.sh
   scripts/main-build-version.sh
   scripts/test-main-build-version.sh
+  scripts/playwright-os-deps.sh
+  scripts/test-playwright-os-deps.sh
   scripts/test-vsix-host-target.sh
   packages/nightgauge/scripts/vsix-host-target.sh
   scripts/test-verify-release-channels.sh
@@ -1669,6 +1676,12 @@ run_step "ci-local.sh dependency bootstrap decision" \
 run_step "ci-local.sh go test pass record" \
   bash scripts/test-ci-local-go-pass-stamp.sh
 
+# 0c3a. The Go test cache split (#3208): the skip accounting's cached-package
+#       count, -count=1 only under CI_LOCAL_NO_TEST_CACHE=1, and the
+#       always-uncached runner's stale-entry failure. Stub `go`, so seconds.
+run_step "go test cache and always-uncached list" \
+  bash scripts/test-go-test-cache.sh
+
 # 0c4. When the gate reuses a passed tree and what it records (#2784). A stub
 #      binary and one trivial step, so seconds.
 run_step "ci-local.sh gate ledger reuse" \
@@ -1708,13 +1721,24 @@ run_step "state-backstop.sh regression suite" bash scripts/test-state-backstop.s
 # 20m is twice that observed worst. A hang still fails the step; it just takes
 # 20 minutes, not 10, to say so.
 GO_TEST_TIMEOUT=20m
+#
+# Neither pass sets -count=1 (#3208): an unchanged package replays its last
+# result from Go's test cache, whose key already covers the package's sources
+# and deps, the flags, the toolchain, go.mod/go.sum, and every env var and file
+# the test process reads through package os. What it cannot see — a script a
+# child process reads on the test's behalf, the real worktree's git state, the
+# network, the clock — is named in scripts/go-test-uncached.txt, and
+# scripts/go-test-uncached.py runs those tests again with -count=1 after each
+# pass. A toolchain or go.mod change already misses the cache, so no run needs
+# the knob for that. CI_LOCAL_NO_TEST_CACHE=1 runs both passes fully uncached.
+# The hosted workflows still run every package with -count=1.
 decide_go_scope
 run_step "go build ./..." go build ./...
 if [ "$GO_SCOPE_RUN" -eq 0 ]; then
-  skip_step "go test ./... -count=1 (with skip accounting)" \
+  skip_step "go test ./... (with skip accounting)" \
     "--changed, and $GO_SCOPE_REASON"
 else
-run_group --wait "go test ./... -count=1 (with skip accounting)" \
+run_group --wait "go test ./... (with skip accounting)" \
   bash scripts/ci-local-go-test.sh "$GO_TEST_TIMEOUT" "$LOG_DIR/go-test-pass.tree"
 fi
 # Mirrors the race half of ci.yml's "Test (plain and race, concurrently)" step
@@ -1746,14 +1770,21 @@ fi
 # On a box running a second gate both passes are slower, which is the budget
 # above doing its job rather than a regression.
 if [ "$GO_SCOPE_RUN" -eq 0 ]; then
-  skip_step "go test -race -count=1 ./..." \
+  skip_step "go test -race ./..." \
     "--changed, and $GO_SCOPE_REASON"
 else
-run_group --wait "go test -race -count=1 ./..." \
-  go test -race -count=1 -timeout "$GO_TEST_TIMEOUT" ./...
+run_group --wait "go test -race ./..." \
+  bash scripts/ci-local-go-test.sh --race "$GO_TEST_TIMEOUT"
 fi
-run_step "gofmt -l ./internal ./cmd" \
-  bash -c '! gofmt -l ./internal ./cmd | grep .'
+# The gofmt of the toolchain go.mod selects, not the one first on PATH (#3192).
+# Formatting changes between Go releases: when go.mod moved to go1.27.4, CI's
+# gofmt (setup-go reads go.mod) rejected two files that go1.26.11's gofmt on the
+# operator's PATH accepted, and the gap first showed in the merge group, where
+# the heavy jobs run. `go env GOROOT` names the toolchain GOTOOLCHAIN=auto
+# switched to, which fixes an older Go on PATH but not a newer one (auto never
+# downgrades), so scripts/check-gofmt.sh fails first when `go env GOVERSION` is
+# not go.mod's toolchain.
+run_step "gofmt -l ./internal ./cmd" bash scripts/check-gofmt.sh
 
 # 1b. branch-merged-check.sh regression suite — the shell-side decision
 #     procedure `git branch -D` reclaim decisions defer to (docs/GIT_WORKFLOW.md
@@ -2057,7 +2088,12 @@ run_step "visibility-prose reintroduction gate" python3 scripts/check-visibility
 run_group "Workflow-reference gate regression suite" bash scripts/test-workflow-refs-check.sh
 run_group "Marketplace channel regression suite" bash scripts/test-marketplace-channel.sh
 run_group "Release channel wiring suite" bash scripts/test-release-channel-wiring.sh
+# The margin scan (#3192): RC margin builds and the release gate that requires a
+# margin-clean RC on the tag's commit, against stub make/sign/gh.
+run_group "Release margin scan suite" bash scripts/test-release-margin.sh
+run_group "gofmt toolchain check suite" bash scripts/test-check-gofmt.sh
 run_group "Main build version regression suite" bash scripts/test-main-build-version.sh
+run_group "Playwright OS deps regression suite" bash scripts/test-playwright-os-deps.sh
 run_group "VSIX host-target regression suite" bash scripts/test-vsix-host-target.sh
 run_group "Release channel verification regression suite" bash scripts/test-verify-release-channels.sh
 run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-refs.py

@@ -14,6 +14,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- **The local gate reuses Go's test cache (#3208).** `scripts/ci-local.sh` no
+  longer passes `-count=1` to its plain and race Go test passes, so an unchanged
+  package replays its cached result. Tests whose result depends on something the
+  cache cannot track, such as a repository script run in a child shell, are
+  listed in `scripts/go-test-uncached.txt` and always run uncached. The gate
+  fails when a listed test no longer exists. The skip accounting now reports how
+  many packages ran and how many were cached. `CI_LOCAL_NO_TEST_CACHE=1` runs
+  both passes fully uncached. Hosted CI is unchanged.
+
 ### Fixed
 
 - `nightgauge doctor`'s orphaned-process check now names a `ps` or `lsof` scan that
@@ -21,6 +32,75 @@ changelog, and the release workflow refuses a tag that does not.
   scan. Its real-process-table test no longer fails as "parser drift" under gate load.
   (#3097)
 
+- **An RC's VirusTotal scan spends about half the requests it did (#3202).**
+  rc.3 sent 108 requests, 63 of them re-analysing unchanged, clean hooks and
+  scripts. A text file now reuses a clean, complete report for 14 days
+  (`VT_REUSE_MAX_AGE_TEXT`); binaries, VSIXes and archives keep 24 hours, and a
+  report with a finding is always re-analysed. Replayed through the offline
+  API double, rc.3's files now take 52 requests. The margin builds are scanned
+  as raw binaries instead of archives that were scanned and then unpacked. A
+  reanalysis that VirusTotal completes without a newer report now stops the
+  scan at once (exit 2, re-run) instead of polling to the 30-minute timeout,
+  and the lookup's report is never accepted as the reanalysis. Every scan prints its
+  requests by class, and the rc-scan step caps a run at 160
+  (docs/RELEASE_BINARIES.md#the-rc-scan-request-budget).
+- **The Linux amd64 release binary is built the way that measured cleanest,
+  and every RC now proves its margin (#3192).** v0.8.6-rc.3's Linux binary was
+  flagged by Microsoft's model. Across 86 measured builds its verdict flips
+  with the version string alone, so no single clean scan is evidence. Release
+  binaries now build on go1.27.4 with uncompressed DWARF
+  (`-compressdwarf=false`; on go1.27.3 this was flagged at 1 of 18 version
+  strings against 3 of 6 before, and go1.27.4 adds the fix for the `net/http`
+  vulnerability GO-2026-6859), and `release-dwarf-check` rejects a shipped binary whose DWARF is
+  compressed. Each RC also builds and scans its Linux and universal darwin
+  binaries at `X.Y.Z`, `X.Y.Z-rc.(N+1)` and `X.Y.(Z+1)-rc.1`; any finding fails
+  the RC. `release.yml` refuses a tag unless an RC on the same commit passed
+  that scan with the release's own version string. Building from source now
+  needs Go 1.27, and `scripts/ci-local.sh` checks formatting with that
+  toolchain's `gofmt`, not the one first on `PATH`, because go1.27's `gofmt`
+  formats two existing files differently. It fails, naming both versions and
+  `GOTOOLCHAIN=<version>` as the fix, when `go env GOVERSION` is not the
+  toolchain `go.mod` selects, since a newer Go is never switched down to it.
+- **A merge-queue removal now says whether the merge group or the PR failed
+  (#3198).** pr-merge reads the failed merge-group jobs' steps and compares them
+  with the repository's workflow steps. It fails safe toward the PR's own code:
+  a step that runs any check (build, test, lint, format, typecheck), or one of
+  the commands CI discovery finds, is a check even when it carries a setup word
+  (`eslint --cache`, `go test ./internal/cache/...`). A step is setup only when
+  it is a known environment action (checkout, `setup-*`, cache, artifacts) or
+  every command in it is an OS-package, cache or runner configuration step. An
+  install that reads the repository's own manifest (`npm ci`, `pip install -r`)
+  and any other action (a lint or analysis action) count as the PR's own. Infrastructure needs a job that failed in a setup step
+  and skipped the checks after it (an install step hitting an upstream outage):
+  pr-merge re-enqueues the PR twice, five minutes apart, naming the job and step
+  each time, then ends the run as `merge_queue_infra_failed`. That kind is
+  terminal and non-fault: it neither trips the circuit breaker nor counts toward
+  the issue's failure cap, the model is not escalated to re-run pr-merge, and
+  the issue report says the PR needs no change. A pr-merge stopped mid-retry
+  ends the same way. pr-merge's default timeout now covers every re-enqueue's
+  delay and queue wait. Any other failed step, including one the classifier
+  cannot name, is a code failure: the run goes back to `feature-dev` once with
+  that step's own log section (never the job's tail), and a second removal for
+  the same job and step in the same run fails the run. One code failure decides
+  a removal that also failed the infrastructure way; a cancelled job decides
+  nothing. A PR ended as `merge_queue_infra_failed` stays In review rather than
+  returning to Ready, so a lasting outage cannot loop. A removal whose job data
+  cannot be read keeps the plain `merge-queue-failed` refusal.
+- **Re-running an issue from the "not closed: PR left criteria unmet" card now
+  scopes the run to those criteria in the VS Code extension too.** The
+  extension's stage loop never applied the partial-delivery scope, so the
+  card's re-plan option started an ordinary full run there. Feature-planning
+  and feature-dev now carry the same `## Partial-Delivery Re-run Scope` block
+  as on the Go path, read from the newest trusted partial-delivery comment
+  when the stage starts; `nightgauge issue partial-delivery --json` reports it
+  as `prompt_blocks`. The option now reads "Re-run: plan only the criteria
+  PR #N left unmet" (#3095).
+- **An unreachable apt mirror no longer fails the Playwright CI job (#3199).**
+  `scripts/playwright-os-deps.sh` installs Chromium's OS dependencies and, when
+  that install fails, launches the cached headless Chromium once: a successful
+  launch continues with a warning naming the failed install, a failed launch
+  fails the job with the launch error. The browser download is no longer bundled
+  with the apt install.
 - **The independent review no longer files a follow-up for the reviewed issue's
   own unmet criterion, or for a gap another stage already recorded (#3186).** A
   plan-compliance finding that begins `Criterion N:` is linked to that criterion;

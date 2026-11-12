@@ -1,0 +1,59 @@
+# go-test-uncached.txt — Go tests the local gate always runs with -count=1 (#3208).
+#
+# scripts/ci-local.sh runs `go test ./...` and `go test -race ./...` WITHOUT
+# -count=1, so an unchanged package replays its last result from Go's test cache.
+# The cache key covers the package's sources and dependencies, the flags, the
+# toolchain, go.mod/go.sum, and every environment variable and file the TEST
+# PROCESS itself reads through package os (Getenv, Open, Stat, Chdir). A binary
+# found through exec.LookPath is stat'd, so replacing `git` or `bash` already
+# invalidates the cache.
+#
+# Membership rule. A test belongs here when its result depends on something the
+# cache cannot see:
+#   - content a CHILD process reads that the test never opened or stat'd through
+#     os (`exec.Command("bash", "scripts/x.sh")` reads x.sh in the child);
+#   - files outside the module, the real worktree's git state, the network, or
+#     the clock.
+# A test that execs `git` only against a t.TempDir() repository stays cached, as
+# does one that reads a script with os.ReadFile and runs a temp copy of it.
+#
+# Format: `<import path> <TopLevelTestName>`, one per line, with a reason.
+# scripts/go-test-uncached.py runs them per package with -count=1 -run, and fails
+# the gate when a listed test no longer exists, naming the entry.
+
+# bash runs scripts/capture-opencode-fixture.sh.
+github.com/nightgauge/nightgauge/internal/execution TestCaptureOpenCodeFixtureRefusesCredentials
+github.com/nightgauge/nightgauge/internal/execution TestOpenCodeLongLine
+# bash runs scripts/state-backstop.sh.
+github.com/nightgauge/nightgauge/internal/execution TestStateBackstop_ExcusesPipelineWorktreeRemoval
+
+# bash sources claude-plugins/nightgauge/hooks/lib/guard.sh (TestGuardShell
+# stat's it first, so the cache tracks that one).
+github.com/nightgauge/nightgauge/internal/hooks TestGuardShellUserShim
+# bash runs claude-plugins/nightgauge/hooks/test-quality.sh.
+github.com/nightgauge/nightgauge/internal/hooks TestTestQualityHonoursSkipEnvVar
+github.com/nightgauge/nightgauge/internal/hooks TestTestQualityMatchesShellScript
+# bash runs scripts/ci-local-go-test.sh --fingerprint.
+github.com/nightgauge/nightgauge/internal/hooks TestTreeFingerprintMatchesCILocal
+
+# bash runs scripts/capture-conflicted-rebase-fixture.sh.
+github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_BinaryConflict_NotCapturedAsSuccess
+github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_DetachedHead_BranchGenuinelyUnknown
+github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_GitlinkConflict_CapturedAsMetadata
+github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_GitlinkConflict_EvidenceDumpSurvives
+github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_ModeOnlyConflict_SurvivesItsOwnReader
+github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_MultiFileConflict_NonASCIIPathCaptured
+github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_PreexistingRebase_OperatorWorkSurvives
+github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_RebaseBranch_ResolvesHeadName
+github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_RebaseConflict_CapturesThenAborts
+github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_RebaseConflict_RecordsRealBranch
+github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_RebaseRefused_NoConflictState
+github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_SkillWriter_ReadByRecoveryLoop
+github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_SymlinkConflict_ReadsAsBlob
+github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestSkillWriter_ConflictEnumerationIsShellPortable
+
+# bash runs packages/nightgauge/scripts/bundle-marketplace.sh, which rsyncs the
+# whole skills tree.
+github.com/nightgauge/nightgauge/internal/skillrender TestBundleShipsEverySkillFile
+github.com/nightgauge/nightgauge/internal/skillrender TestBundledSkillsExistOnDisk
+github.com/nightgauge/nightgauge/internal/skillrender TestEverySkillPathInABundleRenderExists
