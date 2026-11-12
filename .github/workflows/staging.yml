@@ -64,7 +64,7 @@ jobs:
     # runner such as macos-14-xlarge, which is billed even on public repos.
     # Do not copy this pattern into a private repository without re-checking.
     runs-on: macos-latest
-    # 45, not 30: an RC tag also builds, signs and packs the margin binaries
+    # 45, not 30: an RC tag also builds and signs the margin binaries
     # at three more version strings (#3192).
     timeout-minutes: 45
     outputs:
@@ -171,17 +171,19 @@ jobs:
           set -euo pipefail
           bash scripts/release-margin-builds.sh "$VERSION" "$RUNNER_TEMP/margin"
           go build -o "$RUNNER_TEMP/release-dwarf-check" ./cmd/release-dwarf-check
-          "$RUNNER_TEMP/release-dwarf-check" "$RUNNER_TEMP"/margin/nightgauge-margin_*.tar.gz
+          "$RUNNER_TEMP/release-dwarf-check" "$RUNNER_TEMP"/margin/nightgauge-margin_*_*
 
       # 90 days: release.yml reads the scanned manifest (rc-margin-scan-*,
       # uploaded by rc-scan) when the RC is promoted, and a soak can be long.
+      # Raw binaries, not archives: the gate scans an archive and then the
+      # binary inside it, two uploads for one build (#3202).
       - name: Upload margin scan inputs
         if: startsWith(github.ref, 'refs/tags/v') && inputs.version == ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rc-margin-${{ steps.version.outputs.tag }}
           path: |
-            ${{ runner.temp }}/margin/nightgauge-margin_*.tar.gz
+            ${{ runner.temp }}/margin/nightgauge-margin_*_*
             ${{ runner.temp }}/margin/margin-manifest.txt
           if-no-files-found: error
           retention-days: 90
@@ -481,8 +483,9 @@ jobs:
     # the skipped workflow_call job never requests it from a branch ref.
     environment: production
     runs-on: ubuntu-latest
-    # 100: the six margin archives (#3192) add about 36 requests, nine more
-    # minutes at the free key's 4 requests/min.
+    # 100: the RC's own files take about 60 requests and the six raw margin
+    # binaries (#3192) about 24 more, about 21 minutes at the free key's 4
+    # requests/min, plus backed-off polls of slow analyses.
     timeout-minutes: 100
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -507,6 +510,13 @@ jobs:
       - name: Scan every archive and VSIX
         env:
           VT_API_KEY: ${{ secrets.VT_API_KEY }}
+          # The RC scan's budget (docs/RELEASE_BINARIES.md#the-rc-scan-request-budget):
+          # about 52 for the RC's files, about 58 more when the text files'
+          # 14-day window has run out (the rc.3 replay: 111 against 52), 24 for
+          # the margin binaries, and about 16 for slow polls. Past it the scan
+          # is a HARNESS ERROR; the day's 500 keep room for a second RC and a
+          # release (#3202).
+          VT_MAX_REQUESTS: "160"
         run: |
           set -euo pipefail
           if [ -z "${VT_API_KEY:-}" ]; then
@@ -516,9 +526,9 @@ jobs:
           shopt -s nullglob
           FILES=("$RUNNER_TEMP"/rc/packages/nightgauge/*.vsix "$RUNNER_TEMP"/rc/dist/*.tar.gz)
           [ "${#FILES[@]}" -gt 0 ] || { echo "::error::no .vsix or .tar.gz in rc-artifacts"; ls -R "$RUNNER_TEMP/rc"; exit 1; }
-          MARGIN=("$RUNNER_TEMP"/margin/nightgauge-margin_*.tar.gz)
+          MARGIN=("$RUNNER_TEMP"/margin/nightgauge-margin_*_*)
           [ "${#MARGIN[@]}" -eq 6 ] && [ -s "$RUNNER_TEMP/margin/margin-manifest.txt" ] || {
-            echo "::error::rc-margin holds ${#MARGIN[@]} margin archives and no manifest or an empty one; the margin scan needs 6 and the manifest (docs/RELEASE_BINARIES.md)"
+            echo "::error::rc-margin holds ${#MARGIN[@]} margin binaries and no manifest or an empty one; the margin scan needs 6 and the manifest (docs/RELEASE_BINARIES.md)"
             ls -R "$RUNNER_TEMP/margin"
             exit 1
           }

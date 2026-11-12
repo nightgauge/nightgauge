@@ -16,13 +16,15 @@
 # X.Y.Z-rc.(N+1) and X.Y.(Z+1)-rc.1. For each one it runs the Makefile's
 # `build-release-targets` and `darwin-universal` targets, so the flags are the
 # RC's own, signs the universal file with scripts/sign-macos-binaries.sh (a
-# loud no-op without the Apple secrets, exactly as for the RC), and packs
+# loud no-op without the Apple secrets, exactly as for the RC), and copies
 #
-#   OUT_DIR/nightgauge-margin_<v>_linux_amd64.tar.gz
-#   OUT_DIR/nightgauge-margin_<v>_darwin_universal.tar.gz
+#   OUT_DIR/nightgauge-margin_<v>_linux_amd64
+#   OUT_DIR/nightgauge-margin_<v>_darwin_universal
 #
-# each holding one `nightgauge` binary. OUT_DIR/margin-manifest.txt gets one
-# `<version> <archive> <binary sha256>` line per build; release.yml reads it
+# as raw, executable binaries. They are not archived: the scan gate scans an
+# archive and then the binary inside it, so a .tar.gz cost each build two
+# uploads (#3202). OUT_DIR/margin-manifest.txt gets one
+# `<version> <file> <binary sha256>` line per build; release.yml reads it
 # to prove the RC's margin scan covered the release string.
 #
 # These are scan inputs only. They are uploaded as their own artifact and
@@ -32,15 +34,15 @@
 # scripts/sign-macos-binaries.sh).
 #
 # Exit:
-#   0  six archives and the manifest were written
-#   1  a build, signature or archive failed, or fewer than six archives exist
+#   0  six binaries and the manifest were written
+#   1  a build, signature or copy failed, or other than six binaries exist
 #   2  HARNESS ERROR: bad arguments; nothing was built
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAKE_CMD="${MAKE:-make}"
 SIGN_SCRIPT="${MARGIN_SIGN_SCRIPT:-$ROOT/scripts/sign-macos-binaries.sh}"
-EXPECTED_ARCHIVES=6
+EXPECTED_BINARIES=6
 
 harness() { echo "HARNESS ERROR: release-margin-builds: $*" >&2; exit 2; }
 fail() { echo "::error::release-margin-builds: $*" >&2; exit 1; }
@@ -78,15 +80,11 @@ sha256() {
   fi
 }
 
-# pack SRC ARCHIVE: one `nightgauge` entry, the layout GoReleaser's archives use.
-pack() {
-  local src="$1" archive="$2" stage
-  [ -f "$src" ] || fail "missing $src; the build did not produce it"
-  stage="$(mktemp -d)"
-  cp "$src" "$stage/nightgauge"
-  chmod +x "$stage/nightgauge"
-  tar -czf "$archive" -C "$stage" nightgauge
-  rm -rf "$stage"
+# place SRC DEST: the build, byte for byte, executable.
+place() {
+  [ -f "$1" ] || fail "missing $1; the build did not produce it"
+  cp "$1" "$2" || fail "copying $1 to $2 failed"
+  chmod +x "$2"
 }
 
 mkdir -p "$OUT"
@@ -104,21 +102,21 @@ for V in $VERSIONS; do
     fail "signing the universal binary failed for $V"
   for PAIR in "linux-amd64:linux_amd64" "darwin-universal:darwin_universal"; do
     SRC="$BIN/nightgauge-${PAIR%%:*}"
-    ARCHIVE="nightgauge-margin_${V}_${PAIR#*:}.tar.gz"
-    pack "$SRC" "$OUT/$ARCHIVE"
-    echo "$V $ARCHIVE $(sha256 "$SRC")" >>"$MANIFEST"
+    FILE="nightgauge-margin_${V}_${PAIR#*:}"
+    place "$SRC" "$OUT/$FILE"
+    echo "$V $FILE $(sha256 "$OUT/$FILE")" >>"$MANIFEST"
   done
 done
 
 COUNT=0
-for f in "$OUT"/nightgauge-margin_*.tar.gz; do
+for f in "$OUT"/nightgauge-margin_*_*; do
   [ -f "$f" ] && COUNT=$((COUNT + 1))
 done
-[ "$COUNT" -eq "$EXPECTED_ARCHIVES" ] ||
-  fail "expected $EXPECTED_ARCHIVES margin archives in $OUT, found $COUNT"
+[ "$COUNT" -eq "$EXPECTED_BINARIES" ] ||
+  fail "expected $EXPECTED_BINARIES margin binaries in $OUT, found $COUNT"
 LINES="$(wc -l <"$MANIFEST" | tr -d ' ')"
-[ "$LINES" -eq "$EXPECTED_ARCHIVES" ] ||
-  fail "expected $EXPECTED_ARCHIVES manifest lines, found $LINES"
+[ "$LINES" -eq "$EXPECTED_BINARIES" ] ||
+  fail "expected $EXPECTED_BINARIES manifest lines, found $LINES"
 
 echo "Margin builds for $RC: $VERSIONS"
 cat "$MANIFEST"

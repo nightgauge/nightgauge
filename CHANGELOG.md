@@ -16,6 +16,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **An RC's VirusTotal scan spends about half the requests it did (#3202).**
+  rc.3 sent 108 requests, 63 of them re-analysing unchanged, clean hooks and
+  scripts. A text file now reuses a clean, complete report for 14 days
+  (`VT_REUSE_MAX_AGE_TEXT`); binaries, VSIXes and archives keep 24 hours, and a
+  report with a finding is always re-analysed. Replayed through the offline
+  API double, rc.3's files now take 52 requests. The margin builds are scanned
+  as raw binaries instead of archives that were scanned and then unpacked. A
+  reanalysis that VirusTotal completes without a newer report now stops the
+  scan at once (exit 2, re-run) instead of polling to the 30-minute timeout,
+  and the lookup's report is never accepted as the reanalysis. Every scan prints its
+  requests by class, and the rc-scan step caps a run at 160
+  (docs/RELEASE_BINARIES.md#the-rc-scan-request-budget).
 - **The Linux amd64 release binary is built the way that measured cleanest,
   and every RC now proves its margin (#3192).** v0.8.6-rc.3's Linux binary was
   flagged by Microsoft's model. Across 86 measured builds its verdict flips
