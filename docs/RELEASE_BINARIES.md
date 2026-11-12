@@ -297,7 +297,9 @@ built at several version strings and nothing else.
 | **go1.27.3 and `-compressdwarf=false`**                      | **18** |      **1** (`0.8.9`) |
 | darwin universal, go1.27.3 (the #3161 recipe)                |      5 |                    0 |
 
-The per-build sha256 and verdicts are on #3192.
+The four variants the cause turns on are recorded per build in
+[Cause measurement](#cause-measurement-the-four-required-variants). The
+other variants' per-build sha256 and verdicts are on #3192.
 
 **Cause.** No change between rc.2 and rc.3 caused it. Each suspected change,
 reverted alone, was still flagged. The verdict flips with the version string in
@@ -353,6 +355,71 @@ in `cmd/release-dwarf-check` fail if a step is removed, moved, made
 non-failing, or stops feeding the scan. `scripts/test-release-margin.sh` (run by
 `scripts/ci-local.sh`) covers the version strings, the six-binary count, and
 each verdict of the release gate against a stub `gh`.
+
+### Cause measurement: the four required variants
+
+Method, as the operator ran it on 2026-11-11. Every build is the following,
+from a clean clone, with the one named change:
+
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+  -ldflags "-X main.version=<v> -X 'main.vendor=Edibu, LLC'" ./cmd/nightgauge
+```
+
+Every scan used `scripts/vt-scan.sh` only: no browser upload, no vendor
+false-positive form, no allowlist, no `--allow-red-job`. A build counts as
+clean only when every engine reports it clean. Microsoft was the only engine
+that reported anything.
+
+The flagged ELF reproduces byte for byte: `adc53828` built at `0.8.6-rc.3` this
+way is `fc38f3df02e9abf2e88acf840e4bce7c420f2d9569cc72d13ab9bc3ddf691f9d`,
+the sha256 staging shipped.
+
+**A. rc.3's tree (`adc53828`) as staging builds it, go1.26.11.** Flagged 3 of 6.
+
+| Version      | sha256                                                             | Microsoft                    |
+| ------------ | ------------------------------------------------------------------ | ---------------------------- |
+| `0.8.6-rc.3` | `fc38f3df02e9abf2e88acf840e4bce7c420f2d9569cc72d13ab9bc3ddf691f9d` | `Trojan:Script/Wacatac.B!ml` |
+| `0.8.6-rc.4` | `328c8c7a8fe323081828b9804977bc6f88f5d05bf0e327ab554179a290c944cb` | clean                        |
+| `0.8.6`      | `90b1f2634f733aacb6ea8cb381ed9541913d977979abeab194bd350895eda1a3` | `Trojan:Script/Wacatac.C!ml` |
+| `0.8.7-rc.1` | `bf3a478caeb463640d2a128ccdafc4204550343c2a7f0772684591eeb3752b51` | clean                        |
+| `0.8.6-rc.5` | `d05613e7a0f8c885dc1c8179159032c2df5cf475a88c3db7e688357bae659044` | clean                        |
+| `0.8.7`      | `48ff20516a77db6cb378798ccd689fc997009418644d6d535a0e88ee2bf5ed15` | `Trojan:Script/Wacatac.B!ml` |
+
+**B. go1.26.11 reverted to go1.26.10, the only change.** Flagged 3 of 5: the
+toolchain bump is not the cause.
+
+| Version      | sha256                                                             | Microsoft                    |
+| ------------ | ------------------------------------------------------------------ | ---------------------------- |
+| `0.8.6-rc.3` | `f9d9c0e94ccd42a296d6ab15a21195f6e82789a5c4b975eebde8fb06fd446ff4` | clean                        |
+| `0.8.6-rc.4` | `0f1b73f0bee301f12373023513ea29ed9add63604b5e2ad9e49bfb8d0cc8517e` | `Trojan:Script/Wacatac.B!ml` |
+| `0.8.6`      | `7dd567b9fc641e7dfc11f9e658724694cf768099fa65df1c173e288a5611e622` | clean                        |
+| `0.8.6-rc.5` | `195dbd7203bea6c290a2dab0dc8b2c8833077d7bf798bea64f36a66f86e771a5` | `Trojan:Script/Wacatac.B!ml` |
+| `0.8.7`      | `eaef6f531f3e41d5ab88d108e1f54ac0d7d3a8f8755f2a57b05559750b571c79` | `Trojan:Script/Wacatac.B!ml` |
+
+**C. `x/sys` 0.49.0 and `x/oauth2` 0.37.0, the dependency bump reverted, the
+only change.** Flagged 1 of 6: the dependency bump is not the cause.
+
+| Version      | sha256                                                             | Microsoft                    |
+| ------------ | ------------------------------------------------------------------ | ---------------------------- |
+| `0.8.6-rc.3` | `29d7c1d7c973b8debf1378da02056c02a42e13400cb7ed0417d217240c70dd82` | clean                        |
+| `0.8.6-rc.4` | `0cd485ec1c0b6d888a02c2b35bffd65c01e51b87d4fd5245b2866e2a1798ae29` | `Trojan:Script/Wacatac.C!ml` |
+| `0.8.6`      | `17cbb0188666d94a730fcb0f5616f298452e748a8febdb7baf8736c00a242665` | clean                        |
+| `0.8.7-rc.1` | `92b6e811249c3cbae21bd989ef047be40b96d22089547509502f7ee19604c9b5` | clean                        |
+| `0.8.6-rc.5` | `d912802f5237716661f4ca0396e689b139777b16a42dc6cf9ab75d7ca0528808` | clean                        |
+| `0.8.7`      | `7efced5d6f8b602287a138adcee72248a54285454f45b75affd5762469593c2d` | clean                        |
+
+**D. rc.2's code (`10a3d0f3`) on go1.26.11.** Flagged 2 of 3: rc.2's own code
+is flagged, so nothing between rc.2 and rc.3 is the cause.
+
+| Version      | sha256                                                             | Microsoft                    |
+| ------------ | ------------------------------------------------------------------ | ---------------------------- |
+| `0.8.6-rc.3` | `9d618aa0c0e364cdc0a46473d320a5fb5e96729faf9750cffbaf38f688f5a51e` | clean                        |
+| `0.8.6-rc.4` | `97d6db8db647c3235cbd37d7f3c393efc74c13ce55342582b6cb58aff1c6857c` | `Trojan:Script/Wacatac.B!ml` |
+| `0.8.6`      | `739449b1d4beb6725e53ccc69d2ae28181a4c2ee2f0718cba7498451e1ec16fd` | `Trojan:Script/Wacatac.B!ml` |
+
+In all four, builds that differ only in the version string get opposite
+verdicts. That is the measured cause stated under **Cause.** above.
 
 ### The RC scan request budget
 
