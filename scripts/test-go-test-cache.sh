@@ -4,8 +4,9 @@
 #
 #   - check-go-test-skips.py counts cached packages, still accounts the skips a
 #     cached package replays, and never reports a cached package as skipped;
-#   - ci-local-go-test.sh passes -count=1 only under CI_LOCAL_NO_TEST_CACHE=1,
-#     and runs the always-uncached list otherwise (plain and --race);
+#   - ci-local-go-test.sh's rest and shard steps (#3209) pass -count=1 only
+#     under CI_LOCAL_NO_TEST_CACHE=1, and the rest steps run the always-uncached
+#     list otherwise (plain and --race);
 #   - go-test-uncached.py runs each package's entries with -count=1 -run, fails
 #     on a failing listed test, and fails naming a listed test that ran nothing.
 #
@@ -81,6 +82,7 @@ mkdir -p "$TMP/bin" "$TMP/repo"
 cat > "$TMP/bin/go" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB_ARGV"
+if [ "$1" = list ]; then printf '%s\n' example/sharded example/rest; exit 0; fi
 pkg="${!#}"
 run=""
 for ((i = 1; i < $#; i++)); do
@@ -109,6 +111,8 @@ example/one TestBeta
 example/two TestGamma
 LIST
 export GO_TEST_UNCACHED_LIST="$TMP/list.txt"
+printf 'shard example/sharded 2\n' > "$TMP/shards.txt"
+export GO_TEST_SHARD_CONFIG="$TMP/shards.txt"
 
 cd "$TMP/repo" || { echo "HARNESS ERROR: no fixture directory"; exit 1; }
 if ! { git init -q && git config user.email t@example.com && git config user.name t &&
@@ -117,35 +121,51 @@ if ! { git init -q && git config user.email t@example.com && git config user.nam
   exit 1
 fi
 
+STATE="$TMP/state"
+mkdir -p "$STATE/plain" "$STATE/race"
 : > "$STUB_ARGV"
-bash "$GO_TEST" 20m "$TMP/pass.tree" >/dev/null 2>&1
-check "the cached plain pass succeeds" $?
-FIRST_ARGV="$(sed -n 1p "$STUB_ARGV")"
-grep -q -- '-json \./\.\.\.' <<<"$FIRST_ARGV" && ! grep -q -- '-count=1' <<<"$FIRST_ARGV"
-check "the main plain pass runs without -count=1 by default" $?
+bash "$GO_TEST" --rest 20m "$STATE" >/dev/null 2>&1
+check "the cached plain rest pass succeeds" $?
+FIRST_ARGV="$(sed -n 2p "$STUB_ARGV")"
+[ "$FIRST_ARGV" = 'test -json -timeout 20m example/rest' ]
+check "the plain rest pass runs the unsharded packages without -count=1 by default" $?
 grep -qx -- "test -json -count=1 -timeout 20m -run ^(TestAlpha|TestBeta)\$ example/one" "$STUB_ARGV"
 check "the listed tests run per package with -count=1 -run '^(A|B)\$'" $?
-grep -q '"Package":"example/two","Test":"TestGamma"' go-test.json
-check "the uncached run's events are appended to go-test.json" $?
+grep -q '"Package":"example/two","Test":"TestGamma"' "$STATE/plain/rest.json"
+check "the uncached run's events are appended to the plain rest's JSON" $?
 
 : > "$STUB_ARGV"
-CI_LOCAL_NO_TEST_CACHE=1 bash "$GO_TEST" 20m "$TMP/pass.tree" >/dev/null 2>&1
-check "the uncached plain pass succeeds" $?
-grep -q -- '-json \./\.\.\. -count=1' "$STUB_ARGV" && [ "$(wc -l < "$STUB_ARGV")" -eq 1 ]
+CI_LOCAL_NO_TEST_CACHE=1 bash "$GO_TEST" --rest 20m "$STATE" >/dev/null 2>&1
+check "the uncached plain rest pass succeeds" $?
+grep -qx -- 'test -json -count=1 -timeout 20m example/rest' "$STUB_ARGV" &&
+  [ "$(grep -c '^test' "$STUB_ARGV")" -eq 1 ]
 check "CI_LOCAL_NO_TEST_CACHE=1 adds -count=1 and skips the separate list run" $?
 
 : > "$STUB_ARGV"
-bash "$GO_TEST" --race 20m >/dev/null 2>&1
-check "the cached race pass succeeds" $?
-[ "$(sed -n 1p "$STUB_ARGV")" = 'test -race -timeout 20m ./...' ]
-check "the race pass runs go test -race without -count=1" $?
+bash "$GO_TEST" --rest --race 20m "$STATE" >/dev/null 2>&1
+check "the cached race rest pass succeeds" $?
+[ "$(sed -n 2p "$STUB_ARGV")" = 'test -json -race -timeout 20m example/rest' ]
+check "the race rest pass runs go test -race without -count=1" $?
 grep -qx -- "test -json -count=1 -race -timeout 20m -run ^(TestGamma)\$ example/two" "$STUB_ARGV"
 check "the race pass runs the list with -race" $?
+! grep -q 'TestGamma' "$STATE/race/rest.json"
+check "the race pass keeps no events for the list run" $?
 
 : > "$STUB_ARGV"
-CI_LOCAL_NO_TEST_CACHE=1 bash "$GO_TEST" --race 20m >/dev/null 2>&1
-grep -qx -- 'test -race -count=1 -timeout 20m ./...' "$STUB_ARGV" && [ "$(wc -l < "$STUB_ARGV")" -eq 1 ]
+CI_LOCAL_NO_TEST_CACHE=1 bash "$GO_TEST" --rest --race 20m "$STATE" >/dev/null 2>&1
+grep -qx -- 'test -json -race -count=1 -timeout 20m example/rest' "$STUB_ARGV" &&
+  [ "$(grep -c '^test' "$STUB_ARGV")" -eq 1 ]
 check "CI_LOCAL_NO_TEST_CACHE=1 race pass is -count=1 with no list run" $?
+
+printf '{"packages":{"example/sharded":{"shards":[["TestAlpha"],["TestBeta"]],"tests":2}}}' \
+  > "$STATE/plan.json"
+: > "$STUB_ARGV"
+bash "$GO_TEST" --shard 20m "$STATE" example/sharded 2 >/dev/null 2>&1
+CI_LOCAL_NO_TEST_CACHE=1 bash "$GO_TEST" --shard --race 20m "$STATE" example/sharded 2 >/dev/null 2>&1
+[ "$(cat "$STUB_ARGV")" = "$(printf '%s\n' \
+  'test -json -timeout 20m -run ^(TestBeta)$ example/sharded' \
+  'test -json -race -count=1 -timeout 20m -run ^(TestBeta)$ example/sharded')" ]
+check "a shard step is cached by default and -count=1 only under CI_LOCAL_NO_TEST_CACHE=1" $?
 
 # ── the runner's failure modes ─────────────────────────────────────────────
 err="$(STUB_MISSING=TestBeta python3 "$UNCACHED" --list "$TMP/list.txt" 2>&1 >/dev/null)"

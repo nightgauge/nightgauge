@@ -1,0 +1,38 @@
+# go-test-shards.txt — Go packages the local gate splits across processes (#3209).
+#
+# Go runs one package's top-level tests one after another unless they call
+# t.Parallel(), so the slowest package sets the floor of `go test ./...`
+# (internal/orchestrator: 453s plain and 445s race of a 13m26s gate, #3209).
+# scripts/ci-local.sh runs each package below as N separate
+# `go test -run '^(A|B|...)$' <pkg>` processes, for the plain and the race
+# pass, and every other package in one `go test` over the rest. No test code
+# changes.
+#
+# A test goes in bucket crc32(name) % N, so a new test lands in a bucket by
+# itself and only a rename moves one. scripts/go-test-shard.py checks that
+# every top-level test is in exactly one bucket before the run, and that each
+# ran exactly once after it.
+#
+# Formats, one per line, `#` starts a comment:
+#   shard  <import path> <N>                 split the package into N processes
+#   serial <import path> <TestName> <reason> keep the test in shard 1
+#
+# Order the `shard` lines slowest first: the gate starts them in this order.
+#
+# A test that cannot run beside ANOTHER process of its own package (a fixed
+# port, a fixed path outside t.TempDir(), a file under the real home, a global
+# lock) gets a `serial` line. Every pinned test lands in shard 1, so pinned
+# tests still run one after another, as they did before sharding. Prefer fixing
+# the test (port 0, t.TempDir()) to pinning it. A `serial` line naming a test
+# that no longer exists fails the plan.
+#
+# Audited on 2026-11-12 (#3209): every package below isolates HOME, the state
+# root, the machine config home and git config per test process in its
+# TestMain, and the gate already ran each one's plain and race binaries at the
+# same time before sharding. No test needed a pin.
+
+shard github.com/nightgauge/nightgauge/internal/orchestrator 4
+shard github.com/nightgauge/nightgauge/internal/execution 3
+shard github.com/nightgauge/nightgauge/cmd/nightgauge 2
+shard github.com/nightgauge/nightgauge/internal/ipc 2
+shard github.com/nightgauge/nightgauge/internal/doctor 2
