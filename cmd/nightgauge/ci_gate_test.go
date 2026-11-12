@@ -139,13 +139,13 @@ func TestGateStatus_ReportsAnUnusableDeclaration(t *testing.T) {
 	if st.GateError == "" || st.GateCommand != "" {
 		t.Fatalf("broken declaration: %+v", st)
 	}
-	if err := runRepositoryGate(context.Background(), root, io.Discard, io.Discard); err == nil {
+	if _, err := runRepositoryGate(context.Background(), root, io.Discard, io.Discard); err == nil {
 		t.Fatal("gate-run accepted a broken declaration")
 	}
 }
 
 func TestGateRun_NoGateIsAnError(t *testing.T) {
-	if err := runRepositoryGate(context.Background(), gateRepo(t), io.Discard, io.Discard); err == nil {
+	if _, err := runRepositoryGate(context.Background(), gateRepo(t), io.Discard, io.Discard); err == nil {
 		t.Fatal("gate-run passed a repository with no gate")
 	}
 }
@@ -163,8 +163,8 @@ func TestGateRun_NeverUsesAShell(t *testing.T) {
 	}
 	const arg = "x; touch injected"
 	declareGate(t, root, "local_gate:\n  steps:\n    - [sh, scripts/gate.sh, \""+arg+"\"]\n")
-	if err := runRepositoryGate(context.Background(), root, io.Discard, io.Discard); err != nil {
-		t.Fatal(err)
+	if code, err := runRepositoryGate(context.Background(), root, io.Discard, io.Discard); err != nil || code != 0 {
+		t.Fatalf("code %d, err %v", code, err)
 	}
 	got, err := os.ReadFile(filepath.Join(root, "received"))
 	if err != nil {
@@ -198,5 +198,55 @@ func TestIssueFromBranch(t *testing.T) {
 		if got := issueFromBranch(branch); got != want {
 			t.Errorf("issueFromBranch(%q) = %d, want %d", branch, got, want)
 		}
+	}
+}
+
+// gate-run records a declared gate itself, stamped with the pipeline run, and
+// gate-count reports that run's full gates only.
+func TestGateCount_CountsOnePipelineRunsFullGates(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_ISSUE_NUMBER", "7")
+	t.Setenv("NIGHTGAUGE_RUN_ID", "run-1")
+	root := gateRepo(t)
+	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "scripts", "gate.sh"), []byte("exit 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	declareGate(t, root, "local_gate:\n  steps:\n    - [sh, scripts/gate.sh]\n")
+	ctx := context.Background()
+	if code, err := runRepositoryGate(ctx, root, io.Discard, io.Discard); err != nil || code != 0 {
+		t.Fatalf("code %d, err %v", code, err)
+	}
+	t.Setenv("NIGHTGAUGE_RUN_ID", "run-2")
+	record(t, root, gateledger.Event{
+		Event: gateledger.EventFinish, RunID: "other", Kind: gateledger.KindParity,
+		Tree: "t", Verdict: gateledger.VerdictFail, Full: true,
+	})
+	c, err := countGates(ctx, root, 0, "run-1", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Issue != 7 || c.PipelineRun != "run-1" || c.Full != 1 || c.Passed != 1 || c.Failed != 0 {
+		t.Fatalf("gate-count = %+v, want one passed gate for issue 7 run-1", c)
+	}
+	// The default run is NIGHTGAUGE_RUN_ID.
+	c, err = countGates(ctx, root, 0, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.PipelineRun != "run-2" || c.Full != 1 || c.Failed != 1 {
+		t.Fatalf("gate-count = %+v, want one failed gate for run-2", c)
+	}
+}
+
+func TestCompleteGateEvent_AdoptsTheGateRunsRunID(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_GATE_RUN_ID", "from-gate-run")
+	ev := gateledger.Event{Event: gateledger.EventStart, Kind: gateledger.KindLocalGate}
+	if err := completeGateEvent(context.Background(), gateRepo(t), &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.RunID != "from-gate-run" {
+		t.Fatalf("RunID = %q, want the gate-run's", ev.RunID)
 	}
 }

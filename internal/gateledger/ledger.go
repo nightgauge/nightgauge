@@ -50,10 +50,13 @@ const (
 
 // Verdicts of a finish event. Infra means a check could not run, so the run
 // asserted nothing about the tree, and the answer is to run the gate again.
+// Superseded means the gate was stopped because its worktree's tree changed
+// under it (#3207): not a failure, and, like infra, it proves nothing.
 const (
-	VerdictPass  = "pass"
-	VerdictFail  = "fail"
-	VerdictInfra = "infra"
+	VerdictPass       = "pass"
+	VerdictFail       = "fail"
+	VerdictInfra      = "infra"
+	VerdictSuperseded = "superseded"
 )
 
 // Event is one line of the ledger.
@@ -74,8 +77,9 @@ type Event struct {
 	Issue     int    `json:"issue,omitempty"`
 	Stage     string `json:"stage,omitempty"`
 	Branch    string `json:"branch,omitempty"`
-	// PipelineRun is the run identity of a review event, which scopes its round
-	// cap. RunID identifies the ledger run, not the pipeline's.
+	// PipelineRun is the pipeline run the event belongs to (NIGHTGAUGE_RUN_ID).
+	// It scopes a review's round cap and a run's gate count (#3207). RunID
+	// identifies the ledger run, not the pipeline's.
 	PipelineRun string `json:"pipeline_run,omitempty"`
 	// Review is the stored outcome of a review event, owned by internal/review.
 	Review json.RawMessage `json:"review,omitempty"`
@@ -316,4 +320,88 @@ func UsageIn(root string, issue int, stage string, from, to time.Time) (Usage, e
 		}
 	}
 	return u, nil
+}
+
+// RunTally counts one pipeline run's full gates, one verdict per ledger run id.
+type RunTally struct {
+	// Full counts full gates that started or finished: Passed + Failed + Infra
+	// + Superseded + Unfinished.
+	Full       int `json:"full"`
+	Passed     int `json:"passed"`
+	Failed     int `json:"failed"`
+	Infra      int `json:"infra"`
+	Superseded int `json:"superseded"`
+	// Unfinished counts full gates with a start and no finish: killed, or still
+	// running.
+	Unfinished int `json:"unfinished"`
+	// Reused counts gates skipped because the tree had already passed.
+	Reused int `json:"reused"`
+	// Seconds is the total duration of the finished gates.
+	Seconds int `json:"seconds"`
+}
+
+// RunCount answers how many full gates ran for issue during one pipeline run
+// (#3207). An empty pipelineRun counts every gate of the issue. Events are
+// grouped by ledger run id, so a run's start and finish count once; when one
+// run id holds several finishes, superseded wins (a SIGTERM'd gate's own trap
+// may record infra before its superseder records superseded), and otherwise the
+// last finish counts. Reviews are not gates and are not counted.
+func RunCount(root string, issue int, pipelineRun string) (RunTally, error) {
+	entries, err := read(root)
+	if err != nil {
+		return RunTally{}, err
+	}
+	type run struct {
+		full    bool
+		verdict string
+		seconds int
+	}
+	runs := map[string]*run{}
+	var order []string
+	var t RunTally
+	for _, e := range entries {
+		if !e.ok || e.ev.Kind == KindReview || e.ev.Issue != issue ||
+			(pipelineRun != "" && e.ev.PipelineRun != pipelineRun) {
+			continue
+		}
+		if e.ev.Event == EventReused {
+			t.Reused++
+			continue
+		}
+		if e.ev.Event != EventStart && e.ev.Event != EventFinish {
+			continue
+		}
+		r := runs[e.ev.RunID]
+		if r == nil {
+			r = &run{}
+			runs[e.ev.RunID] = r
+			order = append(order, e.ev.RunID)
+		}
+		r.full = r.full || e.ev.Full
+		if e.ev.Event == EventFinish && r.verdict != VerdictSuperseded {
+			r.verdict = e.ev.Verdict
+			r.seconds = e.ev.Seconds
+		}
+	}
+	for _, id := range order {
+		r := runs[id]
+		if !r.full {
+			continue
+		}
+		t.Full++
+		t.Seconds += r.seconds
+		switch r.verdict {
+		case "":
+			t.Unfinished++
+		case VerdictPass:
+			t.Passed++
+		case VerdictFail:
+			t.Failed++
+		case VerdictSuperseded:
+			t.Superseded++
+		default:
+			t.Infra++
+		}
+	}
+	return t, nil
 }

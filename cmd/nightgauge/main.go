@@ -8230,7 +8230,7 @@ func ciCmd() *cobra.Command {
 		Use:   "ci",
 		Short: "CI check operations (wait, logs, history, parity, discover-commands, gate-status, gate-run, gate-record)",
 	}
-	cmd.AddCommand(ciWaitCmd(), ciLogsCmd(), ciHistoryCmd(), ciParityCheckCmd(), ciDiscoverCommandsCmd(), ciClassifyCmd(), ciClassifyUISurfaceCmd(), ciChecksCompleteCmd(), ciGateStatusCmd(), ciGateRunCmd(), ciGateRecordCmd())
+	cmd.AddCommand(ciWaitCmd(), ciLogsCmd(), ciHistoryCmd(), ciParityCheckCmd(), ciDiscoverCommandsCmd(), ciClassifyCmd(), ciClassifyUISurfaceCmd(), ciChecksCompleteCmd(), ciGateStatusCmd(), ciGateRunCmd(), ciGateRecordCmd(), ciGateCountCmd())
 	return cmd
 }
 

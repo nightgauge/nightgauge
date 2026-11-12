@@ -4589,7 +4589,7 @@ Findings for a tree that moved, a missing or rejected file and a failed spawn al
 record `catch` with no ledger event, so the next attempt reviews again. Outcomes
 live in `gate-runs.jsonl` as kind `review`, which the local-gate answers ignore.
 
-#### `ci gate-status`, `ci gate-run` and `ci gate-record`
+#### `ci gate-status`, `ci gate-run`, `ci gate-record` and `ci gate-count`
 
 One tree-keyed ledger, `gate-runs.jsonl` in the pipeline state directory, counts
 full gates and reuses a pass (#2784). `scripts/ci-local.sh` and feature-validate
@@ -4601,6 +4601,7 @@ nightgauge ci gate-run
 RUN=$(nightgauge ci gate-record --event start --kind parity --tree "$TREE" --full)
 nightgauge ci gate-record --event finish --run-id "$RUN" --kind parity --tree "$TREE" \
   --verdict pass --full --seconds 120
+nightgauge ci gate-count --json
 ```
 
 `gate-status` prints `reusable`, `reason`, `tree`, `gate_command`,
@@ -4610,6 +4611,37 @@ renders the repository's `local_gate`, else `bash scripts/ci-local.sh` when that
 script exists. It is for display and is never executed: arguments may hold shell
 metacharacters. `gate-run` runs each step as an argv, stops at the first failure,
 and fails on a `gate_error` or a repository with no gate.
+
+`gate-run` allows one gate per worktree (#3207). A guard file in the pipeline
+state directory, keyed on the worktree, names the running gate. A second
+`gate-run` on the same tree waits for it and exits with its result. One on a
+different tree supersedes it: the running gate's process group gets SIGTERM, then
+SIGKILL after 10 s, and is verified dead before the ledger records that run as
+`superseded` and the new gate starts. Gates in other worktrees are untouched.
+The guard records the holder's pid with its process start time and host, and
+the start time of the running step's group leader. A guard is stale, and
+reclaimed, when the pid is dead, its start time differs (a reused pid, or a
+guard that survived a reboot), or the guard is older than the gate timeout
+`hooks.pre_push.timeout_seconds` (default 1800 s); on another host only the age
+is judged. A stale holder's step group is stopped only while its leader's start
+time still matches, so a reused pgid is never signalled. A same-tree wait is
+bounded by the same timeout and exits `75` naming the guard file. SIGINT,
+SIGTERM and SIGHUP to `gate-run` are forwarded to the running step's group,
+which gets SIGKILL after 10 s (at once on a second signal) and is verified dead;
+no further step starts, the ledger records `infra`, the guard is released, and
+`gate-run` exits `128+signo`. Exit `75` means the holder could not be stopped or
+the wait timed out, so nothing ran. Exit `76` means this gate was superseded,
+which is not a failure. `gate-run` exports `NIGHTGAUGE_GATE_RUN_ID` to the gate, and
+`ci-local.sh` and `gate-record --event start` record under it. It records a
+declared `local_gate` itself, as kind `parity`.
+
+`gate-count` prints how many full gates one issue's pipeline run ran:
+`issue`, `pipeline_run`, `full`, `passed`, `failed`, `infra`, `superseded`,
+`unfinished`, `reused` and `seconds`. Events carry the run from
+`NIGHTGAUGE_RUN_ID`; `--issue` and `--run` override the stage's environment, and
+an empty `--run` counts every run of the issue. A run id with several finishes
+counts once, and `superseded` wins over the `infra` a stopped gate's own trap
+may record.
 
 A pass is reusable only when it was full, the tree held still for the whole run,
 and no later failure or infrastructure stop landed on that tree. A `local-gate`

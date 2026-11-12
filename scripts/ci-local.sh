@@ -14,6 +14,9 @@
 # gates itself, and #855 made the expensive publication-boundary family
 # concurrency-safe on purpose. Serialising the gate would remove that, so it is
 # NOT what this script does. THE ANSWER IS NOT A LOCK.
+# `nightgauge ci gate-run` does guard one gate per WORKTREE (#3207): two gates
+# on one worktree's tree are duplicates, and a gate on a stale tree is void.
+# Gates in different worktrees still run concurrently on the shared budget.
 #
 # WHAT REGRESSED, because the property held from #855 (2026-08-24) until it
 # quietly stopped: #1217/#1219 (2026-08-30) took this gate from `189% cpu,
@@ -928,8 +931,14 @@ gate_ledger_open() {
   [ "$CHANGED_SCOPE" -eq 1 ] || full_flag="--full"
   GATE_RUN_STARTED=$SECONDS
   # shellcheck disable=SC2086 # full_flag is one flag or nothing
+  # Under `ci gate-run`, record under its run id, so its supersede line and
+  # this run's own finish name one run (#3207). Newer binaries also adopt it
+  # from the environment; passing it explicitly covers older ones.
+  local run_flag=""
+  [ -z "${NIGHTGAUGE_GATE_RUN_ID:-}" ] || run_flag="--run-id $NIGHTGAUGE_GATE_RUN_ID"
+  # shellcheck disable=SC2086 # full_flag and run_flag are one flag or nothing
   GATE_RUN_ID="$("$bin" ci gate-record --event start --kind local-gate --tree "$GATE_TREE" \
-    $full_flag 2>/dev/null || true)"
+    $full_flag $run_flag 2>/dev/null || true)"
 }
 
 # Called from the EXIT trap, so every way out of a run records its verdict. Pass

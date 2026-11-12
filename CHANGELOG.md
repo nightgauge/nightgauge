@@ -16,6 +16,22 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A pipeline run pays for one full local gate, not one per review round
+  (#3207).** `nightgauge ci gate-run` now allows one gate per worktree. A second
+  `gate-run` on the same tree waits for the running gate and exits with its
+  result. One on a changed tree stops the running gate's process group, verifies
+  it dead, and the gate ledger records that gate as `superseded`, not as a
+  failure. It exits 75 when the running gate could not be stopped, and 76 for
+  the superseded gate. Gates in different worktrees still run concurrently.
+  feature-validate runs only build, vet and the changed packages' tests between
+  independent-review rounds, and the full gate once, after the final round. The
+  new `nightgauge ci gate-count` prints how many full gates an issue's run ran.
+  A guard is stale when its holder's pid is dead, its process start time differs
+  (a reused pid or a reboot), or it is older than `hooks.pre_push.timeout_seconds`,
+  and a same-tree wait gives up after that timeout with exit 75. Signalling
+  `gate-run` stops the running step's process group, releases the guard, and
+  exits `128+signo`.
+
 - **An RC's VirusTotal scan spends about half the requests it did (#3202).**
   rc.3 sent 108 requests, 63 of them re-analysing unchanged, clean hooks and
   scripts. A text file now reuses a clean, complete report for 14 days
