@@ -14,6 +14,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The clone-isolation workspace test no longer times out under gate load (#3224).**
+  The case runs about twelve real `git` commands: 0.5 s idle, 5.5 s at load ~15,
+  past Vitest's 5 s default. It now carries a 30 s per-case timeout.
+
 ### Changed
 
 - **The local gate splits its slowest Go packages across processes (#3209).**
