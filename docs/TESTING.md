@@ -496,6 +496,32 @@ Plugin-manifest validation is **not** wired into CI. These checks —
 and must be run by hand. `.github/workflows/lint.yml` covers Prettier, ESLint,
 SKILL.md metadata and the plugin-mirror drift gate.
 
+### The local gate uses Go's test cache (#3208)
+
+`scripts/ci-local.sh` runs `go test ./...` and `go test -race ./...` without
+`-count=1`, so an unchanged package replays its last result from Go's test cache.
+The cache key covers the package's sources and dependencies, the flags, the
+toolchain, `go.mod`/`go.sum`, and every environment variable and file the test
+process reads through package `os`. A binary found through `exec.LookPath` is
+stat'd, so replacing `git` or `bash` also invalidates it.
+
+The cache cannot see content a child process reads on the test's behalf
+(`exec.Command("bash", "scripts/x.sh")` reads `x.sh` in the child), files outside
+the module, the real worktree's git state, the network, or the clock. Tests that
+depend on those are listed in
+[`scripts/go-test-uncached.txt`](../scripts/go-test-uncached.txt), whose header
+states the membership rule. After each pass, `scripts/go-test-uncached.py` runs
+them with `-count=1 -run`. It fails when a listed test no longer exists, and
+names the entry. When you add a test that runs a repository script through a
+shell or interpreter without opening that script itself, add it to the list.
+
+The skip accounting prints `Go test packages: N ran, M cached`. A cached package
+replays its per-test events, so its skips still count against the allowlist.
+
+Set `CI_LOCAL_NO_TEST_CACHE=1` to run both passes fully uncached. A toolchain or
+`go.mod` change does not need it, because both are part of the cache key. The
+hosted workflows and the `Makefile` `test` target still run with `-count=1`.
+
 ### Workflow action SHA-pin gate
 
 `scripts/check-action-pins.py` (#1782) asks the GitHub API whether every

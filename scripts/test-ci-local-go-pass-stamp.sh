@@ -24,6 +24,10 @@ exit "${STUB_EXIT:-0}"
 STUB
 chmod +x "$TMP/bin/go"
 export PATH="$TMP/bin:$PATH"
+# The stub emits no test events, so the always-uncached runner (#3208) gets an
+# empty list here; scripts/test-go-test-cache.sh covers it.
+: > "$TMP/uncached.txt"
+export GO_TEST_UNCACHED_LIST="$TMP/uncached.txt"
 
 cd "$TMP/repo" || { echo "HARNESS ERROR: no fixture repository"; exit 1; }
 if ! { git init -q && git config user.email t@example.com && git config user.name t &&
