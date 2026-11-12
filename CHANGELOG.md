@@ -27,6 +27,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A merge-queue merge is no longer booked as `merge-queue-failed` (#3219).**
+  GitHub can show a just-merged PR as open and outside the queue for one read.
+  The queue wait now needs a second such read before it calls the PR dequeued,
+  unless failed merge-group checks already explain the removal. pr-merge also
+  re-reads the PR after any queue error and books a `MERGED` PR as merged.
+
 - **A pipeline run pays for one full local gate, not one per review round
   (#3207).** `nightgauge ci gate-run` now allows one gate per worktree. A second
   `gate-run` on the same tree waits for the running gate and exits with its

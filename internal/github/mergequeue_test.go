@@ -279,6 +279,41 @@ func TestMergePRWithStrategy_Dequeued_ReturnsClassifiedFailureWithChecks(t *test
 	}
 }
 
+// A merged PR can read OPEN and outside the queue for one read after its
+// entry is gone; that read must not be booked as a dequeue (#3219).
+func TestMergePRWithStrategy_TransientOpenAfterQueue_WaitsForMerge(t *testing.T) {
+	qs := &queueServer{statuses: []map[string]any{
+		prNode("OPEN", true, false, nil, ""),
+		prNode("OPEN", true, true, entry("AWAITING_CHECKS", "mg1"), ""),
+		prNode("OPEN", true, false, nil, ""), // stale read: entry gone, state not yet MERGED
+		prNode("MERGED", true, false, nil, "landed1"),
+	}}
+	sha, err := newQueuePRService(t, qs).MergePRWithStrategy(context.Background(), "PR_1", "SQUASH")
+	if err != nil {
+		t.Fatalf("MergePRWithStrategy: %v, want the merge to be observed", err)
+	}
+	if sha != "landed1" {
+		t.Errorf("sha = %q, want landed1", sha)
+	}
+}
+
+// A check-less removal is confirmed by a second absent read (#3219).
+func TestMergePRWithStrategy_DequeuedWithoutChecks_ConfirmedOnSecondRead(t *testing.T) {
+	qs := &queueServer{statuses: []map[string]any{
+		prNode("OPEN", true, false, nil, ""),
+		prNode("OPEN", true, true, entry("AWAITING_CHECKS", "mg1"), ""),
+		prNode("OPEN", true, false, nil, ""),
+	}}
+	_, err := newQueuePRService(t, qs).MergePRWithStrategy(context.Background(), "PR_1", "SQUASH")
+	var qe *MergeQueueError
+	if !errors.As(err, &qe) || qe.Kind != MergeQueueDequeued {
+		t.Fatalf("err = %v, want a dequeued *MergeQueueError", err)
+	}
+	if qs.reads < 4 {
+		t.Errorf("reads = %d, want the removal confirmed by a second absent read", qs.reads)
+	}
+}
+
 // withMergeable sets the PR's own mergeability on a status node.
 func withMergeable(n map[string]any, mergeable string) map[string]any {
 	n["mergeable"] = mergeable
@@ -387,7 +422,8 @@ func TestClassifyMergeQueue(t *testing.T) {
 		{"unmergeable conflicting", MergeQueueStatus{State: "OPEN", InQueue: true, EntryState: "UNMERGEABLE", Mergeable: "CONFLICTING"}, true, 0, MergeQueueFailed, MergeQueueUnmergeable},
 		{"unmergeable behind entry", MergeQueueStatus{State: "OPEN", InQueue: true, EntryState: "UNMERGEABLE", Mergeable: "MERGEABLE"}, true, 0, MergeQueuePending, ""},
 		{"unmergeable unknown", MergeQueueStatus{State: "OPEN", InQueue: true, EntryState: "UNMERGEABLE", Mergeable: "UNKNOWN"}, true, 0, MergeQueuePending, ""},
-		{"left the queue after being seen", open, true, 1, MergeQueueFailed, MergeQueueDequeued},
+		{"one absent read after being seen is unconfirmed", open, true, 1, MergeQueuePending, ""},
+		{"left the queue after being seen", open, true, 2, MergeQueueFailed, MergeQueueDequeued},
 		{"not yet visible inside the grace", open, false, 1, MergeQueuePending, ""},
 		{"never visible past the grace", open, false, 3, MergeQueueFailed, MergeQueueDequeued},
 	}

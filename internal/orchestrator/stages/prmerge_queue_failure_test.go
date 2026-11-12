@@ -435,3 +435,34 @@ func TestRun_MergeQueueRemoval_DiscoveryFailureIsUnclassified(t *testing.T) {
 		t.Fatalf("without discovered checks a removal must not be treated as infrastructure: %+v", res)
 	}
 }
+
+// A dequeue reported for a PR the queue actually merged is booked as the
+// merge, not as merge-queue-failed (#3219).
+func TestRun_MergeQueueDequeuedButMerged_IsMerged(t *testing.T) {
+	q := &removalQueueGh{outcomes: []error{removal()}}
+	r, _ := newRemovalRunner(t, q)
+	q.rereads = []github.MergeQueueStatus{{PRID: "PR_1", State: "MERGED", BaseRef: "main"}}
+	res, err := r.Run(context.Background(), 7, "", "")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Path != PathMerged || res.Reason != ReasonMergeQueueMerged {
+		t.Fatalf("got %+v, want the merge booked", res)
+	}
+	if q.queueCalls != 1 {
+		t.Errorf("queue calls %d, want 1: a merged PR is never re-enqueued", q.queueCalls)
+	}
+}
+
+// When the re-read still shows the PR OPEN the refusal is unchanged (#3219).
+func TestRun_MergeQueueDequeuedStillOpen_IsRefused(t *testing.T) {
+	q := &removalQueueGh{outcomes: []error{removal()}}
+	r, _ := newRemovalRunner(t, q)
+	res, err := r.Run(context.Background(), 7, "", "")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Path != PathRefused || !strings.HasPrefix(res.Reason, ReasonMergeQueueFailed) {
+		t.Fatalf("got %+v, want merge-queue-failed", res)
+	}
+}
