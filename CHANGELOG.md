@@ -35,6 +35,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The release checklist and the scan gate's held-draft error no longer call a
+  scan finding an owner decision (#3098).** Both now state the release rule: a
+  finding is fixed at its cause and ships in the next patch; nothing publishes the
+  held draft. The gate's error names the remedy for its exit code: a finding
+  (exit 1) is fixed at its cause; a harness error (exit 2) is re-run.
 - **A merge-queue merge is no longer booked as `merge-queue-failed` (#3219).**
   GitHub can show a just-merged PR as open and outside the queue for one read.
   The queue wait now needs a second such read before it calls the PR dequeued,
