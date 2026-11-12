@@ -1450,25 +1450,41 @@ func TestUnverifiableProcessScan_TimeoutAndDriftAreDistinct(t *testing.T) {
 	}
 }
 
-// A wedged lsof makes the cwd half report a named timeout (#3097).
-func TestBuildForeignCwdScan_AWedgedLsofIsANamedTimeout(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("the cwd half shells lsof only on darwin")
+// A wedged lsof makes the cwd half report a named timeout (#3097). The lsof
+// reader has no build tag, so a PATH stub proves it on Linux CI too; only the
+// darwin dispatch inside lookupCwds is platform-bound, and that wrap is
+// asserted inline on darwin rather than skipped elsewhere.
+func TestLookupCwdsDarwin_AWedgedLsofIsANamedTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stubs need a POSIX shell")
 	}
-	r := newLeakRepo(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "lsof"), []byte("#!/bin/sh\nexec /bin/sleep 30\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	procs := []runningProcess{{PID: os.Getpid(), Command: "doctor"}}
+	const bound = 300 * time.Millisecond
+
 	start := time.Now()
-	_, err := buildForeignCwdScan(r.dir, procs, processScanBounds{Table: psTimeout, Cwd: 300 * time.Millisecond})
+	cwds, err := lookupCwdsDarwin([]int{os.Getpid()}, bound)
+	elapsed := time.Since(start)
 	var timeout *scanTimeoutError
 	if !errors.As(err, &timeout) {
-		t.Fatalf("a wedged lsof did not yield a scanTimeoutError: %v", err)
+		t.Fatalf("a wedged lsof did not yield a scanTimeoutError: cwds=%v err=%v", cwds, err)
 	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
+	if timeout.Bound != bound || !strings.HasPrefix(timeout.Command, "lsof ") {
+		t.Errorf("timeout names %q within %v, want an lsof command within %v", timeout.Command, timeout.Bound, bound)
+	}
+	if elapsed > 5*time.Second {
 		t.Fatalf("wedged lsof held the scan for %v", elapsed)
+	}
+
+	if runtime.GOOS == "darwin" {
+		r := newLeakRepo(t)
+		procs := []runningProcess{{PID: os.Getpid(), Command: "doctor"}}
+		_, err := buildForeignCwdScan(r.dir, procs, processScanBounds{Table: psTimeout, Cwd: bound})
+		if !errors.As(err, &timeout) {
+			t.Fatalf("buildForeignCwdScan lost the scanTimeoutError through its wrap: %v", err)
+		}
 	}
 }
