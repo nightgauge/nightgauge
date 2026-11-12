@@ -268,7 +268,11 @@ if [ "$SCAN_RC" -ne 0 ]; then
     gh release upload "$TAG" "$REPORT" --clobber -R "$REPO" >/dev/null 2>&1 ||
       echo "::warning::could not attach $REPORT_ASSET to draft $TAG" >&2
   fi
-  echo "::error::release-scan-gate: $TAG stays a DRAFT (vt-scan exit $SCAN_RC). Read $REPORT_ASSET; fix the finding at its cause and ship the next patch; nothing publishes this draft." >&2
+  if [ "$SCAN_RC" -eq 1 ]; then
+    echo "::error::release-scan-gate: $TAG stays a DRAFT (vt-scan exit 1: finding). Read $REPORT_ASSET; fix the finding at its cause and ship the next patch; nothing publishes this draft." >&2
+  else
+    echo "::error::release-scan-gate: $TAG stays a DRAFT (vt-scan exit $SCAN_RC: harness error, nothing was decided about the files). Re-run the scan (gh run rerun <run-id> --failed reuses the draft); never publish this draft." >&2
+  fi
   exit "$SCAN_RC"
 fi
 

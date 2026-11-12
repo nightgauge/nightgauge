@@ -170,6 +170,8 @@ expect "forced detection -> exit 1" 1 "extension/dist/sdk-cli.cjs"
   ok "forced detection: the findings report is attached to the draft" ||
   bad "forced detection: no findings report on the draft"
 grep -qF "StubEngineA: malicious" <<<"$OUT" && ok "forced detection names the engine" || bad "engine not named"
+grep -qF "fix the finding at its cause" <<<"$OUT" && ok "forced detection: error names the fix-at-cause remedy" ||
+  bad "forced detection: error does not say to fix the finding at its cause"
 
 # 2. Clean: published exactly once, after the report is attached.
 make_release draft
@@ -227,6 +229,8 @@ gate scan "$TAG"
 rm -f "$VTSTATE/fail-file"
 expect "VirusTotal HTTP 500 -> exit 2" 2 "HARNESS ERROR"
 [ -e "$REL/draft" ] && [ "$(edits)" -eq 0 ] && ok "outage: still a draft" || bad "outage published"
+grep -qF "Re-run the scan" <<<"$OUT" && ! grep -qF "fix the finding" <<<"$OUT" &&
+  ok "outage: error says re-run, not fix a finding" || bad "outage: error names the wrong remedy"
 
 # 8. The report upload fails on a clean scan: not published.
 make_release draft
