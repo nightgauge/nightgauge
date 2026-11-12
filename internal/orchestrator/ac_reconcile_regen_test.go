@@ -13,6 +13,7 @@ import (
 	stagecontext "github.com/nightgauge/nightgauge/internal/execution/context"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 	"github.com/nightgauge/nightgauge/internal/state"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -58,7 +59,7 @@ func TestRegenerateACReconcile_ReplacesStaleReport(t *testing.T) {
 	path := writeStaleReport(t, ws)
 	body := regenCriteria(13)
 
-	s := &Scheduler{acReconcileBody: func(context.Context, types.BoardItem) (string, error) { return body, nil }}
+	s := &Scheduler{trustGate: allWritersGate(), acReconcileBody: func(context.Context, types.BoardItem) (string, error) { return body, nil }}
 	if err := s.regenerateACReconcileFor(context.Background(), types.BoardItem{Number: 42, Repo: "o/r"}, ws); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +79,7 @@ func TestRegenerateACReconcile_ReadErrorFails(t *testing.T) {
 	path := writeStaleReport(t, ws)
 	before, _ := os.ReadFile(path)
 
-	s := &Scheduler{acReconcileBody: func(context.Context, types.BoardItem) (string, error) {
+	s := &Scheduler{trustGate: allWritersGate(), acReconcileBody: func(context.Context, types.BoardItem) (string, error) {
 		return "", errors.New("HTTP 502")
 	}}
 	err := s.regenerateACReconcileFor(context.Background(), types.BoardItem{Number: 42, Repo: "o/r"}, ws)
@@ -116,6 +117,7 @@ func TestRegenerateACReconcile_NoCriteriaNotifies(t *testing.T) {
 	ws := gitWorkspace(t)
 	notified := 0
 	s := &Scheduler{
+		trustGate:       allWritersGate(),
 		acReconcileBody: func(context.Context, types.BoardItem) (string, error) { return "No criteria here.", nil },
 		acEmptyNotify:   func(context.Context, types.BoardItem) error { notified++; return nil },
 	}
@@ -188,5 +190,70 @@ func TestScheduler_FailedACReconcileRegenerationFailsTheStage(t *testing.T) {
 	if reason := snap.StageErrors[string(snap.Stage)]; !strings.Contains(reason, "ac-reconcile regeneration failed") ||
 		!strings.Contains(reason, "HTTP 502") {
 		t.Errorf("stage error = %q, want the regeneration failure", reason)
+	}
+}
+
+// A body whose author has write access is vouched for after the read and is
+// reconciled (#3231).
+func TestRegenerateACReconcile_VouchedBodyReconciles(t *testing.T) {
+	ws := gitWorkspace(t)
+	path := writeStaleReport(t, ws)
+	body := regenCriteria(13)
+	gate, f := levelsGate(map[string]trust.Level{"maintainer": trust.LevelWrite})
+	f.signals["o/r#42"] = trust.Signals{Author: "maintainer"}
+
+	s := &Scheduler{trustGate: gate, acReconcileBody: func(context.Context, types.BoardItem) (string, error) { return body, nil }}
+	if err := s.regenerateACReconcileFor(context.Background(), types.BoardItem{Number: 42, Repo: "o/r"}, ws); err != nil {
+		t.Fatal(err)
+	}
+	if rec := readReport(t, path); rec.ACFingerprint != preflight.ACFingerprint(body) {
+		t.Errorf("ac_fingerprint = %q, want the vouched body's", rec.ACFingerprint)
+	}
+}
+
+// An outsider's body is refused after the read: the stage errors with the
+// gate's reason and the earlier report is neither replaced nor used (#3231).
+func TestRegenerateACReconcile_UnvouchedBodyRefused(t *testing.T) {
+	ws := gitWorkspace(t)
+	path := writeStaleReport(t, ws)
+	before, _ := os.ReadFile(path)
+	gate, f := levelsGate(map[string]trust.Level{"stranger": trust.LevelRead})
+	f.signals["o/r#42"] = trust.Signals{Author: "stranger"}
+
+	s := &Scheduler{trustGate: gate, acReconcileBody: func(context.Context, types.BoardItem) (string, error) {
+		return regenCriteria(13), nil
+	}}
+	err := s.regenerateACReconcileFor(context.Background(), types.BoardItem{Number: 42, Repo: "o/r"}, ws)
+	if err == nil || !strings.Contains(err.Error(), "not vouched for") {
+		t.Fatalf("err = %v, want a not-vouched refusal", err)
+	}
+	if strings.HasSuffix(strings.TrimSpace(err.Error()), "read time:") {
+		t.Errorf("err = %v, want it to carry the gate's reason", err)
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != string(before) {
+		t.Error("the earlier report was rewritten from an unvouched body")
+	}
+}
+
+// A forge that cannot answer the trust question fails closed (#3231).
+func TestRegenerateACReconcile_UndecidableFailsClosed(t *testing.T) {
+	ws := gitWorkspace(t)
+	path := writeStaleReport(t, ws)
+	before, _ := os.ReadFile(path)
+	for name, gate := range map[string]*trust.Gate{
+		"forge cannot answer": trust.NewGate(&fakeTrustForge{}, nil),
+		"no gate":             nil,
+	} {
+		s := &Scheduler{trustGate: gate, acReconcileBody: func(context.Context, types.BoardItem) (string, error) {
+			return regenCriteria(13), nil
+		}}
+		if err := s.regenerateACReconcileFor(context.Background(), types.BoardItem{Number: 42, Repo: "o/r"}, ws); err == nil {
+			t.Errorf("%s: regeneration succeeded, want fail-closed", name)
+		}
+		after, _ := os.ReadFile(path)
+		if string(after) != string(before) {
+			t.Errorf("%s: report was rewritten", name)
+		}
 	}
 }

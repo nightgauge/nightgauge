@@ -60,14 +60,28 @@ func (s *Scheduler) regenerateACReconcileFor(ctx context.Context, item types.Boa
 	return nil
 }
 
-// readACReconcileBody reads the dispatched issue's body. It runs right after
-// the per-stage eligibility re-check (#2130), so the body it reads is the one
-// that check vouched for.
+// readACReconcileBody reads the dispatched issue's body and then decides,
+// after the read and on a fresh cache, whether the issue is still vouched
+// for: the same guard `forge issue view --vouched` applies (#2130). The
+// per-stage re-check ran before this read, so an outsider's edit landing in
+// between would otherwise reach the reconcile unvouched (#3231). A refused or
+// undecidable issue (no gate, forge cannot answer) fails closed with an error,
+// so no report is written from the body.
 func (s *Scheduler) readACReconcileBody(ctx context.Context, item types.BoardItem) (string, error) {
+	var body string
+	var err error
 	if s.acReconcileBody != nil {
-		return s.acReconcileBody(ctx, item)
+		body, err = s.acReconcileBody(ctx, item)
+	} else {
+		body, err = forgeACReconcileBody(s, ctx, item)
 	}
-	return forgeACReconcileBody(s, ctx, item)
+	if err != nil {
+		return "", err
+	}
+	if d := s.stageEligibility(ctx, item); !d.Eligible {
+		return "", fmt.Errorf("issue body not vouched for at read time: %s", d.Reason)
+	}
+	return body, nil
 }
 
 // forgeACReconcileBody and forgeNotifyNoACs are the production forge calls
@@ -78,6 +92,8 @@ var (
 	forgeNotifyNoACs     = (*Scheduler).postNoACsNote
 )
 
+// readIssueBodyFromForge is the raw read; readACReconcileBody vouches for its
+// result after the read.
 func (s *Scheduler) readIssueBodyFromForge(ctx context.Context, item types.BoardItem) (string, error) {
 	owner, repo := splitOwnerRepo(item.Repo)
 	if owner == "" || repo == "" {

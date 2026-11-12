@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The Go ac-reconcile regeneration before feature-planning now decides whether
+  the issue is still vouched for after it reads the body, on a fresh cache, as
+  `forge issue view --vouched` does. An outsider's edit landing after the
+  stage's eligibility re-check now fails the stage instead of being reconciled,
+  and a forge that cannot answer fails closed.
 - pr-create no longer marks a met acceptance criterion `unmet` because the diff
   lacks an issue or PR number its prose names as context ("reproducing PR
   #3225"). A prose `#N` the diff adds is cited as evidence; one it lacks leaves
