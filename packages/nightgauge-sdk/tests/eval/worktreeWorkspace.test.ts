@@ -248,6 +248,8 @@ describe("WorktreeWorkspaceProvider isolation: clone (#2118)", () => {
     return [bare, sha];
   }
 
+  // ~12 git subprocesses: 489 ms idle, 5528 ms at load ~15 under ci-local (#3224),
+  // so Vitest's 5 s default is an idle-machine budget. 30 s still bounds a real hang.
   it("gives each cell its own clone, branch and git dir, refuses pushes to main, and disposes", async () => {
     const [bare, sha] = await seed();
     const provider = new WorktreeWorkspaceProvider({
@@ -294,5 +296,5 @@ describe("WorktreeWorkspaceProvider isolation: clone (#2118)", () => {
     await b.dispose();
     await expect(stat(a.dir)).rejects.toThrow();
     await expect(stat(b.dir)).rejects.toThrow();
-  });
+  }, 30_000);
 });
