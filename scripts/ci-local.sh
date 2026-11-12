@@ -14,6 +14,9 @@
 # gates itself, and #855 made the expensive publication-boundary family
 # concurrency-safe on purpose. Serialising the gate would remove that, so it is
 # NOT what this script does. THE ANSWER IS NOT A LOCK.
+# `nightgauge ci gate-run` does guard one gate per WORKTREE (#3207): two gates
+# on one worktree's tree are duplicates, and a gate on a stale tree is void.
+# Gates in different worktrees still run concurrently on the shared budget.
 #
 # WHAT REGRESSED, because the property held from #855 (2026-08-24) until it
 # quietly stopped: #1217/#1219 (2026-08-30) took this gate from `189% cpu,
@@ -478,9 +481,16 @@ REQUIRED_FILES=(
   scripts/test-workflow-refs-check.sh
   scripts/test-marketplace-channel.sh
   scripts/test-release-channel-wiring.sh
+  scripts/release-margin-builds.sh
+  scripts/release-rc-margin-check.sh
+  scripts/test-release-margin.sh
+  scripts/check-gofmt.sh
+  scripts/test-check-gofmt.sh
   scripts/verify-registry-pat.sh
   scripts/main-build-version.sh
   scripts/test-main-build-version.sh
+  scripts/playwright-os-deps.sh
+  scripts/test-playwright-os-deps.sh
   scripts/test-vsix-host-target.sh
   packages/nightgauge/scripts/vsix-host-target.sh
   scripts/test-verify-release-channels.sh
@@ -551,6 +561,9 @@ REQUIRED_FILES=(
   scripts/test-ci-local-changed-scope.sh
   scripts/test-ci-local-bootstrap.sh
   scripts/ci-local-go-test.sh
+  scripts/go-test-shard.py
+  scripts/go-test-shards.txt
+  scripts/test-go-test-shard.sh
   scripts/test-ci-local-go-pass-stamp.sh
   scripts/test-ci-local-gate-reuse.sh
   scripts/state-backstop.sh
@@ -921,8 +934,14 @@ gate_ledger_open() {
   [ "$CHANGED_SCOPE" -eq 1 ] || full_flag="--full"
   GATE_RUN_STARTED=$SECONDS
   # shellcheck disable=SC2086 # full_flag is one flag or nothing
+  # Under `ci gate-run`, record under its run id, so its supersede line and
+  # this run's own finish name one run (#3207). Newer binaries also adopt it
+  # from the environment; passing it explicitly covers older ones.
+  local run_flag=""
+  [ -z "${NIGHTGAUGE_GATE_RUN_ID:-}" ] || run_flag="--run-id $NIGHTGAUGE_GATE_RUN_ID"
+  # shellcheck disable=SC2086 # full_flag and run_flag are one flag or nothing
   GATE_RUN_ID="$("$bin" ci gate-record --event start --kind local-gate --tree "$GATE_TREE" \
-    $full_flag 2>/dev/null || true)"
+    $full_flag $run_flag 2>/dev/null || true)"
 }
 
 # Called from the EXIT trap, so every way out of a run records its verdict. Pass
@@ -1664,10 +1683,21 @@ run_step "ci-local.sh change-scoping contract" \
 run_step "ci-local.sh dependency bootstrap decision" \
   bash scripts/test-ci-local-bootstrap.sh
 
-# 0c3. When the go test step records a passing tree (#2700). A stub `go`, so
+# 0c3. When the go test steps record a passing tree (#2700). A stub `go`, so
 #      seconds; pre-push validate trusts this record to skip the suite.
 run_step "ci-local.sh go test pass record" \
   bash scripts/test-ci-local-go-pass-stamp.sh
+
+# 0c3a. The Go test cache split (#3208): the skip accounting's cached-package
+#       count, -count=1 only under CI_LOCAL_NO_TEST_CACHE=1, and the
+#       always-uncached runner's stale-entry failure. Stub `go`, so seconds.
+run_step "go test cache and always-uncached list" \
+  bash scripts/test-go-test-cache.sh
+
+# 0c3b. The Go shard partitioner (#3209): stable crc32 buckets, `serial` pins in
+#       shard 1, exact-once failures named, the rest excluding sharded packages,
+#       and the finalize step's record rule. Stub `go`, so seconds.
+run_step "go test shard partitioner" bash scripts/test-go-test-shard.sh
 
 # 0c4. When the gate reuses a passed tree and what it records (#2784). A stub
 #      binary and one trivial step, so seconds.
@@ -1708,15 +1738,17 @@ run_step "state-backstop.sh regression suite" bash scripts/test-state-backstop.s
 # 20m is twice that observed worst. A hang still fails the step; it just takes
 # 20 minutes, not 10, to say so.
 GO_TEST_TIMEOUT=20m
-decide_go_scope
-run_step "go build ./..." go build ./...
-if [ "$GO_SCOPE_RUN" -eq 0 ]; then
-  skip_step "go test ./... -count=1 (with skip accounting)" \
-    "--changed, and $GO_SCOPE_REASON"
-else
-run_group --wait "go test ./... -count=1 (with skip accounting)" \
-  bash scripts/ci-local-go-test.sh "$GO_TEST_TIMEOUT" "$LOG_DIR/go-test-pass.tree"
-fi
+#
+# Neither pass sets -count=1 (#3208): an unchanged package replays its last
+# result from Go's test cache, whose key already covers the package's sources
+# and deps, the flags, the toolchain, go.mod/go.sum, and every env var and file
+# the test process reads through package os. What it cannot see — a script a
+# child process reads on the test's behalf, the real worktree's git state, the
+# network, the clock — is named in scripts/go-test-uncached.txt, and
+# scripts/go-test-uncached.py runs those tests again with -count=1 after each
+# pass. A toolchain or go.mod change already misses the cache, so no run needs
+# the knob for that. CI_LOCAL_NO_TEST_CACHE=1 runs both passes fully uncached.
+# The hosted workflows still run every package with -count=1.
 # Mirrors the race half of ci.yml's "Test (plain and race, concurrently)" step
 # (#493, merged with the plain pass in #1218), which replaced the
 # internal/orchestrator-scoped step from #428 — one race pass, not two. The
@@ -1745,15 +1777,89 @@ fi
 #
 # On a box running a second gate both passes are slower, which is the budget
 # above doing its job rather than a regression.
-if [ "$GO_SCOPE_RUN" -eq 0 ]; then
-  skip_step "go test -race -count=1 ./..." \
-    "--changed, and $GO_SCOPE_REASON"
-else
-run_group --wait "go test -race -count=1 ./..." \
-  go test -race -count=1 -timeout "$GO_TEST_TIMEOUT" ./...
+#
+# Sharding (#3209). Go runs one package's top-level tests one after another
+# unless they call t.Parallel(), so the slowest package set the floor of each
+# pass: internal/orchestrator took 453s plain and 445s race of a 13m26s gate.
+# The packages in scripts/go-test-shards.txt now run as N `go test -run`
+# processes each, every other package runs in one `go test` over the rest, and
+# each of those is its own `run_group --wait` step, plain and race alike. So each
+# holds ONE slot of the machine-wide budget and the Go suite never runs more
+# than CI_LOCAL_JOBS heavy steps (#1983); CI_LOCAL_SERIAL=1 still runs them all
+# inline. The labels come from the config alone, so `--list-steps` is still
+# instant, and a shard count change shows up in scripts/ci-local-steps.txt.
+#
+#   go test shard plan   serial, first: lists the sharded packages' tests and
+#                        fails before anything starts when a test is in no shard
+#                        or in two, or a `serial` pin names a missing test.
+#   ... rest, shards     grouped, the rest first, then the shards slowest first.
+#   finalize             serial, after the final run_group_wait below: merges the
+#                        plain events into go-test.json, checks every sharded test
+#                        ran exactly once per pass, runs the skip accounting, and
+#                        writes go-test-pass.tree when every step passed and the
+#                        tree is unchanged since the plan step.
+GO_TEST_STATE="$LOG_DIR/go-test"
+GO_TEST_FINALIZE_LABEL="go test shard coverage, skip accounting and pass record"
+GO_TEST_STEPS=()
+while read -r _pass _pkg _index _count; do
+  GO_TEST_STEPS+=("$_pass $_pkg $_index $_count")
+done < <(python3 scripts/go-test-shard.py steps)
+if [ "${#GO_TEST_STEPS[@]}" -eq 0 ]; then
+  echo "ERROR: scripts/go-test-shard.py steps listed no shard steps" >&2
+  exit 1
 fi
-run_step "gofmt -l ./internal ./cmd" \
-  bash -c '! gofmt -l ./internal ./cmd | grep .'
+go_shard_label() { # <plain|race> <import path> <i> <N>
+  local race=""
+  [ "$1" = race ] && race=" -race"
+  printf 'go test%s %s shard %s/%s' "$race" "${2#github.com/nightgauge/nightgauge/}" "$3" "$4"
+}
+
+# skip_go_test_steps <reason> — every step after the plan, by name (#983).
+skip_go_test_steps() {
+  skip_step "go test ./... except sharded packages" "$1"
+  skip_step "go test -race ./... except sharded packages" "$1"
+  local step
+  for step in "${GO_TEST_STEPS[@]}"; do
+    # shellcheck disable=SC2086 # four words by construction
+    skip_step "$(go_shard_label $step)" "$1"
+  done
+}
+
+decide_go_scope
+run_step "go build ./..." go build ./...
+if [ "$GO_SCOPE_RUN" -eq 0 ]; then
+  skip_step "go test shard plan" "--changed, and $GO_SCOPE_REASON"
+  skip_go_test_steps "--changed, and $GO_SCOPE_REASON"
+else
+  run_step "go test shard plan" \
+    bash scripts/ci-local-go-test.sh --prepare "$GO_TEST_STATE" "$LOG_DIR/go-test-pass.tree"
+fi
+if [ "$GO_SCOPE_RUN" -eq 1 ] && [ "$LIST_STEPS" -eq 0 ] && [ ! -s "$GO_TEST_STATE/plan.json" ]; then
+  # Every shard would only fail for want of a plan; the plan step names the defect.
+  skip_go_test_steps "the go test shard plan step failed"
+elif [ "$GO_SCOPE_RUN" -eq 1 ]; then
+  run_group --wait "go test ./... except sharded packages" \
+    bash scripts/ci-local-go-test.sh --rest "$GO_TEST_TIMEOUT" "$GO_TEST_STATE"
+  run_group --wait "go test -race ./... except sharded packages" \
+    bash scripts/ci-local-go-test.sh --rest --race "$GO_TEST_TIMEOUT" "$GO_TEST_STATE"
+  for _step in "${GO_TEST_STEPS[@]}"; do
+    read -r _pass _pkg _index _count <<<"$_step"
+    _race=()
+    [ "$_pass" = race ] && _race=(--race)
+    run_group --wait "$(go_shard_label "$_pass" "$_pkg" "$_index" "$_count")" \
+      bash scripts/ci-local-go-test.sh --shard ${_race[@]+"${_race[@]}"} "$GO_TEST_TIMEOUT" \
+      "$GO_TEST_STATE" "$_pkg" "$_index"
+  done
+fi
+# The gofmt of the toolchain go.mod selects, not the one first on PATH (#3192).
+# Formatting changes between Go releases: when go.mod moved to go1.27.4, CI's
+# gofmt (setup-go reads go.mod) rejected two files that go1.26.11's gofmt on the
+# operator's PATH accepted, and the gap first showed in the merge group, where
+# the heavy jobs run. `go env GOROOT` names the toolchain GOTOOLCHAIN=auto
+# switched to, which fixes an older Go on PATH but not a newer one (auto never
+# downgrades), so scripts/check-gofmt.sh fails first when `go env GOVERSION` is
+# not go.mod's toolchain.
+run_step "gofmt -l ./internal ./cmd" bash scripts/check-gofmt.sh
 
 # 1b. branch-merged-check.sh regression suite — the shell-side decision
 #     procedure `git branch -D` reclaim decisions defer to (docs/GIT_WORKFLOW.md
@@ -2057,7 +2163,12 @@ run_step "visibility-prose reintroduction gate" python3 scripts/check-visibility
 run_group "Workflow-reference gate regression suite" bash scripts/test-workflow-refs-check.sh
 run_group "Marketplace channel regression suite" bash scripts/test-marketplace-channel.sh
 run_group "Release channel wiring suite" bash scripts/test-release-channel-wiring.sh
+# The margin scan (#3192): RC margin builds and the release gate that requires a
+# margin-clean RC on the tag's commit, against stub make/sign/gh.
+run_group "Release margin scan suite" bash scripts/test-release-margin.sh
+run_group "gofmt toolchain check suite" bash scripts/test-check-gofmt.sh
 run_group "Main build version regression suite" bash scripts/test-main-build-version.sh
+run_group "Playwright OS deps regression suite" bash scripts/test-playwright-os-deps.sh
 run_group "VSIX host-target regression suite" bash scripts/test-vsix-host-target.sh
 run_group "Release channel verification regression suite" bash scripts/test-verify-release-channels.sh
 run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-refs.py
@@ -2311,6 +2422,16 @@ run_step "Mirror include expansion regression suite" \
 # the group is read-only by construction, so no serial step downstream depends
 # on one having finished.
 run_group_wait
+
+# The Go suite's aggregate step (#3209): it reads every Go step's output, so it
+# runs only now that all of them have finished. See the sharding note at the Go
+# test steps above.
+if [ "$GO_SCOPE_RUN" -eq 0 ]; then
+  skip_step "$GO_TEST_FINALIZE_LABEL" "--changed, and $GO_SCOPE_REASON"
+else
+  run_step "$GO_TEST_FINALIZE_LABEL" \
+    bash scripts/ci-local-go-test.sh --finalize "$GO_TEST_STATE" "$LOG_DIR/go-test-pass.tree"
+fi
 
 # ci.yml's OpenCode integration step, through the same script (#2300: the tag
 # was never compiled here, so a moved run root reached CI red). It runs after

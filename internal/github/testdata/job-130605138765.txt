@@ -1,0 +1,78 @@
+﻿2026-11-11T15:04:14.4572213Z Current runner version: '2.338.2'
+2026-11-11T15:04:14.4587349Z ##[group]Runner Image Provisioner
+2026-11-11T15:04:14.4587848Z Hosted Compute Agent
+2026-11-11T15:04:15.4045833Z ##[group]Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+2026-11-11T15:04:15.4046316Z with:
+2026-11-11T15:04:15.4046542Z   fetch-depth: 0
+2026-11-11T15:04:15.4046789Z   repository: nightgauge/nightgauge
+2026-11-11T15:04:19.2638266Z ##[group]Run export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+2026-11-11T15:04:19.2638659Z [36;1mexport GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"[0m
+2026-11-11T15:04:19.2638960Z [36;1mgit config --global user.email "ci@nightgauge.dev"[0m
+2026-11-11T15:04:19.2639251Z [36;1mgit config --global user.name "Nightgauge CI"[0m
+2026-11-11T15:04:19.2857448Z ##[group]Run actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+2026-11-11T15:04:19.2857728Z with:
+2026-11-11T15:04:19.2857904Z   go-version-file: go.mod
+2026-11-11T15:04:19.2858090Z   cache: true
+2026-11-11T15:04:33.1415707Z ##[group]Run bash scripts/test-ci-change-class.sh
+2026-11-11T15:04:33.1415943Z [36;1mbash scripts/test-ci-change-class.sh[0m
+2026-11-11T15:04:33.1459899Z shell: /usr/bin/bash -e {0}
+2026-11-11T15:04:33.1460045Z env:
+2026-11-11T15:04:45.8999495Z ##[group]Run go test ./internal/preflight/ -count=1
+2026-11-11T15:04:45.8999837Z [36;1mgo test ./internal/preflight/ -count=1[0m
+2026-11-11T15:04:45.9043657Z shell: /usr/bin/bash -e {0}
+2026-11-11T15:04:45.9043796Z env:
+2026-11-11T15:04:48.5254222Z ##[group]Run make check-platform-operations
+2026-11-11T15:04:48.5254446Z [36;1mmake check-platform-operations[0m
+2026-11-11T15:04:48.5295858Z shell: /usr/bin/bash -e {0}
+2026-11-11T15:04:48.5295997Z env:
+2026-11-11T15:04:48.7145981Z ##[group]Run go build ./...
+2026-11-11T15:04:48.7146158Z [36;1mgo build ./...[0m
+2026-11-11T15:04:48.7186690Z shell: /usr/bin/bash -e {0}
+2026-11-11T15:04:48.7186843Z env:
+2026-11-11T15:04:50.5161439Z ##[group]Run go vet ./...
+2026-11-11T15:04:50.5161613Z [36;1mgo vet ./...[0m
+2026-11-11T15:04:50.5201528Z shell: /usr/bin/bash -e {0}
+2026-11-11T15:04:50.5201674Z env:
+2026-11-11T15:05:01.8201641Z ##[group]Run UNFORMATTED="$(gofmt -l ./internal ./cmd)"
+2026-11-11T15:05:01.8201898Z [36;1mUNFORMATTED="$(gofmt -l ./internal ./cmd)"[0m
+2026-11-11T15:05:01.8202090Z [36;1mif [ -n "$UNFORMATTED" ]; then[0m
+2026-11-11T15:05:01.8202276Z [36;1m  echo "The following files are not gofmt-clean:"[0m
+2026-11-11T15:05:02.4917040Z ##[group]Run timeout 25m go test -json ./... -count=1 > go-test.json 2> go-test.err &
+2026-11-11T15:05:02.4917398Z [36;1mtimeout 25m go test -json ./... -count=1 > go-test.json 2> go-test.err &[0m
+2026-11-11T15:05:02.4917611Z [36;1mplain=$![0m
+2026-11-11T15:05:02.4917794Z [36;1mtimeout 25m go test -race -count=1 ./... > go-test-race.log 2>&1 &[0m
+2026-11-11T15:10:36.8254448Z   SKIP github.com/nightgauge/nightgauge/internal/ipc.TestGitHub_IssueView_Shape
+2026-11-11T15:10:36.8254633Z   SKIP github.com/nightgauge/nightgauge/internal/ipc.TestIPCPlatform_DockerCompose_SkipIfNotSet
+2026-11-11T15:10:36.8254912Z   SKIP github.com/nightgauge/nightgauge/internal/ipc.TestRoundTrip_NonSequentialIDs_EchoedCorrectly
+2026-11-11T15:10:36.8255124Z   SKIP github.com/nightgauge/nightgauge/internal/workspacemanifest.TestRealRepositoryManifestRoundTrip
+2026-11-11T15:10:36.8255388Z   ran (allowlisted as a possible skip) github.com/nightgauge/nightgauge/internal/e2e.TestRunCmd_Timeout_SurvivorHoldsPipe_ReturnsPromptly
+2026-11-11T15:10:36.8255653Z   ran (allowlisted as a possible skip) github.com/nightgauge/nightgauge/internal/gittest.TestBackgroundGitProcessCanOutliveItsParent
+2026-11-11T15:10:36.8270079Z ##[error]skip accounting failed (exit 1)
+2026-11-11T15:10:36.8275733Z ##[error]Process completed with exit code 1.
+2026-11-11T15:10:36.8307813Z ##[group]Run bash scripts/opencode-integration.sh "$RUNNER_TEMP/opencode-cli"
+2026-11-11T15:10:36.8308035Z [36;1mbash scripts/opencode-integration.sh "$RUNNER_TEMP/opencode-cli"[0m
+2026-11-11T15:10:36.8347270Z shell: /usr/bin/bash -e {0}
+2026-11-11T15:10:36.8347316Z env:
+2026-11-11T15:12:33.2287284Z ##[group]Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+2026-11-11T15:12:33.2287504Z with:
+2026-11-11T15:12:33.2287639Z   name: go-test-logs
+2026-11-11T15:12:33.2287791Z   path: go-test.json
+2026-11-11T15:12:34.6744056Z ##[group]Run bash scripts/test-branch-merged-check.sh
+2026-11-11T15:12:34.6744307Z [36;1mbash scripts/test-branch-merged-check.sh[0m
+2026-11-11T15:12:34.6783884Z shell: /usr/bin/bash -e {0}
+2026-11-11T15:12:34.6784030Z env:
+2026-11-11T15:13:10.8011465Z ##[group]Run {
+2026-11-11T15:13:10.8011645Z [36;1m{[0m
+2026-11-11T15:13:10.8011778Z [36;1m  if [ "$RUN_HEAVY" = "false" ]; then[0m
+2026-11-11T15:13:10.9156268Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-11T15:13:10.9379907Z Removing includeIf entries pointing to credentials config files
+2026-11-11T15:13:10.9384799Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-11T15:13:10.9406143Z includeif.gitdir:/home/runner/work/nightgauge/nightgauge/.git.path
+2026-11-11T15:13:10.9406461Z includeif.gitdir:/home/runner/work/nightgauge/nightgauge/.git/worktrees/*.path
+2026-11-11T15:13:10.9406822Z includeif.gitdir:/github/workspace/.git.path
+2026-11-11T15:13:10.9407254Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-11-11T15:13:10.9412942Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/nightgauge/nightgauge/.git.path
+2026-11-11T15:13:10.9439222Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/nightgauge/nightgauge/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-306076ff\-8e68\-439b\-8144\-1e1fbcfd43d9\.config
+2026-11-11T15:13:10.9467103Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/nightgauge/nightgauge/.git/worktrees/*.path
+2026-11-11T15:13:10.9617571Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-11T15:13:10.9953688Z Cleaning up orphan processes

@@ -3,6 +3,7 @@ package doctor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -80,14 +81,50 @@ const psTimeout = 30 * time.Second
 // pipe open blocks Output past the deadline.
 const psWaitDelay = time.Second
 
+// processScanBounds carries the bounds of every machine-wide exec the
+// orphaned-process check runs. Production uses defaultScanBounds; a wiring
+// test that must survive a loaded host injects a generous one (#3097) while
+// TestEnumerateProcesses_AWedgedPsTimesOutToUnverifiable proves the real bound.
+type processScanBounds struct {
+	Table time.Duration // full-table `ps` reads and `git worktree list`
+	Cwd   time.Duration // the cwd lookup (`lsof` on darwin)
+}
+
+var defaultScanBounds = processScanBounds{Table: psTimeout, Cwd: cwdTimeout}
+
+// scanTimeoutError names a bounded exec that was killed at its deadline, so a
+// timed-out scan is never reported in the words of a failed or drifted one
+// (#3097). It wraps the underlying exec error.
+type scanTimeoutError struct {
+	Command string
+	Bound   time.Duration
+	Err     error
+}
+
+func (e *scanTimeoutError) Error() string {
+	return fmt.Sprintf("`%s` did not finish within %s and was killed at the deadline (a heavily loaded host, or a wedged command)", e.Command, e.Bound)
+}
+
+func (e *scanTimeoutError) Unwrap() error { return e.Err }
+
 // boundedOutput runs name with args, killed at timeout, and returns its
 // stdout. WaitDelay keeps a child that inherited stdout from outliving it.
+// When the deadline fired the error is a *scanTimeoutError; any other failure
+// (non-zero exit, missing binary) is returned unchanged.
 func boundedOutput(timeout time.Duration, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.WaitDelay = psWaitDelay
-	return cmd.Output()
+	out, err := cmd.Output()
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		cmdline := strings.Join(append([]string{name}, args...), " ")
+		if len(cmdline) > 80 {
+			cmdline = cmdline[:77] + "..."
+		}
+		err = &scanTimeoutError{Command: cmdline, Bound: timeout, Err: err}
+	}
+	return out, err
 }
 
 // runningProcess is one row of the process table.
@@ -568,18 +605,24 @@ func classifyProcessesScoped(procs []runningProcess, claimed map[int]bool, self 
 // not start, but whether a sidecar's claim still counts is a question about
 // wall-clock progress (see staleSidecarClaim).
 func orphanedProcessFindings(startDir string, now time.Time) ([]Finding, string) {
-	raw, err := enumerateProcesses()
+	return orphanedProcessFindingsWithin(startDir, now, defaultScanBounds)
+}
+
+// orphanedProcessFindingsWithin is orphanedProcessFindings with explicit exec
+// bounds, threaded down to every bounded command the scan runs.
+func orphanedProcessFindingsWithin(startDir string, now time.Time, bounds processScanBounds) ([]Finding, string) {
+	raw, err := enumerateProcessesWithin(bounds.Table)
 	if err != nil {
 		return unverifiableProcessScan(err)
 	}
-	return processTableReport(startDir, raw, sidecarPIDs(startDir, now), staleServeClaims(now))
+	return processTableReport(startDir, raw, sidecarPIDs(startDir, now), staleServeClaims(now), bounds)
 }
 
 // processTableReport parses a raw `ps` table and reports on it, or explains why
 // it could not. Split from orphanedProcessFindings so every route out of a real
 // table — parsed, unparsable, implausible — is reachable from a test without
 // spawning a process.
-func processTableReport(startDir, raw string, claimed map[int]bool, staleServe map[int]string) ([]Finding, string) {
+func processTableReport(startDir, raw string, claimed map[int]bool, staleServe map[int]string, bounds processScanBounds) ([]Finding, string) {
 	procs, determined := parseProcessTable(raw)
 	if !determined {
 		return unverifiableProcessScan(fmt.Errorf("`ps` output could not be parsed"))
@@ -594,15 +637,15 @@ func processTableReport(startDir, raw string, claimed map[int]bool, staleServe m
 			"the parsed table has %d row(s) and does not include this process (pid %d), so it did not enumerate this machine",
 			len(procs), os.Getpid()))
 	}
-	fc, cwdScanOK := buildForeignCwdScan(startDir, procs)
-	if !cwdScanOK {
+	fc, cwdErr := buildForeignCwdScan(startDir, procs, bounds)
+	if cwdErr != nil {
 		// The mechanism itself did not work — `git worktree list` failed, or
 		// the cwd source (lsof/proc) could not be read. That is a scan that
 		// never ran, not a scan that found nothing (#296).
 		return unverifiableProcessScan(fmt.Errorf(
-			"the process table parsed, but the cwd-inside-worktree half could not run: `git worktree list` failed, or the process cwd source (lsof/proc) was unavailable"))
+			"the process table parsed, but the cwd-inside-worktree half could not run: %w", cwdErr))
 	}
-	return orphanedProcessReportScoped(procs, claimed, staleServe, fc, buildProcessScope(startDir, procs))
+	return orphanedProcessReportScoped(procs, claimed, staleServe, fc, buildProcessScope(startDir, procs, bounds))
 }
 
 // listsPID reports whether pid appears in the parsed table.
@@ -618,9 +661,17 @@ func listsPID(procs []runningProcess, pid int) bool {
 // unverifiableProcessScan renders the house unverifiable outcome: never a
 // pass, never silent, and explicit that a clean report would be a claim about
 // a scan that did not happen (#296, #323).
+//
+// A timed-out scan is named as a timeout, never in the failed-or-drifted
+// wording, so a loaded host cannot be mistaken for parser drift (#3097).
 func unverifiableProcessScan(cause error) ([]Finding, string) {
+	explanation := fmt.Sprintf("could not enumerate running processes (%v) — no `ps` on this platform, or it failed, or its output was not the expected `pid etime command` shape", cause)
+	var timeout *scanTimeoutError
+	if errors.As(cause, &timeout) {
+		explanation = fmt.Sprintf("the process scan timed out (%v) — re-run when the host is less loaded", cause)
+	}
 	return []Finding{unverifiableFinding("orphaned_processes", "NGD021", SeverityHousekeeping, "orphaned processes",
-			fmt.Sprintf("could not enumerate running processes (%v) — no `ps` on this platform, or it failed, or its output was not the expected `pid etime command` shape. A clean report here would be an assertion about a scan that never ran", cause))},
+			explanation+". A clean report here would be an assertion about a scan that never ran")},
 		"could not scan for orphaned nightgauge processes"
 }
 
@@ -797,29 +848,29 @@ func worktreeBasesFor(root string) []string {
 // resolveWorktreeBase is config.ResolveWorktreeBase, swappable in tests.
 var resolveWorktreeBase = config.ResolveWorktreeBase
 
-// buildForeignCwdScan gathers the cwd-half inputs for this run. The second
-// return value is false only when the MECHANISM did not work — `git worktree
+// buildForeignCwdScan gathers the cwd-half inputs for this run. The error is
+// non-nil (and names the cause) only when the MECHANISM did not work — `git worktree
 // list` failed in some repo root, or the cwd source itself could not be read
 // (unsupported platform, `lsof`/`/proc` unreachable) — which the caller must
 // route through unverifiableProcessScan rather than silently reporting clean
 // (#296). A workspace with no repo root at all has genuinely nothing to scan;
-// that is the one case that legitimately returns (nil, true).
+// that is the one case that legitimately returns (nil, nil).
 //
 // Active worktrees are resolved ONE REPO ROOT AT A TIME and kept in that
 // shape (foreignCwdScan.ActiveByRepo) rather than merged into one
 // workspace-wide issue-number set: two repos can each have their own
 // issue-488, live or removed independently, and merging would let one repo's
 // live worktree paper over another repo's removed one.
-func buildForeignCwdScan(startDir string, procs []runningProcess) (*foreignCwdScan, bool) {
+func buildForeignCwdScan(startDir string, procs []runningProcess, bounds processScanBounds) (*foreignCwdScan, error) {
 	repoRoots := config.WorkspaceRepoRoots(startDir)
 	if len(repoRoots) == 0 {
-		return nil, true
+		return nil, nil
 	}
 	activeByRepo := make(map[string]map[int]bool, len(repoRoots))
 	for _, root := range repoRoots {
 		active, determined := execution.ActiveWorktreeIssues([]string{root})
 		if !determined {
-			return nil, false
+			return nil, fmt.Errorf("`git worktree list` failed in %s", root)
 		}
 		activeByRepo[root] = active
 	}
@@ -827,11 +878,11 @@ func buildForeignCwdScan(startDir string, procs []runningProcess) (*foreignCwdSc
 	for _, p := range procs {
 		pids = append(pids, p.PID)
 	}
-	cwds, determined := lookupCwds(pids)
-	if !determined {
-		return nil, false
+	cwds, err := lookupCwds(pids, bounds.Cwd)
+	if err != nil {
+		return nil, fmt.Errorf("the process cwd source could not be read: %w", err)
 	}
-	return &foreignCwdScan{Cwds: cwds, RepoRoots: repoRoots, ActiveByRepo: activeByRepo}, true
+	return &foreignCwdScan{Cwds: cwds, RepoRoots: repoRoots, ActiveByRepo: activeByRepo}, nil
 }
 
 // classifyForeignCwdHolders finds every process (self excluded) whose cwd
@@ -938,24 +989,24 @@ func worktreeDirContaining(cwd string, repoRoots []string) (repoRoot, base strin
 // lookupCwds resolves the cwd of every pid in ONE bounded call per platform —
 // never one invocation per process, which would make a machine-wide scan
 // spawn a subprocess per row — and reports whether the answer is DETERMINED.
-// determined=false means the mechanism itself did not work (unsupported
+// A non-nil error (naming the cause) means the mechanism itself did not work (unsupported
 // platform, the command timed out or produced nothing at all); a specific pid
 // simply missing from the returned map (permission denied on someone else's
 // process, or it exited mid-scan) is routine and does NOT undetermine the
 // whole lookup — the same "one gap does not undetermine an unrelated
 // narrowing filter" doctrine sidecarPIDs already applies to an unreadable
 // sidecar.
-func lookupCwds(pids []int) (map[int]string, bool) {
+func lookupCwds(pids []int, timeout time.Duration) (map[int]string, error) {
 	if len(pids) == 0 {
-		return map[int]string{}, true
+		return map[int]string{}, nil
 	}
 	switch runtime.GOOS {
 	case "darwin":
-		return lookupCwdsDarwin(pids)
+		return lookupCwdsDarwin(pids, timeout)
 	case "linux":
-		return lookupCwdsLinux(pids), true
+		return lookupCwdsLinux(pids), nil
 	default:
-		return nil, false
+		return nil, fmt.Errorf("no process cwd source on %s", runtime.GOOS)
 	}
 }
 
@@ -985,22 +1036,20 @@ func lookupCwdsLinux(pids []int) map[int]string {
 // a machine-wide scan and not a failure of the mechanism itself; only the
 // absence of ANY usable output (the binary is missing, every pid was
 // inaccessible, the timeout fired) means the mechanism did not work.
-func lookupCwdsDarwin(pids []int) (map[int]string, bool) {
+func lookupCwdsDarwin(pids []int, timeout time.Duration) (map[int]string, error) {
 	strs := make([]string, len(pids))
 	for i, p := range pids {
 		strs[i] = strconv.Itoa(p)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), cwdTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "lsof", "-a", "-d", "cwd", "-Fpn", "-p", strings.Join(strs, ",")).Output()
+	out, err := boundedOutput(timeout, "lsof", "-a", "-d", "cwd", "-Fpn", "-p", strings.Join(strs, ","))
 	if len(out) == 0 {
 		if err != nil {
-			return nil, false
+			return nil, err
 		}
-		return map[int]string{}, true
+		return map[int]string{}, nil
 	}
 	cwds, _ := parseLsofCwd(string(out))
-	return cwds, true
+	return cwds, nil
 }
 
 // parseLsofCwd parses `lsof -Fpn` output into pid → cwd. The format is
@@ -1118,12 +1167,12 @@ func classifyProcessScope(procs []runningProcess, roots []string, cwds map[int]s
 // workspaceDirs returns this workspace's directories: the repo toplevel (or
 // startDir outside git) and every worktree git has registered for it, since
 // pipeline worktrees may live outside the checkout.
-func workspaceDirs(startDir string) []string {
+func workspaceDirs(startDir string, timeout time.Duration) []string {
 	abs, err := filepath.Abs(startDir)
 	if err != nil {
 		return nil
 	}
-	out, err := boundedOutput(psTimeout, "git", "-C", abs, "worktree", "list", "--porcelain")
+	out, err := boundedOutput(timeout, "git", "-C", abs, "worktree", "list", "--porcelain")
 	if err != nil {
 		return []string{abs}
 	}
@@ -1144,11 +1193,11 @@ func workspaceDirs(startDir string) []string {
 
 // processParents returns pid -> ppid for the whole table, or nil when ps
 // could not answer (liveness then gives no exemption).
-func processParents() map[int]int {
+func processParents(timeout time.Duration) map[int]int {
 	if runtime.GOOS == "windows" {
 		return nil
 	}
-	out, err := boundedOutput(psTimeout, "ps", "-axo", "pid=,ppid=")
+	out, err := boundedOutput(timeout, "ps", "-axo", "pid=,ppid=")
 	if err != nil {
 		return nil
 	}
@@ -1171,13 +1220,13 @@ func processParents() map[int]int {
 // source that cannot answer leaves every process without a cwd, which keeps it
 // IN scope: the scan then reports exactly what it did before #2200 rather than
 // hiding anything.
-func buildProcessScope(startDir string, procs []runningProcess) processScope {
+func buildProcessScope(startDir string, procs []runningProcess, bounds processScanBounds) processScope {
 	var pids []int
 	for _, p := range procs {
 		if p.isNightgauge() && p.PID != os.Getpid() {
 			pids = append(pids, p.PID)
 		}
 	}
-	cwds, _ := lookupCwds(pids)
-	return classifyProcessScope(procs, workspaceDirs(startDir), cwds, processParents())
+	cwds, _ := lookupCwds(pids, bounds.Cwd)
+	return classifyProcessScope(procs, workspaceDirs(startDir, bounds.Table), cwds, processParents(bounds.Table))
 }

@@ -239,19 +239,20 @@ else
 fi
 rm -f "$STATE/upload-url"
 
-# 18. Poll backoff: waits double from VT_MIN_INTERVAL and stop at the cap.
-# Its own file: the stub counts polls per analysis for the whole suite.
+# 18. Poll backoff: waits double from VT_MIN_INTERVAL and stop at the cap. A
+# file poll that shows no newer date switches to polling the analysis object
+# alone (#3202); the stub's analysis completes on the 4th poll of either kind,
+# an analysis poll, so one more file poll reads the report.
 SLOW="$(art slow.js 'console.log("slow")')"
 printf '3\n' >"$STATE/pending-polls"
 scan VT_MIN_INTERVAL=1 VT_POLL_MAX_INTERVAL=4 VT_ANALYSIS_TIMEOUT=60 -- "$SLOW"
 rm -f "$STATE/pending-polls"
 expect "pending analysis polled to completion" 0 "every file clean"
-waits="$(sed -n 's/^  polling analysis of .* after \([0-9]*\)s$/\1/p' <<<"$OUT" | tr '\n' ' ')"
-SLOW_SHA="$(shasum -a 256 "$SLOW" | cut -d' ' -f1)"
-[ "$waits" = "1 2 4 4 " ] && [ "$(grep -c "^GET /api/v3/files/$SLOW_SHA " "$STATE/requests.log")" -eq 5 ] &&
-  ! grep -q '^GET /api/v3/analyses/' "$STATE/requests.log" &&
-  ok "poll waits double and cap: 1 2 4 4, on the file report (1 lookup + 4 polls)" ||
-  bad "poll waits: want '1 2 4 4 ' and 5 file GETs, got '$waits' and $(grep -c "^GET /api/v3/files/$SLOW_SHA " "$STATE/requests.log")"
+waits="$(sed -n 's/^  polling analysis \(object \)\{0,1\}of .* after \([0-9]*\)s$/\2/p' <<<"$OUT" | tr '\n' ' ')"
+kinds="$(sed -nE 's#^GET /api/v3/(files|analyses)/.*#\1#p' "$STATE/requests.log" | tr '\n' ' ')"
+[ "$waits" = "1 2 4 4 4 " ] && [ "$kinds" = "files files analyses analyses analyses files " ] &&
+  ok "poll waits double and cap: 1 2 4 4 4; then the analysis object alone, then the file" ||
+  bad "poll waits: want '1 2 4 4 4 ' and lookup + file, analysis x3, file, got '$waits' and '$kinds'"
 
 # 19. Every report counts the requests the run sent: lookup, POST, one poll.
 scan -- "$CLEAN"
@@ -261,6 +262,13 @@ jq -e '.files[0].source == "uploaded" and .sources == {uploaded: 1} and .files[0
   and (.files[0].analysed_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T"))' "$REPORT" >/dev/null &&
   ok "an unknown file is uploaded; the report records source, engines and analysis time" ||
   bad "uploaded report: $(jq -c '{sources, f: .files[0] | {source, engines_total, analysed_at}}' "$REPORT" 2>/dev/null)"
+# 19-classes. Every run prints its requests by class, and the report's
+# requests_by_class sums to requests (#3202).
+expect "the run ends with its requests by class" 0 "vt-scan: 3 requests (lookups 1, uploads 1, reanalyses 0, polls 1)"
+jq -e '.requests_by_class == {lookup: 1, upload: 1, reanalysis: 0, poll: 1}
+  and ([.requests_by_class[]] | add) == .requests' "$REPORT" >/dev/null &&
+  ok "report requests_by_class: lookup 1, upload 1, poll 1, summing to requests" ||
+  bad "requests_by_class: $(jq -c '{requests, requests_by_class}' "$REPORT" 2>/dev/null)"
 
 # 19a-19h. Reuse (session 86): a file VirusTotal analysed within
 # VT_REUSE_MAX_AGE is judged from that analysis in 1 request; an older one is
@@ -284,16 +292,70 @@ grep -q "^POST /api/v3/files/$CLEAN_SHA/analyse " "$STATE/requests.log" && [ ! -
   [ "$(jq -r '.requests' "$REPORT")" = "3" ] &&
   ok "VT_REUSE_MAX_AGE=0: reanalysed, not re-uploaded, 3 requests" ||
   bad "reuse off: requests $(tr '\n' ' ' <"$STATE/requests.log")"
-scan -- "$CLEAN"
-echo "$CLEAN_SHA $(($(date +%s) - 172800)) $CLEAN" >"$STATE/seed"
-EPOCH=$((EPOCH + 1)); echo "$EPOCH" >"$STATE/epoch"
-KEEP_VT=1 scan -- "$CLEAN"
-rm -f "$STATE/seed"
-expect "an analysis older than VT_REUSE_MAX_AGE is re-analysed -> exit 0" 0 "reanalysing $CLEAN ($CLEAN_SHA): last analysed"
-grep -qx "$CLEAN_SHA" "$STATE/analyses.log" && [ ! -s "$STATE/uploads.log" ] &&
-  jq -e '.files[0].source == "reanalysed"' "$REPORT" >/dev/null &&
-  ok "stale: POST /files/{sha256}/analyse, no upload, source reanalysed" ||
-  bad "stale: requests $(tr '\n' ' ' <"$STATE/requests.log")"
+# seed_scan AGE FILE [env...] — FILE is known to VirusTotal, last analysed AGE
+# seconds ago, and is scanned against that.
+seed_scan() {
+  local age="$1" f="$2"
+  shift 2
+  echo "$(shasum -a 256 "$f" | cut -d' ' -f1) $(($(date +%s) - age)) $f" >"$STATE/seed"
+  EPOCH=$((EPOCH + 1)); echo "$EPOCH" >"$STATE/epoch"
+  KEEP_VT=1 scan "$@" -- "$f"
+  rm -f "$STATE/seed"
+}
+ELF="$(art tool 'payload stub binary')"
+printf '\177ELF' | cat - "$ELF" >"$ELF.tmp" && mv "$ELF.tmp" "$ELF"
+ELF_SHA="$(shasum -a 256 "$ELF" | cut -d' ' -f1)"
+seed_scan 172800 "$ELF"
+expect "a binary analysed more than VT_REUSE_MAX_AGE ago is re-analysed -> exit 0" 0 "reanalysing $ELF ($ELF_SHA): last analysed"
+grep -qx "$ELF_SHA" "$STATE/analyses.log" && [ ! -s "$STATE/uploads.log" ] &&
+  jq -e '.files[0].source == "reanalysed" and .files[0].reuse_window == {kind: "binary", applied: null, max_age: 86400}' "$REPORT" >/dev/null &&
+  ok "stale binary: POST /files/{sha256}/analyse, no upload, source reanalysed, kind binary" ||
+  bad "stale binary: requests $(tr '\n' ' ' <"$STATE/requests.log"), entry $(jq -c '.files[0].reuse_window' "$REPORT" 2>/dev/null)"
+# 19-windows. The long window (#3202): a clean text file VirusTotal analysed
+# within VT_REUSE_MAX_AGE_TEXT (14 days) is judged in 1 request; a binary, a
+# report with a finding, or an older report is re-analysed.
+TEXT_OLD="$(art old-hook.sh 'echo "unchanged hook"')"
+seed_scan 259200 "$TEXT_OLD"
+expect "a clean text file analysed 3 days ago is reused -> exit 0" 0 "reused report, analysed"
+[ "$(jq -r '.requests' "$REPORT")" = "1" ] && ! grep -q '^POST' "$STATE/requests.log" &&
+  jq -e '.files[0].source == "reused" and .files[0].reuse_window == {kind: "text", applied: "long", max_age: 1209600}
+    and .reuse_max_age_text == 1209600 and (.files[0].analysed_at | test("^[0-9]{4}-"))' "$REPORT" >/dev/null &&
+  ok "long window: 1 request, nothing posted, reuse_window text/long and the analysis date recorded" ||
+  bad "long window: requests $(tr '\n' ' ' <"$STATE/requests.log"), entry $(jq -c '.files[0] | {source, reuse_window, analysed_at}' "$REPORT" 2>/dev/null)"
+seed_scan 259200 "$ELF"
+expect "a binary analysed 3 days ago is re-analysed -> exit 0" 0 "reanalysed report"
+grep -qx "$ELF_SHA" "$STATE/analyses.log" && ok "long window: never for a binary" ||
+  bad "long window applied to a binary: $(tr '\n' ' ' <"$STATE/requests.log")"
+TEXT_MAL="$(art old-mal.js 'payload VT-STUB-MALICIOUS old text')"
+TEXT_MAL_SHA="$(shasum -a 256 "$TEXT_MAL" | cut -d' ' -f1)"
+seed_scan 259200 "$TEXT_MAL"
+expect "a text file whose 3-day-old report has a finding -> re-analysed, exit 1" 1 "carries a finding, so it is re-analysed"
+grep -qx "$TEXT_MAL_SHA" "$STATE/analyses.log" && jq -e '.files[0].source == "reanalysed"' "$REPORT" >/dev/null &&
+  ok "long window: a finding is never reused, it is re-analysed" ||
+  bad "finding reused under the long window: $(tr '\n' ' ' <"$STATE/requests.log")"
+seed_scan 1296000 "$TEXT_OLD"
+expect "a text file analysed 15 days ago is re-analysed -> exit 0" 0 "reanalysed report"
+seed_scan 259200 "$TEXT_OLD" VT_REUSE_MAX_AGE_TEXT=86400
+expect "VT_REUSE_MAX_AGE_TEXT=86400 re-analyses a 3-day-old text file" 0 "reanalysed report"
+seed_scan 259200 "$TEXT_OLD" VT_REUSE_MAX_AGE=0
+expect "VT_REUSE_MAX_AGE=0 turns the long window off too" 0 "reanalysed report"
+seed_scan 3600 "$TEXT_OLD"
+jq -e '.files[0].reuse_window == {kind: "text", applied: "short", max_age: 86400}' "$REPORT" >/dev/null &&
+  ok "a report inside 24 hours records the short window" ||
+  bad "short window entry: $(jq -c '.files[0].reuse_window' "$REPORT" 2>/dev/null)"
+# The kind comes from the bytes: a NUL byte, or an archive name, makes a binary.
+NUL_FILE="$WORK/art/data.txt"
+printf 'looks like text\000but is not\n' >"$NUL_FILE"
+seed_scan 259200 "$NUL_FILE"
+jq -e '.files[0].reuse_window.kind == "binary" and .files[0].source == "reanalysed"' "$REPORT" >/dev/null &&
+  ok "a NUL byte makes a .txt file binary: short window" ||
+  bad "NUL file kind: $(jq -c '.files[0] | {source, reuse_window}' "$REPORT" 2>/dev/null)"
+NAMED_VSIX="$(art plain.vsix 'plain text named as a vsix')"
+seed_scan 259200 "$NAMED_VSIX"
+jq -e '.files[0].reuse_window.kind == "binary" and .files[0].source == "reanalysed"' "$REPORT" >/dev/null &&
+  ok "a .vsix name makes a file binary: short window" ||
+  bad "vsix kind: $(jq -c '.files[0] | {source, reuse_window}' "$REPORT" 2>/dev/null)"
+
 SEEDED_MAL="$(art seeded-mal.bin 'payload VT-STUB-MALICIOUS seeded')"
 SEEDED_MAL_SHA="$(shasum -a 256 "$SEEDED_MAL" | cut -d' ' -f1)"
 EPOCH=$((EPOCH + 1)); echo "$EPOCH" >"$STATE/epoch"
@@ -315,11 +377,157 @@ KEEP_VT=1 scan VT_REUSE_MAX_AGE=0 -- "$CLEAN"
 rm -f "$STATE/fail-analyse"
 expect "HTTP 500 on reanalysis -> exit 2" 2 "HARNESS ERROR: POST /api/v3/files/$CLEAN_SHA/analyse: HTTP 500"
 
+# 19-instant. A reanalysis VirusTotal completes at once ends on the first file
+# poll: 3 requests (lookup, reanalysis, one poll), never a poll to the timeout.
+scan -- "$CLEAN"
+instant_start="$(date +%s)"
+KEEP_VT=1 scan VT_REUSE_MAX_AGE=0 VT_ANALYSIS_TIMEOUT=30 -- "$CLEAN"
+instant_secs=$(($(date +%s) - instant_start))
+expect "a reanalysis that completes at once -> exit 0" 0 "reanalysed report"
+[ "$(jq -r '.requests' "$REPORT")" = "3" ] && [ "$instant_secs" -lt 15 ] &&
+  jq -e '.files[0].source == "reanalysed" and .requests_by_class.poll == 1' "$REPORT" >/dev/null &&
+  ok "instant reanalysis: 3 requests in ${instant_secs}s, source reanalysed" ||
+  bad "instant reanalysis: ${instant_secs}s, requests $(tr '\n' ' ' <"$STATE/requests.log")"
+# 19-fold. 2026-11-11 (#3202): VirusTotal completed a reanalysis without moving
+# the file's last_analysis_date. The scan stops at once (exit 2, re-run) and
+# never judges the lookup's report as the reanalysis, however fresh it is.
+scan -- "$CLEAN"
+touch "$STATE/fold-analyse"
+fold_start="$(date +%s)"
+KEEP_VT=1 scan VT_REUSE_MAX_AGE=0 VT_ANALYSIS_TIMEOUT=30 -- "$CLEAN"
+fold_secs=$(($(date +%s) - fold_start))
+rm -f "$STATE/fold-analyse"
+expect "a completed analysis with no newer report -> exit 2 at once" 2 "that report is not accepted as a reanalysis"
+[ "$(jq -r '.requests' "$REPORT")" -le 5 ] && [ "$fold_secs" -lt 15 ] &&
+  jq -e '[.files[] | select(.source == "reanalysed")] | length == 0' "$REPORT" >/dev/null &&
+  ok "no newer report: stopped in ${fold_secs}s after $(jq -r '.requests' "$REPORT") requests, nothing judged reanalysed" ||
+  bad "no newer report: ${fold_secs}s, report $(jq -c '{requests, files}' "$REPORT" 2>/dev/null)"
+# 19-fold-dated. The same fold, with the analysis dated at its creation (newer
+# than the lookup): the file is read a bounded number of times, then the scan
+# stops; it never polls to the timeout.
+scan -- "$CLEAN"
+touch "$STATE/fold-analyse" "$STATE/fold-analyse-dated"
+fold_start="$(date +%s)"
+KEEP_VT=1 scan VT_REUSE_MAX_AGE=0 VT_MIN_INTERVAL=1 VT_POLL_MAX_INTERVAL=1 VT_ANALYSIS_TIMEOUT=60 -- "$CLEAN"
+fold_secs=$(($(date +%s) - fold_start))
+rm -f "$STATE/fold-analyse" "$STATE/fold-analyse-dated"
+expect "a folded analysis dated newer -> exit 2 after bounded file reads" 2 "after 3 file reads"
+[ "$fold_secs" -lt 30 ] && [ "$(jq -r '.requests_by_class.poll' "$REPORT")" -le 5 ] &&
+  jq -e '[.files[] | select(.source == "reanalysed")] | length == 0' "$REPORT" >/dev/null &&
+  ok "dated fold: stopped in ${fold_secs}s after $(jq -r '.requests_by_class.poll' "$REPORT") polls, nothing judged reanalysed" ||
+  bad "dated fold: ${fold_secs}s, report $(jq -c '{requests_by_class, files}' "$REPORT" 2>/dev/null)"
+# 19-fold-stale. The operator's case: an executable whose report is 3 days old
+# is re-analysed, and its old report never passes as reanalysed.
+touch "$STATE/fold-analyse"
+fold_start="$(date +%s)"
+seed_scan 259200 "$ELF" VT_ANALYSIS_TIMEOUT=30
+fold_secs=$(($(date +%s) - fold_start))
+rm -f "$STATE/fold-analyse"
+expect "a 3-day-old executable report with no newer one -> exit 2" 2 "that report is not accepted as a reanalysis"
+grep -q "^POST /api/v3/files/$ELF_SHA/analyse " "$STATE/requests.log" && [ "$fold_secs" -lt 15 ] &&
+  jq -e '[.files[] | select(.source == "reanalysed")] | length == 0' "$REPORT" >/dev/null &&
+  ok "stale executable: re-analysed, stopped in ${fold_secs}s, never judged reanalysed" ||
+  bad "stale executable: ${fold_secs}s, requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(jq -c '.files' "$REPORT" 2>/dev/null)"
+# 19-window. A newer report still has to fall inside the file's window: an
+# executable's reanalysis dated two days ago (newer than its 3-day-old lookup)
+# is not judged reanalysed; the poll runs on to the timeout.
+printf '172800\n' >"$STATE/analysis-age"
+seed_scan 259200 "$ELF" VT_MIN_INTERVAL=1 VT_POLL_MAX_INTERVAL=1 VT_ANALYSIS_TIMEOUT=4
+rm -f "$STATE/analysis-age"
+expect "a newer executable report outside 24 hours is not judged -> exit 2" 2 "did not complete within 4s"
+grep -qF 'newer than the lookup' <<<"$OUT" &&
+  jq -e '[.files[] | select(.source == "reanalysed")] | length == 0' "$REPORT" >/dev/null &&
+  ok "window guard: a 2-day-old reanalysis of an executable never passes" ||
+  bad "window guard: report $(jq -c '.files' "$REPORT" 2>/dev/null)"
+# 19-lag. A completed analysis newer than the file's report means the file
+# object lags: the old report must never be judged as a folded reanalysis.
+scan -- "$CLEAN"
+printf '2\n' >"$STATE/file-lag"
+KEEP_VT=1 scan VT_REUSE_MAX_AGE=0 VT_MIN_INTERVAL=1 VT_POLL_MAX_INTERVAL=1 VT_ANALYSIS_TIMEOUT=30 -- "$CLEAN"
+rm -f "$STATE/file-lag"
+expect "a lagging file object is polled until its date moves -> exit 0" 0 "polling analysis of"
+[ "$(jq -r '.requests' "$REPORT")" = "6" ] &&
+  jq -e '.files[0].source == "reanalysed" and .requests_by_class.poll == 4' "$REPORT" >/dev/null &&
+  ok "lagging file object: 6 requests (lookup, reanalysis, file, analysis, file, file), the new report judged" ||
+  bad "lagging file object: report $(jq -c '{requests, requests_by_class, f: .files[0]}' "$REPORT" 2>/dev/null), requests $(tr '\n' ' ' <"$STATE/requests.log")"
+printf 'bogus\n' >"$STATE/analysis-status"
+printf '5\n' >"$STATE/pending-polls"
+scan -- "$CLEAN"
+rm -f "$STATE/analysis-status" "$STATE/pending-polls"
+expect "an analysis in an unknown status -> exit 2" 2 "answered status 'bogus'"
+expect "a harness error still prints the requests by class" 2 "vt-scan: 4 requests (lookups 1, uploads 1, reanalyses 0, polls 2)"
+
+# 19-replay. rc.3 (run 43029170580) through the stub (#3202): its 31 files,
+# their kinds, recorded sources, ages and polls. Under yesterday's 24-hour
+# rule for every file the replay spends rc.3's classes again; under the
+# defaults it must spend 60 or fewer.
+REPLAY="$WORK/rc3"
+mkdir -p "$REPLAY"
+REPLAY_FILES=()
+REPLAY_SEED="$WORK/rc3-seed"
+: >"$REPLAY_SEED"
+rm -f "$STATE"/pending-*
+rec_lookups=0 rec_upload=0 rec_reanalysis=0 rec_polls=0 rec_slow=0
+while read -r name kind size source age polls; do
+  case "$name" in '#'* | '') continue ;; esac
+  f="$REPLAY/$name"
+  if [ "$kind" = text ]; then
+    printf 'rc3 replay %s\n' "$name" >"$f"
+  else
+    case "$name" in
+    *.vsix) printf 'PK\003\004' >"$f" ;;
+    *.tar.gz) printf '\037\213' >"$f" ;;
+    *) printf '\177ELF' >"$f" ;;
+    esac
+    printf 'rc3 replay %s\n' "$name" >>"$f"
+  fi
+  [ "$size" -le 33554432 ] || dd if=/dev/zero of="$f" bs=1 count=1 seek=33554432 conv=notrunc 2>/dev/null
+  sha="$(shasum -a 256 "$f" | cut -d' ' -f1)"
+  rec_lookups=$((rec_lookups + 1))
+  rec_polls=$((rec_polls + polls))
+  [ "$polls" -le 1 ] || { printf '%s\n' "$((polls - 1))" >"$STATE/pending-$sha"; rec_slow=$((rec_slow + 1)); }
+  case "$source" in
+  uploaded) rec_upload=$((rec_upload + 1)); [ "$size" -le 33554432 ] || rec_upload=$((rec_upload + 1)) ;;
+  reanalysed) rec_reanalysis=$((rec_reanalysis + 1)) ;;
+  esac
+  [ "$age" = - ] || printf '%s %s %s\n' "$sha" "$age" "$f" >>"$REPLAY_SEED"
+  REPLAY_FILES+=("$f")
+done <"$FIXTURES/rc3-files.tsv"
+rec_total=$((rec_lookups + rec_upload + rec_reanalysis + rec_polls))
+replay() {
+  awk -v now="$(date +%s)" '{ print $1, now - $2, $3 }' "$REPLAY_SEED" >"$STATE/seed"
+  EPOCH=$((EPOCH + 1)); echo "$EPOCH" >"$STATE/epoch"
+  KEEP_VT=1 scan "$@" -- "${REPLAY_FILES[@]}"
+  rm -f "$STATE/seed"
+}
+[ "${#REPLAY_FILES[@]}" = 31 ] && [ "$rec_total" = 108 ] &&
+  ok "rc.3 fixture: 31 files, 108 recorded requests ($rec_lookups lookups, $rec_upload uploads, $rec_reanalysis reanalyses, $rec_polls polls)" ||
+  bad "rc.3 fixture: ${#REPLAY_FILES[@]} files, $rec_total recorded requests"
+replay VT_REUSE_MAX_AGE_TEXT=86400
+expect "rc.3 replay under the 24-hour rule -> exit 0" 0 "every file clean"
+before="$(jq -r '.requests' "$REPORT")"
+# Every rc.3 file that took more than one poll completes on an analysis-object
+# poll in the replay, so each takes one more file poll than rc.3's file-only
+# loop to read the report.
+jq -e --argjson l "$rec_lookups" --argjson u "$rec_upload" --argjson r "$rec_reanalysis" --argjson p "$rec_polls" --argjson s "$rec_slow" \
+  '.requests_by_class == {lookup: $l, upload: $u, reanalysis: $r, poll: ($p + $s)}' "$REPORT" >/dev/null &&
+  ok "rc.3 replay before: $before requests, rc.3's recorded $rec_total plus $rec_slow file reads after a completed analysis" ||
+  bad "rc.3 replay before: $(jq -c '{requests, requests_by_class}' "$REPORT" 2>/dev/null)"
+replay
+expect "rc.3 replay under the defaults -> exit 0" 0 "every file clean"
+after="$(jq -r '.requests' "$REPORT")"
+[ "$after" -le 60 ] && jq -e '.sources == {reused: 23, uploaded: 8}' "$REPORT" >/dev/null &&
+  ok "rc.3 replay after: $after requests (<= 60, from $rec_total recorded): 23 text files reused, 8 uploaded" ||
+  bad "rc.3 replay after: $(jq -c '{requests, requests_by_class, sources}' "$REPORT" 2>/dev/null)"
+echo "  rc.3 replay: recorded $rec_total requests, replayed before $before, after $after"
+rm -f "$STATE"/pending-*
+
 # 20. The request budget stops the run before it sends past VT_MAX_REQUESTS.
 scan VT_MAX_REQUESTS=1 -- "$CLEAN"
 expect "request budget reached -> exit 2" 2 "HARNESS ERROR: request budget spent: VT_MAX_REQUESTS=1"
 [ "$(wc -l <"$STATE/requests.log" | tr -d ' ')" = "1" ] && [ "$(report_status)" = "error" ] &&
   [ "$(jq -r '.requests' "$REPORT")" = "1" ] &&
+  jq -e '.requests_by_class.lookup == 1' "$REPORT" >/dev/null &&
   ok "budget: one request sent, report error with requests 1" ||
   bad "budget: requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(cat "$REPORT" 2>/dev/null)"
 
@@ -330,6 +538,10 @@ scan VT_MIN_INTERVAL=10 VT_POLL_MAX_INTERVAL=5 -- "$CLEAN"
 expect "VT_POLL_MAX_INTERVAL below VT_MIN_INTERVAL -> exit 2" 2 "HARNESS ERROR: VT_POLL_MAX_INTERVAL"
 scan VT_REUSE_MAX_AGE=1d -- "$CLEAN"
 expect "VT_REUSE_MAX_AGE not in seconds -> exit 2" 2 "HARNESS ERROR: VT_REUSE_MAX_AGE"
+scan VT_REUSE_MAX_AGE_TEXT=2w -- "$CLEAN"
+expect "VT_REUSE_MAX_AGE_TEXT not in seconds -> exit 2" 2 "HARNESS ERROR: VT_REUSE_MAX_AGE_TEXT must be"
+scan VT_REUSE_MAX_AGE_TEXT=3600 -- "$CLEAN"
+expect "VT_REUSE_MAX_AGE_TEXT below VT_REUSE_MAX_AGE -> exit 2" 2 "HARNESS ERROR: VT_REUSE_MAX_AGE_TEXT (3600) is below"
 scan VT_MIN_ENGINES=0 -- "$CLEAN"
 expect "VT_MIN_ENGINES=0 -> exit 2" 2 "HARNESS ERROR: VT_MIN_ENGINES"
 

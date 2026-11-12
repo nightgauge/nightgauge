@@ -370,6 +370,8 @@ func TestIsEnqueueFailedCleanPR(t *testing.T) {
 		{"clean green other kind", TerminalKindPrMergeUnmerged, "CLEAN", nil, false},
 		{"clean with failed check", TerminalKindMergeQueueEnqueueFailed, "CLEAN", []string{"ci"}, false},
 		{"blocked enqueue-failed", TerminalKindMergeQueueEnqueueFailed, "BLOCKED", nil, false},
+		{"clean green infra-failed stays for a human", TerminalKindMergeQueueInfraFailed, "CLEAN", nil, false},
+		{"blocked infra-failed", TerminalKindMergeQueueInfraFailed, "BLOCKED", nil, false},
 		{"no failure record", "", "CLEAN", nil, false},
 	}
 	for _, tc := range cases {

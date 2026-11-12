@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/ci"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/knowledge"
@@ -138,6 +139,11 @@ const (
 	// transiently after every retry (#2729). Only this reason maps to the
 	// non-fault merge_queue_enqueue_failed terminal kind.
 	ReasonMergeQueueEnqueueExhausted = "merge-queue-enqueue-exhausted"
+	// ReasonMergeQueueInfraExhausted (PathRefused): the merge group kept
+	// failing in a job step before the repository's own checks ran, through
+	// every re-enqueue (#3198). It maps to the non-fault
+	// merge_queue_infra_failed terminal kind: the PR needs no change.
+	ReasonMergeQueueInfraExhausted = "merge-queue-infra-exhausted"
 	// ReasonReviewFixNeeded (PathPunt) hands a hold finding to the LLM stage for
 	// one fix round (#2730).
 	ReasonReviewFixNeeded = "review-fix-needed"
@@ -329,6 +335,14 @@ type mergeQueueClient interface {
 	EnqueueAndWait(ctx context.Context, status github.MergeQueueStatus, opts github.MergeQueueWaitOptions) (github.MergeQueueStatus, error)
 }
 
+// mergeGroupJobReader is implemented by merge-queue clients that can read a
+// merge-group job's steps and its plain-text log (#3198). A client without it
+// leaves every merge-group removal unclassified.
+type mergeGroupJobReader interface {
+	WorkflowJob(ctx context.Context, jobID int64) (github.WorkflowRunJob, error)
+	WorkflowJobLog(ctx context.Context, jobID int64) (string, error)
+}
+
 // MergeDecision is the output of the pure decision rule. The shell-out
 // populates a snapshot, Decide() evaluates it, and the runner reacts.
 type MergeDecision struct {
@@ -461,6 +475,16 @@ type DeterministicRunner struct {
 	// reviewFiling files the review findings left open at enqueue (#2730).
 	// nil means this runner cannot file, so such a finding refuses the merge.
 	reviewFiling ReviewFiling
+	// queueInfraRetries / queueInfraRetryDelay bound the re-enqueues after a
+	// merge-group removal classified as infrastructure (#3198); queueSleep
+	// waits out the delay and is injectable for tests.
+	queueInfraRetries    int
+	queueInfraRetryDelay time.Duration
+	queueSleep           func(ctx context.Context, d time.Duration) error
+	// stepKinds classifies the workflow steps a merge-group job ran: check,
+	// setup or other (#3198). nil, an error or a nil classifier leaves a removal
+	// unclassified.
+	stepKinds func(ctx context.Context, workdir string) (func(string) ci.StepKind, error)
 }
 
 // SetReviewFiling wires the filer the enqueue gate uses for open findings.
@@ -507,6 +531,23 @@ func NewDeterministicRunner() *DeterministicRunner {
 		steeringGate: func(ctx context.Context, workdir, headRef string) (codexprovision.PRHeadVerdict, error) {
 			return codexprovision.GuardPRHead(ctx, workdir, "origin", headRef)
 		},
+
+		queueInfraRetries:    DefaultQueueInfraRetries,
+		queueInfraRetryDelay: DefaultQueueInfraRetryDelay,
+		queueSleep:           sleepCtx,
+		stepKinds:            discoverStepKinds,
+	}
+}
+
+// sleepCtx waits d or until ctx ends.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }
 
@@ -790,10 +831,37 @@ func (r *DeterministicRunner) detectMergeQueue(ctx context.Context, gh ghClient,
 	return mq, st
 }
 
+// queueMergedAfterAll re-reads a PR whose queue wait ended in a
+// *github.MergeQueueError and reports its status when it reads MERGED (#3219).
+// GitHub can report a merged PR as OPEN and outside the queue for a read after
+// its entry is gone; the merge, not that read, is the outcome. A failed
+// re-read, or one cut short by ctx, keeps the original error.
+func (r *DeterministicRunner) queueMergedAfterAll(ctx context.Context, mq mergeQueueClient, prNumber int, err error) (github.MergeQueueStatus, bool) {
+	var qe *github.MergeQueueError
+	if err == nil || !errors.As(err, &qe) || ctx.Err() != nil {
+		return github.MergeQueueStatus{}, false
+	}
+	st, rerr := mq.MergeQueueStatus(ctx, prNumber)
+	if rerr != nil || st.State != "MERGED" {
+		return github.MergeQueueStatus{}, false
+	}
+	log.Printf("pr-merge: PR #%d queue wait ended %s but the PR reads MERGED; booking the merge", prNumber, qe.Kind)
+	return st, true
+}
+
 // awaitMergeQueue enqueues the PR (unless already queued) and waits for the
 // queue's outcome (#2214). MERGED → PathMerged. Every other outcome is
 // PathRefused: a failed merge group is a CI failure on the merge-group
 // commit, and a queue wait is never handed to the LLM skill.
+//
+// A removal is classified from the failed jobs' steps (#3198). An
+// infrastructure removal is re-enqueued up to queueInfraRetries times, after
+// queueInfraRetryDelay each, and then refused as merge-queue-infra-exhausted.
+// A code removal is refused with MergeQueueCodeFailureMarker and its job's
+// log excerpt is written for the recovery that sends it back to feature-dev.
+// When ctx ends while an infrastructure removal is being retried (the delay,
+// or the re-enqueued wait), the result is still merge-queue-infra-exhausted,
+// a non-fault kind: a stage stopped mid-retry never ends in a timeout kind.
 //
 // The wait after the PR reaches the queue is recorded for issueNumber
 // (#2770), the same record `nightgauge pr merge --issue` writes, so a
@@ -807,7 +875,54 @@ func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmit
 		opts.OnQueued = func(github.MergeQueueStatus) { begin() }
 		defer end()
 	}
-	final, err := mq.EnqueueAndWait(ctx, st, opts)
+	var final github.MergeQueueStatus
+	var err error
+	var lastInfra *MergeGroupVerdict
+	reenqueues := 0
+	for ; ; reenqueues++ {
+		final, err = mq.EnqueueAndWait(ctx, st, opts)
+		if merged, ok := r.queueMergedAfterAll(ctx, mq, prNumber, err); ok {
+			final, err = merged, nil
+			break
+		}
+		var removal *github.MergeQueueError
+		if err == nil || !errors.As(err, &removal) || removal.Kind != github.MergeQueueDequeued {
+			break
+		}
+		verdict := r.classifyQueueRemoval(ctx, mq, workdir, removal)
+		switch verdict.Class {
+		case MergeGroupCode:
+			return r.queueCodeFailure(ctx, ph, mq, workdir, issueNumber, prNumber, final, snap, verdict)
+		case MergeGroupInfra:
+			if reenqueues >= r.queueInfraRetries {
+				log.Printf("pr-merge: PR #%d merge group failed in job %q step %q before the build or test ran; %d re-enqueue(s) spent",
+					prNumber, verdict.Job, verdict.Step, reenqueues)
+				ph.supersedeInFlight()
+				return PRMergeResult{Path: PathRefused, PRNumber: prNumber, PRState: queueState(final, snap),
+					Reason: MergeQueueInfraExhaustedReason(verdict, reenqueues)}
+			}
+			lastInfra = &verdict
+			log.Printf("pr-merge: PR #%d merge group failed in job %q step %q before the build or test ran (infrastructure); re-enqueueing in %s (attempt %d/%d)",
+				prNumber, verdict.Job, verdict.Step, r.queueInfraRetryDelay, reenqueues+1, r.queueInfraRetries)
+			if serr := r.queueSleep(ctx, r.queueInfraRetryDelay); serr != nil {
+				return r.queueInfraInterrupted(ph, prNumber, final, snap, verdict, reenqueues, serr)
+			}
+			next, serr := mq.MergeQueueStatus(ctx, prNumber)
+			if serr != nil {
+				log.Printf("pr-merge: re-reading PR #%d before re-enqueue failed, using the prior status: %v", prNumber, serr)
+				next = st
+				next.InQueue = false
+			}
+			st = next
+			continue
+		}
+		break
+	}
+	if lastInfra != nil && err != nil && ctx.Err() != nil {
+		// The re-enqueued wait was cut short: the removal that started the
+		// retries was infrastructure, and nothing since says otherwise.
+		return r.queueInfraInterrupted(ph, prNumber, final, snap, *lastInfra, reenqueues, ctx.Err())
+	}
 	if err == nil && final.State == "MERGED" {
 		ph.complete("merge")
 		ph.skipOffPath()
@@ -820,11 +935,7 @@ func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmit
 		}
 	}
 	ph.supersedeInFlight()
-	state := final.State
-	if state == "" {
-		state = snap.State
-	}
-	res := PRMergeResult{Path: PathRefused, PRNumber: prNumber, PRState: state}
+	res := PRMergeResult{Path: PathRefused, PRNumber: prNumber, PRState: queueState(final, snap)}
 	var qe *github.MergeQueueError
 	switch {
 	case err == nil:
@@ -849,6 +960,113 @@ func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmit
 		res.Reason = fmt.Sprintf("%s: %s", ReasonMergeQueueEnqueueFailed, truncateErr(err, 300))
 	}
 	return res
+}
+
+// queueState is the PR state to report after a queue wait.
+func queueState(final github.MergeQueueStatus, snap PRViewSnapshot) string {
+	if final.State != "" {
+		return final.State
+	}
+	return snap.State
+}
+
+// classifyQueueRemoval reads each failed merge-group job's steps and
+// classifies the removal (#3198). Every read failure degrades to
+// unclassified, which keeps the plain merge-queue-failed refusal.
+func (r *DeterministicRunner) classifyQueueRemoval(ctx context.Context, mq mergeQueueClient, workdir string, removal *github.MergeQueueError) MergeGroupVerdict {
+	unclassified := MergeGroupVerdict{Class: MergeGroupUnclassified}
+	reader, ok := mq.(mergeGroupJobReader)
+	if !ok || len(removal.FailedJobs) == 0 || r.stepKinds == nil {
+		return unclassified
+	}
+	kind, err := r.stepKinds(ctx, workdir)
+	if err != nil || kind == nil {
+		if err != nil {
+			log.Printf("pr-merge: cannot classify merge-group removal of PR #%d: reading CI workflows failed: %v", removal.PRNumber, err)
+		}
+		return unclassified
+	}
+	withJob := map[string]bool{}
+	jobs := make([]MergeGroupJobResult, 0, len(removal.FailedChecks))
+	for _, j := range removal.FailedJobs {
+		withJob[j.Name] = true
+		res := MergeGroupJobResult{Check: j.Name, JobID: j.JobID, RunID: j.RunID}
+		job, jerr := reader.WorkflowJob(ctx, j.JobID)
+		if jerr != nil {
+			log.Printf("pr-merge: reading merge-group job %d (%s) failed: %v", j.JobID, j.Name, jerr)
+		} else {
+			res.Steps = job.Steps
+		}
+		jobs = append(jobs, res)
+	}
+	// A failed check with no Actions job (a commit status) has no steps, so it
+	// can never be shown to be infrastructure.
+	for _, name := range removal.FailedChecks {
+		if !withJob[name] {
+			jobs = append(jobs, MergeGroupJobResult{Check: name})
+		}
+	}
+	return ClassifyMergeGroupFailure(jobs, kind)
+}
+
+// queueCodeFailure refuses a removal caused by the repository's own check and
+// records the failed step's own log excerpt for the feature-dev rewind
+// (#3198). The excerpt is that step's section of the job log, never the
+// job's tail; when the section cannot be located it is left empty.
+func (r *DeterministicRunner) queueCodeFailure(ctx context.Context, ph *phaseEmitter, mq mergeQueueClient, workdir string, issueNumber, prNumber int, final github.MergeQueueStatus, snap PRViewSnapshot, v MergeGroupVerdict) PRMergeResult {
+	log.Printf("pr-merge: PR #%d merge group failed in job %q step %q, one of the repository's own checks (code failure)", prNumber, v.Job, v.Step)
+	ph.supersedeInFlight()
+	if issueNumber > 0 && workdir != "" {
+		rec := MergeQueueFailureRecord{
+			IssueNumber: issueNumber,
+			PRNumber:    prNumber,
+			Class:       string(v.Class),
+			Check:       v.Job,
+			JobID:       v.JobID,
+			RunID:       v.RunID,
+			Step:        v.Step,
+			CreatedAt:   r.now().UTC().Format(time.RFC3339),
+		}
+		if reader, ok := mq.(mergeGroupJobReader); ok && v.JobID > 0 && v.StepNumber > 0 {
+			rec.LogExcerpt = failedStepExcerpt(ctx, reader, v)
+		}
+		if err := writeMergeQueueFailureRecord(workdir, rec); err != nil {
+			log.Printf("pr-merge: recording the merge-group code failure for issue #%d failed: %v", issueNumber, err)
+		}
+	}
+	return PRMergeResult{Path: PathRefused, PRNumber: prNumber, PRState: queueState(final, snap), Reason: MergeQueueCodeFailureReason(v)}
+}
+
+// queueInfraInterrupted is the result when ctx ends during the retries of an
+// infrastructure removal: merge-queue-infra-exhausted with the re-enqueues
+// done so far, which maps to the non-fault merge_queue_infra_failed kind.
+func (r *DeterministicRunner) queueInfraInterrupted(ph *phaseEmitter, prNumber int, final github.MergeQueueStatus, snap PRViewSnapshot, v MergeGroupVerdict, reenqueues int, cause error) PRMergeResult {
+	log.Printf("pr-merge: PR #%d re-enqueue after an infrastructure failure in job %q step %q interrupted after %d re-enqueue(s): %v",
+		prNumber, v.Job, v.Step, reenqueues, cause)
+	ph.supersedeInFlight()
+	return PRMergeResult{Path: PathRefused, PRNumber: prNumber, PRState: queueState(final, snap),
+		Reason: MergeQueueInfraExhaustedReason(v, reenqueues)}
+}
+
+// failedStepExcerpt reads the failed job's steps and log and returns the
+// failed step's own section (github.FailedStepExcerpt). A read failure yields
+// no excerpt; the rewind's feedback then says the log could not be read.
+func failedStepExcerpt(ctx context.Context, reader mergeGroupJobReader, v MergeGroupVerdict) string {
+	job, err := reader.WorkflowJob(ctx, v.JobID)
+	if err != nil {
+		log.Printf("pr-merge: reading merge-group job %d failed: %v", v.JobID, err)
+		return ""
+	}
+	text, err := reader.WorkflowJobLog(ctx, v.JobID)
+	if err != nil {
+		log.Printf("pr-merge: reading the log of merge-group job %d failed: %v", v.JobID, err)
+		return ""
+	}
+	excerpt := github.FailedStepExcerpt(text, job.Steps, v.StepNumber)
+	if excerpt == "" {
+		log.Printf("pr-merge: could not locate step %d (%q) in the log of merge-group job %d; no excerpt", v.StepNumber, v.Step, v.JobID)
+	}
+	return excerpt
 }
 
 // MergeQueueConflictReason names a queue-side conflict (#2611). pr-merge
@@ -1726,6 +1944,28 @@ func (c *execGhClient) EnqueueAndWait(ctx context.Context, st github.MergeQueueS
 		opts.CreateCommit = c.createCommit
 	}
 	return github.NewMergeQueue(c.graphQL).EnqueueAndWait(ctx, st, opts)
+}
+
+// WorkflowJob implements mergeGroupJobReader: one Actions job with its steps
+// (#3198).
+func (c *execGhClient) WorkflowJob(ctx context.Context, jobID int64) (github.WorkflowRunJob, error) {
+	out, err := github.RunGhSubprocess(ctx, c.workdir, "api", fmt.Sprintf("repos/{owner}/{repo}/actions/jobs/%d", jobID))
+	if err != nil {
+		return github.WorkflowRunJob{}, normalizeGhError(err)
+	}
+	return github.DecodeWorkflowRunJob(out)
+}
+
+// WorkflowJobLog implements mergeGroupJobReader: the job's plain-text log.
+// A job log carries ANSI colour codes, which gh refuses to print unless told
+// it may.
+func (c *execGhClient) WorkflowJobLog(ctx context.Context, jobID int64) (string, error) {
+	out, err := github.RunGhSubprocess(ctx, c.workdir, "api", "--allow-escape-sequences",
+		fmt.Sprintf("repos/{owner}/{repo}/actions/jobs/%d/logs", jobID))
+	if err != nil {
+		return "", normalizeGhError(err)
+	}
+	return string(out), nil
 }
 
 // graphQL is the github.GraphQLDoer for `gh api graphql`. String variables

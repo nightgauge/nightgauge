@@ -169,6 +169,12 @@ const (
 	// sidelined to In review), and the in-review reconcile moves a CLEAN, green
 	// PR with this kind back to Ready.
 	TerminalKindMergeQueueEnqueueFailed = "merge_queue_enqueue_failed"
+	// TerminalKindMergeQueueInfraFailed is set when the merge group kept
+	// failing in a job step before the repository's own checks ran, through
+	// every re-enqueue (#3198). An upstream outage, not the PR: routed exactly
+	// like TerminalKindMergeQueueEnqueueFailed (non-fault, In review, and the
+	// in-review reconcile returns a CLEAN, green PR to Ready).
+	TerminalKindMergeQueueInfraFailed = "merge_queue_infra_failed"
 	// TerminalKindRunawayProgress is set when the progress-based runaway
 	// monitor fires: the stage made no new forward-progress signal for the
 	// configured window. Same recovery path as stall_kill (30m backoff, no

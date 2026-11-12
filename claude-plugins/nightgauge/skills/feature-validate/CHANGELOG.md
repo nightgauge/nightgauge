@@ -10,6 +10,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **The full local gate runs once per run, after the final independent-review
+  round (#3207).** With the review on, Phase 2.5 runs only build, vet and the
+  changed packages' tests, and a review `catch` re-runs those, never the full
+  gate. The new Step 2.7.4 runs the one full gate on the tree the review passed,
+  and puts `nightgauge ci gate-count` in the validate notes. `ci gate-run` exits
+  75 (another gate holds this worktree) and 76 (superseded) are documented.
+  Between rounds a repository that is not Go runs its build, lint and the
+  changed workspaces' tests, never the full gate.
+
 - **Each Step 2.7.3 review round re-prints the `ci-parity-check` phase marker
   (#3168).** The progress monitor counts it as productive, so a multi-round
   review with fixes is no longer killed as churn.

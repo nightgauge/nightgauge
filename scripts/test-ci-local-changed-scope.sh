@@ -333,10 +333,14 @@ list_rc=$?
 check "\`--list-steps --changed\` exits 0 — got $list_rc" $?
 diff -q scripts/ci-local-steps.txt "$scoped_list" >/dev/null 2>&1
 check "the scoped inventory is IDENTICAL to the unscoped checked-in inventory" $?
-grep -qF 'go test -race -count=1 ./...' "$scoped_list"
+grep -qxF 'go test -race ./... except sharded packages' "$scoped_list"
 check "the race suite is still listed even when it would be skipped" $?
-grep -qF 'go test ./... -count=1 (with skip accounting)' "$scoped_list"
+grep -qxF 'go test ./... except sharded packages' "$scoped_list"
 check "the plain Go suite is still listed even when it would be skipped" $?
+grep -qxF 'go test -race internal/orchestrator shard 1/4' "$scoped_list"
+check "a race shard is still listed even when it would be skipped" $?
+grep -qxF 'go test shard coverage, skip accounting and pass record' "$scoped_list"
+check "the Go suite's finalize step is still listed even when it would be skipped" $?
 
 # ── (12) the #983 guard still goes red if a step DISAPPEARS ────────────────
 # The distinction this whole file rests on: explicitly skipped is fine, gone is
@@ -347,15 +351,14 @@ python3 - "$CI_LOCAL" "$DOCTORED" <<'PY'
 import re, sys
 src = open(sys.argv[1]).read()
 # Delete the race step's dispatch entirely -- the #983 defect, staged.
-pat = re.compile(
-    r'\nif \[ "\$GO_SCOPE_RUN" -eq 0 \]; then\n'
-    r'  skip_step "go test -race[^\n]*\n'
-    r'[^\n]*\n'
-    r'else\n'
-    r'run_group (?:--wait )?"go test -race[^\n]*\n'
-    r'[^\n]*\n'
-    r'fi\n')
-out, n = pat.subn('\n', src)
+# Both of its dispatch sites go: the skip_step and the run_group (2 lines).
+skip = re.compile(r'\n  skip_step "go test -race \./\.\.\. except sharded packages"[^\n]*\n')
+run = re.compile(
+    r'\n  run_group --wait "go test -race \./\.\.\. except sharded packages"[^\n]*\n'
+    r'[^\n]*\n')
+out, n_skip = skip.subn('\n', src)
+out, n_run = run.subn('\n', out)
+n = 1 if (n_skip, n_run) == (1, 1) else n_skip + n_run
 if n != 1:
     sys.stderr.write("doctoring failed: matched %d race-step dispatches\n" % n)
     sys.exit(3)
@@ -367,7 +370,7 @@ check "the doctored copy could be produced (arm 12 is not vacuous)" $?
 if [ "$doctor_rc" -eq 0 ]; then
   doctored_list="$TMP/doctored-list.txt"
   bash "$DOCTORED" --list-steps > "$doctored_list" 2>/dev/null
-  ! grep -qF 'go test -race -count=1 ./...' "$doctored_list"
+  ! grep -qxF 'go test -race ./... except sharded packages' "$doctored_list"
   check "a DELETED step really is absent from the doctored inventory" $?
   ! diff -q scripts/ci-local-steps.txt "$doctored_list" >/dev/null 2>&1
   check "the #983 guard's comparison goes RED when a step disappears entirely" $?

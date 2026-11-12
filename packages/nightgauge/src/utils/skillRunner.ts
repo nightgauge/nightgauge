@@ -4585,7 +4585,13 @@ function runStageSkillHeadlessImpl(
    * cannot serve the request fails the stage, naming the pin, because the
    * requester must not be served by another adapter without being told.
    */
-  adapterPinRequested?: boolean
+  adapterPinRequested?: boolean,
+  /**
+   * Text appended to the stage prompt (#3095): the partial-delivery re-run
+   * scope block the Go binary renders, so a run this path starts on an issue
+   * with a pending remainder is scoped like the Go scheduler's.
+   */
+  promptTrailer?: string
 ): SkillProcessHandle {
   // The stage budget gate this call runs under (#1668); see runStageSkillHeadless.
   const dispatchGate = takeDispatchGate();
@@ -5016,6 +5022,7 @@ function runStageSkillHeadlessImpl(
   // Build the prompt. Mutable: the Haiku behavioral preamble (#77 → #106)
   // is prepended below now that the model decision is final.
   let prompt = buildSkillPrompt(stage, skillData.content, issueNumber, skillDir);
+  if (promptTrailer) prompt += promptTrailer;
 
   // Behavioral preamble for the Haiku tier (#77 → #106): prepended
   // prompt-proximally now that the model decision is final; measured skip

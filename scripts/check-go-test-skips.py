@@ -27,8 +27,17 @@ of printing ok"). An allowlisted test that RAN is reported, not failed —
 that is the environment-conditional case, and failing on it is what a count
 would wrongly do.
 
+# Cached packages (#3208)
+
+The local gate runs without -count=1, so an unchanged package replays its last
+result from Go's test cache. `go test -json` replays the cached per-test events
+too, so a cached package's skips are still counted against the allowlist. The
+package count line says how many packages ran and how many replayed: a cached
+package is never reported as skipped or as having run no tests. Only the main
+pass can produce a `(cached)` line; the always-uncached reruns use -count=1.
+
 Usage:
-    go test -json -count=1 ./... | tee go-test.json
+    go test -json ./... | tee go-test.json
     python3 scripts/check-go-test-skips.py go-test.json
 """
 
@@ -51,14 +60,8 @@ def read_allowlist():
     return allowed
 
 
-def collect_skips(path):
-    """Return sorted "pkg.Test" names for every skipped test.
-
-    Only events carrying a non-null Test count: `go test -json` also emits an
-    Action "skip" at PACKAGE level for a package with no test files at all,
-    which is not a skipped test.
-    """
-    skipped = set()
+def read_events(path):
+    """Yield every JSON event in a `go test -json` stream."""
     with open(path) as fh:
         for line in fh:
             line = line.strip()
@@ -67,16 +70,49 @@ def collect_skips(path):
                 # not a JSON event rather than failing on it.
                 continue
             try:
-                ev = json.loads(line)
+                yield json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if ev.get("Action") != "skip":
-                continue
-            test = ev.get("Test")
-            if not test:
-                continue
-            skipped.add("%s.%s" % (ev.get("Package", "?"), test))
+
+
+def collect_skips(events):
+    """Return sorted "pkg.Test" names for every skipped test.
+
+    Only events carrying a non-null Test count: `go test -json` also emits an
+    Action "skip" at PACKAGE level for a package with no test files at all,
+    which is not a skipped test.
+    """
+    skipped = set()
+    for ev in events:
+        if ev.get("Action") != "skip":
+            continue
+        test = ev.get("Test")
+        if not test:
+            continue
+        skipped.add("%s.%s" % (ev.get("Package", "?"), test))
     return sorted(skipped)
+
+
+def count_packages(events):
+    """Return (ran, cached): packages whose tests ran, and packages replayed.
+
+    A package is cached when its package-level output carries the `(cached)`
+    marker go prints in place of the elapsed time ("ok  \t<pkg>\t(cached)").
+    It ran when it has a package-level pass or fail and no such marker. A
+    package with no test files ends in a package-level skip and is neither.
+    """
+    finished = set()
+    cached = set()
+    for ev in events:
+        pkg = ev.get("Package")
+        if not pkg or ev.get("Test"):
+            continue
+        action = ev.get("Action")
+        if action in ("pass", "fail"):
+            finished.add(pkg)
+        elif action == "output" and "\t(cached)" in (ev.get("Output") or ""):
+            cached.add(pkg)
+    return len(finished - cached), len(cached)
 
 
 def main():
@@ -93,10 +129,13 @@ def main():
         return 2
 
     allowed = read_allowlist()
-    skipped = collect_skips(events_path)
+    events = list(read_events(events_path))
+    skipped = collect_skips(events)
+    ran_pkgs, cached_pkgs = count_packages(events)
     unlisted = [name for name in skipped if name not in allowed]
     ran = sorted(allowed - set(skipped))
 
+    print("Go test packages: %d ran, %d cached" % (ran_pkgs, cached_pkgs))
     print("Go test skips: %d (allowlist has %d entries)" % (len(skipped), len(allowed)))
     for name in skipped:
         print(

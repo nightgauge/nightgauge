@@ -26,9 +26,60 @@ failing on first CI run and requiring pr-merge auto-fix cycles.
 > full CI round-trip per attempt, and pr-merge's auto-fix is limited to 3
 > attempts with a narrow context window.
 
+### Step 2.5.0a: Scoped Checks While the Review Runs (#3207)
+
+The full gate runs once per run, on the tree the independent review last
+passed. While the review is on (`pipeline.adversarial_review.enabled` is not
+`false`), every review `catch` fix changes the tree, so a full gate started
+before the final round is void and gets killed and restarted. So with the
+review on, this phase runs only the **scoped checks**: build, vet, and the
+tests of the changed packages. The run's one full gate is
+[Step 2.7.4](#step-274-the-runs-one-full-gate-3207), after the final review
+round. With the review off, skip this step: Steps 2.5.0 to 2.5.3 below are the
+run's one full gate, as written.
+
+```bash
+REVIEW_ENABLED=$(nightgauge config show --key pipeline.adversarial_review.enabled --raw 2>/dev/null || echo true)
+SCOPED_CHECKS_ONLY=false
+[ "$REVIEW_ENABLED" = "false" ] || SCOPED_CHECKS_ONLY=true
+if [ "$SCOPED_CHECKS_ONLY" = "true" ]; then
+  BASE_REF=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null || echo origin/main)
+  # Changed files: tracked edits since the merge base, plus untracked new files.
+  CHANGED_FILES=$( { git diff --name-only "$(git merge-base HEAD "$BASE_REF")"; \
+    git ls-files --others --exclude-standard; } | sort -u)
+  if [ -f go.mod ]; then
+    # Build, vet, and the tests of the changed packages only: never ./...
+    CHANGED_PKGS=$(printf '%s\n' "$CHANGED_FILES" | grep '\.go$' | xargs -n1 dirname 2>/dev/null \
+      | sort -u | while read -r d; do [ -d "$d" ] && echo "./$d"; done)
+    # shellcheck disable=SC2086 # one argument per package
+    go build ./... && { [ -z "$CHANGED_PKGS" ] || { go vet $CHANGED_PKGS && go test $CHANGED_PKGS; }; } \
+      || CI_PARITY_PASSED=false
+  fi
+  if [ -f package.json ]; then
+    # Not Go: the repository's build and lint, and the tests of the changed
+    # workspaces only. Never the full gate between rounds.
+    CHANGED_WS=$(printf '%s\n' "$CHANGED_FILES" | awk -F/ '$1 == "packages" && NF > 2 {print $1 "/" $2}' \
+      | sort -u | while read -r d; do [ -f "$d/package.json" ] && echo "$d"; done)
+    { npm run build --if-present && npm run lint --if-present; } || CI_PARITY_PASSED=false
+    for WS in $CHANGED_WS; do
+      npm run -w "$WS" test --if-present || CI_PARITY_PASSED=false
+    done
+  fi
+fi
+```
+
+For a repository that is neither Go nor npm, run its build and lint and the
+tests of the changed packages or modules only, by the commands its `AGENTS.md`
+names. Never run the full gate between review rounds.
+
+A scoped failure is fixed here, like any test failure, and the scoped checks run
+again. Then go to Step 2.7.3. Steps 2.5.0 to 2.5.3 do not run now: Step 2.7.4
+runs them, on the final tree.
+
 ### Step 2.5.0: One Gate Per Tree (#2784)
 
-This phase is the run's one full gate. Ask the ledger first: if this exact tree
+This step starts the run's one full gate: here when the review is off,
+otherwise in Step 2.7.4. Ask the ledger first: if this exact tree
 already passed, say so and move on. Otherwise a repository with a complete local
 gate runs that gate as this phase's only command, because the discovered commands
 are a subset of it and a pass of them cannot satisfy `pre-push validate`. A
@@ -83,6 +134,18 @@ call orphans it instead. The `gate-background` hook denies both forms (#2953).
 `gate_command` is never run directly: run `nightgauge ci gate-run`. Its log is
 declared at spawn so the wait reads as work
 (`_shared/LONG_RUNNING_PROCESSES.md`, #2694).
+
+`nightgauge ci gate-run` allows one gate per worktree, and records the start
+and finish of every gate it runs, so this step records nothing for it (#3207).
+A second `gate-run` on the same tree waits for the running one and exits with
+its result: never start another, and never kill a running gate. Its own exit
+codes are:
+
+- `75`: another gate holds this worktree on a different tree and could not be
+  stopped, so nothing ran. Wait for that gate to end, then run `gate-run` again.
+- `76`: this gate was superseded by a newer tree in this worktree. That is not
+  a failure, and the ledger already records it as `superseded`: run the gate
+  for the current tree, never record a fail.
 
 The full gate runs the unit suite, so its result is the unit result. Its log
 is kept as `gate-{N}.log` in the pipeline state directory, and
@@ -163,11 +226,12 @@ function run_ci_parity() {
   return 0
 }
 
-# A gate that writes its own ledger events needs no recording here. Anything else
-# is recorded as kind parity, so every repository is counted and reusable. A
-# command skipped as not installed means the pass was not full.
+# `nightgauge ci gate-run` records every gate it runs, so it needs no recording
+# here. Discovered commands are recorded as kind parity, so every repository is
+# counted and reusable. A command skipped as not installed means the pass was
+# not full.
 function record_ci_parity() { # record_ci_parity <verdict>
-  [ "$CI_GATE_RECORDS_ITSELF" = "true" ] && [ -n "$CI_GATE_COMMAND" ] && return 0
+  [ "${CI_PARITY_COMMANDS[0]:-}" = "nightgauge ci gate-run" ] && return 0
   local full_flag="--full"
   printf '%s\n' "$CI_PARITY_RESULTS_JSON" | jq -e 'any(.status == "skipped")' >/dev/null && full_flag=""
   nightgauge ci gate-record --event finish --run-id "$CI_GATE_RUN" --kind parity \
@@ -188,7 +252,7 @@ elif [ "${#CI_PARITY_COMMANDS[@]}" -eq 0 ]; then
   SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "ci_parity_check", "reason": "no runnable CI commands discovered"}]')
 else
   CI_GATE_STARTED=$SECONDS
-  if [ "$CI_GATE_RECORDS_ITSELF" != "true" ] || [ -z "$CI_GATE_COMMAND" ]; then
+  if [ "${CI_PARITY_COMMANDS[0]:-}" != "nightgauge ci gate-run" ]; then
     CI_GATE_RUN=$(nightgauge ci gate-record --event start --kind parity --tree "$CI_GATE_TREE" --full 2>/dev/null || true)
   fi
   if run_ci_parity; then record_ci_parity pass; else record_ci_parity fail; fi
@@ -245,7 +309,9 @@ stays an ordinary failure.
 ### Step 2.5.3: Auto-Fix Loop (If Failures Detected)
 
 When a CI parity command fails, attempt to fix it using the same pattern as the
-RALPH loop. The agent has full code context here, making fixes far more likely
+RALPH loop. This loop re-runs the full gate after each fix because the gate
+itself failed; that is not a review round. A review `catch` never re-runs the
+full gate (Step 2.7.3). The agent has full code context here, making fixes far more likely
 to succeed than in pr-merge.
 
 ```bash
@@ -480,6 +546,9 @@ validation left — failures that would otherwise be caught during `pr-create` o
 
 ### Step 2.7.1: Resolve Binary and Run Gate
 
+With the independent review on, Step 2.7.3 (the review) and Step 2.7.4 (the
+run's one full gate) run before this step, in that order.
+
 Pass no timeout flag: the verb resolves `hooks.pre_push.timeout_seconds`, then
 its default, which covers the repository's suite. That limit exceeds what a
 foreground call survives, so start this step with the Bash tool's
@@ -634,9 +703,31 @@ Never edit the findings file. The verdict is the binary's, and it writes the one
 gate-metric row, the duration, the severity counts and any discovered work.
 
 - `pass`: continue. Findings it routed to `discovered` need nothing from you.
-- `catch` with items in `fix`, and no `cap_reached`: fix each one, re-run the checks they touch, and
-  go back to `review prepare`. The tree changed, so that is a new round. A later
+- `catch` with items in `fix`, and no `cap_reached`: fix each one, re-run the
+  scoped checks (build, vet, tests of the changed packages, Step 2.5.0a): never
+  the full gate, and never kill a running gate. Then go back to
+  `review prepare`. The tree changed, so that is a new round. A later
   `pass` supersedes the catch, and after three catches in a run `prepare` stops.
 - `catch` with an empty `fix`: the review did not complete, which is not a pass.
   Set `VALIDATION_STATUS="failed"` so commit and push are skipped, and put the
   `summary` in the validate notes.
+
+### Step 2.7.4: The Run's One Full Gate (#3207)
+
+Run this once, after Step 2.7.3 returns `pass`, `reusable` or `disabled` on the
+final tree, and before the pre-push gate (Step 2.7.1). It is Steps 2.5.0 to 2.5.3
+as written, on the tree the review passed: `nightgauge ci gate-status`, then
+`nightgauge ci gate-run` in the background, then the auto-fix loop if the gate
+fails. Skip it when the review is off, because Phase 2.5 already ran the full
+gate. Skip it too when the review ended in `cap_reached` or a failed review,
+because commit and push are skipped and no gate result would be used. A gate
+fix that changes the tree after the review passed needs a new review round:
+go back to Step 2.7.3 once, then return here.
+
+The pre-push gate then reuses this tree's ledger pass instead of running again.
+Put the run's gate count in the validate notes, so the stage record carries it:
+
+```bash
+GATE_COUNT=$(nightgauge ci gate-count --json 2>/dev/null || echo '{}')
+echo "Full gates this run: $(printf '%s\n' "$GATE_COUNT" | jq -r '.full // "unknown"')"
+```

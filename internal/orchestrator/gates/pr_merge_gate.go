@@ -109,13 +109,13 @@ func (PrMergeGate) Verify(ctx context.Context, issueNumber int, workspace string
 				// PR (→ rebase-before-merge) apart from a plain unflipped PR
 				// (#4071).
 				return false, fmt.Sprintf("PR #%d is not MERGED (state=%s, mergeStateStatus=%s)",
-						prCtx.PrNumber, ghResp.State, ghResp.MergeStateStatus), []string{
-						fmt.Sprintf("pr=%d", prCtx.PrNumber),
-						fmt.Sprintf("state=%s", ghResp.State),
-						fmt.Sprintf("mergeStateStatus=%s", ghResp.MergeStateStatus),
-						fmt.Sprintf("mergeable=%s", ghResp.Mergeable),
-						fmt.Sprintf("reviewDecision=%s", ghResp.ReviewDecision),
-					}, KindNoOp, ""
+					prCtx.PrNumber, ghResp.State, ghResp.MergeStateStatus), []string{
+					fmt.Sprintf("pr=%d", prCtx.PrNumber),
+					fmt.Sprintf("state=%s", ghResp.State),
+					fmt.Sprintf("mergeStateStatus=%s", ghResp.MergeStateStatus),
+					fmt.Sprintf("mergeable=%s", ghResp.Mergeable),
+					fmt.Sprintf("reviewDecision=%s", ghResp.ReviewDecision),
+				}, KindNoOp, ""
 			}
 			return true, "PR is MERGED", []string{
 				fmt.Sprintf("pr=%d", prCtx.PrNumber),

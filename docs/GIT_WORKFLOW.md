@@ -1459,7 +1459,7 @@ In a pipeline run, feature-dev runs focused checks only. feature-validate's Phas
 can skip `go test` on that tree and a later push on it reuses the pass. A review
 fix changes the tree, so it is gated again. `nightgauge exit-records gate-summary`
 totals gates per stage and run. See
-[GO_BINARY.md](GO_BINARY.md#ci-gate-status-ci-gate-run-and-ci-gate-record).
+[GO_BINARY.md](GO_BINARY.md#ci-gate-status-ci-gate-run-ci-gate-record-and-ci-gate-count).
 
 ### The gate is not the loop
 
@@ -1506,6 +1506,33 @@ Two things this does not license:
   touches shared types, generated files, config schemas, or anything under
   `src/manifest/`, go straight to the package rung — those edits break things at
   a distance by their nature.
+
+### How the gate runs the Go suite (#3209)
+
+Go runs one package's top-level tests one after another unless they call
+`t.Parallel()`, so the slowest package set the floor of each Go pass. The gate
+therefore splits the packages listed in `scripts/go-test-shards.txt` into N
+`go test -run '^(...)$'` processes each, for both the plain pass and the race
+pass. Every other package runs in one `go test` over the rest.
+
+- **Steps.** `go test shard plan` runs first. Then each rest pass and each shard
+  runs as its own grouped step, holding one `CI_LOCAL_JOBS` slot. After every
+  grouped step has finished, `go test shard coverage, skip accounting and pass
+record` merges the plain events into `go-test.json` and checks that every
+  sharded test ran exactly once per pass. It then runs the skip accounting and
+  records the tree for pre-push validate.
+- **Buckets.** A test goes in shard `crc32(name) % N + 1`, so a new test is
+  placed automatically. The plan step fails when a test is in no shard or in
+  two, and the finalize step fails when a planned test ran zero times or twice.
+- **Adding a package.** Add a `shard <import path> <N>` line, slowest first,
+  then refresh `scripts/ci-local-steps.txt` with `--list-steps`. Before you do,
+  look for state that two processes of the package would share: a fixed port, a
+  fixed path outside `t.TempDir()`, a file under the real home directory, or a
+  global lock. Fix it, or pin the test into shard 1 with a
+  `serial <import path> <TestName> <reason>` line.
+- **Comparing coverage.** `python3 scripts/go-test-shard.py names <go test -json
+file>...` prints the tests a run covered. Diff it against an unsharded
+  `go test -json -count=1 ./...` on the same tree.
 
 ### `--changed`: the opt-in fast path (#1985)
 

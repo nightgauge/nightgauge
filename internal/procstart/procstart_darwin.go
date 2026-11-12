@@ -1,6 +1,6 @@
 //go:build darwin
 
-package queuewait
+package procstart
 
 import (
 	"fmt"
@@ -8,8 +8,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// processStart is pid's start time in Unix microseconds.
-func processStart(pid int) (int64, error) {
+// Start is pid's start time in Unix microseconds.
+func Start(pid int) (int64, error) {
 	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
 	if err != nil {
 		return 0, err

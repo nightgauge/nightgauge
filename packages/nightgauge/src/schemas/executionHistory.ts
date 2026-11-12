@@ -595,6 +595,7 @@ export const TerminalFailureKindSchema = z.enum([
   "runaway_progress", // Issue #3783 — progress-based runaway monitor fired; treated like stall_kill
   "merge_conflict", // Issue #2841 — conflict recovery could not land a merge-queue conflict
   "merge_queue_enqueue_failed", // Issue #2729 — pr-merge's enqueue still failed after transient retries; the green PR parks in In review for the reconcile
+  "merge_queue_infra_failed", // Issue #3198 — the merge group failed before the build or test ran on every re-enqueue; the PR needs no change and parks in In review
   "pr_merge_unmerged", // Issue #3691 — pr-merge exited cleanly but the PR was not actually merged
   "blocked_dependency", // Issue #305 — scheduler dispatched an issue whose blockedBy dependencies are still open; non-failure deferral
   "architecture_approval_required", // Issue #4098/#4222 — architecture-approval gate halted the run before feature-dev for a human-owned decision

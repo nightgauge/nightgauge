@@ -45,6 +45,15 @@ const (
 	DefaultMergeQueueDequeueGrace = 3
 )
 
+// mergeQueueDequeueConfirmPolls is how many consecutive polls must show an
+// OPEN PR outside the queue, after its entry was observed, before that is read
+// as a removal (#3219). GitHub records merged, closed and
+// removed_from_merge_queue in the same second, yet the PR's state can still
+// read OPEN for one read after the entry is gone; a single read would book a
+// merged PR as dequeued. A removal with failed merge-group checks is reported
+// on the first read by Wait, so only a check-less removal pays the extra poll.
+const mergeQueueDequeueConfirmPolls = 2
+
 // MergeableUnknown is GitHub's "I have not computed this yet" answer for a
 // pull request's `mergeable` field. It is returned for the first seconds after
 // a push or a PR creation.
@@ -210,7 +219,11 @@ type MergeQueueError struct {
 	Kind         string
 	EntryHeadOID string
 	FailedChecks []string
-	Cause        error
+	// FailedJobs carries the GitHub Actions job behind each failed CheckRun in
+	// FailedChecks, when the rollup exposed its job and run ids (#3198).
+	// StatusContext failures have no job and never appear here.
+	FailedJobs []MergeGroupJob
+	Cause      error
 	// Detail qualifies a MergeQueueNotReady error: what was still pending.
 	Detail string
 }
@@ -257,6 +270,16 @@ func (e *MergeQueueError) Error() string {
 
 func (e *MergeQueueError) Unwrap() error { return e.Cause }
 
+// MergeGroupJob identifies the GitHub Actions job behind one failed
+// merge-group CheckRun (#3198). JobID is the CheckRun's databaseId, which is
+// the Actions job id; RunID is its workflow run's databaseId (0 when the
+// check suite has no workflow run).
+type MergeGroupJob struct {
+	Name  string
+	JobID int64
+	RunID int64
+}
+
 func shortOID(oid string) string {
 	if len(oid) > 12 {
 		return oid[:12]
@@ -299,7 +322,7 @@ const mergeQueueStatusByNumberQuery = `query($owner: String!, $repo: String!, $n
 
 const enqueuePullRequestMutation = `mutation($id: ID!) { enqueuePullRequest(input: {pullRequestId: $id}) { mergeQueueEntry { state position } } }`
 
-const mergeGroupChecksQuery = `query($id: ID!, $oid: GitObjectID!) { node(id: $id) { ... on PullRequest { baseRepository { object(oid: $oid) { ... on Commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } } } } } } } } } }`
+const mergeGroupChecksQuery = `query($id: ID!, $oid: GitObjectID!) { node(id: $id) { ... on PullRequest { baseRepository { object(oid: $oid) { ... on Commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name status conclusion databaseId checkSuite { workflowRun { databaseId } } } ... on StatusContext { context state } } } } } } } } } }`
 
 type mqPRNode struct {
 	ID                  string `json:"id"`
@@ -593,9 +616,16 @@ func notReadyDetail(st MergeQueueStatus) string {
 // FailedMergeGroupChecks returns the names of the checks that failed on the
 // merge-group commit oid, sorted. Pending and passing checks are omitted.
 func (q *MergeQueue) FailedMergeGroupChecks(ctx context.Context, prID, oid string) ([]string, error) {
+	names, _, err := q.failedMergeGroupContexts(ctx, prID, oid)
+	return names, err
+}
+
+// failedMergeGroupContexts returns the sorted names of the failed checks on
+// oid and, for each failed CheckRun that carries a job id, its Actions job.
+func (q *MergeQueue) failedMergeGroupContexts(ctx context.Context, prID, oid string) ([]string, []MergeGroupJob, error) {
 	body, err := q.do(ctx, mergeGroupChecksQuery, map[string]any{"id": prID, "oid": oid})
 	if err != nil {
-		return nil, fmt.Errorf("merge-group checks: %w", err)
+		return nil, nil, fmt.Errorf("merge-group checks: %w", err)
 	}
 	var data struct {
 		Node *struct {
@@ -607,8 +637,14 @@ func (q *MergeQueue) FailedMergeGroupChecks(ctx context.Context, prID, oid strin
 								Typename   string `json:"__typename"`
 								Name       string `json:"name"`
 								Conclusion string `json:"conclusion"`
-								Context    string `json:"context"`
-								State      string `json:"state"`
+								DatabaseID int64  `json:"databaseId"`
+								CheckSuite *struct {
+									WorkflowRun *struct {
+										DatabaseID int64 `json:"databaseId"`
+									} `json:"workflowRun"`
+								} `json:"checkSuite"`
+								Context string `json:"context"`
+								State   string `json:"state"`
 							} `json:"nodes"`
 						} `json:"contexts"`
 					} `json:"statusCheckRollup"`
@@ -617,19 +653,27 @@ func (q *MergeQueue) FailedMergeGroupChecks(ctx context.Context, prID, oid strin
 		} `json:"node"`
 	}
 	if err := decodeGraphQL(body, &data); err != nil {
-		return nil, fmt.Errorf("merge-group checks: %w", err)
+		return nil, nil, fmt.Errorf("merge-group checks: %w", err)
 	}
 	if data.Node == nil || data.Node.BaseRepository == nil || data.Node.BaseRepository.Object == nil ||
 		data.Node.BaseRepository.Object.StatusCheckRollup == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var failed []string
+	var jobs []MergeGroupJob
 	for _, n := range data.Node.BaseRepository.Object.StatusCheckRollup.Contexts.Nodes {
 		switch n.Typename {
 		case "CheckRun":
 			switch n.Conclusion {
 			case "FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE":
 				failed = append(failed, n.Name)
+				if n.DatabaseID > 0 {
+					job := MergeGroupJob{Name: n.Name, JobID: n.DatabaseID}
+					if n.CheckSuite != nil && n.CheckSuite.WorkflowRun != nil {
+						job.RunID = n.CheckSuite.WorkflowRun.DatabaseID
+					}
+					jobs = append(jobs, job)
+				}
 			}
 		case "StatusContext":
 			if n.State == "FAILURE" || n.State == "ERROR" {
@@ -638,7 +682,8 @@ func (q *MergeQueue) FailedMergeGroupChecks(ctx context.Context, prID, oid strin
 		}
 	}
 	sort.Strings(failed)
-	return failed, nil
+	sort.Slice(jobs, func(i, j int) bool { return jobs[i].Name < jobs[j].Name })
+	return failed, jobs, nil
 }
 
 // MergeQueueOutcome is the pure classification of one queue observation.
@@ -652,7 +697,9 @@ const (
 
 // ClassifyMergeQueue maps one observation to an outcome. absentPolls is the
 // number of consecutive polls (including this one) that saw the PR OPEN and
-// outside the queue; seenEntry is whether an entry was ever observed.
+// outside the queue; seenEntry is whether an entry was ever observed. A
+// removal after an entry was seen needs mergeQueueDequeueConfirmPolls absent
+// reads (#3219); before one was seen it needs grace.
 //
 // An UNMERGEABLE entry is terminal only when the PR itself reads CONFLICTING
 // (#2611). On a still-mergeable PR it means the entry is blocked behind an
@@ -673,7 +720,7 @@ func ClassifyMergeQueue(st MergeQueueStatus, seenEntry bool, absentPolls, grace 
 	if st.InQueue {
 		return MergeQueuePending, ""
 	}
-	if seenEntry || absentPolls >= grace {
+	if (seenEntry && absentPolls >= mergeQueueDequeueConfirmPolls) || absentPolls >= grace {
 		return MergeQueueFailed, MergeQueueDequeued
 	}
 	return MergeQueuePending, ""
@@ -740,6 +787,17 @@ func (q *MergeQueue) Wait(ctx context.Context, prID string, initial MergeQueueSt
 					blockedUnmergeable = st.EntryState == "UNMERGEABLE" && st.Mergeable != "CONFLICTING"
 				} else if st.State == "OPEN" {
 					absent++
+					// A removal for failed merge-group checks is real: report it now
+					// rather than waiting out the dequeue confirmation (#3219).
+					if seenEntry && absent == 1 && headOID != "" {
+						failed, jobs, ferr := q.failedMergeGroupContexts(ctx, prID, headOID)
+						if ferr != nil {
+							log.Printf("merge queue: could not read merge-group checks for PR #%d at %s: %v", st.Number, shortOID(headOID), ferr)
+						} else if len(failed) > 0 {
+							return st, &MergeQueueError{PRNumber: st.Number, Kind: MergeQueueDequeued,
+								EntryHeadOID: headOID, FailedChecks: failed, FailedJobs: jobs}
+						}
+					}
 				}
 				outcome, kind := ClassifyMergeQueue(st, seenEntry, absent, opts.DequeueGrace)
 				switch outcome {
@@ -762,11 +820,12 @@ func (q *MergeQueue) Wait(ctx context.Context, prID string, initial MergeQueueSt
 func (q *MergeQueue) failure(ctx context.Context, prID string, number int, kind, headOID string, cause error) error {
 	e := &MergeQueueError{PRNumber: number, Kind: kind, EntryHeadOID: headOID, Cause: cause}
 	if headOID != "" && kind != MergeQueueTimeout {
-		failed, err := q.FailedMergeGroupChecks(ctx, prID, headOID)
+		failed, jobs, err := q.failedMergeGroupContexts(ctx, prID, headOID)
 		if err != nil {
 			log.Printf("merge queue: could not read merge-group checks for PR #%d at %s: %v", number, shortOID(headOID), err)
 		}
 		e.FailedChecks = failed
+		e.FailedJobs = jobs
 	}
 	return e
 }

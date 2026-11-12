@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
+	"time"
 )
 
 // WorkflowRun is a single GitHub Actions workflow run.
@@ -36,6 +38,168 @@ type WorkflowRunJob struct {
 	Name       string `json:"name"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
+	// Steps is the job's step list, in execution order. Populated by
+	// `GET /repos/{owner}/{repo}/actions/jobs/{job_id}` and the run-jobs list.
+	Steps []WorkflowRunStep `json:"steps"`
+}
+
+// WorkflowRunStep is one step of a workflow job. Conclusion is "success",
+// "failure", "skipped", "cancelled", "timed_out" or "" while it runs.
+type WorkflowRunStep struct {
+	Name        string `json:"name"`
+	Number      int    `json:"number"`
+	Status      string `json:"status"`
+	Conclusion  string `json:"conclusion"`
+	StartedAt   string `json:"started_at,omitempty"`
+	CompletedAt string `json:"completed_at,omitempty"`
+}
+
+// DecodeWorkflowRunJob decodes a `GET /repos/{owner}/{repo}/actions/jobs/{job_id}`
+// response (#3198). A body with no job id is an error: it is not a job.
+func DecodeWorkflowRunJob(body []byte) (WorkflowRunJob, error) {
+	var job WorkflowRunJob
+	if err := json.Unmarshal(body, &job); err != nil {
+		return WorkflowRunJob{}, fmt.Errorf("decode workflow job: %w", err)
+	}
+	if job.ID == 0 {
+		return WorkflowRunJob{}, fmt.Errorf("decode workflow job: response carries no job id")
+	}
+	return job, nil
+}
+
+// Failed-step excerpt bounds (#3198): enough of the end of the failed step's
+// output to show the failing command and its error without carrying a whole
+// log into a feedback file.
+const (
+	JobLogExcerptMaxLines = 60
+	JobLogExcerptMaxBytes = 8 << 10
+)
+
+// jobLogStepHeader opens the output of each step that ran, after the
+// timestamp: `##[group]Run <command or action>`.
+const jobLogStepHeader = "##[group]Run "
+
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+
+// FailedStepExcerpt returns the end of one step's own output from a job's
+// plain-text log (`GET /actions/jobs/{id}/logs`), the step chosen by its
+// number in steps. It never falls back to the job's tail: post-failure steps
+// (`if: always()` uploads, summaries, post-job cleanup) follow the failed
+// step, and their lines say nothing about the failure.
+//
+// Each step that ran opens with a `##[group]Run ` header line. Steps that
+// produce none (GitHub's "Set up job", "Complete job" and "Post ..." steps,
+// and skipped steps) are left out, so the failed step is the k-th header
+// where k is its position among the steps that ran. The header's timestamp
+// must fall inside the step's started_at..completed_at window, and the count
+// of headers must equal the count of steps that ran; otherwise (a composite
+// action that adds headers of its own, a log in another format) the result is
+// empty. An empty excerpt is acceptable; a wrong one is not.
+//
+// The step's section runs from its header to the next header, ending no later
+// than one second past its completed_at. Timestamps and ANSI colour codes are
+// stripped, and the last JobLogExcerptMaxLines lines are kept, at most
+// JobLogExcerptMaxBytes from the end.
+func FailedStepExcerpt(log string, steps []WorkflowRunStep, stepNumber int) string {
+	ran := make([]WorkflowRunStep, 0, len(steps))
+	k := -1
+	for _, st := range steps {
+		if !stepProducesHeader(st) {
+			continue
+		}
+		if st.Number == stepNumber {
+			k = len(ran)
+		}
+		ran = append(ran, st)
+	}
+	if k < 0 {
+		return ""
+	}
+	started, err1 := time.Parse(time.RFC3339, ran[k].StartedAt)
+	completed, err2 := time.Parse(time.RFC3339, ran[k].CompletedAt)
+	if err1 != nil || err2 != nil {
+		return ""
+	}
+	end := completed.Add(time.Second)
+
+	lines := strings.Split(strings.TrimPrefix(log, "\ufeff"), "\n")
+	var headers []int
+	for i, line := range lines {
+		if _, text, ok := splitLogLine(line); ok && strings.HasPrefix(text, jobLogStepHeader) {
+			headers = append(headers, i)
+		}
+	}
+	if len(headers) != len(ran) {
+		return ""
+	}
+	ts, _, _ := splitLogLine(lines[headers[k]])
+	if ts.Before(started) || !ts.Before(end) {
+		return ""
+	}
+	stop := len(lines)
+	if k+1 < len(headers) {
+		stop = headers[k+1]
+	}
+	var section []string
+	for _, line := range lines[headers[k]:stop] {
+		lt, text, ok := splitLogLine(line)
+		if ok && !lt.Before(end) {
+			break
+		}
+		if !ok {
+			text = strings.TrimRight(line, "\r")
+		}
+		section = append(section, ansiEscape.ReplaceAllString(text, ""))
+	}
+	return excerptTail(strings.Join(section, "\n"))
+}
+
+// stepProducesHeader reports whether a step that the job lists opens its log
+// output with a `##[group]Run ` header.
+func stepProducesHeader(st WorkflowRunStep) bool {
+	switch {
+	case st.Name == "Set up job", st.Name == "Complete job", strings.HasPrefix(st.Name, "Post "):
+		return false
+	}
+	switch strings.ToLower(st.Conclusion) {
+	case "", "skipped":
+		return false
+	}
+	return true
+}
+
+// splitLogLine splits a job-log line into its leading RFC 3339 timestamp and
+// its text. ok is false for a line without one.
+func splitLogLine(line string) (time.Time, string, bool) {
+	line = strings.TrimRight(line, "\r")
+	stamp, text, found := strings.Cut(line, " ")
+	if !found {
+		return time.Time{}, line, false
+	}
+	t, err := time.Parse(time.RFC3339Nano, stamp)
+	if err != nil {
+		return time.Time{}, line, false
+	}
+	return t, text, true
+}
+
+// excerptTail keeps the last JobLogExcerptMaxLines lines of s, trimmed to at
+// most JobLogExcerptMaxBytes from the end, on a line boundary where one
+// exists.
+func excerptTail(s string) string {
+	s = strings.TrimRight(s, "\r\n")
+	lines := strings.Split(s, "\n")
+	if len(lines) > JobLogExcerptMaxLines {
+		lines = lines[len(lines)-JobLogExcerptMaxLines:]
+	}
+	out := strings.Join(lines, "\n")
+	if len(out) > JobLogExcerptMaxBytes {
+		out = out[len(out)-JobLogExcerptMaxBytes:]
+		if i := strings.IndexByte(out, '\n'); i >= 0 && i < len(out)-1 {
+			out = out[i+1:]
+		}
+	}
+	return out
 }
 
 // ListWorkflowRuns fetches the last `perPage` completed runs of `workflowFile`

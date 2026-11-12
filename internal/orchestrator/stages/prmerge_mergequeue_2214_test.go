@@ -243,8 +243,8 @@ func TestRun_MergeQueueNonConflict_KeepsReason(t *testing.T) {
 		rereadErr error
 		maxCalls  int
 	}{
-		"checks failed":         {err: checks, rereads: []github.MergeQueueStatus{{Mergeable: "CONFLICTING"}}, maxCalls: 1},
-		"closed":                {err: closed, rereads: []github.MergeQueueStatus{{Mergeable: "CONFLICTING"}}, maxCalls: 1},
+		"checks failed":         {err: checks, rereads: []github.MergeQueueStatus{{Mergeable: "CONFLICTING"}}, maxCalls: 2},
+		"closed":                {err: closed, rereads: []github.MergeQueueStatus{{Mergeable: "CONFLICTING"}}, maxCalls: 2},
 		"unmergeable mergeable": {err: unmergeable, rereads: []github.MergeQueueStatus{{Mergeable: "MERGEABLE"}}},
 		"unmergeable unknown":   {err: unmergeable, rereads: []github.MergeQueueStatus{{Mergeable: github.MergeableUnknown}}},
 		"unmergeable read err":  {err: unmergeable, rereadErr: errors.New("boom")},
@@ -267,7 +267,7 @@ func TestRun_MergeQueueNonConflict_KeepsReason(t *testing.T) {
 				t.Errorf("Reason = %q must not name a conflict", res.Reason)
 			}
 			if tc.maxCalls > 0 && q.statusCalls > tc.maxCalls {
-				t.Errorf("MergeQueueStatus called %d times; a non-unmergeable outcome must not re-read", q.statusCalls)
+				t.Errorf("MergeQueueStatus called %d times; a non-unmergeable outcome re-reads only for the MERGED check (#3219)", q.statusCalls)
 			}
 		})
 	}

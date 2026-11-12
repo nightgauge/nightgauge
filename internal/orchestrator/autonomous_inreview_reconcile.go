@@ -612,7 +612,9 @@ func (as *AutonomousScheduler) projectForRepo(owner, repoName string) (int, gh.O
 // parked by an enqueue that exhausted its transient retries (#2729). Nothing
 // about such a PR needs a human: re-running pr-merge enqueues it. Any other
 // CLEAN PR is left alone, because its last run ended for a reason the
-// reconcile cannot judge.
+// reconcile cannot judge. That includes merge_queue_infra_failed (#3198):
+// pr-merge already re-enqueued it up to its bound, and re-admitting it would
+// start a fresh round with nothing to stop the cycle.
 func (as *AutonomousScheduler) isEnqueueFailedCleanPR(repo string, number int, mergeState string, pr openPR) bool {
 	if !strings.EqualFold(mergeState, "CLEAN") || len(pr.FailedChecks) > 0 {
 		return false

@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-09
 **Status:** Decided
-**Issue:** #3091, #3102, #3104
+**Issue:** #3091, #3102, #3104, #3161, #3192
 
 ---
 
@@ -11,7 +11,11 @@
 Every Go binary Nightgauge ships is built **without** the linker strip flags
 `-s` and `-w`. That covers the darwin and linux binaries in the release
 archives, the binaries bundled in each VSIX, and the Homebrew cask's. Each
-binary keeps its symbol table and its DWARF debug information.
+binary keeps its symbol table and its DWARF debug information, and the release
+targets keep that DWARF uncompressed (`-compressdwarf=false`). The toolchain is
+go1.27.4. Every RC also scans its shipped binaries at three neighbouring version
+strings, and a release is promoted only from an RC whose margin scan was clean
+([Linux amd64 margin and the margin scan](#linux-amd64-margin-and-the-margin-scan-3192)).
 
 A scan finding is fixed at its cause. Owner rule: a finding is never reported
 to the vendor as a false positive (no WDSI or "incorrectly detected"
@@ -123,13 +127,18 @@ scan needs no change.
 
 ## Enforcement
 
-- `Makefile` `LDFLAGS` and `.goreleaser.yml` `ldflags` carry no `-s` or `-w`.
-  Each has a comment that cites this record. `TestNoLinkerStripFlags` in
-  `cmd/release-dwarf-check` fails, naming this record, if either flag returns.
+- `Makefile` `LDFLAGS`/`RELEASE_LDFLAGS` and `.goreleaser.yml` `ldflags` carry
+  no `-s` or `-w`. Each has a comment that cites this record.
+  `TestNoLinkerStripFlags` in `cmd/release-dwarf-check` fails, naming this
+  record, if either flag returns. `TestReleaseBuildsKeepDWARFUncompressed`
+  fails if a release target in the Makefile, or the `.goreleaser.yml` ldflags,
+  lose `-compressdwarf=false`.
 - `cmd/release-dwarf-check` reads the packaged files, not the flags. It opens
   every Go binary in each `.tar.gz` and `.vsix` (or a raw binary) with Go's
-  `debug/elf` or `debug/macho` and requires `DWARF()` to yield data. It exits
-  `0` when every binary carries DWARF and `1` when any lacks it. It exits `2`
+  `debug/elf` or `debug/macho` and requires `DWARF()` to yield data, stored
+  uncompressed: no ELF `.debug_*` section flagged `SHF_COMPRESSED`, no
+  `.zdebug_*` and no Mach-O `__zdebug_*`. It exits `0` when every binary
+  carries uncompressed DWARF and `1` when any lacks DWARF or compresses it. It exits `2`
   with a `HARNESS ERROR` line when it checked nothing: no path, an unreadable
   path, or an archive with no Go binary.
 - `staging.yml` runs it in the `dry-run` job, which the RC's `rc-scan` job
@@ -138,13 +147,18 @@ scan needs no change.
   Tests in the same package prove the step's position and that it fails
   closed.
 - The detector's regression tests build a small program for linux/amd64 and
-  darwin/arm64 with and without `-s -w`, and check each raw, in a `.tar.gz` and
-  in a `.vsix`. `scripts/ci-local.sh` runs them through `go test ./...`.
+  darwin/arm64 stripped, with compressed DWARF and with uncompressed DWARF, and
+  check each raw, in a `.tar.gz` and in a `.vsix`. `scripts/ci-local.sh` runs
+  them through `go test ./...`.
+- The margin scan and the release gate are described in
+  [their own section](#linux-amd64-margin-and-the-margin-scan-3192).
 
 ## A Microsoft `!ml` finding on a Go binary
 
 Check it against this record first. Are the binaries still unstripped, and did
 `release-dwarf-check` pass in the run that built them? If not, restore DWARF.
+A finding in an RC's margin builds counts the same as one in its own files; see
+[the margin scan](#linux-amd64-margin-and-the-margin-scan-3192).
 Then check that `go.mod` still holds the pinned dependency set below
 (`TestScoreSensitiveModulesStayPinned`). If they are unstripped, pinned and
 still flagged, the cause is something else. Find it and fix it there. Never report it to the vendor as a
@@ -248,10 +262,146 @@ The signed universal file was clean at all five, including the two
 file and copy it over `bin/nightgauge-darwin-amd64` and
 `bin/nightgauge-darwin-arm64`, so both darwin VSIXs, both darwin archives and
 the cask carry identical bytes. `scripts/verify-darwin-universal.sh` fails the
-run when a darwin VSIX or bin/ binary is not that file. The linux build is
-unchanged. Each darwin download is about twice the size of a thin one.
+run when a darwin VSIX or bin/ binary is not that file. Each darwin download is
+about twice the size of a thin one. The universal file stayed clean on go1.27.3
+at the same five version strings (#3192).
 
 **Rule.** A darwin binary change ships only if the signed build is clean at five
 or more version strings, `0.8.6-rc.3` among them. Shipping a thin darwin binary
 again is such a change. Nothing here is allowlisted or reported as a false
 positive. A flagged darwin binary holds the release.
+
+## Linux amd64 margin and the margin scan (#3192)
+
+v0.8.6-rc.3's Linux amd64 binary was flagged (`Trojan:Script/Wacatac.B!ml`,
+sha256 `fc38f3df…`, reproduced byte for byte from `adc53828`). 86 builds were
+measured, each scanned with `scripts/vt-scan.sh` only. Every build is Linux
+amd64, `CGO_ENABLED=0 go build -trimpath` with the release's version and
+vendor strings, and differs from rc.3's tree by the one named change. Each was
+built at several version strings and nothing else.
+
+| Variant                                                      | Builds | Flagged by Microsoft |
+| ------------------------------------------------------------ | -----: | -------------------: |
+| rc.3's tree as staging built it, go1.26.11                   |      6 |                    3 |
+| go1.26.10 (toolchain bump reverted)                          |      5 |                    3 |
+| `x/sys` 0.49.0, `x/oauth2` 0.37.0 (dependency bump reverted) |      6 |                    1 |
+| rc.2's code (`10a3d0f3`) on go1.26.11                        |      3 |                    2 |
+| `-compressdwarf=false`                                       |      6 |                    1 |
+| Embedded text assets gzipped (diagnostic)                    |      6 |                    4 |
+| go1.27.3                                                     |      5 |                    1 |
+| `-buildmode=pie`                                             |      5 |                    3 |
+| `GOAMD64=v2`                                                 |      5 |                    3 |
+| v0.8.5's tree (`a70689f4`) on go1.26.11                      |      5 |                    1 |
+| `8c0df4d4`, before the #3104 pin                             |      5 |                    5 |
+| `modernc.org/sqlite` driver import removed (diagnostic)      |      6 |                    2 |
+| **go1.27.3 and `-compressdwarf=false`**                      | **18** |      **1** (`0.8.9`) |
+| darwin universal, go1.27.3 (the #3161 recipe)                |      5 |                    0 |
+
+The per-build sha256 and verdicts are on #3192.
+
+**Cause.** No change between rc.2 and rc.3 caused it. Each suspected change,
+reverted alone, was still flagged. The verdict flips with the version string in
+every variant: rc.3's tree was flagged at `0.8.6-rc.3`, `0.8.6` and `0.8.7`,
+and clean at `0.8.6-rc.4`, `0.8.6-rc.5` and `0.8.7-rc.1`. The Linux ELF as a
+whole sits at this model's threshold, at least since v0.8.5. rc.1 and rc.2 were
+each clean at one string, and that was read as a fix. It was not.
+
+**What ships.** `-compressdwarf=false` on every release target
+(`RELEASE_LDFLAGS` in the `Makefile`, mirrored in `.goreleaser.yml`) on the
+go1.27 toolchain: the lowest rate measured, 1 of 18 on go1.27.3, against 3 of 6
+as rc.3 was built. Neither change alone did as well. `go.mod` names go1.27.4,
+not go1.27.3: GO-2026-6859, a `net/http` vulnerability this code reaches, is
+fixed only in go1.27.4 (main's go1.26.11 already had the fix), so go1.27.3
+would fail `govulncheck`. go1.27.4 is unmeasured; the first RC's own scan and
+its three margin strings measure it at four version strings, and the release
+gate holds the release until they are clean. The residual is not zero, so the
+build is paired with the margin scan. Uncompressed DWARF adds about 17 MB to
+the Linux binary before compression.
+
+**Rule.** One clean scan is not evidence. A build change, or a raise of a
+score-sensitive pin, is accepted only when it is clean at four or more version
+strings, the release string among them. A margin finding is fixed by changing
+the build, never by picking another version number. It is never reported to
+the vendor as a false positive and never allowlisted.
+
+**The margin scan.** For an RC `X.Y.Z-rc.N`, `scripts/release-margin-builds.sh`
+builds the Linux amd64 binary and the signed universal darwin file at `X.Y.Z`
+(the release string), `X.Y.Z-rc.(N+1)` and `X.Y.(Z+1)-rc.1`. It uses the
+Makefile's `build-release-targets` and `darwin-universal` targets, so the flags
+are the RC's own, and writes six raw, executable `nightgauge-margin_<v>_<target>`
+binaries and a `margin-manifest.txt` (`<version> <file> <sha256>` per line).
+They are not archived: the scan gate scans an archive and then the binary
+inside it, so an archive cost each build two uploads (#3202). In `staging.yml`:
+
+- `dry-run` builds them on RC tag pushes, DWARF-checks them and uploads
+  `rc-margin-<tag>`. They never enter `rc-artifacts-*` or a GitHub Release.
+- `rc-scan` fails unless it holds six binaries and the manifest, then scans them
+  with the RC's own files in one `release-scan-gate.sh local` call. Any finding
+  fails the RC. After a clean scan it uploads `rc-margin-scan-<tag>` (the
+  manifest and the report), kept 90 days.
+
+**The release gate.** `release.yml`'s first step after checkout runs
+`scripts/release-rc-margin-check.sh`. It passes only when an RC tag
+`vX.Y.Z-rc.N` points at the release tag's commit, that tag's staging run has a
+successful `rc-scan`, and its unexpired `rc-margin-scan-*` manifest names
+`X.Y.Z`. Otherwise nothing is built. It has no override. An expired record
+(after 90 days) means a new RC on the commit.
+
+**Tests.** `TestStagingWorkflowBuildsMarginBinaries`,
+`TestRCScanScansMarginBinaries` and `TestReleaseWorkflowRequiresMarginScannedRC`
+in `cmd/release-dwarf-check` fail if a step is removed, moved, made
+non-failing, or stops feeding the scan. `scripts/test-release-margin.sh` (run by
+`scripts/ci-local.sh`) covers the version strings, the six-binary count, and
+each verdict of the release gate against a stub `gh`.
+
+### The RC scan request budget
+
+The free VirusTotal key allows 4 requests a minute and 500 a day. One RC scan,
+margin builds included, is budgeted at 160 requests (`VT_MAX_REQUESTS: "160"`
+on `staging.yml`'s rc-scan step), so a second RC and a release fit in the same
+day. A scan that would pass the budget stops before sending the request, with a
+HARNESS ERROR, and the RC fails.
+
+- **The RC's own files: about 60.** rc.3 sent 108 requests for 31 unique files.
+  63 of them re-analysed 21 unchanged, clean hooks and scripts whose last
+  analysis was older than 24 hours. A text file now reuses a clean, complete
+  report for 14 days (`VT_REUSE_MAX_AGE_TEXT`), so it costs one lookup.
+  Binaries, VSIXes and archives keep the 24-hour window
+  (`VT_REUSE_MAX_AGE`): a classifier verdict on them moves without a byte
+  changing. A report with any finding is never reused under the long window.
+  The kind comes from the bytes: an ELF, Mach-O, PE, zip or gzip header, or a
+  NUL byte in the first 8 KiB, makes a file a binary. `scripts/test-vt-scan.sh`
+  replays rc.3's file list through the offline API double: 108 requests
+  recorded, 52 under these rules.
+- **The text files' window running out: about 58 more.** Reuse never moves
+  VirusTotal's report date, so an RC cut 14 or more days after the text files
+  were last analysed re-analyses all of them again. The same replay with every
+  text file re-analysed takes 111 requests: rc.3's 21 reanalyses took 35
+  polls, not one each. Their new reports then carry the next 14 days.
+- **The six margin binaries: about 24.** Each is new to VirusTotal: a lookup,
+  `upload_url` (they are over 32 MB), the upload and a poll.
+- **Headroom: about 16** for polls of slow analyses. A report counts as
+  reanalysed only when its date is later than the lookup's and within the
+  file's window: 24 hours for a binary, VSIX, archive or any report with a
+  finding, the long window only for a clean text file. A file poll that shows no
+  newer date switches to polling the analysis object alone, one request per
+  poll, until it completes; then the file is read again. When that analysis
+  completes without a newer report (2026-11-11), the scan stops at once with
+  exit 2 and the step is re-run; the lookup's report is never judged as the
+  reanalysis. A newer analysis may mean the file object lags, so the file is
+  read up to three more times; if its date still has not moved, the scan stops
+  with exit 2 the same way (VirusTotal dates an analysis when it is created, so
+  a folded one can look newer).
+
+Every `vt-scan.sh` run ends with a line counting its requests by class
+(lookups, uploads, reanalyses, polls), and the report carries the same counts
+as `requests_by_class`; each entry records the reuse window that applied
+(`reuse_window`) and the analysis date.
+
+A measurement scan, such as an ad-hoc `vt-scan.sh` or `release-scan-gate.sh
+local` run to test a hypothesis, spends the same daily quota as the release
+path. Plan it against the day's remaining quota before the first request is
+sent: count the requests already spent today (each report's `requests`), add
+the planned scan's estimate from the rules above, and keep room for any RC or
+release still due that day. Set `VT_MAX_REQUESTS` to that estimate so the scan
+stops instead of spending the rest.

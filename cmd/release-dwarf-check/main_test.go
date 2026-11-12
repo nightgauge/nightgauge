@@ -20,13 +20,18 @@ type fixture struct {
 	goos     string
 	goarch   string
 	stripped bool
+	// compressed builds with the linker's default compressed DWARF; the
+	// release builds use -compressdwarf=false (#3192).
+	compressed bool
 }
 
 var fixtures = []fixture{
-	{"linux-stripped", "linux", "amd64", true},
-	{"linux-unstripped", "linux", "amd64", false},
-	{"darwin-stripped", "darwin", "arm64", true},
-	{"darwin-unstripped", "darwin", "arm64", false},
+	{"linux-stripped", "linux", "amd64", true, false},
+	{"linux-unstripped", "linux", "amd64", false, false},
+	{"linux-compressed", "linux", "amd64", false, true},
+	{"darwin-stripped", "darwin", "arm64", true, false},
+	{"darwin-unstripped", "darwin", "arm64", false, false},
+	{"darwin-compressed", "darwin", "arm64", false, true},
 }
 
 var (
@@ -65,8 +70,11 @@ func buildFixtures(t *testing.T) string {
 		}
 		for _, fx := range fixtures {
 			args := []string{"build", "-trimpath", "-o", filepath.Join(dir, fx.name)}
-			if fx.stripped {
+			switch {
+			case fx.stripped:
 				args = append(args, "-ldflags=-s -w")
+			case !fx.compressed:
+				args = append(args, "-ldflags=-compressdwarf=false")
 			}
 			args = append(args, ".")
 			cmd := exec.Command("go", args...)
@@ -101,7 +109,7 @@ func runCheck(t *testing.T, args ...string) (int, string) {
 }
 
 func wantCode(fx fixture) int {
-	if fx.stripped {
+	if fx.stripped || fx.compressed {
 		return 1
 	}
 	return 0
@@ -115,8 +123,11 @@ func TestRawBinaries(t *testing.T) {
 			if code != wantCode(fx) {
 				t.Fatalf("exit %d, want %d; output:\n%s", code, wantCode(fx), out)
 			}
-			if fx.stripped && !strings.Contains(out, record) {
+			if wantCode(fx) != 0 && !strings.Contains(out, record) {
 				t.Errorf("finding does not name %s:\n%s", record, out)
+			}
+			if fx.compressed && !strings.Contains(out, "compressed DWARF") {
+				t.Errorf("compressed fixture not reported as compressed DWARF:\n%s", out)
 			}
 		})
 	}
@@ -328,6 +339,106 @@ func TestNoLinkerStripFlags(t *testing.T) {
 	}
 }
 
+// releaseBuildTargets are the Makefile's release binaries: every one must be
+// linked with uncompressed DWARF (#3192). build-cli, the native dev build, is
+// not shipped and is not checked.
+var releaseBuildTargets = []string{
+	"nightgauge-darwin-arm64",
+	"nightgauge-darwin-amd64",
+	"nightgauge-linux-amd64",
+}
+
+const noCompressFlag = "-compressdwarf=false"
+
+// makefileReleaseLDFlags returns, for each release target, the expanded
+// ldflags its `go build` line uses: the line's own text plus the definition of
+// every $(VAR) it names.
+func makefileReleaseLDFlags(t *testing.T, mk string) map[string]string {
+	t.Helper()
+	defs := map[string]string{}
+	for _, line := range strings.Split(mk, "\n") {
+		if name, val, ok := strings.Cut(line, ":="); ok {
+			if name = strings.TrimSpace(name); name != "" && !strings.ContainsAny(name, " \t#") {
+				defs[name] = val
+			}
+		}
+	}
+	got := map[string]string{}
+	for _, line := range strings.Split(mk, "\n") {
+		if !strings.Contains(line, "go build") {
+			continue
+		}
+		for _, target := range releaseBuildTargets {
+			if !strings.Contains(line, "$(BIN_DIR)/"+target+" ") {
+				continue
+			}
+			expanded := line
+			for rest := line; ; {
+				i := strings.Index(rest, "$(")
+				if i < 0 {
+					break
+				}
+				j := strings.Index(rest[i:], ")")
+				if j < 0 {
+					break
+				}
+				expanded += " " + defs[rest[i+2:i+j]]
+				rest = rest[i+j:]
+			}
+			got[target] = expanded
+		}
+	}
+	return got
+}
+
+func TestReleaseBuildsKeepDWARFUncompressed(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(repoRoot, "Makefile"))
+	if err != nil {
+		t.Fatalf("HARNESS ERROR: %v", err)
+	}
+	builds := makefileReleaseLDFlags(t, string(b))
+	for _, target := range releaseBuildTargets {
+		line, ok := builds[target]
+		if !ok {
+			t.Fatalf("HARNESS ERROR: no go build line for %s in the Makefile; the guard would check nothing", target)
+		}
+		if !strings.Contains(line, noCompressFlag) {
+			t.Errorf("Makefile builds %s without %s; release binaries keep DWARF uncompressed (see %s)",
+				target, noCompressFlag, record)
+		}
+	}
+	lines := ldflagsLines(t, filepath.Join(repoRoot, ".goreleaser.yml"), true)
+	if len(lines) == 0 {
+		t.Fatal("HARNESS ERROR: no ldflags item in .goreleaser.yml; the guard would check nothing")
+	}
+	for n, line := range lines {
+		if !strings.Contains(line, noCompressFlag) {
+			t.Errorf(".goreleaser.yml:%d ldflags lack %s; it must build the way the Makefile does (see %s)",
+				n, noCompressFlag, record)
+		}
+	}
+}
+
+// The guard must go red when a release target loses the flag.
+func TestReleaseLDFlagsDetector(t *testing.T) {
+	mk := `RELEASE_LDFLAGS := -ldflags "-compressdwarf=false -X main.version=$(VERSION)"
+LDFLAGS := -ldflags "-X main.version=$(VERSION)"
+x:
+	GOOS=darwin GOARCH=arm64 go build $(RELEASE_LDFLAGS) -o $(BIN_DIR)/nightgauge-darwin-arm64 ./cmd/nightgauge
+	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BIN_DIR)/nightgauge-linux-amd64 ./cmd/nightgauge
+`
+	got := makefileReleaseLDFlags(t, mk)
+	if !strings.Contains(got["nightgauge-darwin-arm64"], noCompressFlag) {
+		t.Errorf("detector missed the flag through $(RELEASE_LDFLAGS): %q", got["nightgauge-darwin-arm64"])
+	}
+	if line, ok := got["nightgauge-linux-amd64"]; !ok || strings.Contains(line, noCompressFlag) {
+		t.Errorf("detector did not report the linux build as lacking the flag: %q", line)
+	}
+	if _, ok := got["nightgauge-darwin-amd64"]; ok {
+		t.Errorf("detector invented a build line for a target the Makefile does not build")
+	}
+}
+
 func TestStripFlagDetector(t *testing.T) {
 	bad := []string{
 		`LDFLAGS := -ldflags "-s -w -X main.version=1"`,
@@ -360,7 +471,7 @@ func stepBlock(t *testing.T, wf, name string) (string, int) {
 	t.Helper()
 	start := strings.Index(wf, "- name: "+name)
 	if start < 0 {
-		t.Fatalf("no %q step; the release must check DWARF before scanning (see %s)", name, record)
+		t.Fatalf("no %q step; the release workflows must keep it (see %s)", name, record)
 	}
 	rest := wf[start+1:]
 	end := strings.Index(rest, "\n      - ")
@@ -423,5 +534,181 @@ func TestStagingWorkflowChecksDWARFBeforeRCScan(t *testing.T) {
 	}
 	if !strings.Contains(wf[rcScan:], "needs: dry-run") {
 		t.Errorf("staging.yml rc-scan no longer needs dry-run, so the DWARF check no longer precedes the scan")
+	}
+}
+
+// --- Margin scan guard (#3192): every RC builds and scans the shipped binaries
+// at three neighbouring version strings, and a release needs a margin-clean RC. ---
+
+const (
+	marginStepName     = "Build the margin scan binaries"
+	marginUploadName   = "Upload margin scan inputs"
+	marginDownloadName = "Download margin scan inputs"
+	marginRecordName   = "Upload the margin scan record"
+	marginGateName     = "Require an RC on this commit with a clean margin scan"
+	rcScanStepName     = "Scan every archive and VSIX"
+	rcScanCondition    = "if: startsWith(github.ref, 'refs/tags/v') && inputs.version == ''"
+)
+
+// assertNoSwallow fails when a step can pass while its command fails.
+func assertNoSwallow(t *testing.T, file, name, block string) {
+	t.Helper()
+	for _, bad := range []string{"continue-on-error", "|| true", "|| :", "exit 0"} {
+		if strings.Contains(block, bad) {
+			t.Errorf("%s step %q contains %q; it must fail closed (see %s)", file, name, bad, record)
+		}
+	}
+}
+
+// jobSpan returns the byte range of the job whose header is `  name:`.
+func jobSpan(t *testing.T, wf, file, name string) (int, int) {
+	t.Helper()
+	start := strings.Index(wf, "\n  "+name+":\n")
+	if start < 0 {
+		t.Fatalf("HARNESS ERROR: %s has no %s job", file, name)
+	}
+	end := len(wf)
+	for i := start + 1; i < len(wf); {
+		j := strings.Index(wf[i:], "\n  ")
+		if j < 0 {
+			break
+		}
+		i += j + 1
+		if i+2 < len(wf) && wf[i+2] != ' ' && wf[i+2] != '#' && wf[i+2] != '\n' {
+			end = i
+			break
+		}
+	}
+	return start, end
+}
+
+func TestStagingWorkflowBuildsMarginBinaries(t *testing.T) {
+	wf := readWorkflow(t, "staging.yml")
+	dryStart, dryEnd := jobSpan(t, wf, "staging.yml", "dry-run")
+	block, at := stepBlock(t, wf, marginStepName)
+	if at < dryStart || at > dryEnd {
+		t.Fatalf("staging.yml %q is not in the dry-run job", marginStepName)
+	}
+	assertNoSwallow(t, "staging.yml", marginStepName, block)
+	if !strings.Contains(block, "scripts/release-margin-builds.sh \"$VERSION\"") {
+		t.Errorf("staging.yml %q does not run scripts/release-margin-builds.sh on the RC version:\n%s",
+			marginStepName, block)
+	}
+	// Raw binaries, not archives (#3202): the scan gate scans an archive and
+	// then the binary inside it, two uploads for one build.
+	if !strings.Contains(block, "./cmd/release-dwarf-check") || !strings.Contains(block, "nightgauge-margin_*_*") ||
+		strings.Contains(block, "nightgauge-margin_*.tar.gz") {
+		t.Errorf("staging.yml %q does not DWARF-check the raw margin binaries:\n%s", marginStepName, block)
+	}
+	// The margin builds are scan inputs only. Notarizing them cannot change a
+	// bare Mach-O and can stall dry-run on Apple's queue (#3192).
+	for _, secret := range []string{"APPLE_ID:", "APPLE_TEAM_ID:", "APPLE_APP_PASSWORD:"} {
+		if strings.Contains(block, secret) {
+			t.Errorf("staging.yml %q carries %s; margin builds must not be notarized:\n%s",
+				marginStepName, strings.TrimSuffix(secret, ":"), block)
+		}
+	}
+	if !strings.Contains(block, rcScanCondition) {
+		t.Errorf("staging.yml %q must run exactly when rc-scan does (%s):\n%s", marginStepName, rcScanCondition, block)
+	}
+	_, sign := stepBlock(t, wf, "Sign the macOS binaries")
+	if at < sign {
+		t.Errorf("staging.yml builds the margin binaries before the RC's own are signed")
+	}
+	upload, up := stepBlock(t, wf, marginUploadName)
+	if up < at || up > dryEnd {
+		t.Errorf("staging.yml %q must follow the margin build inside dry-run", marginUploadName)
+	}
+	for _, want := range []string{"name: rc-margin-${{ steps.version.outputs.tag }}", "if-no-files-found: error",
+		"nightgauge-margin_*_*", "margin-manifest.txt", rcScanCondition} {
+		if !strings.Contains(upload, want) {
+			t.Errorf("staging.yml %q lacks %q:\n%s", marginUploadName, want, upload)
+		}
+	}
+	rc, _ := stepBlock(t, wf, "Upload RC artifacts for manual verification")
+	if strings.Contains(rc, "margin") {
+		t.Errorf("staging.yml uploads margin builds in rc-artifacts; they are scan inputs only and never published")
+	}
+}
+
+func TestRCScanScansMarginBinaries(t *testing.T) {
+	wf := readWorkflow(t, "staging.yml")
+	scanStart, scanEnd := jobSpan(t, wf, "staging.yml", "rc-scan")
+	if !strings.Contains(wf[scanStart:scanEnd], "needs: dry-run") {
+		t.Fatalf("staging.yml rc-scan no longer needs dry-run, so it cannot read the margin builds")
+	}
+	dl, dlAt := stepBlock(t, wf, marginDownloadName)
+	if dlAt < scanStart || dlAt > scanEnd || !strings.Contains(dl, "name: rc-margin-${{ needs.dry-run.outputs.tag }}") {
+		t.Errorf("staging.yml rc-scan does not download rc-margin-<tag>:\n%s", dl)
+	}
+	scan, scanAt := stepBlock(t, wf, rcScanStepName)
+	if scanAt < dlAt || scanAt > scanEnd {
+		t.Fatalf("staging.yml %q must follow the margin download inside rc-scan", rcScanStepName)
+	}
+	assertNoSwallow(t, "staging.yml", rcScanStepName, scan)
+	// The raw margin binaries, counted and scanned under the workflow's request
+	// budget (#3202): the gate fails a run that would pass VT_MAX_REQUESTS.
+	for _, want := range []string{"-eq 6", "margin-manifest.txt", `"${MARGIN[@]}"`, "release-scan-gate.sh local",
+		`margin/nightgauge-margin_*_*)`, `VT_MAX_REQUESTS: "160"`} {
+		if !strings.Contains(scan, want) {
+			t.Errorf("staging.yml %q lacks %q; it must count the raw margin binaries and scan them in budget:\n%s",
+				rcScanStepName, want, scan)
+		}
+	}
+	if strings.Contains(scan, "nightgauge-margin_*.tar.gz") {
+		t.Errorf("staging.yml %q still scans margin archives; each would be uploaded twice:\n%s", rcScanStepName, scan)
+	}
+	rec, recAt := stepBlock(t, wf, marginRecordName)
+	if recAt < scanAt || recAt > scanEnd {
+		t.Errorf("staging.yml %q must follow the scan inside rc-scan", marginRecordName)
+	}
+	for _, want := range []string{"name: rc-margin-scan-${{ needs.dry-run.outputs.tag }}", "margin-manifest.txt",
+		"retention-days: 90", "if-no-files-found: error"} {
+		if !strings.Contains(rec, want) {
+			t.Errorf("staging.yml %q lacks %q:\n%s", marginRecordName, want, rec)
+		}
+	}
+	if strings.Contains(rec, "if:") {
+		t.Errorf("staging.yml %q has a condition; it must upload only after a clean scan:\n%s", marginRecordName, rec)
+	}
+	// upload-artifact roots the artifact at the paths' common ancestor, and
+	// scripts/release-rc-margin-check.sh reads margin-manifest.txt and
+	// vt-scan-report-rc.json from its top level, so both must be uploaded from
+	// the same directory (#3192).
+	for _, want := range []string{"${{ runner.temp }}/margin-manifest.txt", "${{ runner.temp }}/vt-scan-report-rc.json"} {
+		if !strings.Contains(rec, want) {
+			t.Errorf("staging.yml %q must upload %s so the release gate finds it at the artifact's top level:\n%s",
+				marginRecordName, want, rec)
+		}
+	}
+	if !strings.Contains(scan, `cp "$RUNNER_TEMP/margin/margin-manifest.txt" "$RUNNER_TEMP/margin-manifest.txt"`) {
+		t.Errorf("staging.yml %q must copy the manifest beside the scan report before the record upload:\n%s",
+			rcScanStepName, scan)
+	}
+}
+
+func TestReleaseWorkflowRequiresMarginScannedRC(t *testing.T) {
+	wf := readWorkflow(t, "release.yml")
+	relStart, relEnd := jobSpan(t, wf, "release.yml", "release")
+	block, at := stepBlock(t, wf, marginGateName)
+	if at < relStart || at > relEnd {
+		t.Fatalf("release.yml %q is not in the release job", marginGateName)
+	}
+	assertNoSwallow(t, "release.yml", marginGateName, block)
+	if strings.Contains(block, "if:") {
+		t.Errorf("release.yml %q has a condition; there is no override (see %s)", marginGateName, record)
+	}
+	if !strings.Contains(block, `scripts/release-rc-margin-check.sh "$TAG" "$GITHUB_SHA" "$REPO"`) {
+		t.Errorf("release.yml %q does not run the margin gate on the tag's commit:\n%s", marginGateName, block)
+	}
+	build := strings.Index(wf, "- name: Build all Go binaries")
+	if build < 0 {
+		t.Fatal("HARNESS ERROR: release.yml has no Build all Go binaries step")
+	}
+	if at > build {
+		t.Errorf("release.yml runs the margin gate after the build; it must refuse before anything is built")
+	}
+	if !strings.Contains(wf[relStart:at], "actions: read") {
+		t.Errorf("release.yml release job lacks `actions: read`; the gate cannot read the RC's run and artifact")
 	}
 }

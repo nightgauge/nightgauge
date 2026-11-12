@@ -125,11 +125,12 @@ func TestFeatureValidate_PhaseTwoFiveRunsOneGate(t *testing.T) {
 		}
 		at += i + 1
 	}
-	// A gate that records itself must not get a second start: that start would
-	// never finish, and would count as a killed gate.
-	if !strings.Contains(body, `if [ "$CI_GATE_RECORDS_ITSELF" != "true" ] || [ -z "$CI_GATE_COMMAND" ]; then
+	// `ci gate-run` records every gate it runs (#3207), so it must not get a
+	// second start: that start would never finish, and would count as a killed
+	// gate.
+	if !strings.Contains(body, `if [ "${CI_PARITY_COMMANDS[0]:-}" != "nightgauge ci gate-run" ]; then
     CI_GATE_RUN=$(nightgauge ci gate-record --event start`) {
-		t.Error("the parity start is not guarded against a self-recording gate")
+		t.Error("the parity start is not guarded against gate-run's own recording")
 	}
 	if !strings.Contains(body, "NIGHTGAUGE_PROGRESS:") {
 		t.Error("the gate runs with no declared log")
