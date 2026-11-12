@@ -7,7 +7,7 @@ description: Documentation-first feature planning. Read docs before code, propos
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.18.0"
+  version: "1.19.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 context: fork
@@ -351,13 +351,17 @@ printf '<!-- phase:start name="load-context" index=1 total=13 stage="feature-pla
 Load issue context and signal stage start — see
 `_includes/feedback-and-context.md` (same directory as this SKILL.md).
 
-### Phase 1.7: AC Reconciliation Pre-Flight (Deterministic)
+### Phase 1.7: Read the AC Reconciliation Report (Deterministic)
 
 ```bash
 printf '<!-- phase:start name="ac-reconcile" index=2 total=13 stage="feature-planning" -->\n'
 ```
 
-**PURPOSE**: Deterministic, pre-LLM check classifying each AC as `satisfied | partial | unsatisfied | undetectable` against the current `main` working tree, persisting the report to `ac-reconcile-{N}.json` in the clone's pipeline state directory and routing planning accordingly:
+**PURPOSE**: Read the deterministic AC report and route planning by it. Before
+this stage was dispatched, the orchestrator rebuilt `ac-reconcile-{N}.json` in
+the clone's pipeline state directory from the issue body as it is now, classifying
+each AC as `satisfied | partial | unsatisfied | undetectable` against the
+working tree (#3228). The report is never left over from an earlier run.
 
 - `all-satisfied` → produce a plan with `approach: "verify-and-close"` and
   empty `files_to_create` / `files_to_modify` (Issue #708 short-circuit).
@@ -365,59 +369,23 @@ printf '<!-- phase:start name="ac-reconcile" index=2 total=13 stage="feature-pla
   scope to the unsatisfied / undetectable subset.
 - otherwise → continue normal planning.
 
-`--notify-empty` comments once on an issue with no recognisable criteria, so
-the gap surfaces now rather than as `Refs #N` at pr-create (#2906).
-
-Consumes zero LLM tokens. Skip cleanly when the binary is missing.
+This phase only reads the report. Do not run `preflight ac-reconcile`, and do
+not write or edit `ac-reconcile-{N}.json`: on #3192's re-run the planning model
+found the previous run's report, read it, and four criteria added since were
+never judged. A missing report is a stage failure, not a cue to produce one.
 
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ISSUE_BODY_FILE=$(mktemp)
-
-BINARY="${NIGHTGAUGE_BIN:-}"
-[ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
-[ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
-  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
-    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
-    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
-    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
-    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
-    case "${NG_ORIGIN%.git}" in
-      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
-        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
-    esac
-  done
-fi
-[ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
-[ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
-
-# The issue's own read re-checks who vouches for it, so a body edited after a
-# maintainer approved the issue is refused, not read (#2130).
-if [ -n "$BINARY" ]; then
-  REPO="${NIGHTGAUGE_REPO:-$("$BINARY" git repo-slug 2>/dev/null)}"
-  [ -n "$REPO" ] && "$BINARY" forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json --vouched 2>/dev/null \
-    | jq -r '.body // ""' > "$ISSUE_BODY_FILE" || true
-fi
-
 AC_RECONCILE_FILE="$(nightgauge layout path pipeline ac-reconcile-${ISSUE_NUMBER}.json)"
-if [ -n "$BINARY" ] && [ -s "$ISSUE_BODY_FILE" ]; then
-  "$BINARY" preflight ac-reconcile "$ISSUE_NUMBER" \
-    --workdir "$(pwd)" \
-    --body-file "$ISSUE_BODY_FILE" \
-    --out "$AC_RECONCILE_FILE" \
-    --notify-empty ${REPO:+--repo "$REPO"} \
-    || echo "AC reconcile failed (non-fatal); continuing"
+if [ ! -f "$AC_RECONCILE_FILE" ]; then
+  echo "ERROR: $AC_RECONCILE_FILE is missing — the orchestrator writes it before planning (#3228)." >&2
+  exit 1
 fi
-rm -f "$ISSUE_BODY_FILE"
-
-if [ -f "$AC_RECONCILE_FILE" ]; then
-  AC_AGGREGATE=$(jq -r '.aggregate_status' "$AC_RECONCILE_FILE")
-  AC_APPROACH=$(jq -r '.suggested_route.approach' "$AC_RECONCILE_FILE")
-  AC_FOCUS=$(jq -r '.suggested_route.focus_acs | @json' "$AC_RECONCILE_FILE")
-  echo "AC reconcile: aggregate=$AC_AGGREGATE approach=$AC_APPROACH focus=$AC_FOCUS"
-fi
+AC_AGGREGATE=$(jq -r '.aggregate_status' "$AC_RECONCILE_FILE")
+AC_APPROACH=$(jq -r '.suggested_route.approach' "$AC_RECONCILE_FILE")
+AC_FOCUS=$(jq -r '.suggested_route.focus_acs | @json' "$AC_RECONCILE_FILE")
+echo "AC reconcile: aggregate=$AC_AGGREGATE approach=$AC_APPROACH focus=$AC_FOCUS"
 ```
 
 When `aggregate_status === "all-satisfied"`, Phase 4 (Produce Plan) MUST emit a

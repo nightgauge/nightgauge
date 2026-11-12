@@ -185,6 +185,11 @@ type PRCreateSnapshot struct {
 	// ACFingerprint is ac-reconcile's fingerprint of the criteria the run
 	// planned against (#2623), recorded in pr-{N}.json for the resume gate.
 	ACFingerprint string
+	// ACScopeUnverified is true when pr-create could not confirm that the
+	// run's criteria are the issue body's current ones (#3228): the body was
+	// unreadable, or its fingerprint differed from ac-reconcile's. The PR
+	// then says `Refs`, never `Closes`.
+	ACScopeUnverified bool
 
 	// Planning / knowledge
 	KnowledgePath    string
@@ -482,10 +487,12 @@ func RenderBody(snap PRCreateSnapshot) string {
 		}
 		b.WriteString("\n")
 	}
-	if !IssueClosedBy(snap.ACVerdicts) {
+	if !snapClosesIssue(snap) {
 		b.WriteString(UnmetACHeading + "\n\n")
 		open := OpenACs(snap.ACVerdicts)
-		if len(open) == 0 && snap.ACReconcileMissing {
+		if len(open) == 0 && snap.ACScopeUnverified {
+			b.WriteString(fmt.Sprintf("This PR leaves #%d open: pr-create could not confirm these criteria are the issue's current ones.\n\n", snap.IssueNumber))
+		} else if len(open) == 0 && snap.ACReconcileMissing {
 			b.WriteString(fmt.Sprintf("This PR leaves #%d open: ac-reconcile-%d.json was not found, so no acceptance criteria could be verified.\n\n", snap.IssueNumber, snap.IssueNumber))
 		} else if len(open) == 0 {
 			b.WriteString(fmt.Sprintf("This PR leaves #%d open: no acceptance criteria were found to verify.\n\n", snap.IssueNumber))
@@ -597,9 +604,15 @@ func acRunState(snap PRCreateSnapshot) ACTestState {
 	return ACTestState{}
 }
 
+// snapClosesIssue reports whether the PR closes its issue: every criterion
+// met, and the criteria confirmed as the issue body's current ones (#3228).
+func snapClosesIssue(snap PRCreateSnapshot) bool {
+	return IssueClosedBy(snap.ACVerdicts) && !snap.ACScopeUnverified
+}
+
 // closingKeyword is "Closes" only when every acceptance criterion is met.
 func closingKeyword(snap PRCreateSnapshot) string {
-	if IssueClosedBy(snap.ACVerdicts) {
+	if snapClosesIssue(snap) {
 		return "Closes"
 	}
 	return "Refs"
@@ -611,6 +624,8 @@ func acStatusLabel(status string) string {
 		return "✅ met"
 	case ACUnmet:
 		return "❌ unmet"
+	case ACNotJudged:
+		return "❔ not verified"
 	default:
 		return "❔ not verifiable"
 	}
@@ -789,7 +804,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 			Title:         title,
 			BaseBranch:    snap.BaseBranch,
 			KnowledgePath: snap.KnowledgePath,
-			ClosesIssue:   IssueClosedBy(snap.ACVerdicts),
+			ClosesIssue:   snapClosesIssue(snap),
 			ACVerdicts:    snap.ACVerdicts,
 			ACFingerprint: snap.ACFingerprint,
 		})
@@ -857,7 +872,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 		Title:         title,
 		BaseBranch:    snap.BaseBranch,
 		KnowledgePath: snap.KnowledgePath,
-		ClosesIssue:   IssueClosedBy(snap.ACVerdicts),
+		ClosesIssue:   snapClosesIssue(snap),
 		ACVerdicts:    snap.ACVerdicts,
 		ACFingerprint: snap.ACFingerprint,
 	}); writeErr != nil {
@@ -948,6 +963,12 @@ type prContextPayload struct {
 	PreflightResults map[string]string `json:"preflight_results"`
 	CIMonitoring     map[string]any    `json:"ci_monitoring"`
 	CreatedAt        string            `json:"created_at"`
+}
+
+// prCreateIssueBody returns the reader pr-create checks the ac-reconcile
+// report's scope against (#3228). Swapped in tests so they stay offline.
+var prCreateIssueBody = func(workdir string) IssueBodyReader {
+	return ExecIssueBodyReader(workdir)
 }
 
 // defaultWritePRContext writes pr-{N}.json under workdir. Indirected through
@@ -1230,6 +1251,38 @@ func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber i
 			seen[key] = true
 			criteria = append(criteria, c.Text)
 		}
+		// The report's scope may predate the issue body (#3228): a re-run that
+		// reused an earlier report judged only the criteria that report had.
+		// Compare its fingerprint with the body as it reads now — the check
+		// ResolvePreservedResume makes — and on a mismatch take the criteria
+		// from the body, marking every one the report never judged.
+		// A report written without a fingerprint is fingerprinted from its own
+		// list: the fingerprint is defined over exactly these ordered texts.
+		fingerprint := rec.ACFingerprint
+		if fingerprint == "" {
+			fingerprint = preflight.ACFingerprint(acCheckboxBody(criteria))
+		}
+		var unjudged map[string]bool
+		forceRefs := false
+		if body, bodyErr := prCreateIssueBody(workdir)(ctx, issueNumber); bodyErr != nil {
+			forceRefs = true
+			log.Printf("pr-create: WARNING cannot read #%d's body to check ac-reconcile's scope (%v); the PR will say Refs #%d, not Closes", issueNumber, bodyErr, issueNumber)
+		} else if current := preflight.ACFingerprint(body); current != fingerprint {
+			judged := map[string]bool{}
+			for _, c := range criteria {
+				judged[preflight.NormalizeACText(c)] = true
+			}
+			criteria = preflight.ACTexts(body)
+			unjudged = map[string]bool{}
+			for _, c := range criteria {
+				if !judged[preflight.NormalizeACText(c)] {
+					unjudged[preflight.NormalizeACText(c)] = true
+				}
+			}
+			fingerprint = current
+			forceRefs = true
+			log.Printf("pr-create: WARNING ac-reconcile-%d.json's criteria differ from #%d's body (%d criteria, %d never judged); the PR lists the body's criteria and says Refs #%d", issueNumber, issueNumber, len(criteria), len(unjudged), issueNumber)
+		}
 		var det *preflight.ACReconcileResult
 		var diffCheck ACDiffChecker
 		if len(criteria) > 0 && workdir != "" {
@@ -1241,7 +1294,14 @@ func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber i
 			}
 		}
 		snap.ACVerdicts = ResolveACVerdicts(criteria, validateVerdicts, det, diffCheck)
-		snap.ACFingerprint = rec.ACFingerprint
+		for i, v := range snap.ACVerdicts {
+			if unjudged[preflight.NormalizeACText(v.Text)] {
+				snap.ACVerdicts[i] = ACVerdict{Index: v.Index, Text: v.Text, Status: ACNotJudged, Source: ACSourceStale,
+					Evidence: "added to the issue after this run's acceptance criteria were reconciled"}
+			}
+		}
+		snap.ACFingerprint = fingerprint
+		snap.ACScopeUnverified = forceRefs
 	} else {
 		snap.ACReconcileMissing = true
 		log.Printf("pr-create: WARNING ac-reconcile-%d.json unreadable (%v); the PR will say Refs #%d, not Closes", issueNumber, err, issueNumber)

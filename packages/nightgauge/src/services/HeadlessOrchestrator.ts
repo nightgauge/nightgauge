@@ -154,6 +154,7 @@ import { SUCCESS_OUTCOMES } from "../utils/telemetryEventBuilder";
 import type { RepositoryContextLoader, ContextFileType } from "./RepositoryContextLoader";
 import type { Logger } from "../utils/logger";
 import { resolveRuntimeSnapshotPath } from "../utils/runtimeSnapshotResolver";
+import { regenerateAcReconcileReport } from "./acReconcileRegen";
 import type { IssueQueueService } from "./IssueQueueService";
 import { requeueOptionsFor, type QueueItem } from "../types/queue";
 import type { ProjectBoardService } from "./ProjectBoardService";
@@ -6348,6 +6349,20 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       pr_number?: unknown;
     };
     return typeof parsed.pr_number === "number" ? parsed.pr_number : 0;
+  }
+
+  /**
+   * Rebuild `ac-reconcile-{N}.json` from the issue's current body before
+   * feature-planning (#3228). Returns the error that fails the stage, or null.
+   */
+  async regenerateAcReconcile(issueNumber: number): Promise<Error | null> {
+    return regenerateAcReconcileReport({
+      binary: await BinaryResolver.fromVSCode().resolve(),
+      issueNumber,
+      cwd: this.getWorkingDirectory(),
+      repoSlug: await this.resolveRunRepoSlug(),
+      outPath: this.getContextPath("ac-reconcile", issueNumber),
+    });
   }
 
   /**
@@ -13047,6 +13062,20 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             timestamp: new Date().toISOString(),
           },
         });
+
+        // The orchestrator, not the planning model, writes the scope every
+        // later stage judges (#3228): ac-reconcile-{N}.json is rebuilt from the
+        // issue body as it is now, before every planning attempt. A failure
+        // fails the stage; an earlier run's report is never a fallback. The Go
+        // scheduler does the same in internal/orchestrator/ac_reconcile_regen.go.
+        if (stage === "feature-planning") {
+          const regenError = await this.regenerateAcReconcile(issueNumber);
+          if (regenError) {
+            failedStage = stage;
+            error = regenError;
+            break;
+          }
+        }
 
         // ===================================================================
         // DETERMINISTIC-FIRST EXECUTION FOR PR-CREATE / PR-MERGE (Issue #300)

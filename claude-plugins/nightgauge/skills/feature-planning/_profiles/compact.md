@@ -177,16 +177,16 @@ printf '<!-- phase:start name="load-context" index=1 total=13 stage="feature-pla
 
 Load issue context and signal stage start — see `_includes/feedback-and-context.md`.
 
-### Phase 1.7: AC Reconciliation Pre-Flight (Deterministic)
+### Phase 1.7: Read the AC Reconciliation Report (Deterministic)
 
 ```bash
 printf '<!-- phase:start name="ac-reconcile" index=2 total=13 stage="feature-planning" -->\n'
 ```
 
-**PURPOSE**: Deterministic, pre-LLM check classifying each AC as
-`satisfied | partial | unsatisfied | undetectable` against the current `main`
-working tree, persisting the report to `ac-reconcile-{N}.json` in the clone's
-pipeline state directory and routing planning accordingly:
+**PURPOSE**: Read the deterministic AC report and route planning by it. The
+orchestrator rebuilt `ac-reconcile-{N}.json` from the issue's current body
+before this stage was dispatched (#3228); it is never left over from an earlier
+run.
 
 - `all-satisfied` → produce a plan with `approach: "verify-and-close"` and
   empty `files_to_create` / `files_to_modify` (Issue #708 short-circuit).
@@ -194,8 +194,9 @@ pipeline state directory and routing planning accordingly:
   to the unsatisfied / undetectable subset.
 - otherwise → continue normal planning.
 
-Consumes zero LLM tokens. Skip cleanly when the binary is missing. Full shell
-(binary resolution, `ac-reconcile` invocation and field extraction): Read
+This phase only reads the report: never run `preflight ac-reconcile` or write
+the file, and treat a missing report as a stage failure. Full shell (the `jq`
+reads of `aggregate_status` and `suggested_route`): Read
 `skills/nightgauge-feature-planning/SKILL.md` (Phase 1.7) now.
 
 When `aggregate_status === "all-satisfied"`, Phase 4 (Produce Plan) MUST emit a

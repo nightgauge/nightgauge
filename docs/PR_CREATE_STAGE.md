@@ -209,8 +209,14 @@ byte-equal output across calls. (The run id is read from
 
 ### Acceptance criteria and partial delivery (#2595, #2655, #2665)
 
-The criteria come from `ac-reconcile-{N}.json`, which planning's preflight
-wrote from the issue body. pr-create drops repeated criteria from that list,
+The criteria come from `ac-reconcile-{N}.json`, which the orchestrator wrote
+from the issue body before planning. pr-create first compares the report's
+`ac_fingerprint` with `preflight.ACFingerprint` of the issue body as it reads it
+now (#3228). On a mismatch it takes the criteria from the body, marks every one
+the report never judged `not_judged` (`❔ not verified`, listed under the unmet
+heading), and says `Refs`. A body it cannot read keeps the report's list and
+also says `Refs`: pr-create never closes an issue whose scope it cannot
+confirm. pr-create drops repeated criteria from that list,
 so a list a pre-#2655 parser doubled still renders each criterion once.
 `ResolveACVerdicts` (`prcreate_ac.go`) gathers up to three answers per
 criterion:

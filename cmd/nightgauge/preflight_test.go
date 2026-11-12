@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/nightgauge/nightgauge/internal/preflight"
 )
 
 func TestPreflightCmd_RegistersAllSubcommands(t *testing.T) {
@@ -141,13 +143,13 @@ func TestPreflightACReconcile_NotifyEmpty(t *testing.T) {
 		fake := &fakeACEmptyNotifier{}
 		runACReconcileNotify(t, fake, noACs, "--notify-empty")
 		runACReconcileNotify(t, fake, noACs, "--notify-empty")
-		if len(fake.posted) != 1 || !strings.HasPrefix(fake.posted[0], noACsMarker) ||
+		if len(fake.posted) != 1 || !strings.HasPrefix(fake.posted[0], preflight.NoACsMarker) ||
 			!strings.Contains(fake.posted[0], "`Refs #7`") {
 			t.Fatalf("posted = %q, want one marker comment naming Refs #7", fake.posted)
 		}
 	})
 	t.Run("existing marker comment posts nothing", func(t *testing.T) {
-		fake := &fakeACEmptyNotifier{existing: []string{"earlier\n" + noACsMarker}}
+		fake := &fakeACEmptyNotifier{existing: []string{"earlier\n" + preflight.NoACsMarker}}
 		runACReconcileNotify(t, fake, noACs, "--notify-empty")
 		if len(fake.posted) != 0 {
 			t.Fatalf("posted = %q, want none", fake.posted)

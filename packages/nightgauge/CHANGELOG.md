@@ -11,6 +11,7 @@ and this project adheres to
 
 ### Fixed
 
+- A pipeline run rebuilds the acceptance-criteria report from the issue's current body before planning, so criteria added since an earlier run are judged; if the rebuild fails, planning fails instead of reusing the old report (#3228).
 - Re-running an issue from the "not closed: PR left criteria unmet" card now
   plans and implements only the criteria that PR left unmet, instead of
   starting a full run (#3095).

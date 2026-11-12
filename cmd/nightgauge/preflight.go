@@ -312,19 +312,6 @@ keeps it to one comment per issue; a forge failure warns and exits 0.`,
 	return cmd
 }
 
-// noACsMarker is the hidden line that makes the zero-criteria note
-// idempotent: a second run that finds it posts nothing (#2906).
-const noACsMarker = "<!-- nightgauge:no-acceptance-criteria -->"
-
-// noACsComment is the zero-criteria note posted by --notify-empty.
-func noACsComment(issueNumber int) string {
-	return noACsMarker + "\n" +
-		"Nightgauge found no acceptance criteria in this issue. Add a `## Acceptance Criteria` " +
-		"(or `## Verification` / `## Done when`) section with checkbox, numbered or bulleted " +
-		fmt.Sprintf("items; without one, the pull request will say `Refs #%d` and this issue ", issueNumber) +
-		"will not close on merge.\n"
-}
-
 // acEmptyNotifier reads and posts issue comments for --notify-empty.
 // followup.GitHubFiler satisfies it.
 type acEmptyNotifier interface {
@@ -363,7 +350,7 @@ func notifyNoACs(ctx context.Context, stderr io.Writer, workdir, repoSlug string
 		fmt.Fprintf(stderr, "Warning: ac-reconcile --notify-empty: %v — no note posted\n", err)
 		return
 	}
-	posted, err := n.HasComment(ctx, issueNumber, noACsMarker)
+	posted, err := n.HasComment(ctx, issueNumber, preflight.NoACsMarker)
 	if err != nil {
 		fmt.Fprintf(stderr, "Warning: ac-reconcile --notify-empty: read #%d's comments: %v — no note posted\n", issueNumber, err)
 		return
@@ -371,7 +358,7 @@ func notifyNoACs(ctx context.Context, stderr io.Writer, workdir, repoSlug string
 	if posted {
 		return
 	}
-	if err := n.AddComment(ctx, issueNumber, noACsComment(issueNumber)); err != nil {
+	if err := n.AddComment(ctx, issueNumber, preflight.NoACsComment(issueNumber)); err != nil {
 		fmt.Fprintf(stderr, "Warning: ac-reconcile --notify-empty: comment on #%d: %v\n", issueNumber, err)
 		return
 	}

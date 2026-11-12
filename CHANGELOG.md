@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A re-run judges the issue's current acceptance criteria, not an earlier run's (#3228).**
+  The orchestrator now rebuilds `ac-reconcile-{N}.json` from the issue body
+  before every feature-planning dispatch, on the Go scheduler and in the
+  extension, and a failed rebuild fails the stage. The planning skill only reads
+  the report. pr-create also compares the report's fingerprint with the live
+  body: on a mismatch it lists the body's criteria, marks those the run never
+  judged `❔ not verified`, and says `Refs`, so the partial-delivery comment
+  names them too.
 - **The clone-isolation workspace test no longer times out under gate load (#3224).**
   The case runs about twelve real `git` commands: 0.5 s idle, 5.5 s at load ~15,
   past Vitest's 5 s default. It now carries a 30 s per-case timeout.
