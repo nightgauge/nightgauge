@@ -522,6 +522,12 @@ Set `CI_LOCAL_NO_TEST_CACHE=1` to run both passes fully uncached. A toolchain or
 `go.mod` change does not need it, because both are part of the cache key. The
 hosted workflows and the `Makefile` `test` target still run with `-count=1`.
 
+The release path does not set it either. Release candidates and releases are
+built and tested by the hosted workflows, which keep `-count=1`. They restore
+Go's build cache, but `-count=1` never replays a cached test result, so no
+cached result stands behind a published binary. Installing a published release
+or release candidate locally runs no gate, so there is no cache for it to read.
+
 ### Workflow action SHA-pin gate
 
 `scripts/check-action-pins.py` (#1782) asks the GitHub API whether every
