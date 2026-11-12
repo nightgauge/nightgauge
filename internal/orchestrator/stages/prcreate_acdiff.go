@@ -1395,8 +1395,9 @@ func acBoundAdded(b acBound, paths []string, d *ACDiff) (loc, val string, ok, pa
 var acKeyValueRE = regexp.MustCompile(`^["']?([A-Za-z_][A-Za-z0-9_.\-]*)["']?\s*[:=]\s*["']?([^\s"':=]+)["']?$`)
 
 // acCallSpanRE parses a call span: an identifier, optionally qualified,
-// followed by empty parentheses, such as `name()` or `Type.Method()` (#3053).
-var acCallSpanRE = regexp.MustCompile(`^(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*([A-Za-z_$][A-Za-z0-9_$]*)\(\)$`)
+// followed by empty parentheses, such as `name()` or `Type.Method()` (#3053),
+// or by a placeholder argument list, such as `it(...)` or `run(…)` (#3226).
+var acCallSpanRE = regexp.MustCompile(`^(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*([A-Za-z_$][A-Za-z0-9_$]*)\(\s*(?:\.\.\.|…)?\s*\)$`)
 
 // acWrappedIdentRE parses a span that is one identifier wrapped in `{}`, `<>`
 // or `[]`, such as `{sessionJwt}` (#3154). Spaces are allowed inside `{}` and
@@ -1423,7 +1424,8 @@ func acWrappedIdent(tok string) string {
 // YAML or a Go literal, with the key compared case-insensitively and the
 // value exactly (#3030). A call span such as `name()` or `obj.name()` matches
 // its last name followed by an open parenthesis, optionally after a generic,
-// so declarations and calls with arguments count (#3053). A single identifier
+// so declarations and calls with arguments count (#3053); a placeholder call
+// span such as `it(...)` matches the same way (#3226). A single identifier
 // wrapped in `{}`, `<>` or `[]` matches that identifier as a whole word, so
 // `{sessionJwt}` matches `[{ sessionJwt: [] }]` but not `sessionJwtX`
 // (#3154). Any other span matches as a literal substring.
