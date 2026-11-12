@@ -92,7 +92,7 @@ func (s *Service) MergeBaseIntoBranch(branch, base string) (*BaseMergeResult, er
 		_ = os.RemoveAll(dir)
 		_, _ = s.gitExec("worktree", "prune")
 	}()
-	w := &Service{repo: s.repo, repoPath: wt}
+	w := &Service{repoPath: wt}
 
 	before, err := w.gitExec("rev-parse", "HEAD")
 	if err != nil {

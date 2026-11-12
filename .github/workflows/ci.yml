@@ -712,9 +712,9 @@ jobs:
       - name: Go dependency-license gate (go-licenses)
         # Blocks proprietary (forbidden) and GPL/AGPL-family (restricted)
         # licenses. Reciprocal (MPL-2.0, file-level copyleft) is allowed — it is
-        # compatible with Apache-2.0 redistribution and present transitively via
-        # go-git (filepath-securejoin). modernc.org/mathutil is BSD-3-Clause but
-        # its LICENSE file defeats go-licenses' detector, so it is ignored.
+        # compatible with Apache-2.0 redistribution. modernc.org/mathutil is
+        # BSD-3-Clause but its LICENSE file defeats go-licenses' detector, so it
+        # is ignored.
         run: |
           go install github.com/google/go-licenses@v1.6.0
           "$(go env GOPATH)/bin/go-licenses" check ./cmd/nightgauge \

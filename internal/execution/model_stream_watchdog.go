@@ -25,16 +25,18 @@ package execution
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	_ "modernc.org/sqlite" // registers the "sqlite" driver
 )
 
 // ModelStreamStalledMarker is the token the model_stream_stalled terminal
@@ -66,6 +68,10 @@ type modelStreamWatchdog struct {
 type sessionProgress struct {
 	lastUpdate  time.Time // the latest part update, zero when none
 	toolRunning bool      // a tool call is pending or running
+	// toolUnknown: no sqlite3 CLI, so whether a tool runs cannot be read.
+	// A long tool call writes no heartbeat, so check grants the heartbeat
+	// unknownToolGraceBounds bounds instead of one before it stops the stage.
+	toolUnknown bool
 }
 
 // newModelStreamWatchdog returns nil when bound is not positive, and every
@@ -128,6 +134,10 @@ func (w *modelStreamWatchdog) arm(proc *os.Process, exited <-chan struct{}) {
 	}()
 }
 
+// unknownToolGraceBounds is how many bounds a quiet stream heartbeat is
+// allowed when no sqlite3 CLI can say whether a tool is running.
+const unknownToolGraceBounds = 10
+
 // check reports whether the stage has stalled at now, and records it.
 func (w *modelStreamWatchdog) check(now time.Time) bool {
 	last := time.Unix(0, w.lastEvent.Load())
@@ -136,7 +146,18 @@ func (w *modelStreamWatchdog) check(now time.Time) bool {
 	}
 	if w.sessionDB != "" && w.session != nil {
 		if p, err := w.session(w.sessionDB); err == nil {
-			if p.toolRunning {
+			if p.toolUnknown && !p.lastUpdate.IsZero() {
+				// The file-based fallback: the heartbeat alone judges
+				// progress, with a longer allowance because a running tool
+				// may be what keeps it quiet.
+				if p.lastUpdate.After(last) {
+					w.lastEvent.Store(p.lastUpdate.UnixNano())
+					last = p.lastUpdate
+				}
+				if now.Sub(last) < unknownToolGraceBounds*w.bound {
+					return false
+				}
+			} else if p.toolRunning {
 				// A tool is running: not the model stream. Look again a
 				// whole bound later.
 				w.lastEvent.Store(now.UnixNano())
@@ -180,6 +201,9 @@ func (w *modelStreamWatchdog) notice() string {
 // the latest part update, and whether a tool call is pending or running.
 func readSessionProgress(dir string) (sessionProgress, error) {
 	p, err := readSessionDBProgress(dir)
+	if errors.Is(err, errSQLiteCLIUnavailable) {
+		p.toolUnknown = true
+	}
 	// The plugin's stream heartbeat (#2184) is progress too: a streaming
 	// delta is never written to the database.
 	if info, statErr := os.Stat(filepath.Join(dir, streamHeartbeatFile)); statErr == nil {
@@ -200,32 +224,81 @@ func readSessionProgress(dir string) (sessionProgress, error) {
 // and was stopped. Mirrors session.js STREAM_HEARTBEAT_FILE byte for byte.
 const streamHeartbeatFile = "nightgauge-stream.heartbeat"
 
-// readSessionDBProgress reads opencode.db read-only.
+// errSQLiteCLIUnavailable is readSessionDBProgress's answer when no sqlite3
+// CLI is on PATH: the database exists but cannot be read.
+var errSQLiteCLIUnavailable = errors.New("sqlite3 not on PATH")
+
+// lookSQLite3 resolves the sqlite3 CLI. A variable so tests can take it away.
+var lookSQLite3 = func() (string, error) { return exec.LookPath("sqlite3") }
+
+// sqliteFallbackOnce guards the one log line that says the watchdog is
+// running on the stream heartbeat alone; sqliteFallbackLog writes it. Both are
+// variables so tests can count the line.
+var (
+	sqliteFallbackOnce = &sync.Once{}
+	sqliteFallbackLog  = log.Printf
+)
+
+// sessionProgressQuery answers both questions in one row, "max|running": the
+// latest part update in Unix milliseconds (empty when there are no parts) and
+// the number of tool calls pending or running.
+const sessionProgressQuery = `SELECT MAX(time_updated), ` +
+	`(SELECT COUNT(*) FROM part WHERE json_extract(data, '$.type') = 'tool' ` +
+	`AND json_extract(data, '$.state.status') IN ('pending', 'running')) FROM part;`
+
+// readSessionDBProgress reads opencode.db read-only through the sqlite3 CLI.
+//
+// The release CLI does not link a SQLite engine (#3192): the embedded one was
+// a large share of what antivirus heuristics flagged on the Linux binary, and
+// this watchdog was its only reader that needed SQL. When sqlite3 is not on
+// PATH this returns errSQLiteCLIUnavailable, logged once per process, and
+// readSessionProgress falls back to the plugin's stream heartbeat file.
 func readSessionDBProgress(dir string) (sessionProgress, error) {
-	path := filepath.Join(dir, "opencode.db")
-	if _, err := os.Stat(path); err != nil {
-		return sessionProgress{}, err
-	}
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(2000)")
+	path, err := filepath.Abs(filepath.Join(dir, "opencode.db"))
 	if err != nil {
 		return sessionProgress{}, err
 	}
-	defer db.Close()
+	if _, err := os.Stat(path); err != nil {
+		return sessionProgress{}, err
+	}
+	cli, err := lookSQLite3()
+	if err != nil {
+		sqliteFallbackOnce.Do(func() {
+			sqliteFallbackLog("model-stream watchdog: sqlite3 not on PATH; " +
+				"the watchdog uses the stream-heartbeat file only")
+		})
+		return sessionProgress{}, errSQLiteCLIUnavailable
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	cmd := exec.CommandContext(ctx, cli, "-readonly", "-batch", "-noheader", "-list",
+		"-separator", "|", "-cmd", ".timeout 2000", path, sessionProgressQuery)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return sessionProgress{}, fmt.Errorf("sqlite3 %s: %w: %s", path, err, strings.TrimSpace(stderr.String()))
+	}
+	return parseSessionProgressRow(strings.TrimSpace(string(out)))
+}
+
+// parseSessionProgressRow parses sessionProgressQuery's "max|running" row.
+func parseSessionProgressRow(row string) (sessionProgress, error) {
+	maxField, runningField, ok := strings.Cut(row, "|")
+	if !ok {
+		return sessionProgress{}, fmt.Errorf("sqlite3: unexpected session progress row %q", row)
+	}
 	var p sessionProgress
-	var maxUpdated sql.NullInt64
-	if err := db.QueryRowContext(ctx, `SELECT MAX(time_updated) FROM part`).Scan(&maxUpdated); err != nil {
-		return sessionProgress{}, err
+	if maxField != "" {
+		ms, err := strconv.ParseInt(maxField, 10, 64)
+		if err != nil {
+			return sessionProgress{}, fmt.Errorf("sqlite3: part.time_updated %q: %w", maxField, err)
+		}
+		p.lastUpdate = time.UnixMilli(ms)
 	}
-	if maxUpdated.Valid {
-		p.lastUpdate = time.UnixMilli(maxUpdated.Int64)
-	}
-	var running int
-	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM part WHERE json_extract(data, '$.type') = 'tool' AND json_extract(data, '$.state.status') IN ('pending', 'running')`,
-	).Scan(&running); err != nil {
-		return sessionProgress{}, err
+	running, err := strconv.Atoi(runningField)
+	if err != nil {
+		return sessionProgress{}, fmt.Errorf("sqlite3: running tool count %q: %w", runningField, err)
 	}
 	p.toolRunning = running > 0
 	return p, nil

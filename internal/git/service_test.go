@@ -10,10 +10,6 @@ import (
 	"testing"
 	"time"
 
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/config"
-	"github.com/go-git/go-git/v5/plumbing"
-
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
@@ -22,15 +18,20 @@ import (
 func setupTestRepo(t *testing.T) (*Service, string) {
 	t.Helper()
 	dir := t.TempDir()
-	repo, err := InitRepo(dir)
+	return setupTestRepoAt(t, dir), dir
+}
+
+// setupTestRepoAt initialises a repository on master at dir with one commit
+// and opens a Service on it.
+func setupTestRepoAt(t *testing.T, dir string) *Service {
+	t.Helper()
+	gittest.InitRepo(t, dir, "-q", "-b", "master")
+	gittest.InitialCommit(t, dir)
+	svc, err := NewService(dir)
 	if err != nil {
-		t.Fatalf("InitRepo: %v", err)
+		t.Fatalf("NewService: %v", err)
 	}
-	if err := CreateInitialCommit(repo, dir); err != nil {
-		t.Fatalf("CreateInitialCommit: %v", err)
-	}
-	svc := NewServiceFromRepo(repo, dir)
-	return svc, dir
+	return svc
 }
 
 func TestCurrentBranch(t *testing.T) {
@@ -39,28 +40,16 @@ func TestCurrentBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentBranch: %v", err)
 	}
-	// go-git defaults to "master" for PlainInit
 	if branch != "master" {
 		t.Errorf("CurrentBranch = %q, want 'master'", branch)
 	}
 }
 
 func TestCurrentBranchDetachedHead(t *testing.T) {
-	svc, _ := setupTestRepo(t)
+	svc, dir := setupTestRepo(t)
+	gittest.Run(t, dir, "checkout", "-q", "--detach", "HEAD")
 
-	head, err := svc.repo.Head()
-	if err != nil {
-		t.Fatalf("Head: %v", err)
-	}
-	wt, err := svc.repo.Worktree()
-	if err != nil {
-		t.Fatalf("Worktree: %v", err)
-	}
-	if err := wt.Checkout(&gogit.CheckoutOptions{Hash: head.Hash()}); err != nil {
-		t.Fatalf("Checkout detached: %v", err)
-	}
-
-	_, err = svc.CurrentBranch()
+	_, err := svc.CurrentBranch()
 	if err == nil {
 		t.Fatal("expected error for detached HEAD, got nil")
 	}
@@ -440,17 +429,169 @@ func TestParseGitHubRemoteSlug(t *testing.T) {
 
 func TestStatusCode(t *testing.T) {
 	tests := []struct {
-		name string
+		code byte
 		want string
 	}{
-		{"modified", "modified"},
-		{"added", "added"},
-		{"deleted", "deleted"},
+		{'M', "modified"},
+		{'T', "modified"},
+		{'A', "added"},
+		{'D', "deleted"},
+		{'R', "renamed"},
+		{'C', "copied"},
+		{'?', "untracked"},
+		{'U', "unknown"},
 	}
-
-	// Just verify the function doesn't panic
 	for _, tt := range tests {
-		_ = tt // statusCode is tested implicitly through Status()
+		if got := statusCode(tt.code); got != tt.want {
+			t.Errorf("statusCode(%q) = %q, want %q", tt.code, got, tt.want)
+		}
+	}
+}
+
+// TestParsePorcelainStatus pins the -z record shape, including the extra
+// source-path field a rename carries, which must not be read as a record.
+func TestParsePorcelainStatus(t *testing.T) {
+	out := "R  new.txt\x00old.txt\x00 M changed.go\x00?? dir/untracked.txt\x00"
+	got := parsePorcelainStatus(out)
+	want := []statusEntry{
+		{staging: 'R', worktree: ' ', path: "new.txt"},
+		{staging: ' ', worktree: 'M', path: "changed.go"},
+		{staging: '?', worktree: '?', path: "dir/untracked.txt"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("entries = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entry %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// TestStatusReportsStagedRenameAndUnstagedChange exercises Status against a
+// real index: a staged rename, an unstaged modification, and an untracked
+// file inside a new directory (listed per file, not collapsed).
+func TestStatusReportsStagedRenameAndUnstagedChange(t *testing.T) {
+	svc, dir := setupTestRepo(t)
+	writeFileTest(t, dir, "a.txt", "one\ntwo\nthree\n")
+	writeFileTest(t, dir, "b.txt", "b\n")
+	gittest.Run(t, dir, "add", "-A")
+	gittest.Run(t, dir, "commit", "-q", "-m", "files")
+	gittest.Run(t, dir, "mv", "a.txt", "renamed.txt")
+	writeFileTest(t, dir, "b.txt", "b changed\n")
+	writeFileTest(t, dir, "newdir/u.txt", "u\n")
+
+	st, err := svc.Status()
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.IsClean {
+		t.Error("IsClean = true for a dirty tree")
+	}
+	if len(st.StagedFiles) != 1 || st.StagedFiles[0] != (FileChange{Path: "renamed.txt", Status: "renamed"}) {
+		t.Errorf("StagedFiles = %+v, want renamed.txt renamed", st.StagedFiles)
+	}
+	if len(st.UnstagedFiles) != 1 || st.UnstagedFiles[0] != (FileChange{Path: "b.txt", Status: "modified"}) {
+		t.Errorf("UnstagedFiles = %+v, want b.txt modified", st.UnstagedFiles)
+	}
+	if len(st.UntrackedFiles) != 1 || st.UntrackedFiles[0] != "newdir/u.txt" {
+		t.Errorf("UntrackedFiles = %v, want [newdir/u.txt]", st.UntrackedFiles)
+	}
+	diff, err := svc.Diff()
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if diff != "--- b.txt [modified]" {
+		t.Errorf("Diff = %q, want the one unstaged modification", diff)
+	}
+}
+
+// TestCommitRecordsThePipelineIdentity: the commit's author AND committer are
+// pipelineSignature, whatever identity the ambient environment carries.
+func TestCommitRecordsThePipelineIdentity(t *testing.T) {
+	svc, dir := setupTestRepo(t)
+	t.Setenv("GIT_AUTHOR_NAME", "")
+	writeFileTest(t, dir, "c.txt", "c\n")
+	hash, err := svc.Commit("feat: c")
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if head := gittest.Run(t, dir, "rev-parse", "HEAD"); head != hash {
+		t.Errorf("Commit returned %s, HEAD is %s", hash, head)
+	}
+	got := gittest.Run(t, dir, "log", "-1", "--format=%an <%ae>|%cn <%ce>|%s")
+	want := "Nightgauge Pipeline <pipeline@nightgauge.dev>|Nightgauge Pipeline <pipeline@nightgauge.dev>|feat: c"
+	if got != want {
+		t.Errorf("commit identity = %q, want %q", got, want)
+	}
+}
+
+// TestLocalBranchExistsIsExactAndIgnoresRevisionSyntax: a name that is a
+// prefix of a nested branch, or a revision expression, is not a branch.
+func TestLocalBranchExistsIsExactAndIgnoresRevisionSyntax(t *testing.T) {
+	svc, dir := setupTestRepo(t)
+	gittest.Run(t, dir, "branch", "feat/1-x")
+	for name, want := range map[string]bool{
+		"feat/1-x": true,
+		"feat":     false,
+		"master~0": false,
+		"missing":  false,
+	} {
+		got, err := svc.LocalBranchExists(name)
+		if err != nil {
+			t.Fatalf("LocalBranchExists(%q): %v", name, err)
+		}
+		if got != want {
+			t.Errorf("LocalBranchExists(%q) = %v, want %v", name, got, want)
+		}
+	}
+	branches, err := svc.ListLocalBranches()
+	if err != nil {
+		t.Fatalf("ListLocalBranches: %v", err)
+	}
+	if strings.Join(branches, ",") != "feat/1-x,master" {
+		t.Errorf("ListLocalBranches = %v", branches)
+	}
+}
+
+// TestNewServiceRefusesASubdirectoryOfARepository: git walks up to the
+// enclosing repository; NewService must not.
+func TestNewServiceRefusesASubdirectoryOfARepository(t *testing.T) {
+	_, dir := setupTestRepo(t)
+	sub := filepath.Join(dir, "pkg")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewService(sub); err == nil {
+		t.Fatalf("NewService(%s) opened a subdirectory of a repository", sub)
+	}
+	bare := gittest.InitRepo(t, t.TempDir(), "-q", "--bare")
+	if _, err := NewService(bare); err != nil {
+		t.Errorf("NewService(bare repository root): %v", err)
+	}
+}
+
+// TestNewServiceRelativePath opens a repository by a relative path, as
+// getGitRoot's NewService(".") does, and requires Root() to be absolute so
+// callers taking filepath.Dir of it reach the checkout's parent (#3192).
+func TestNewServiceRelativePath(t *testing.T) {
+	_, dir := setupTestRepo(t)
+	t.Chdir(dir)
+	for _, rel := range []string{".", filepath.Join("..", filepath.Base(dir))} {
+		svc, err := NewService(rel)
+		if err != nil {
+			t.Fatalf("NewService(%q): %v", rel, err)
+		}
+		root, err := svc.Root()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !filepath.IsAbs(root) || !sameDir(root, dir) {
+			t.Errorf("NewService(%q).Root() = %q, want absolute %q", rel, root, dir)
+		}
+		if !sameDir(filepath.Dir(root), filepath.Dir(dir)) {
+			t.Errorf("filepath.Dir(Root()) = %q, want %q", filepath.Dir(root), filepath.Dir(dir))
+		}
 	}
 }
 
@@ -473,72 +614,13 @@ func TestNewServiceInvalidPath(t *testing.T) {
 func setupTestRepoWithRemote(t *testing.T) (*Service, string) {
 	t.Helper()
 
-	// Create a bare repo to act as the remote
-	remoteDir := t.TempDir()
-	if _, err := gogit.PlainInit(remoteDir, true); err != nil {
-		t.Fatalf("PlainInit bare: %v", err)
-	}
-
-	// Create a working repo
+	remoteDir := gittest.InitRepo(t, t.TempDir(), "-q", "--bare", "-b", "master")
 	workDir := t.TempDir()
-	workRepo, err := gogit.PlainInit(workDir, false)
-	if err != nil {
-		t.Fatalf("PlainInit work: %v", err)
-	}
+	svc := setupTestRepoAt(t, workDir)
 
-	svc := NewServiceFromRepo(workRepo, workDir)
-
-	// Write initial commit
-	if err := CreateInitialCommit(workRepo, workDir); err != nil {
-		t.Fatalf("CreateInitialCommit: %v", err)
-	}
-
-	// Set origin to file:// bare repo
-	remoteURL := "file://" + remoteDir
-	_, err = workRepo.CreateRemote(&config.RemoteConfig{
-		Name:  "origin",
-		URLs:  []string{remoteURL},
-		Fetch: []config.RefSpec{"refs/heads/*:refs/remotes/origin/*"},
-	})
-	if err != nil {
-		t.Fatalf("CreateRemote: %v", err)
-	}
-
-	// Push master to remote
-	refSpec := config.RefSpec("refs/heads/master:refs/heads/master")
-	if err := workRepo.Push(&gogit.PushOptions{
-		RemoteName: "origin",
-		RefSpecs:   []config.RefSpec{refSpec},
-	}); err != nil {
-		t.Fatalf("Push initial: %v", err)
-	}
-
-	// Fetch to populate refs/remotes/origin/master
-	if err := workRepo.Fetch(&gogit.FetchOptions{
-		RemoteName: "origin",
-		RefSpecs:   []config.RefSpec{"refs/heads/*:refs/remotes/origin/*"},
-	}); err != nil && err != gogit.NoErrAlreadyUpToDate {
-		t.Fatalf("Fetch: %v", err)
-	}
-
-	// Verify refs/remotes/origin/master is resolvable; if not, set it manually
-	if _, lookupErr := workRepo.Reference(
-		"refs/remotes/origin/master",
-		true,
-	); lookupErr != nil {
-		// Manually populate the remote tracking ref from HEAD
-		head, headErr := workRepo.Head()
-		if headErr != nil {
-			t.Fatalf("Head: %v", headErr)
-		}
-		trackingRef := plumbing.NewHashReference(
-			plumbing.ReferenceName("refs/remotes/origin/master"),
-			head.Hash(),
-		)
-		if setErr := workRepo.Storer.SetReference(trackingRef); setErr != nil {
-			t.Fatalf("SetReference origin/master: %v", setErr)
-		}
-	}
+	gittest.SetRemote(t, workDir, "file://"+remoteDir)
+	gittest.Run(t, workDir, "push", "-q", "origin", "refs/heads/master:refs/heads/master")
+	gittest.Run(t, workDir, "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*")
 
 	return svc, workDir
 }
@@ -625,20 +707,12 @@ func commitFile(t *testing.T, svc *Service, workDir, name, content, msg string) 
 
 func localBranchHash(t *testing.T, svc *Service, name string) string {
 	t.Helper()
-	ref, err := svc.repo.Reference(plumbing.NewBranchReferenceName(name), true)
-	if err != nil {
-		t.Fatalf("lookup local %s: %v", name, err)
-	}
-	return ref.Hash().String()
+	return gittest.Run(t, svc.RepoPath(), "rev-parse", "--verify", "refs/heads/"+name)
 }
 
 func remoteBranchHash(t *testing.T, svc *Service, name string) string {
 	t.Helper()
-	ref, err := svc.repo.Reference(plumbing.ReferenceName("refs/remotes/origin/"+name), true)
-	if err != nil {
-		t.Fatalf("lookup origin/%s: %v", name, err)
-	}
-	return ref.Hash().String()
+	return gittest.Run(t, svc.RepoPath(), "rev-parse", "--verify", "refs/remotes/origin/"+name)
 }
 
 // TestResetLocalBranchToRemote_ReconcilesDivergedLocal reproduces the #3884
@@ -790,14 +864,7 @@ func setupTestRepoNamed(t *testing.T, name string) (*Service, string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	repo, err := InitRepo(dir)
-	if err != nil {
-		t.Fatalf("InitRepo: %v", err)
-	}
-	if err := CreateInitialCommit(repo, dir); err != nil {
-		t.Fatalf("CreateInitialCommit: %v", err)
-	}
-	return NewServiceFromRepo(repo, dir), dir
+	return setupTestRepoAt(t, dir), dir
 }
 
 func writeFileTest(t *testing.T, dir, rel, content string) string {
@@ -823,17 +890,7 @@ func writeDevHandoff(t *testing.T, dir string, issue int, body string) {
 
 func detachHeadTest(t *testing.T, svc *Service) {
 	t.Helper()
-	head, err := svc.repo.Head()
-	if err != nil {
-		t.Fatalf("Head: %v", err)
-	}
-	wt, err := svc.repo.Worktree()
-	if err != nil {
-		t.Fatalf("Worktree: %v", err)
-	}
-	if err := wt.Checkout(&gogit.CheckoutOptions{Hash: head.Hash()}); err != nil {
-		t.Fatalf("detach HEAD: %v", err)
-	}
+	gittest.Run(t, svc.RepoPath(), "checkout", "-q", "--detach", "HEAD")
 }
 
 func checkoutNewBranchTest(t *testing.T, svc *Service, branch string) {
@@ -1353,14 +1410,15 @@ func TestBranchCreateFrom_InLinkedWorktreeMovesHead(t *testing.T) {
 	}
 }
 
-// TestNewService_RefusesGhostWorktreeDirectory pins DetectDotGit OFF.
+// TestNewService_RefusesGhostWorktreeDirectory pins NewService's refusal to
+// walk up to an enclosing repository.
 //
 // `.worktrees/issue-N` lives INSIDE the primary checkout, so with parent
 // walking on, a ghost directory left behind by a removed run opens as the
 // enclosing repository and every mutation aimed at the dead worktree lands in
 // the operator's own tree — a write-containment escape
-// (docs/MULTI_REPO_WORKSPACE.md#write-containment-issue-129). Adding
-// `DetectDotGit: true` to NewService turns this test red and nothing else.
+// (docs/MULTI_REPO_WORKSPACE.md#write-containment-issue-129). Dropping the
+// repository-root check from verifyRepositoryRoot turns this test red.
 func TestNewService_RefusesGhostWorktreeDirectory(t *testing.T) {
 	mainDir, _ := setupLinkedWorktree(t)
 

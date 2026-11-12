@@ -16,6 +16,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The release CLI no longer links go-git or an embedded SQLite engine (#3192).**
+  Together they were most of the code Microsoft's model flagged on the Linux
+  amd64 binary, which is now about 28.7 MB stripped instead of 36.9 MB. Every
+  `nightgauge git` command and IPC `git.*` method now runs the `git` CLI, so
+  `git` must be on `PATH`. The GitLab webhook's `dedupe_db_path` now names a JSON
+  file. The model-stream watchdog reads OpenCode session progress through the
+  `sqlite3` CLI when it is on `PATH`, and otherwise from the stream-heartbeat
+  file alone, which may then stay quiet for ten bounds, since it cannot tell
+  whether a tool is running. The release checker fails a Linux amd64 binary over 30 MiB
+  stripped.
 - **pr-create's acceptance-criteria check reads `it(...)` as a call, not literal text (#3226).**
   A criterion naming a call with a placeholder argument list, such as `it(...)` or `run(…)`, now
   matches any call of that name, so a met criterion closes its issue instead of only referencing it.

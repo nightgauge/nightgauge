@@ -1836,62 +1836,52 @@ this repository's own `#N`. See
 **The git service is common-dir aware, and must stay that way (#535).** Every
 pipeline stage runs inside a linked worktree, where `.git` is a file pointing at
 `<common>/worktrees/<name>` — a directory holding only HEAD, index, logs and a
-private `refs/`. It has no objects, no config and no `refs/remotes`. `NewService`
-therefore opens the repository with `EnableDotGitCommonDir`, without which go-git
-chroots its storer to that directory and the repository reads as one with no
-remotes, no history and no default branch: `DefaultBranch` finds no
-`origin/HEAD`, `RemoteRepoSlug` reports "remote not found", and any checkout
-fails on a missing object. The same option is what lets `ResetPipeline`,
-`AbortPipeline`, `Status`, `Commit`, `Log` and `Diff` read real history from inside
-a worktree at all — they share this one constructor, so anything that narrows the
-open narrows all of them at once.
+private `refs/`. It has no objects, no config and no `refs/remotes`. Every
+operation in `internal/git` runs the `git` CLI, which resolves the common dir
+itself, so `DefaultBranch`, `RemoteRepoSlug`, `ResetPipeline`, `AbortPipeline`,
+`Status`, `Commit`, `Log` and `Diff` read the repository's real history from
+inside a worktree.
 
-**`DetectDotGit` stays OFF because write containment depends on it**, not
-because callers always pass a repository root — they do not (`openGitService`
-passes `os.Getwd()`, `getGitRoot` passes `"."`). With parent walking on, a path
-that is _not_ a repository still opens: a ghost or stale worktree directory such
-as `<repo>/.worktrees/issue-999`, left behind when a run's worktree was removed,
-resolves upward to the enclosing primary checkout, and every mutation aimed at
-the dead worktree lands in the operator's own tree — the escape
-[write containment](MULTI_REPO_WORKSPACE.md#write-containment-issue-129) exists
-to prevent. Opening a non-repository path must fail; a negative test in
-`internal/git/service_test.go` pins that and goes red the moment `DetectDotGit`
-is enabled.
+**`NewService` opens a repository root and nothing else, because write
+containment depends on it**, not because callers always pass a repository root —
+they do not (`openGitService` passes `os.Getwd()`, `getGitRoot` passes `"."`).
+`git` walks up to the nearest enclosing repository, so a ghost or stale worktree
+directory such as `<repo>/.worktrees/issue-999`, left behind when a run's
+worktree was removed, would resolve to the enclosing primary checkout, and every
+mutation aimed at the dead worktree would land in the operator's own tree — the
+escape [write containment](MULTI_REPO_WORKSPACE.md#write-containment-issue-129)
+exists to prevent. `NewService` therefore requires `git rev-parse
+--show-toplevel` to be the path it was given (or the path to be a bare
+repository's root). Negative tests in `internal/git/service_test.go` pin that.
 
-**`EnableDotGitCommonDir` makes every ref write a SHARED-STORE write, and
-`ResetLocalBranchToRemote` is guarded accordingly (#1499).** `Storer.SetReference`
-writes the ref and nothing else — no index, no working tree, and (go-git
-implements no reflog) not even a reflog message. Because the storer resolves the
-common dir, that write lands in the repository's shared ref store no matter which
-worktree the caller sits in, so it can move a branch the **primary** checkout has
-out. The checkout's HEAD then sits ahead of its own tree and `git status` reports
-every path the two commits differ in as a staged change nothing wrote — which is
-what read as fresh dirt to three concurrent slots' write-containment baselines on
-2026-09-06 and killed all three, in three repositories that had nothing to do
-with it. `ResetLocalBranchToRemote` now refuses `main`/`master` outright, refuses
-with `*BranchHeldByWorktreeError` (writing nothing) when another worktree holds
-the branch, and goes through `git reset --hard` — moving ref and tree together,
-with a reflog entry — when the caller's own checkout is the holder. Occupancy
-comes from `git worktree list --porcelain`, which answers for the whole
-repository from any member. `nightgauge git branch-create <name>` takes `<name>`
-as an unvalidated positional argument and was the one command that could aim this
-at a default branch.
+**Every ref write is a SHARED-STORE write, and `ResetLocalBranchToRemote` is
+guarded accordingly (#1499).** Branch refs live in the common dir, so a ref
+write lands in the repository's shared ref store no matter which worktree the
+caller sits in, and can move a branch the **primary** checkout has out. Writing
+only the ref leaves that checkout's HEAD ahead of its own tree, and `git status`
+reports every path the two commits differ in as a staged change nothing wrote —
+which is what read as fresh dirt to three concurrent slots' write-containment
+baselines on 2026-09-06 and killed all three, in three repositories that had
+nothing to do with it. `ResetLocalBranchToRemote` refuses `main`/`master`
+outright, refuses with `*BranchHeldByWorktreeError` (writing nothing) when
+another worktree holds the branch, goes through `git reset --hard` — moving ref
+and tree together — when the caller's own checkout is the holder, and otherwise
+moves the ref with `git update-ref`. Occupancy comes from
+`git worktree list --porcelain`, which answers for the whole repository from any
+member. `nightgauge git branch-create <name>` takes `<name>` as an unvalidated
+positional argument and was the one command that could aim this at a default
+branch.
 
-**Reads use go-git; the mutations git guards use git.** Common-dir resolution
-made several go-git mutations reachable inside linked worktrees for the first
-time, and go-git implements none of git's safety rules for them: it moves HEAD
-and writes the branch ref into the shared store _before_ discovering the tree is
-dirty (leaving a half-created branch and a wedged retry loop), it checks out a
-branch a sibling worktree already holds (two worktrees on one branch turns one
-stage's commit into a staged deletion in the other's tree), it deletes a branch
-another worktree is sitting on (orphaning it on an unborn HEAD), and its hard
-reset and `Clean` honour neither `.gitignore` nor `.git/info/exclude` (deleting
-`node_modules/`, build caches and `.env`). So `BranchCreate`, `BranchCreateFrom`,
-`Checkout`, `BranchDelete` and `ResetPipeline`'s reset+clean shell out to `git`
-and inherit its guards, exactly as `ls-remote`, `commitAll` and the checkpoint
-anchor already did. This is a per-operation choice, not a fallback path: there
-is one implementation of each operation, and hand-rolling git's guards in Go
-would be a second, weaker copy of rules git already enforces.
+**The git service runs `git` for reads and mutations alike (#3192).** The
+mutations moved first, because `git` enforces safety rules an in-process
+implementation did not: it refuses to move HEAD before discovering the tree is
+dirty, to check out a branch a sibling worktree holds, or to delete a branch
+another worktree sits on, and its reset and clean honour `.gitignore` and
+`.git/info/exclude`. The reads followed so the release CLI no longer links
+go-git, whose SSH, OpenPGP and SHA-1 code dominated what antivirus heuristics
+flagged on the Linux binary (see
+[RELEASE_BINARIES.md](RELEASE_BINARIES.md)). `git` on `PATH` is therefore a hard
+requirement of every `nightgauge git` command and IPC `git.*` method.
 
 ### Pushing a PR Branch Without Force (Issue #2699)
 

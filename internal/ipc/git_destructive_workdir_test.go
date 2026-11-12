@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	gitops "github.com/nightgauge/nightgauge/internal/git"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // newGitRepoWithDirtyFile creates a real repo holding one uncommitted file, so
@@ -17,13 +17,8 @@ import (
 func newGitRepoWithDirtyFile(t *testing.T) (root, dirtyPath string) {
 	t.Helper()
 	root = t.TempDir()
-	repo, err := gitops.InitRepo(root)
-	if err != nil {
-		t.Fatalf("InitRepo: %v", err)
-	}
-	if err := gitops.CreateInitialCommit(repo, root); err != nil {
-		t.Fatalf("CreateInitialCommit: %v", err)
-	}
+	gittest.InitRepo(t, root, "-q")
+	gittest.InitialCommit(t, root)
 	dirtyPath = filepath.Join(root, "uncommitted-work.txt")
 	if err := os.WriteFile(dirtyPath, []byte("an operator's uncommitted work\n"), 0o644); err != nil {
 		t.Fatal(err)

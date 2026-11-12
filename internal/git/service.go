@@ -1,5 +1,10 @@
-// Package git provides in-process git operations using go-git,
-// eliminating the need for the system git binary.
+// Package git provides the pipeline's git operations on a checkout.
+//
+// Every operation runs the system git binary. The package used to read through
+// go-git, which linked an SSH stack, an OpenPGP implementation and a second
+// SHA-1 into the release CLI; #3192 measured that code as the bulk of what
+// antivirus heuristics flagged on the Linux amd64 binary. git is a hard
+// requirement of the pipeline anyway, so the reads now go through it too.
 package git
 
 import (
@@ -16,11 +21,6 @@ import (
 	"strings"
 	"time"
 
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/config"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
-
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/issueslug"
 	"github.com/nightgauge/nightgauge/internal/layout"
@@ -29,66 +29,83 @@ import (
 
 // Service provides git operations on a repository.
 type Service struct {
-	repo     *gogit.Repository
 	repoPath string
 }
 
-// NewService opens a git repository at the given path.
+// NewService opens the git repository whose root is repoPath.
 //
-// EnableDotGitCommonDir is required, not optional: the pipeline runs its stages
-// inside linked worktrees, whose gitdir holds only HEAD, index, logs and refs —
-// no objects, no config, no refs/remotes. Without common-dir support go-git
-// chroots the storer to that directory and the repository reads as one with no
-// remotes and no history.
+// repoPath must BE the root of a working tree (or a bare repository), not a
+// directory somewhere inside one, and that is load-bearing for write
+// containment (docs/MULTI_REPO_WORKSPACE.md#write-containment-issue-129) — not
+// a consequence of callers always passing a repository root, which they do not
+// (openGitService passes os.Getwd(), getGitRoot passes "."). git itself walks
+// up to the nearest enclosing repository, so a path that is NOT a repository
+// would otherwise still open: a stale or ghost worktree directory such as
+// `<repo>/.worktrees/issue-999`, left behind when a run's worktree was removed,
+// resolves upward to the ENCLOSING primary checkout and every mutation aimed at
+// the dead worktree lands in the operator's own tree instead. Opening a
+// non-repository path must fail, not widen; the negative test in
+// service_test.go pins that.
 //
-// DetectDotGit stays OFF, and that is load-bearing for write containment
-// (docs/MULTI_REPO_WORKSPACE.md#write-containment-issue-129) — not a
-// consequence of callers always passing a repository root, which they do not
-// (openGitService passes os.Getwd(), getGitRoot passes "."). With parent
-// walking on, a path that is NOT a repository still opens: a stale or ghost
-// worktree directory such as `<repo>/.worktrees/issue-999`, left behind when a
-// run's worktree was removed, resolves upward to the ENCLOSING primary checkout
-// and every mutation aimed at the dead worktree lands in the operator's own
-// tree instead. Opening a non-repository path must fail, not widen; the
-// negative test in service_test.go pins that and fails the moment DetectDotGit
-// is turned on.
+// Linked worktrees open normally: git resolves their common dir (objects,
+// config, refs/remotes) itself.
 func NewService(repoPath string) (*Service, error) {
-	repo, err := gogit.PlainOpenWithOptions(repoPath, &gogit.PlainOpenOptions{
-		EnableDotGitCommonDir: true,
-	})
+	// git reports roots as absolute paths, and callers derive siblings from
+	// Root() (filepath.Dir), so a relative path such as "." is made absolute.
+	abs, err := filepath.Abs(repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("open repo at %s: %w", repoPath, err)
 	}
-
-	return &Service{
-		repo:     repo,
-		repoPath: repoPath,
-	}, nil
+	s := &Service{repoPath: abs}
+	if err := s.verifyRepositoryRoot(); err != nil {
+		return nil, fmt.Errorf("open repo at %s: %w", repoPath, err)
+	}
+	return s, nil
 }
 
-// NewServiceFromRepo creates a service from an already-opened repository (for testing).
-func NewServiceFromRepo(repo *gogit.Repository, repoPath string) *Service {
-	return &Service{
-		repo:     repo,
-		repoPath: repoPath,
+// verifyRepositoryRoot fails unless repoPath is the root of a working tree or
+// a bare repository. See NewService for why a parent walk must not succeed.
+func (s *Service) verifyRepositoryRoot() error {
+	fi, err := os.Stat(s.repoPath)
+	if err != nil {
+		return err
 	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%s is not a directory", s.repoPath)
+	}
+	out, err := s.gitOutput("rev-parse", "--is-bare-repository", "--git-dir")
+	if err != nil {
+		return err
+	}
+	fields := strings.Split(strings.TrimSpace(out), "\n")
+	if len(fields) != 2 {
+		return fmt.Errorf("unexpected git rev-parse output %q", out)
+	}
+	if fields[0] == "true" {
+		if fields[1] == "." {
+			return nil
+		}
+		return fmt.Errorf("%s is inside the bare repository %s, not its root", s.repoPath, fields[1])
+	}
+	top, err := s.worktreeTopLevel()
+	if err != nil {
+		return err
+	}
+	if !sameDir(top, s.repoPath) {
+		return fmt.Errorf("%s is not a repository root (the enclosing repository is %s)", s.repoPath, top)
+	}
+	return nil
 }
 
 // gitExec runs a git subcommand in this service's checkout and returns its
 // combined output.
 //
-// Reads go through go-git; the MUTATIONS git itself guards go through git.
-// That split is not a fallback and not a compat shim — it is which
-// implementation is correct per operation. go-git implements none of git's
-// worktree safety guards: it will move HEAD and create a branch ref and only
-// then discover the tree is dirty (leaving both mutations behind), check out a
-// branch a sibling worktree already holds, and delete a branch another worktree
-// is sitting on. Every one of those became reachable the moment the service
-// learned to resolve the common dir (#535), because before that a linked
-// worktree simply read as an empty repository. Re-implementing git's guards in
-// Go would be a second, weaker copy of rules git already enforces, so the
-// mutating paths shell out and inherit them. This file already shells out for
-// ls-remote, commitAll and the checkpoint anchor; this is that same idiom.
+// Mutations use it, so a failure's message carries what git printed. git
+// enforces the worktree safety guards an in-process implementation did not
+// (#535): it refuses to check out a branch a sibling worktree holds, refuses to
+// delete a branch another worktree sits on, and never moves HEAD before
+// discovering the tree is dirty. Reads use gitOutput, which keeps stderr out of
+// the parsed result.
 func (s *Service) gitExec(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = s.repoPath
@@ -100,12 +117,58 @@ func (s *Service) gitExec(args ...string) (string, error) {
 	return string(out), nil
 }
 
+// gitOutput runs a read-only git subcommand in this service's checkout and
+// returns its standard output. Standard error is kept out of the result, so a
+// warning git prints cannot corrupt the parse, and is quoted in the error.
+func (s *Service) gitOutput(args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = s.repoPath
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return string(out), fmt.Errorf("git %s: %w: %s",
+			strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return string(out), nil
+}
+
+// refHash returns the commit a fully qualified ref (refs/heads/x,
+// refs/remotes/origin/x) points at. found is false, with a nil error, when the
+// ref does not exist; an error means git could not answer.
+//
+// for-each-ref rather than rev-parse or show-ref: rev-parse evaluates revision
+// syntax, so a name such as "x~1" would resolve to a commit no ref is called,
+// and show-ref exits 128 for both "absent" and "broken". for-each-ref matches
+// by path prefix, so the exact-name comparison discards refs nested under the
+// requested one.
+func (s *Service) refHash(ref string) (hash string, found bool, err error) {
+	out, err := s.gitOutput("for-each-ref", "--format=%(refname)%00%(objectname)", ref)
+	if err != nil {
+		return "", false, err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		name, obj, ok := strings.Cut(line, "\x00")
+		if ok && name == ref {
+			return obj, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// headHash returns the commit HEAD points at.
+func (s *Service) headHash() (string, error) {
+	out, err := s.gitOutput("rev-parse", "--verify", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
 // validateRefArg rejects a ref name that git's own argument parser would read as
 // an option rather than as a name.
 //
-// This boundary did not exist while these operations went through go-git, which
-// takes names as Go strings and never builds an argv. Routing the guarded
-// mutations through the git CLI created it: `git checkout <name>` and
+// Building an argv for the git CLI creates this boundary: `git checkout <name>` and
 // `git branch -D <name>` take the name as a positional operand, so a name
 // beginning with "-" is smuggled in as a flag. Nothing legitimate is lost by
 // refusing them — git itself will not create or resolve a branch whose name
@@ -134,22 +197,23 @@ type BranchInfo struct {
 
 // CurrentBranch returns the name of the current branch.
 func (s *Service) CurrentBranch() (string, error) {
-	head, err := s.repo.Head()
+	branch, err := s.currentBranchName()
 	if err != nil {
 		return "", fmt.Errorf("get HEAD: %w", err)
 	}
-
-	if !head.Name().IsBranch() {
-		return "", fmt.Errorf("HEAD is detached at %s", head.Hash().String()[:8])
+	if branch != "" {
+		return branch, nil
 	}
-
-	return head.Name().Short(), nil
+	hash, err := s.headHash()
+	if err != nil {
+		return "", fmt.Errorf("get HEAD: %w", err)
+	}
+	return "", fmt.Errorf("HEAD is detached at %s", hash[:8])
 }
 
 // BranchCreate creates a new branch from current HEAD and checks it out.
 //
-// `git checkout -b` rather than SetReference + go-git checkout, for the
-// atomicity reason spelled out on BranchCreateFrom.
+// `git checkout -b`, for the atomicity reason spelled out on BranchCreateFrom.
 func (s *Service) BranchCreate(name string) error {
 	if err := validateRefArg("branch", name); err != nil {
 		return err
@@ -165,14 +229,14 @@ func (s *Service) BranchCreate(name string) error {
 // The base is resolved here (local branch first, then origin/<base>) and the
 // resulting commit is handed to `git checkout -B`, which is atomic: git stages
 // the working-tree update first and only writes the branch ref and HEAD once it
-// succeeds. The go-git equivalent is not. In a linked worktree holding ANY
-// modified tracked file — the normal state by the time a stage runs, since the
-// extension runs `npm install` and codegen over tracked files before dispatch —
-// go-git moved HEAD (worktree.go:190) and created refs/heads/<name> in the
-// COMMON store, then failed the reset that rejects a dirty tree
-// (worktree.go:201, ErrUnstagedChanges). The caller saw only a failure, while
-// the worktree was left on a branch that half-existed and every retry took the
-// "branch already exists" path and failed identically forever. git checks out a
+// succeeds. The go-git checkout this replaced was not. In a linked worktree
+// holding ANY modified tracked file — the normal state by the time a stage
+// runs, since the extension runs `npm install` and codegen over tracked files
+// before dispatch — it moved HEAD and created refs/heads/<name> in the COMMON
+// store, then failed the reset that rejects a dirty tree. The caller saw only a
+// failure, while the worktree was left on a branch that half-existed and every
+// retry took the "branch already exists" path and failed identically forever
+// (#535). git checks out a
 // dirty tree the way `git checkout -B` always has: modifications that do not
 // collide with the target are carried across and preserved.
 func (s *Service) BranchCreateFrom(name, base string) error {
@@ -184,7 +248,7 @@ func (s *Service) BranchCreateFrom(name, base string) error {
 		return fmt.Errorf("resolve base branch %s: %w", base, err)
 	}
 
-	if _, err := s.gitExec("checkout", "-B", name, baseHash.String()); err != nil {
+	if _, err := s.gitExec("checkout", "-B", name, baseHash); err != nil {
 		return fmt.Errorf("create branch %s from %s: %w", name, base, err)
 	}
 
@@ -193,14 +257,11 @@ func (s *Service) BranchCreateFrom(name, base string) error {
 
 // LocalBranchExists reports whether the named local branch exists.
 func (s *Service) LocalBranchExists(name string) (bool, error) {
-	_, err := s.repo.Reference(plumbing.NewBranchReferenceName(name), true)
-	if err == nil {
-		return true, nil
+	_, found, err := s.refHash("refs/heads/" + name)
+	if err != nil {
+		return false, fmt.Errorf("lookup local branch %s: %w", name, err)
 	}
-	if err == plumbing.ErrReferenceNotFound {
-		return false, nil
-	}
-	return false, fmt.Errorf("lookup local branch %s: %w", name, err)
+	return found, nil
 }
 
 // RemoteBranchExists reports whether the named remote branch exists on origin.
@@ -231,15 +292,15 @@ func (s *Service) RemoteBranchExists(name string) (bool, error) {
 //
 // # Why this refuses a branch some worktree has checked out (#1499)
 //
-// Storer.SetReference writes the ref and NOTHING else — no index, no working
-// tree, and (go-git implements no reflog) not even a reflog message. On a
-// branch nobody has checked out that is exactly right. On a CHECKED-OUT branch
+// `git update-ref` writes the ref (and its reflog entry) and NOTHING else — no
+// index, no working tree. On a branch nobody has checked out that is exactly
+// right. On a CHECKED-OUT branch
 // it desynchronises HEAD from the tree that is sitting on it: every path the
 // old and new commits differ in immediately reports as a staged change that no
 // process wrote, because `git status` is relative to HEAD.
 //
-// NewService opens with EnableDotGitCommonDir, so the write lands in the
-// repository's SHARED ref store no matter which worktree the caller is in —
+// Branch refs live in the repository's common dir, so the write lands in the
+// SHARED ref store no matter which worktree the caller is in —
 // the desynchronised checkout can be the primary one, belonging to the
 // operator, in a repository this run has nothing to do with.
 //
@@ -267,9 +328,12 @@ func (s *Service) ResetLocalBranchToRemote(name string) error {
 		return fmt.Errorf("refusing to reset protected branch %q to origin/%s", name, name)
 	}
 
-	remoteRef, err := s.repo.Reference(plumbing.ReferenceName("refs/remotes/origin/"+name), true)
+	remoteHash, found, err := s.refHash("refs/remotes/origin/" + name)
 	if err != nil {
 		return fmt.Errorf("lookup remote branch origin/%s: %w", name, err)
+	}
+	if !found {
+		return fmt.Errorf("lookup remote branch origin/%s: reference not found", name)
 	}
 
 	held, err := s.branchesHeldByWorktrees()
@@ -285,15 +349,14 @@ func (s *Service) ResetLocalBranchToRemote(name string) error {
 		}
 		// Our own checkout holds it, so we are entitled to move its tree —
 		// and must, or the ref move leaves this tree reporting phantom dirt.
-		// git writes the reflog entry go-git would not.
 		if _, err := s.gitExec("reset", "--hard", "refs/remotes/origin/"+name); err != nil {
 			return fmt.Errorf("reset local branch %s to origin/%s: %w", name, name, err)
 		}
 		return nil
 	}
 
-	localRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(name), remoteRef.Hash())
-	if err := s.repo.Storer.SetReference(localRef); err != nil {
+	if _, err := s.gitExec("update-ref", "-m", "nightgauge: reset "+name+" to origin/"+name,
+		"refs/heads/"+name, remoteHash); err != nil {
 		return fmt.Errorf("reset local branch %s to origin/%s: %w", name, name, err)
 	}
 
@@ -303,7 +366,7 @@ func (s *Service) ResetLocalBranchToRemote(name string) error {
 // worktreeTopLevel is the root of the working tree this service is operating
 // in — what `git worktree list` names the caller's own entry.
 func (s *Service) worktreeTopLevel() (string, error) {
-	out, err := s.gitExec("rev-parse", "--show-toplevel")
+	out, err := s.gitOutput("rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", err
 	}
@@ -358,21 +421,18 @@ func sameDir(a, b string) bool {
 // here: narrowing this enumerator would make it answer a question its other
 // callers never asked.
 func (s *Service) ListLocalBranches() ([]string, error) {
-	refs, err := s.repo.References()
+	// %(refname), not %(refname:short): the short form disambiguates a branch
+	// that shares a name with a tag as "heads/<name>".
+	out, err := s.gitOutput("for-each-ref", "--format=%(refname)", "refs/heads")
 	if err != nil {
 		return nil, fmt.Errorf("list references: %w", err)
 	}
 
 	var branches []string
-	err = refs.ForEach(func(ref *plumbing.Reference) error {
-		name := ref.Name().String()
+	for _, name := range strings.Split(out, "\n") {
 		if strings.HasPrefix(name, "refs/heads/") {
 			branches = append(branches, strings.TrimPrefix(name, "refs/heads/"))
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("iterate branches: %w", err)
 	}
 
 	sort.Strings(branches)
@@ -380,8 +440,7 @@ func (s *Service) ListLocalBranches() ([]string, error) {
 }
 
 // ListRemoteBranches returns all remote branch names (without the origin/ prefix).
-// Uses git ls-remote via exec to leverage the system's SSH agent and credential helpers,
-// avoiding go-git's auth limitations with SSH remotes.
+// Uses git ls-remote, so the system's SSH agent and credential helpers apply.
 func (s *Service) ListRemoteBranches() ([]string, error) {
 	cmd := exec.Command("git", "ls-remote", "--heads", "origin")
 	cmd.Dir = s.repoPath
@@ -667,8 +726,9 @@ func (s *Service) FindEpicBranch(epicNumber int) (string, error) {
 //
 // Through git, so the worktree-occupancy guard applies: a branch another linked
 // worktree already has checked out is refused, naming the holding worktree.
-// go-git has no such check — it never reads <common>/worktrees/*/HEAD — so it
-// happily put two worktrees on one branch, and that is silent data loss rather
+// The go-git checkout this replaced had no such check — it never read
+// <common>/worktrees/*/HEAD — so it put two worktrees on one branch, and that is
+// silent data loss rather
 // than an oddity: the second stage's `git add -A && git commit` (commitAll)
 // sees the first stage's files as deletions and erases its deliverable from the
 // branch tip. The re-run paths of `nightgauge git branch-create` (the
@@ -686,19 +746,19 @@ func (s *Service) Checkout(branch string) error {
 
 // DefaultBranch returns the repository default branch, preferring origin/HEAD when available.
 func (s *Service) DefaultBranch() (string, error) {
-	if ref, err := s.repo.Reference(plumbing.ReferenceName("refs/remotes/origin/HEAD"), false); err == nil {
-		target := ref.Target().String()
-		target = strings.TrimPrefix(target, "refs/remotes/origin/")
+	// -q: exit 1 with no output when origin/HEAD is absent or not symbolic.
+	if out, err := s.gitOutput("symbolic-ref", "-q", "refs/remotes/origin/HEAD"); err == nil {
+		target := strings.TrimPrefix(strings.TrimSpace(out), "refs/remotes/origin/")
 		if target != "" {
 			return target, nil
 		}
 	}
 
 	for _, candidate := range []string{"main", "master"} {
-		if _, err := s.repo.Reference(plumbing.ReferenceName("refs/remotes/origin/"+candidate), true); err == nil {
+		if _, found, err := s.refHash("refs/remotes/origin/" + candidate); err == nil && found {
 			return candidate, nil
 		}
-		if _, err := s.repo.Reference(plumbing.NewBranchReferenceName(candidate), true); err == nil {
+		if _, found, err := s.refHash("refs/heads/" + candidate); err == nil && found {
 			return candidate, nil
 		}
 	}
@@ -709,12 +769,9 @@ func (s *Service) DefaultBranch() (string, error) {
 // Fetch fetches from origin, pruning remote-tracking branches origin no
 // longer carries when prune is set.
 //
-// It shells out, like PushBranch (#878) and BranchDeleteRemote (#1921). On
-// go-git it sent the *http.BasicAuth NewService built from GITHUB_TOKEN, which
-// go-git rejects against an SSH remote with "invalid auth method" before it
-// connects (#2081), and without a token go-git dialled SSH itself, ignoring
-// GIT_SSH_COMMAND, insteadOf rewrites and ~/.ssh/config. git resolves
-// credentials the way the machine already does. The prune refspec is explicit,
+// It goes through git, which resolves credentials the way the machine already
+// does: SSH agent, GIT_SSH_COMMAND, insteadOf rewrites and ~/.ssh/config
+// (#2081). The prune refspec is explicit,
 // so nothing depends on the remote's configured fetch refspec.
 func (s *Service) Fetch(prune bool) error {
 	args := []string{"fetch", "origin"}
@@ -730,13 +787,8 @@ func (s *Service) Fetch(prune bool) error {
 // Push pushes the current branch to origin, through PushBranch and so through
 // the git CLI.
 //
-// It used to call go-git's Push with no refspec, which go-git defaults to
-// refs/heads/*:refs/heads/*: every local branch, not the current one. go-git
-// also runs no hooks, so `nightgauge git push` and the IPC method git.push
-// skipped the repository's pre-push hook, the publication guard (#2365)
-// included. git runs the hook, and the refspec names only the current branch.
-// It was the last go-git transport call, so NewService no longer turns
-// GITHUB_TOKEN into an *http.BasicAuth: git resolves credentials itself.
+// git runs the repository's pre-push hook, the publication guard (#2365)
+// included, and the refspec names only the current branch.
 func (s *Service) Push() error {
 	branch, err := s.CurrentBranch()
 	if err != nil {
@@ -745,33 +797,17 @@ func (s *Service) Push() error {
 	return s.PushBranch(branch)
 }
 
-// PushBranch pushes the named branch to origin and sets upstream tracking.
 // PushBranch publishes a local branch to origin.
 //
-// This is a MUTATION, so it shells out — the same split gitExec's header
-// states, applied to the operation that most needed it (#878).
-//
-// It used to go through go-git with the *http.BasicAuth that NewService built
-// from GITHUB_TOKEN. That auth is only valid for an HTTPS remote: against
-// `git@github.com:owner/repo.git` go-git's transport rejects it outright with
-// transport.ErrInvalidAuthMethod — "invalid auth method" (#593). SSH is the
-// default remote for anyone who cloned over SSH, so on those checkouts EVERY
-// push through this method failed, and the epic-branch auto-create path
-// (CreateEpicBranch) failed the whole pipeline stage with it.
-//
-// #593 only worked around this on the delete path, by re-reading the remote
-// after the failed push; BranchDeleteRemote now shells out too (#1921). Routing
-// the push through git is the general fix: git resolves credentials the way the user's machine already does
-// — SSH agent, credential helper, insteadOf rewrites — none of which go-git
-// reimplements, and all of which a user has necessarily already configured,
-// because they cloned the repository.
+// git resolves credentials the way the user's machine already does — SSH
+// agent, credential helper, insteadOf rewrites — all of which a user has
+// necessarily configured, because they cloned the repository (#593, #878).
 //
 // The refspec is explicit, so nothing here depends on push.default.
-// "Everything up-to-date" exits 0, which is why go-git's NoErrAlreadyUpToDate
-// arm has no counterpart.
+// "Everything up-to-date" exits 0.
 func (s *Service) PushBranch(name string) error {
 	// Building an argv makes the ref name an operand, so a leading "-" would be
-	// parsed as a flag. This boundary did not exist on the go-git path.
+	// parsed as a flag.
 	if err := validateRefArg("branch", name); err != nil {
 		return err
 	}
@@ -798,34 +834,26 @@ type FileChange struct {
 
 // Status returns the working tree status.
 func (s *Service) Status() (*StatusResult, error) {
-	wt, err := s.repo.Worktree()
-	if err != nil {
-		return nil, fmt.Errorf("get worktree: %w", err)
-	}
-
-	status, err := wt.Status()
+	entries, err := s.porcelainStatus()
 	if err != nil {
 		return nil, fmt.Errorf("get status: %w", err)
 	}
 
-	result := &StatusResult{
-		IsClean: status.IsClean(),
-	}
-
-	for path, fileStatus := range status {
+	result := &StatusResult{IsClean: len(entries) == 0}
+	for _, e := range entries {
 		switch {
-		case fileStatus.Staging == gogit.Untracked:
-			result.UntrackedFiles = append(result.UntrackedFiles, path)
-		case fileStatus.Staging != gogit.Unmodified:
+		case e.staging == '?':
+			result.UntrackedFiles = append(result.UntrackedFiles, e.path)
+		case e.staging != ' ':
 			result.StagedFiles = append(result.StagedFiles, FileChange{
-				Path:   path,
-				Status: statusCode(fileStatus.Staging),
+				Path:   e.path,
+				Status: statusCode(e.staging),
 			})
 		}
-		if fileStatus.Worktree != gogit.Unmodified && fileStatus.Worktree != gogit.Untracked {
+		if e.worktree != ' ' && e.worktree != '?' {
 			result.UnstagedFiles = append(result.UnstagedFiles, FileChange{
-				Path:   path,
-				Status: statusCode(fileStatus.Worktree),
+				Path:   e.path,
+				Status: statusCode(e.worktree),
 			})
 		}
 	}
@@ -837,38 +865,88 @@ func (s *Service) Status() (*StatusResult, error) {
 	return result, nil
 }
 
+// statusEntry is one path from `git status --porcelain=v1`: the index (X) and
+// working-tree (Y) status letters and the path.
+type statusEntry struct {
+	staging  byte
+	worktree byte
+	path     string
+}
+
+// porcelainStatus lists every changed and untracked path. Untracked files are
+// listed one by one (--untracked-files=all), not collapsed to their directory,
+// and ignored files are not listed.
+func (s *Service) porcelainStatus() ([]statusEntry, error) {
+	out, err := s.gitOutput("status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return nil, err
+	}
+	return parsePorcelainStatus(out), nil
+}
+
+// parsePorcelainStatus parses `git status --porcelain=v1 -z` output. Each
+// record is "XY <path>" terminated by NUL; a rename or copy is followed by one
+// more NUL-terminated field, the source path, which is skipped.
+func parsePorcelainStatus(out string) []statusEntry {
+	var entries []statusEntry
+	fields := strings.Split(out, "\x00")
+	for i := 0; i < len(fields); i++ {
+		f := fields[i]
+		if len(f) < 4 {
+			continue
+		}
+		e := statusEntry{staging: f[0], worktree: f[1], path: f[3:]}
+		entries = append(entries, e)
+		if e.staging == 'R' || e.staging == 'C' || e.worktree == 'R' || e.worktree == 'C' {
+			i++
+		}
+	}
+	return entries
+}
+
+// commitSignature is the identity a commit made by the service records.
+type commitSignature struct {
+	Name  string
+	Email string
+	When  time.Time
+}
+
 // pipelineSignature is the author of commits the service makes. When the
 // binary exported a GitHub App's bot identity (GIT_AUTHOR_NAME/EMAIL, #1955)
 // the commit is the App's, matching what git subprocesses record; otherwise
 // it is the generic pipeline identity.
-func pipelineSignature(when time.Time) *object.Signature {
+func pipelineSignature(when time.Time) *commitSignature {
 	name, email := os.Getenv("GIT_AUTHOR_NAME"), os.Getenv("GIT_AUTHOR_EMAIL")
 	if name == "" || email == "" {
 		name, email = "Nightgauge Pipeline", "pipeline@nightgauge.dev"
 	}
-	return &object.Signature{Name: name, Email: email, When: when}
+	return &commitSignature{Name: name, Email: email, When: when}
 }
 
-// Commit stages all changes and creates a commit.
+// Commit stages all changes and creates a commit, authored and committed by
+// pipelineSignature.
 func (s *Service) Commit(message string) (string, error) {
-	wt, err := s.repo.Worktree()
-	if err != nil {
-		return "", fmt.Errorf("get worktree: %w", err)
-	}
-
-	// Stage all changes
-	if _, err := wt.Add("."); err != nil {
+	if _, err := s.gitExec("add", "-A"); err != nil {
 		return "", fmt.Errorf("stage changes: %w", err)
 	}
 
-	hash, err := wt.Commit(message, &gogit.CommitOptions{
-		Author: pipelineSignature(time.Now()),
-	})
-	if err != nil {
-		return "", fmt.Errorf("commit: %w", err)
+	sig := pipelineSignature(time.Now())
+	date := sig.When.Format(time.RFC3339)
+	cmd := exec.Command("git", "commit", "-q", "-m", message)
+	cmd.Dir = s.repoPath
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME="+sig.Name, "GIT_AUTHOR_EMAIL="+sig.Email, "GIT_AUTHOR_DATE="+date,
+		"GIT_COMMITTER_NAME="+sig.Name, "GIT_COMMITTER_EMAIL="+sig.Email, "GIT_COMMITTER_DATE="+date,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("commit: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
-	return hash.String(), nil
+	hash, err := s.headHash()
+	if err != nil {
+		return "", fmt.Errorf("commit: read new HEAD: %w", err)
+	}
+	return hash, nil
 }
 
 // LogEntry represents a single commit log entry.
@@ -885,30 +963,28 @@ func (s *Service) Log(limit int) ([]LogEntry, error) {
 		limit = 10
 	}
 
-	iter, err := s.repo.Log(&gogit.LogOptions{})
+	// %x1f separates fields; %s is the subject, which holds no newline.
+	out, err := s.gitOutput("log", fmt.Sprintf("-n%d", limit), "--format=%H%x1f%an%x1f%aI%x1f%s")
 	if err != nil {
 		return nil, fmt.Errorf("get log: %w", err)
 	}
-	defer iter.Close()
 
 	var entries []LogEntry
-	count := 0
-	err = iter.ForEach(func(c *object.Commit) error {
-		if count >= limit {
-			return fmt.Errorf("stop") // ForEach doesn't support early termination cleanly
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		parts := strings.SplitN(line, "\x1f", 4)
+		if len(parts) != 4 || len(parts[0]) < 8 {
+			continue
+		}
+		date := parts[2]
+		if when, perr := time.Parse(time.RFC3339, parts[2]); perr == nil {
+			date = when.Format("2006-01-02 15:04")
 		}
 		entries = append(entries, LogEntry{
-			Hash:    c.Hash.String()[:8],
-			Message: strings.SplitN(c.Message, "\n", 2)[0],
-			Author:  c.Author.Name,
-			Date:    c.Author.When.Format("2006-01-02 15:04"),
+			Hash:    parts[0][:8],
+			Message: parts[3],
+			Author:  parts[1],
+			Date:    date,
 		})
-		count++
-		return nil
-	})
-	// Ignore the "stop" error used for early termination
-	if err != nil && err.Error() != "stop" {
-		return nil, err
 	}
 
 	return entries, nil
@@ -916,20 +992,15 @@ func (s *Service) Log(limit int) ([]LogEntry, error) {
 
 // Diff returns the diff of unstaged changes.
 func (s *Service) Diff() (string, error) {
-	wt, err := s.repo.Worktree()
-	if err != nil {
-		return "", fmt.Errorf("get worktree: %w", err)
-	}
-
-	status, err := wt.Status()
+	entries, err := s.porcelainStatus()
 	if err != nil {
 		return "", fmt.Errorf("get status: %w", err)
 	}
 
 	var diffParts []string
-	for path, fileStatus := range status {
-		if fileStatus.Worktree != gogit.Unmodified && fileStatus.Worktree != gogit.Untracked {
-			diffParts = append(diffParts, fmt.Sprintf("--- %s [%s]", path, statusCode(fileStatus.Worktree)))
+	for _, e := range entries {
+		if e.worktree != ' ' && e.worktree != '?' {
+			diffParts = append(diffParts, fmt.Sprintf("--- %s [%s]", e.path, statusCode(e.worktree)))
 		}
 	}
 
@@ -996,24 +1067,20 @@ func (s *Service) ResetPipeline() error {
 		log.Printf("git: ResetPipeline: failed to reclaim pipeline stashes: %v", err)
 	}
 
-	head, err := s.repo.Head()
+	head, err := s.headHash()
 	if err != nil {
 		return fmt.Errorf("get HEAD: %w", err)
 	}
 
 	// Reset and clean through git, because "untracked" and "IGNORED" are
-	// different sets and only git knows the difference. go-git honours neither
-	// .gitignore nor .git/info/exclude in either operation: its hard reset
-	// diffs the tree with excludeIgnoredChanges=false and deletes every "extra"
-	// path it finds, and its Clean(Dir:true) walks the same way — so both wipe
-	// node_modules/, build caches and .env along with the junk. That is the
-	// stage's own execution environment and possibly an operator secret, and it
-	// was inert only while a linked worktree read as an empty repository; with
-	// common-dir resolution it is reachable on every reset. `git reset --hard`
+	// different sets and only git knows the difference. The go-git reset and
+	// clean this replaced honoured neither .gitignore nor .git/info/exclude, so
+	// both wiped node_modules/, build caches and environment files along with
+	// the junk. `git reset --hard`
 	// touches tracked content only and `git clean -fd` removes exactly what the
 	// reset is for — untracked files and directories — leaving ignored paths
 	// alone. Adding -x to the clean would restore the bug.
-	if _, err := s.gitExec("reset", "--hard", head.Hash().String()); err != nil {
+	if _, err := s.gitExec("reset", "--hard", head); err != nil {
 		return fmt.Errorf("reset: %w", err)
 	}
 
@@ -1264,11 +1331,11 @@ func (s *Service) anchorDetachedHead() error {
 	if branch != "" {
 		return nil
 	}
-	head, err := s.repo.Head()
+	head, err := s.headHash()
 	if err != nil {
 		return fmt.Errorf("get HEAD: %w", err)
 	}
-	name := fmt.Sprintf("nightgauge-checkpoint-%s", head.Hash().String()[:12])
+	name := fmt.Sprintf("nightgauge-checkpoint-%s", head[:12])
 	cmd := exec.Command("git", "branch", name)
 	cmd.Dir = s.repoPath
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -1329,28 +1396,20 @@ func (s *Service) reclaimPipelineStashes() error {
 // currentBranchName returns the short name of the currently checked-out
 // branch, or "" for a detached HEAD.
 func (s *Service) currentBranchName() (string, error) {
-	head, err := s.repo.Head()
+	cmd := exec.Command("git", "symbolic-ref", "-q", "HEAD")
+	cmd.Dir = s.repoPath
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		// -q: exit status 1 with nothing on stderr means HEAD is detached.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && strings.TrimSpace(stderr.String()) == "" {
+			return "", nil
+		}
+		return "", fmt.Errorf("git symbolic-ref HEAD: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	if !head.Name().IsBranch() {
-		return "", nil
-	}
-	return head.Name().Short(), nil
-}
-
-// InitRepo initializes a new git repository at the given path (for testing).
-func InitRepo(path string) (*gogit.Repository, error) {
-	return gogit.PlainInit(path, false)
-}
-
-// SetRemote adds an origin remote (for testing).
-func (s *Service) SetRemote(url string) error {
-	_, err := s.repo.CreateRemote(&config.RemoteConfig{
-		Name: "origin",
-		URLs: []string{url},
-	})
-	return err
+	return strings.TrimPrefix(strings.TrimSpace(string(out)), "refs/heads/"), nil
 }
 
 // EnsureEpicBranch creates the epic branch from origin/main if it does not already
@@ -1532,14 +1591,17 @@ func IsCleanupCandidate(branch string) bool {
 
 // RemoteRepoSlug returns the GitHub owner/repo from the origin remote URL.
 func (s *Service) RemoteRepoSlug() (string, error) {
-	remote, err := s.repo.Remote("origin")
+	// The configured URL, not `git remote get-url`: insteadOf rewrites are a
+	// transport concern and must not change which repository this names.
+	out, err := s.gitOutput("config", "--get", "remote.origin.url")
 	if err != nil {
-		return "", fmt.Errorf("get remote: %w", err)
+		return "", fmt.Errorf("get remote: origin has no configured URL: %w", err)
 	}
-	if remote.Config() == nil || len(remote.Config().URLs) == 0 {
+	url := strings.TrimSpace(out)
+	if url == "" {
 		return "", fmt.Errorf("origin remote has no configured URLs")
 	}
-	return parseGitHubRemoteSlug(remote.Config().URLs[0])
+	return parseGitHubRemoteSlug(url)
 }
 
 // RequireOriginRepo returns an error unless the checkout's origin is the
@@ -1564,24 +1626,25 @@ func (s *Service) RepoPath() string {
 }
 
 // Root returns the git repository root directory (equivalent to `git rev-parse --show-toplevel`).
-// It resolves the worktree root from go-git, falling back to the stored repoPath.
+// NewService only opens a repository root, so this is the stored repoPath as
+// the caller spelled it; a bare repository, which has no working tree, also
+// answers repoPath.
 func (s *Service) Root() (string, error) {
-	wt, err := s.repo.Worktree()
-	if err != nil {
-		// Bare repo or error — fall back to repoPath
+	top, err := s.worktreeTopLevel()
+	if err != nil || sameDir(top, s.repoPath) {
 		return s.repoPath, nil
 	}
-	return wt.Filesystem.Root(), nil
+	return top, nil
 }
 
-func (s *Service) resolveBranchHash(name string) (plumbing.Hash, error) {
-	if ref, err := s.repo.Reference(plumbing.NewBranchReferenceName(name), true); err == nil {
-		return ref.Hash(), nil
+func (s *Service) resolveBranchHash(name string) (string, error) {
+	if hash, found, err := s.refHash("refs/heads/" + name); err == nil && found {
+		return hash, nil
 	}
-	if ref, err := s.repo.Reference(plumbing.ReferenceName("refs/remotes/origin/"+name), true); err == nil {
-		return ref.Hash(), nil
+	if hash, found, err := s.refHash("refs/remotes/origin/" + name); err == nil && found {
+		return hash, nil
 	}
-	return plumbing.ZeroHash, fmt.Errorf("branch %s not found locally or on origin", name)
+	return "", fmt.Errorf("branch %s not found locally or on origin", name)
 }
 
 func parseGitHubRemoteSlug(url string) (string, error) {
@@ -1601,50 +1664,25 @@ func parseGitHubRemoteSlug(url string) (string, error) {
 	}
 }
 
-// statusCode converts a go-git status code to a human-readable string.
-func statusCode(code gogit.StatusCode) string {
+// statusCode converts a `git status --porcelain` status letter to a
+// human-readable string.
+func statusCode(code byte) string {
 	switch code {
-	case gogit.Modified:
+	case 'M', 'T':
 		return "modified"
-	case gogit.Added:
+	case 'A':
 		return "added"
-	case gogit.Deleted:
+	case 'D':
 		return "deleted"
-	case gogit.Renamed:
+	case 'R':
 		return "renamed"
-	case gogit.Copied:
+	case 'C':
 		return "copied"
-	case gogit.Untracked:
+	case '?':
 		return "untracked"
 	default:
 		return "unknown"
 	}
-}
-
-// CreateInitialCommit creates an initial commit with a .gitkeep file (for testing).
-func CreateInitialCommit(repo *gogit.Repository, repoPath string) error {
-	wt, err := repo.Worktree()
-	if err != nil {
-		return err
-	}
-
-	keepPath := filepath.Join(repoPath, ".gitkeep")
-	if err := os.WriteFile(keepPath, []byte(""), 0644); err != nil {
-		return err
-	}
-
-	if _, err := wt.Add(".gitkeep"); err != nil {
-		return err
-	}
-
-	_, err = wt.Commit("Initial commit", &gogit.CommitOptions{
-		Author: &object.Signature{
-			Name:  "Test",
-			Email: "test@test.com",
-			When:  time.Now(),
-		},
-	})
-	return err
 }
 
 // CleanupMergedBranches removes local branches whose remote tracking branch

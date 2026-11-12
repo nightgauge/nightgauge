@@ -2,6 +2,10 @@ package gitlab_test
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,5 +97,74 @@ func TestDedupeCache_MarkSeen_Idempotent(t *testing.T) {
 	isDup, _ := c.IsDuplicate(ctx, "delivery-1")
 	if !isDup {
 		t.Error("delivery not reported as duplicate after repeated MarkSeen")
+	}
+}
+
+// TestDedupeCache_FileStore_PersistsAcrossReopen: a receiver restarted within
+// the window must still recognise a delivery GitLab retries.
+func TestDedupeCache_FileStore_PersistsAcrossReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dedupe.json")
+	ctx := context.Background()
+
+	c, err := gitlab.NewDedupeCache(path, time.Hour)
+	if err != nil {
+		t.Fatalf("NewDedupeCache: %v", err)
+	}
+	if err := c.MarkSeen(ctx, "delivery-1"); err != nil {
+		t.Fatalf("MarkSeen: %v", err)
+	}
+	_ = c.Close()
+
+	reopened, err := gitlab.NewDedupeCache(path, time.Hour)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if isDup, err := reopened.IsDuplicate(ctx, "delivery-1"); err != nil || !isDup {
+		t.Errorf("after reopen IsDuplicate = %v, %v; want true, nil", isDup, err)
+	}
+	if isDup, _ := reopened.IsDuplicate(ctx, "delivery-2"); isDup {
+		t.Error("a delivery never marked reads as a duplicate after reopen")
+	}
+}
+
+// TestDedupeCache_FileStore_DropsExpiredOnLoad: an entry older than the window
+// is not a duplicate after reopening, and the next write removes it from disk.
+func TestDedupeCache_FileStore_DropsExpiredOnLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dedupe.json")
+	old := time.Now().Add(-2 * time.Hour).Unix()
+	body := fmt.Sprintf(`{"delivery-old":%d}`, old)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	c, err := gitlab.NewDedupeCache(path, time.Hour)
+	if err != nil {
+		t.Fatalf("NewDedupeCache: %v", err)
+	}
+	if isDup, _ := c.IsDuplicate(ctx, "delivery-old"); isDup {
+		t.Error("expired delivery reported as duplicate after load")
+	}
+	if err := c.MarkSeen(ctx, "delivery-new"); err != nil {
+		t.Fatalf("MarkSeen: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); got == body || !strings.Contains(got, "delivery-new") || strings.Contains(got, "delivery-old") {
+		t.Errorf("store after MarkSeen = %s, want delivery-new only", got)
+	}
+}
+
+// TestDedupeCache_FileStore_CorruptFileIsAnError: starting empty over an
+// unreadable store would re-dispatch every retried delivery.
+func TestDedupeCache_FileStore_CorruptFileIsAnError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dedupe.json")
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitlab.NewDedupeCache(path, time.Hour); err == nil {
+		t.Fatal("NewDedupeCache accepted a corrupt store")
 	}
 }

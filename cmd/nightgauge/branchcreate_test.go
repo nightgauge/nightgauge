@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	gogit "github.com/go-git/go-git/v5"
 	gitpkg "github.com/nightgauge/nightgauge/internal/git"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // TestBranchCreateDetachedHead verifies that branch-create succeeds when HEAD
@@ -12,28 +12,16 @@ import (
 func TestBranchCreateDetachedHead(t *testing.T) {
 	dir := t.TempDir()
 
-	repo, err := gitpkg.InitRepo(dir)
+	gittest.InitRepo(t, dir, "-q", "-b", "master")
+	gittest.InitialCommit(t, dir)
+
+	svc, err := gitpkg.NewService(dir)
 	if err != nil {
-		t.Fatalf("InitRepo: %v", err)
-	}
-	if err := gitpkg.CreateInitialCommit(repo, dir); err != nil {
-		t.Fatalf("CreateInitialCommit: %v", err)
+		t.Fatalf("NewService: %v", err)
 	}
 
-	svc := gitpkg.NewServiceFromRepo(repo, dir)
-
-	// Detach HEAD by checking out via commit hash.
-	head, err := repo.Head()
-	if err != nil {
-		t.Fatalf("Head: %v", err)
-	}
-	wt, err := repo.Worktree()
-	if err != nil {
-		t.Fatalf("Worktree: %v", err)
-	}
-	if err = wt.Checkout(&gogit.CheckoutOptions{Hash: head.Hash()}); err != nil {
-		t.Fatalf("detach HEAD: %v", err)
-	}
+	// Detach HEAD by checking out the commit itself.
+	gittest.Run(t, dir, "checkout", "-q", "--detach", "HEAD")
 
 	// Confirm HEAD is detached (CurrentBranch should error).
 	if _, err := svc.CurrentBranch(); err == nil {

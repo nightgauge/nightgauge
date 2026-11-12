@@ -10,6 +10,12 @@
 // the same way (#3161). This tool reads the packaged bytes, not the linker
 // flags, so it also catches a binary stripped or rebuilt by any later step.
 //
+// A Linux amd64 (ELF x86-64) Go binary must also be at most 30 MiB once its
+// DWARF and symbol tables are discounted — the size `strip` would leave. #3192
+// traced that model's verdicts on the Linux binary to the code go-git and the
+// embedded SQLite engine linked in, and dropped both; this bound catches
+// either, or anything of their size, coming back.
+//
 //	release-dwarf-check PATH...
 //
 // Each PATH is a .tar.gz/.tgz archive, a .vsix/.zip archive, or a raw binary.
@@ -22,7 +28,8 @@
 // Exit codes:
 //
 //	0  every Go binary found carries uncompressed DWARF
-//	1  at least one Go binary lacks DWARF or carries it compressed
+//	1  at least one Go binary lacks DWARF or carries it compressed, or a Linux
+//	   amd64 binary exceeds the stripped-size limit
 //	2  nothing was asserted: no arguments, an unreadable path, a path that is
 //	   not a Go binary, or an archive holding no Go binary (a HARNESS ERROR line
 //	   says which)
@@ -46,6 +53,10 @@ import (
 
 const record = "docs/RELEASE_BINARIES.md"
 
+// strippedSizeLimit bounds a Linux amd64 binary's stripped size, in bytes. A
+// variable so tests can exercise the verdict with a small fixture.
+var strippedSizeLimit int64 = 30 << 20
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -57,6 +68,7 @@ const (
 	verdictOK verdict = iota
 	verdictMissing
 	verdictCompressed
+	verdictOversize
 	verdictHarness
 )
 
@@ -77,7 +89,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch worst {
 	case verdictOK:
 		return 0
-	case verdictMissing, verdictCompressed:
+	case verdictMissing, verdictCompressed, verdictOversize:
 		return 1
 	default:
 		return 2
@@ -239,8 +251,65 @@ func checkEntry(label string, r io.Reader, stdout, stderr io.Writer) (bool, verd
 		fmt.Fprintf(stdout, "::error::%s carries compressed DWARF (%s); release binaries are built with -compressdwarf=false (see %s)\n", label, section, record)
 		return true, verdictCompressed
 	}
+	if kind == kindELF {
+		size, measured, err := linuxAMD64StrippedSize(tmp.Name())
+		if err != nil {
+			fmt.Fprintf(stderr, "HARNESS ERROR: %s: %v\n", label, err)
+			return true, verdictHarness
+		}
+		if measured && size > strippedSizeLimit {
+			fmt.Fprintf(stdout, "::error::%s is %s stripped, over the %s limit for a Linux amd64 release binary (see %s)\n",
+				label, mib(size), mib(strippedSizeLimit), record)
+			return true, verdictOversize
+		}
+		if measured {
+			fmt.Fprintf(stdout, "ok   %s (%s stripped)\n", label, mib(size))
+			return true, verdictOK
+		}
+	}
 	fmt.Fprintf(stdout, "ok   %s\n", label)
 	return true, verdictOK
+}
+
+// linuxAMD64StrippedSize returns the size the ELF file at path would have
+// once stripped: its size on disk less every DWARF section (.debug_*,
+// .zdebug_*) and the symbol tables (.symtab, .strtab). measured is false for
+// an ELF file that is not x86-64, which the limit does not cover.
+func linuxAMD64StrippedSize(path string) (size int64, measured bool, err error) {
+	f, err := elf.Open(path)
+	if err != nil {
+		return 0, false, err
+	}
+	defer f.Close()
+	if f.Machine != elf.EM_X86_64 {
+		return 0, false, nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, false, err
+	}
+	return strippedSize(info.Size(), f.Sections), true, nil
+}
+
+// strippedSize is fileSize less the on-disk bytes of the sections strip
+// removes.
+func strippedSize(fileSize int64, sections []*elf.Section) int64 {
+	size := fileSize
+	for _, s := range sections {
+		if s.Type == elf.SHT_NOBITS {
+			continue
+		}
+		if strings.HasPrefix(s.Name, ".debug_") || strings.HasPrefix(s.Name, ".zdebug_") ||
+			s.Name == ".symtab" || s.Name == ".strtab" {
+			size -= int64(s.FileSize)
+		}
+	}
+	return size
+}
+
+// mib formats a byte count in MiB to two decimals.
+func mib(n int64) string {
+	return fmt.Sprintf("%.2f MiB", float64(n)/(1<<20))
 }
 
 type binKind int
