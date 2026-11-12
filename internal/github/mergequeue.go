@@ -45,6 +45,15 @@ const (
 	DefaultMergeQueueDequeueGrace = 3
 )
 
+// mergeQueueDequeueConfirmPolls is how many consecutive polls must show an
+// OPEN PR outside the queue, after its entry was observed, before that is read
+// as a removal (#3219). GitHub records merged, closed and
+// removed_from_merge_queue in the same second, yet the PR's state can still
+// read OPEN for one read after the entry is gone; a single read would book a
+// merged PR as dequeued. A removal with failed merge-group checks is reported
+// on the first read by Wait, so only a check-less removal pays the extra poll.
+const mergeQueueDequeueConfirmPolls = 2
+
 // MergeableUnknown is GitHub's "I have not computed this yet" answer for a
 // pull request's `mergeable` field. It is returned for the first seconds after
 // a push or a PR creation.
@@ -688,7 +697,9 @@ const (
 
 // ClassifyMergeQueue maps one observation to an outcome. absentPolls is the
 // number of consecutive polls (including this one) that saw the PR OPEN and
-// outside the queue; seenEntry is whether an entry was ever observed.
+// outside the queue; seenEntry is whether an entry was ever observed. A
+// removal after an entry was seen needs mergeQueueDequeueConfirmPolls absent
+// reads (#3219); before one was seen it needs grace.
 //
 // An UNMERGEABLE entry is terminal only when the PR itself reads CONFLICTING
 // (#2611). On a still-mergeable PR it means the entry is blocked behind an
@@ -709,7 +720,7 @@ func ClassifyMergeQueue(st MergeQueueStatus, seenEntry bool, absentPolls, grace 
 	if st.InQueue {
 		return MergeQueuePending, ""
 	}
-	if seenEntry || absentPolls >= grace {
+	if (seenEntry && absentPolls >= mergeQueueDequeueConfirmPolls) || absentPolls >= grace {
 		return MergeQueueFailed, MergeQueueDequeued
 	}
 	return MergeQueuePending, ""
@@ -776,6 +787,17 @@ func (q *MergeQueue) Wait(ctx context.Context, prID string, initial MergeQueueSt
 					blockedUnmergeable = st.EntryState == "UNMERGEABLE" && st.Mergeable != "CONFLICTING"
 				} else if st.State == "OPEN" {
 					absent++
+					// A removal for failed merge-group checks is real: report it now
+					// rather than waiting out the dequeue confirmation (#3219).
+					if seenEntry && absent == 1 && headOID != "" {
+						failed, jobs, ferr := q.failedMergeGroupContexts(ctx, prID, headOID)
+						if ferr != nil {
+							log.Printf("merge queue: could not read merge-group checks for PR #%d at %s: %v", st.Number, shortOID(headOID), ferr)
+						} else if len(failed) > 0 {
+							return st, &MergeQueueError{PRNumber: st.Number, Kind: MergeQueueDequeued,
+								EntryHeadOID: headOID, FailedChecks: failed, FailedJobs: jobs}
+						}
+					}
 				}
 				outcome, kind := ClassifyMergeQueue(st, seenEntry, absent, opts.DequeueGrace)
 				switch outcome {

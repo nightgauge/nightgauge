@@ -831,6 +831,24 @@ func (r *DeterministicRunner) detectMergeQueue(ctx context.Context, gh ghClient,
 	return mq, st
 }
 
+// queueMergedAfterAll re-reads a PR whose queue wait ended in a
+// *github.MergeQueueError and reports its status when it reads MERGED (#3219).
+// GitHub can report a merged PR as OPEN and outside the queue for a read after
+// its entry is gone; the merge, not that read, is the outcome. A failed
+// re-read, or one cut short by ctx, keeps the original error.
+func (r *DeterministicRunner) queueMergedAfterAll(ctx context.Context, mq mergeQueueClient, prNumber int, err error) (github.MergeQueueStatus, bool) {
+	var qe *github.MergeQueueError
+	if err == nil || !errors.As(err, &qe) || ctx.Err() != nil {
+		return github.MergeQueueStatus{}, false
+	}
+	st, rerr := mq.MergeQueueStatus(ctx, prNumber)
+	if rerr != nil || st.State != "MERGED" {
+		return github.MergeQueueStatus{}, false
+	}
+	log.Printf("pr-merge: PR #%d queue wait ended %s but the PR reads MERGED; booking the merge", prNumber, qe.Kind)
+	return st, true
+}
+
 // awaitMergeQueue enqueues the PR (unless already queued) and waits for the
 // queue's outcome (#2214). MERGED → PathMerged. Every other outcome is
 // PathRefused: a failed merge group is a CI failure on the merge-group
@@ -863,6 +881,10 @@ func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmit
 	reenqueues := 0
 	for ; ; reenqueues++ {
 		final, err = mq.EnqueueAndWait(ctx, st, opts)
+		if merged, ok := r.queueMergedAfterAll(ctx, mq, prNumber, err); ok {
+			final, err = merged, nil
+			break
+		}
 		var removal *github.MergeQueueError
 		if err == nil || !errors.As(err, &removal) || removal.Kind != github.MergeQueueDequeued {
 			break
