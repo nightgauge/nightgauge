@@ -329,7 +329,12 @@ type acClause struct {
 	Prose    string // Raw with code spans removed
 	Paths    []string
 	Headings []acHeading
-	Tokens   []string // code spans that are not paths or headings, plus #NNN refs
+	Tokens   []string // code spans that are not paths or headings
+	// Refs are #NNN issue/PR references in the prose. They name context ("the
+	// case PR #3225 hit"), not text the diff must add: one the diff adds is
+	// cited as evidence, one it lacks leaves the clause to validate (#3233).
+	// A ref written in a code span is a Token, checked literally.
+	Refs []string
 	// Bounds are code-span values the prose names as a bound ("a version
 	// above `1.26.0`"): a comparison, not text the diff must add (#2941).
 	Bounds []acBound
@@ -568,7 +573,7 @@ func parseACClause(raw string) acClause {
 		add(&c.Paths, m[1])
 	}
 	for _, m := range acIssueRefRE.FindAllStringSubmatch(c.Prose, -1) {
-		add(&c.Tokens, m[1])
+		add(&c.Refs, m[1])
 	}
 	return c
 }
@@ -1115,7 +1120,7 @@ func acSection(c acClause, diffed []string, d *ACDiff) acResult {
 	// holding one is never met on its other spans (#3030).
 	tokens, patterns := acLiteralSpans(c.Tokens)
 	var reasons, tried []string
-	skipped := false
+	skipped, refMissing := false, false
 	for _, p := range diffed {
 		f := d.Files[p]
 		content, ok := d.lines(p)
@@ -1141,13 +1146,20 @@ func acSection(c acClause, diffed []string, d *ACDiff) acResult {
 		if patterns {
 			return acResult{}
 		}
+		// A prose ref the section lacks is context, not a miss: this file
+		// neither satisfies nor refutes the clause, which is left to
+		// validate when no other file satisfies it (#3233).
+		if len(acMissingTokens(c.Refs, sec)) > 0 {
+			refMissing = true
+			continue
+		}
 		ev := fmt.Sprintf("`%s:%d` adds %d line(s) under %s", p, sec[0].N, len(sec), acHeadingList(c.Headings, true))
-		if len(c.Tokens) > 0 {
-			ev += " citing " + acList(c.Tokens, 5)
+		if cited := append(append([]string{}, c.Tokens...), c.Refs...); len(cited) > 0 {
+			ev += " citing " + acList(cited, 5)
 		}
 		return acAnswer(ACMet, ev, p)
 	}
-	if skipped || len(tried) == 0 {
+	if skipped || refMissing || len(tried) == 0 {
 		return acResult{}
 	}
 	return acAnswer(ACUnmet, strings.Join(reasons, "; "), tried...)
@@ -1204,7 +1216,7 @@ func acTokenScope(c acClause, d *ACDiff) []string {
 // diff-checkable. verifyACClause keeps an inherited verdict only when met.
 // Bounds are compared against the values the scope's diff adds.
 func acTokens(c acClause, named, inherited []string, d *ACDiff) acResult {
-	if len(c.Tokens) == 0 && len(c.Bounds) == 0 {
+	if len(c.Tokens) == 0 && len(c.Bounds) == 0 && len(c.Refs) == 0 {
 		return acResult{}
 	}
 	scope := named
@@ -1269,6 +1281,23 @@ func acTokens(c acClause, named, inherited []string, d *ACDiff) acResult {
 			skipped = skipped || unread
 		}
 	}
+	// A prose #NNN ref is context the criterion names, never text the diff
+	// must add: one the diff adds is evidence, one it lacks leaves the clause
+	// to validate instead of making it unmet (#3233).
+	refMissing := false
+	for _, ref := range c.Refs {
+		loc, ok := acAddedToken(ref, scope, d)
+		if !ok {
+			loc, ok = acAddedToken(ref, wide, d)
+		}
+		if !ok {
+			refMissing = true
+			continue
+		}
+		ev = append(ev, fmt.Sprintf("adds `%s` at `%s`", ref, loc))
+		cite(loc)
+		added++
+	}
 	if len(missing) > 0 {
 		if skipped {
 			// A missing token may sit in a scope file the checker could not
@@ -1281,7 +1310,7 @@ func acTokens(c acClause, named, inherited []string, d *ACDiff) acResult {
 		}
 		return acAnswer(ACUnmet, fmt.Sprintf("the diff does not add %s (looked in %s and every other changed file)", acList(missing, 5), acList(named, 3)), named...)
 	}
-	if patterns || (added == 0 && !decided) {
+	if patterns || refMissing || (added == 0 && !decided) {
 		return acResult{}
 	}
 	return acAnswer(ACMet, "the diff "+strings.Join(ev, ", "), paths...)

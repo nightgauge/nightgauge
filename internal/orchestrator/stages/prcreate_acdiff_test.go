@@ -245,7 +245,12 @@ diff --git a/x_test.go b/x_test.go
 		{"test met", "`TestDryRun` passes.", ACMet},
 		{"section met", "`docs/a.md` documents the flag under `## Usage`, citing #77.", ACMet},
 		{"section wrong heading", "`docs/a.md` has a line under `## Other`.", ACUnmet},
-		{"section missing token", "`docs/a.md` adds a line under `## Usage` citing #78.", ACUnmet},
+		{"section missing token", "`docs/a.md` adds a line under `## Usage` citing `#78`.", ACUnmet},
+		{"section missing prose ref (#3233)", "`docs/a.md` adds a line under `## Usage` citing #78.", ""},
+		{"prose ref missing is context (#3233)", "`docs/a.md` mentions `--dry-run`, as PR #3225 asked.", ""},
+		{"prose ref added is evidence (#3233)", "`docs/a.md` mentions `--dry-run` (#77).", ACMet},
+		{"code-span ref missing (#3233)", "`docs/a.md` mentions `#3225`.", ACUnmet},
+		{"regression quoting #3226 (#3233)", "A regression case in `x_test.go` reproducing PR #3225's criterion adds `TestDryRun`.", ACMet},
 		{"token met in named file", "`docs/a.md` mentions `--dry-run`.", ACMet},
 		{"file-less token, no prior file (#2669)", "The diff mentions `--dry-run`.", ""},
 		{"token missing in named file", "`docs/a.md` mentions `--wet-run`.", ACUnmet},
@@ -328,7 +333,7 @@ diff --git a/docs/b.md b/docs/b.md
 	if !ok || got.Status != ACMet {
 		t.Errorf("got %+v ok=%v, want met", got, ok)
 	}
-	got, _ = VerifyACAgainstDiff("`docs/a.md` or `docs/b.md` adds a line under `## Usage` citing #78.", nil, d, ACTestState{})
+	got, _ = VerifyACAgainstDiff("`docs/a.md` or `docs/b.md` adds a line under `## Usage` citing `#78`.", nil, d, ACTestState{})
 	if got.Status != ACUnmet || !strings.Contains(got.Evidence, "docs/a.md") || !strings.Contains(got.Evidence, "docs/b.md") {
 		t.Errorf("got %+v, want unmet naming both files", got)
 	}
@@ -1153,5 +1158,22 @@ func TestVerifyACAgainstDiff_Issue3225(t *testing.T) {
 	}
 	if strings.Contains(got.Evidence, "does not add `it(...)`") {
 		t.Errorf("evidence still reports it(...) missing: %+v", got)
+	}
+}
+
+// #3233: a prose #N the diff lacks leaves the clause to validate, so
+// validate's met resolves the criterion met instead of the diff's unmet.
+func TestResolveACVerdicts_ProseRefKeepsValidateMet(t *testing.T) {
+	d := memDiff(`diff --git a/x_test.go b/x_test.go
+--- a/x_test.go
++++ b/x_test.go
+@@ -1,0 +2 @@
++func TestDryRun(t *testing.T) {}
+`, map[string]string{"x_test.go": "package x\nfunc TestDryRun(t *testing.T) {}\n"})
+	crit := "A regression case reproducing PR #3225 lands in `x_test.go`."
+	validate := []ACVerdict{{Index: 0, Text: crit, Status: ACMet, Evidence: "x_test.go:2 TestDryRun"}}
+	got := ResolveACVerdicts([]string{crit}, validate, nil, d.Checker(ACTestState{Passed: true}))
+	if len(got) != 1 || got[0].Status != ACMet {
+		t.Fatalf("got %+v, want met from validate", got)
 	}
 }

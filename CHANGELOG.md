@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- pr-create no longer marks a met acceptance criterion `unmet` because the diff
+  lacks an issue or PR number its prose names as context ("reproducing PR
+  #3225"). A prose `#N` the diff adds is cited as evidence; one it lacks leaves
+  the criterion to validate's verdict. A `#N` in a code span is still required
+  text (#3233).
+
 - **The release CLI no longer links go-git or an embedded SQLite engine (#3192).**
   Together they were most of the code Microsoft's model flagged on the Linux
   amd64 binary, which is now about 28.7 MB stripped instead of 36.9 MB. Every
