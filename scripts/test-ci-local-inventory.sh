@@ -123,6 +123,9 @@ EOF
 # the real files, not empty ones.
 cp "$REPO_ROOT/scripts/lib/require-bash4.sh" "$REPO_ROOT/scripts/lib/ci-local-budget.sh" \
   "$STUB/scripts/lib/"
+# The Go shard step labels come from the shard config through its partitioner
+# (#3209), which --list-steps runs, so those two are real copies too.
+cp "$REPO_ROOT/scripts/go-test-shard.py" "$REPO_ROOT/scripts/go-test-shards.txt" "$STUB/scripts/"
 
 : > "$STUB/Makefile"
 while IFS= read -r target; do

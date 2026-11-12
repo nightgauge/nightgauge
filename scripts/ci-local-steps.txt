@@ -5,11 +5,39 @@ ci-local.sh change-scoping contract
 ci-local.sh dependency bootstrap decision
 ci-local.sh go test pass record
 go test cache and always-uncached list
+go test shard partitioner
 ci-local.sh gate ledger reuse
 state-backstop.sh regression suite
 go build ./...
-go test ./... (with skip accounting)
-go test -race ./...
+go test shard plan
+go test ./... except sharded packages
+go test -race ./... except sharded packages
+go test internal/orchestrator shard 1/4
+go test -race internal/orchestrator shard 1/4
+go test internal/orchestrator shard 2/4
+go test -race internal/orchestrator shard 2/4
+go test internal/orchestrator shard 3/4
+go test -race internal/orchestrator shard 3/4
+go test internal/orchestrator shard 4/4
+go test -race internal/orchestrator shard 4/4
+go test internal/execution shard 1/3
+go test -race internal/execution shard 1/3
+go test internal/execution shard 2/3
+go test -race internal/execution shard 2/3
+go test internal/execution shard 3/3
+go test -race internal/execution shard 3/3
+go test cmd/nightgauge shard 1/2
+go test -race cmd/nightgauge shard 1/2
+go test cmd/nightgauge shard 2/2
+go test -race cmd/nightgauge shard 2/2
+go test internal/ipc shard 1/2
+go test -race internal/ipc shard 1/2
+go test internal/ipc shard 2/2
+go test -race internal/ipc shard 2/2
+go test internal/doctor shard 1/2
+go test -race internal/doctor shard 1/2
+go test internal/doctor shard 2/2
+go test -race internal/doctor shard 2/2
 gofmt -l ./internal ./cmd
 branch-merged-check.sh regression suite
 post-merge-check.sh regression suite
@@ -114,6 +142,7 @@ Plugin skills mirror in sync
 Mirror link gate regression suite
 Mirror link integrity
 Mirror include expansion regression suite
+go test shard coverage, skip accounting and pass record
 OpenCode integration (opencode_integration tag)
 VSCode host smoke tests
 machine state untouched by the run (~/.nightgauge, default STATE, agent homes)

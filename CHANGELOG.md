@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **The local gate splits its slowest Go packages across processes (#3209).**
+  `scripts/ci-local.sh` now runs `internal/orchestrator`, `internal/execution`,
+  `cmd/nightgauge`, `internal/ipc` and `internal/doctor` as several
+  `go test -run` processes each, for the plain and the race pass, instead of
+  waiting on one package's tests in series. Each shard is its own gate step
+  and holds one `CI_LOCAL_JOBS` slot. The gate fails when a test is in no shard
+  or two, or when a sharded test does not run exactly once. Change a package's
+  shard count in `scripts/go-test-shards.txt`. Hosted CI is unchanged.
 - **The local gate reuses Go's test cache (#3208).** `scripts/ci-local.sh` no
   longer passes `-count=1` to its plain and race Go test passes, so an unchanged
   package replays its cached result. Tests whose result depends on something the
