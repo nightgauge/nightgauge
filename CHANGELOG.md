@@ -14,6 +14,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- **The local gate reuses Go's test cache (#3208).** `scripts/ci-local.sh` no
+  longer passes `-count=1` to its plain and race Go test passes, so an unchanged
+  package replays its cached result. Tests whose result depends on something the
+  cache cannot track, such as a repository script run in a child shell, are
+  listed in `scripts/go-test-uncached.txt` and always run uncached. The gate
+  fails when a listed test no longer exists. The skip accounting now reports how
+  many packages ran and how many were cached. `CI_LOCAL_NO_TEST_CACHE=1` runs
+  both passes fully uncached. Hosted CI is unchanged.
+
 ### Fixed
 
 - **A pipeline run pays for one full local gate, not one per review round
@@ -32,6 +43,10 @@ changelog, and the release workflow refuses a tag that does not.
   `gate-run` stops the running step's process group, releases the guard, and
   exits `128+signo`.
 
+- `nightgauge doctor`'s orphaned-process check now names a `ps` or `lsof` scan that
+  timed out on a loaded host, instead of describing it as a failed or unexpected-shape
+  scan. Its real-process-table test no longer fails as "parser drift" under gate load.
+  (#3097)
 - **An RC's VirusTotal scan spends about half the requests it did (#3202).**
   rc.3 sent 108 requests, 63 of them re-analysing unchanged, clean hooks and
   scripts. A text file now reuses a clean, complete report for 14 days

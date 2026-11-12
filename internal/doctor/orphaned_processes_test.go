@@ -761,7 +761,11 @@ func TestCheckOrphanedProcesses_RunsAgainstTheRealProcessTable(t *testing.T) {
 	// proves the wiring — enumerate, parse, and reach a verdict on this host.
 	r := newLeakRepo(t)
 
-	fs, detail := orphanedProcessFindings(r.dir, time.Now())
+	// Generous bounds, ~10x the production ceiling: this test proves the
+	// wiring, not the bound, and the local gate runs it at load ~20 (#3097).
+	// TestEnumerateProcesses_AWedgedPsTimesOutToUnverifiable proves the bound.
+	fs, detail := orphanedProcessFindingsWithin(r.dir, time.Now(),
+		processScanBounds{Table: 5 * time.Minute, Cwd: 5 * time.Minute})
 	text := findingsText(fs)
 
 	if detail == "" && text == "" {
@@ -772,6 +776,9 @@ func TestCheckOrphanedProcesses_RunsAgainstTheRealProcessTable(t *testing.T) {
 	// carrier: a `ps` whose columns drift from this parser would ship green,
 	// warning forever in production and failing nothing in CI.
 	if runtime.GOOS != "windows" && strings.Contains(text, "unverifiable") {
+		if strings.Contains(text, "did not finish within") {
+			t.Fatalf("the real-table scan timed out under load (not parser drift): %q", text)
+		}
 		t.Fatalf("the real process table was not understood on %s — the parser has drifted from this host's ps: %q", runtime.GOOS, text)
 	}
 	if strings.Contains(text, fmt.Sprintf("%d (", os.Getpid())) {
@@ -793,7 +800,7 @@ func TestProcessTableReport_ATableWithoutThisProcessIsUnverifiable(t *testing.T)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fs, _ := processTableReport(t.TempDir(), tt.raw, map[int]bool{}, nil)
+			fs, _ := processTableReport(t.TempDir(), tt.raw, map[int]bool{}, nil, defaultScanBounds)
 			text := findingsText(fs)
 			if len(fs) == 0 {
 				t.Fatalf("a table that never listed this process reported healthy: %s", text)
@@ -815,7 +822,7 @@ func TestProcessTableReport_ATableContainingThisProcessIsRead(t *testing.T) {
 	raw := derivedRow(t, os.Getpid(), "10:00", "doctor --json") + "\n" +
 		derivedRow(t, unusedPID(t), "05-00:00:00", "autonomous run --dry-run --workdir "+ws) + "\n"
 
-	fs, _ := processTableReport(ws, raw, map[int]bool{}, nil)
+	fs, _ := processTableReport(ws, raw, map[int]bool{}, nil, defaultScanBounds)
 	text := findingsText(fs)
 
 	if strings.Contains(text, "unverifiable") {
@@ -1132,7 +1139,7 @@ func TestBuildForeignCwdScan_UnreadableRepoRootIsUndetermined(t *testing.T) {
 			"  - name: primary\n    path: .\n    role: primary\n"+
 			"  - name: broken\n    path: ../not-a-repo\n    role: primary\n")
 
-	if _, ok := buildForeignCwdScan(r.dir, nil); ok {
+	if _, err := buildForeignCwdScan(r.dir, nil, defaultScanBounds); err == nil {
 		t.Fatal("buildForeignCwdScan reported determined with an unreadable repo root in scope")
 	}
 
@@ -1141,7 +1148,7 @@ func TestBuildForeignCwdScan_UnreadableRepoRootIsUndetermined(t *testing.T) {
 	// is satisfied) but whose cwd half could not run must be unverifiable, not
 	// OK=true.
 	raw := fmt.Sprintf("%d 00:01 nightgauge-doctor-test\n", os.Getpid())
-	fs, _ := processTableReport(r.dir, raw, map[int]bool{}, nil)
+	fs, _ := processTableReport(r.dir, raw, map[int]bool{}, nil, defaultScanBounds)
 	text := findingsText(fs)
 	if len(fs) == 0 {
 		t.Fatalf("a scan whose cwd half could not run reported healthy: %s", text)
@@ -1387,6 +1394,97 @@ func TestEnumerateProcesses_AWedgedPsTimesOutToUnverifiable(t *testing.T) {
 			if len(findings) == 0 || !strings.Contains(strings.ToLower(fmt.Sprint(findings[0])), "unverifiable") {
 				t.Fatalf("want an unverifiable finding, got %+v", findings)
 			}
+			if text := findingsText(findings); !strings.Contains(text, "did not finish within") || strings.Contains(text, "could not be parsed") {
+				t.Fatalf("a wedged ps was not named as a timeout: %q", text)
+			}
 		})
+	}
+}
+
+// A command killed at its deadline is a named timeout (#3097); one that fails
+// fast is not, so neither is reported in the other's words.
+func TestBoundedOutput_NamesATimeoutAndOnlyATimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stubs need a POSIX shell")
+	}
+	dir := t.TempDir()
+	for name, script := range map[string]string{
+		"slowcmd": "#!/bin/sh\nexec /bin/sleep 30\n",
+		"failcmd": "#!/bin/sh\nexit 3\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, err := boundedOutput(200*time.Millisecond, "slowcmd", "-x")
+	var timeout *scanTimeoutError
+	if !errors.As(err, &timeout) {
+		t.Fatalf("a command killed at its deadline is not a scanTimeoutError: %v", err)
+	}
+	if timeout.Command != "slowcmd -x" || timeout.Bound != 200*time.Millisecond {
+		t.Errorf("timeout names %q within %v, want \"slowcmd -x\" within 200ms", timeout.Command, timeout.Bound)
+	}
+
+	_, err = boundedOutput(5*time.Second, "failcmd")
+	if err == nil {
+		t.Fatal("a failing command returned no error")
+	}
+	if errors.As(err, &timeout) {
+		t.Fatalf("a fast non-zero exit was reported as a timeout: %v", err)
+	}
+}
+
+// A parse drift and a timeout never share wording (#3097).
+func TestUnverifiableProcessScan_TimeoutAndDriftAreDistinct(t *testing.T) {
+	drift, _ := processTableReport(t.TempDir(), "not a ps row at all\n", map[int]bool{}, nil, defaultScanBounds)
+	driftText := findingsText(drift)
+	if !strings.Contains(driftText, "could not be parsed") || strings.Contains(driftText, "did not finish within") || strings.Contains(driftText, "timed out") {
+		t.Errorf("drift text = %q", driftText)
+	}
+	timedOut, _ := unverifiableProcessScan(&scanTimeoutError{Command: "ps -axo pid=,etime=,command=", Bound: psTimeout})
+	timeoutText := findingsText(timedOut)
+	if !strings.Contains(timeoutText, "unverifiable") || !strings.Contains(timeoutText, "did not finish within 30s") || strings.Contains(timeoutText, "could not be parsed") || strings.Contains(timeoutText, "expected `pid etime command` shape") {
+		t.Errorf("timeout text = %q", timeoutText)
+	}
+}
+
+// A wedged lsof makes the cwd half report a named timeout (#3097). The lsof
+// reader has no build tag, so a PATH stub proves it on Linux CI too; only the
+// darwin dispatch inside lookupCwds is platform-bound, and that wrap is
+// asserted inline on darwin rather than skipped elsewhere.
+func TestLookupCwdsDarwin_AWedgedLsofIsANamedTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stubs need a POSIX shell")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "lsof"), []byte("#!/bin/sh\nexec /bin/sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	const bound = 300 * time.Millisecond
+
+	start := time.Now()
+	cwds, err := lookupCwdsDarwin([]int{os.Getpid()}, bound)
+	elapsed := time.Since(start)
+	var timeout *scanTimeoutError
+	if !errors.As(err, &timeout) {
+		t.Fatalf("a wedged lsof did not yield a scanTimeoutError: cwds=%v err=%v", cwds, err)
+	}
+	if timeout.Bound != bound || !strings.HasPrefix(timeout.Command, "lsof ") {
+		t.Errorf("timeout names %q within %v, want an lsof command within %v", timeout.Command, timeout.Bound, bound)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("wedged lsof held the scan for %v", elapsed)
+	}
+
+	if runtime.GOOS == "darwin" {
+		r := newLeakRepo(t)
+		procs := []runningProcess{{PID: os.Getpid(), Command: "doctor"}}
+		_, err := buildForeignCwdScan(r.dir, procs, processScanBounds{Table: psTimeout, Cwd: bound})
+		if !errors.As(err, &timeout) {
+			t.Fatalf("buildForeignCwdScan lost the scanTimeoutError through its wrap: %v", err)
+		}
 	}
 }

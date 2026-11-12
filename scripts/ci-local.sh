@@ -1685,6 +1685,12 @@ run_step "ci-local.sh dependency bootstrap decision" \
 run_step "ci-local.sh go test pass record" \
   bash scripts/test-ci-local-go-pass-stamp.sh
 
+# 0c3a. The Go test cache split (#3208): the skip accounting's cached-package
+#       count, -count=1 only under CI_LOCAL_NO_TEST_CACHE=1, and the
+#       always-uncached runner's stale-entry failure. Stub `go`, so seconds.
+run_step "go test cache and always-uncached list" \
+  bash scripts/test-go-test-cache.sh
+
 # 0c4. When the gate reuses a passed tree and what it records (#2784). A stub
 #      binary and one trivial step, so seconds.
 run_step "ci-local.sh gate ledger reuse" \
@@ -1724,13 +1730,24 @@ run_step "state-backstop.sh regression suite" bash scripts/test-state-backstop.s
 # 20m is twice that observed worst. A hang still fails the step; it just takes
 # 20 minutes, not 10, to say so.
 GO_TEST_TIMEOUT=20m
+#
+# Neither pass sets -count=1 (#3208): an unchanged package replays its last
+# result from Go's test cache, whose key already covers the package's sources
+# and deps, the flags, the toolchain, go.mod/go.sum, and every env var and file
+# the test process reads through package os. What it cannot see — a script a
+# child process reads on the test's behalf, the real worktree's git state, the
+# network, the clock — is named in scripts/go-test-uncached.txt, and
+# scripts/go-test-uncached.py runs those tests again with -count=1 after each
+# pass. A toolchain or go.mod change already misses the cache, so no run needs
+# the knob for that. CI_LOCAL_NO_TEST_CACHE=1 runs both passes fully uncached.
+# The hosted workflows still run every package with -count=1.
 decide_go_scope
 run_step "go build ./..." go build ./...
 if [ "$GO_SCOPE_RUN" -eq 0 ]; then
-  skip_step "go test ./... -count=1 (with skip accounting)" \
+  skip_step "go test ./... (with skip accounting)" \
     "--changed, and $GO_SCOPE_REASON"
 else
-run_group --wait "go test ./... -count=1 (with skip accounting)" \
+run_group --wait "go test ./... (with skip accounting)" \
   bash scripts/ci-local-go-test.sh "$GO_TEST_TIMEOUT" "$LOG_DIR/go-test-pass.tree"
 fi
 # Mirrors the race half of ci.yml's "Test (plain and race, concurrently)" step
@@ -1762,11 +1779,11 @@ fi
 # On a box running a second gate both passes are slower, which is the budget
 # above doing its job rather than a regression.
 if [ "$GO_SCOPE_RUN" -eq 0 ]; then
-  skip_step "go test -race -count=1 ./..." \
+  skip_step "go test -race ./..." \
     "--changed, and $GO_SCOPE_REASON"
 else
-run_group --wait "go test -race -count=1 ./..." \
-  go test -race -count=1 -timeout "$GO_TEST_TIMEOUT" ./...
+run_group --wait "go test -race ./..." \
+  bash scripts/ci-local-go-test.sh --race "$GO_TEST_TIMEOUT"
 fi
 # The gofmt of the toolchain go.mod selects, not the one first on PATH (#3192).
 # Formatting changes between Go releases: when go.mod moved to go1.27.4, CI's
