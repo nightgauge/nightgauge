@@ -274,12 +274,19 @@ func foldPath(p string) string {
 // Run executes every step in dir as an argv, never through a shell, streaming
 // its output, and stops at the first failure.
 func (g Gate) Run(ctx context.Context, dir string, stdout, stderr io.Writer) error {
+	return g.RunWith(ctx, dir, stdout, stderr, (*exec.Cmd).Run)
+}
+
+// RunWith is Run with the caller running each step's prepared command, so a
+// caller can set its environment and process group and see its pid before
+// waiting on it (#3207). runStep must start and wait for the command.
+func (g Gate) RunWith(ctx context.Context, dir string, stdout, stderr io.Writer, runStep func(*exec.Cmd) error) error {
 	for _, s := range g.Steps {
 		cmd := exec.CommandContext(ctx, s[0], s[1:]...)
 		cmd.Dir = dir
 		cmd.Stdout = stdout
 		cmd.Stderr = stderr
-		if err := cmd.Run(); err != nil {
+		if err := runStep(cmd); err != nil {
 			return fmt.Errorf("gate step %q: %w", strings.Join(s, " "), err)
 		}
 	}

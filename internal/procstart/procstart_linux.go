@@ -1,6 +1,6 @@
 //go:build linux
 
-package queuewait
+package procstart
 
 import (
 	"fmt"
@@ -9,9 +9,9 @@ import (
 	"strings"
 )
 
-// processStart is pid's start time in clock ticks since boot (/proc/<pid>/stat
+// Start is pid's start time in clock ticks since boot (/proc/<pid>/stat
 // field 22). It is compared only with itself, so the unit does not matter.
-func processStart(pid int) (int64, error) {
+func Start(pid int) (int64, error) {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
 		return 0, err

@@ -157,3 +157,68 @@ func TestUsageIn(t *testing.T) {
 		t.Errorf("UsageIn = %+v, want %+v", got, want)
 	}
 }
+
+func TestLatest_ASupersededFinishIsNotReusable(t *testing.T) {
+	root := repo(t)
+	for _, ev := range []Event{
+		finish(KindLocalGate, "abc", VerdictPass, true),
+		finish(KindLocalGate, "abc", VerdictSuperseded, true),
+	} {
+		if err := Append(root, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := Latest(root, "abc", KindLocalGate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Reusable {
+		t.Fatalf("a superseded tree was reusable: %s", got.Reason)
+	}
+}
+
+func TestRunCount(t *testing.T) {
+	root := repo(t)
+	ev := func(run, event, verdict, pipelineRun string, issue int, full bool, secs int) Event {
+		return Event{RunID: run, Event: event, Kind: KindLocalGate, Tree: "t", Verdict: verdict,
+			Full: full, Issue: issue, PipelineRun: pipelineRun, Seconds: secs}
+	}
+	events := []Event{
+		ev("pass", EventStart, "", "R", 7, true, 0),
+		ev("pass", EventFinish, VerdictPass, "R", 7, true, 600),
+		ev("fail", EventStart, "", "R", 7, true, 0),
+		ev("fail", EventFinish, VerdictFail, "R", 7, true, 60),
+		// A SIGTERM'd gate's trap records infra before its superseder.
+		ev("sup", EventStart, "", "R", 7, true, 0),
+		ev("sup", EventFinish, VerdictInfra, "R", 7, true, 30),
+		ev("sup", EventFinish, VerdictSuperseded, "R", 7, true, 0),
+		ev("infra", EventFinish, VerdictInfra, "R", 7, true, 5),
+		ev("killed", EventStart, "", "R", 7, true, 0),
+		ev("scoped", EventStart, "", "R", 7, false, 0),
+		ev("scoped", EventFinish, VerdictPass, "R", 7, false, 10),
+		ev("", EventReused, "", "R", 7, false, 0),
+		ev("other-run", EventFinish, VerdictPass, "R2", 7, true, 600),
+		ev("other-issue", EventFinish, VerdictPass, "R", 8, true, 600),
+		{RunID: "rev", Event: EventFinish, Kind: KindReview, Verdict: VerdictPass, Issue: 7, PipelineRun: "R", Full: true},
+	}
+	for _, e := range events {
+		if err := Append(root, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := RunCount(root, 7, "R")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := RunTally{Full: 5, Passed: 1, Failed: 1, Infra: 1, Superseded: 1, Unfinished: 1, Reused: 1, Seconds: 665}
+	if got != want {
+		t.Fatalf("RunCount = %+v, want %+v", got, want)
+	}
+	all, err := RunCount(root, 7, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.Full != 6 || all.Passed != 2 {
+		t.Fatalf("RunCount with no pipeline run = %+v, want 6 full and 2 passed", all)
+	}
+}

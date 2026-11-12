@@ -221,7 +221,7 @@ printf '<!-- phase:start name="verify-ui-gate" index=11 total=22 stage="feature-
 printf '<!-- phase:start name="ci-parity-check" index=12 total=22 stage="feature-validate" -->\n'
 ```
 
-> **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run this tree's one full gate: skip it when `nightgauge ci gate-status` says the tree passed, otherwise run the repository's local gate, or its CI commands when it has none. **HARD GATE**: they must pass (after up to 3 auto-fix attempts) or `VALIDATION_STATUS=failed` — PRs arrive green. Step 2.7.3 runs the independent review in a fresh context; `nightgauge review record` writes its verdict.
+> **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** With the independent review on, run only the scoped checks here (build, vet, tests of the changed packages, Step 2.5.0a). Step 2.7.3 runs the review in a fresh context, and `nightgauge review record` writes its verdict; a `catch` fix re-runs the scoped checks, never the full gate. The run's one full gate is Step 2.7.4, after the final review round and before pre-push: skip it when `nightgauge ci gate-status` says the tree passed, otherwise run `nightgauge ci gate-run` (exit 75: another gate holds this worktree, wait; 76: superseded, not a failure), or the CI commands when the repository has no gate. With the review off, that full gate runs here instead. **HARD GATE**: they must pass (after up to 3 auto-fix attempts) or `VALIDATION_STATUS=failed` — PRs arrive green.
 
 ### Phase 2.6: Knowledge Coverage Check
 

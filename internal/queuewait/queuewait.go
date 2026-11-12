@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/procstart"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
@@ -67,7 +68,7 @@ func FileName(issue int) string { return fmt.Sprintf("queue-wait-%d.json", issue
 // Self is the calling process as a Writer.
 func Self() Writer {
 	pid := os.Getpid()
-	start, _ := processStart(pid)
+	start, _ := procstart.Start(pid)
 	return Writer{PID: pid, Start: start}
 }
 
@@ -76,7 +77,7 @@ func SystemProbe(pid int) (int64, bool) {
 	if !runstate.ProcessAlive(pid) {
 		return 0, false
 	}
-	start, err := processStart(pid)
+	start, err := procstart.Start(pid)
 	if err != nil {
 		return 0, true
 	}
