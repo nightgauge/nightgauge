@@ -14,6 +14,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- **The local gate reuses Go's test cache (#3208).** `scripts/ci-local.sh` no
+  longer passes `-count=1` to its plain and race Go test passes, so an unchanged
+  package replays its cached result. Tests whose result depends on something the
+  cache cannot track, such as a repository script run in a child shell, are
+  listed in `scripts/go-test-uncached.txt` and always run uncached. The gate
+  fails when a listed test no longer exists. The skip accounting now reports how
+  many packages ran and how many were cached. `CI_LOCAL_NO_TEST_CACHE=1` runs
+  both passes fully uncached. Hosted CI is unchanged.
+
 ### Fixed
 
 - **An RC's VirusTotal scan spends about half the requests it did (#3202).**
