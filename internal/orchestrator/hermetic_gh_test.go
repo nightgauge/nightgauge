@@ -15,6 +15,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/hometest"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
+	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
 // TestMain replaces the package's `gh` seam for the whole test binary before a
@@ -49,6 +50,11 @@ func TestMain(m *testing.M) {
 	// TestScheduler_NonTerminalReconcile_OwnRunPrOpen_FailurePreserved in CI.
 	gittest.IsolateProcess()
 	reconcileExecGh = refuseUnstubbedGh
+	// The pre-planning ac-reconcile regeneration (#3228) reads the issue body
+	// and may post a no-criteria note. A test that does not say what the
+	// issue holds gets a body with no criteria, and no note is posted.
+	forgeACReconcileBody = func(*Scheduler, context.Context, types.BoardItem) (string, error) { return "", nil }
+	forgeNotifyNoACs = func(*Scheduler, context.Context, types.BoardItem) error { return nil }
 	// The base refresh (#2897) fetches origin in every run worktree; a fixture
 	// whose origin is a real URL would reach the network. A test that wants a
 	// refresh says what it did.

@@ -11,13 +11,18 @@ import (
 )
 
 // Acceptance-criterion verdicts (#2595, #2655). A PR says `Closes #N` only
-// when every criterion is ACMet (IssueClosedBy). Any ACUnmet or
-// ACNotVerifiable criterion, or no criteria at all, gives `Refs #N`, so
-// merging the PR leaves the issue open with the remainder named.
+// when every criterion is ACMet (IssueClosedBy). Any ACUnmet,
+// ACNotVerifiable or ACNotJudged criterion, or no criteria at all, gives
+// `Refs #N`, so merging the PR leaves the issue open with the remainder named.
+//
+// ACNotJudged is a criterion of the issue's current body that the run's
+// ac-reconcile report never contained (#3228): the run never saw it, which is
+// different from seeing it and failing to verify it.
 const (
 	ACMet           = "met"
 	ACUnmet         = "unmet"
 	ACNotVerifiable = "not_verifiable"
+	ACNotJudged     = "not_judged"
 )
 
 // Verdict sources, recorded so a reviewer can tell a mechanical check from a
@@ -27,6 +32,9 @@ const (
 	ACSourceDiff          = "diff"
 	ACSourceValidate      = "feature-validate"
 	ACSourceNone          = "none"
+	// ACSourceStale marks a criterion the run's ac-reconcile report did not
+	// contain (#3228).
+	ACSourceStale = "ac-reconcile"
 )
 
 // ACVerdict is the resolved verdict for one acceptance criterion.

@@ -10,6 +10,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Phase 1.7 only reads `ac-reconcile-{N}.json`: the orchestrator rebuilds it from the current issue body before planning, and a missing report fails the stage. The skill no longer runs or skips `preflight ac-reconcile` (#3228).
 - Already-Resolved Issue Signal: a partial-delivery comment's remaining criteria are met only by evidence dated after it; plan them as `focus_acs`, never verify-and-close (#3089).
 - New gotcha: an existing PR branch is updated by merging its base; a plan never prescribes a rebase or force push (#2699).
 

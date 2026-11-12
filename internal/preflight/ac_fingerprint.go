@@ -3,6 +3,7 @@ package preflight
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 )
 
@@ -51,4 +52,35 @@ func UncoveredACs(body string, rec *ACReconcileResult) []string {
 		}
 	}
 	return out
+}
+
+// ACTexts returns the criterion texts parseACs finds in body, in body order,
+// one per normalized text (#3228). It is the list ACFingerprint hashes, so a
+// caller that rebuilds the criteria from a live body agrees with the
+// fingerprint it compared.
+func ACTexts(body string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, ac := range parseACs(body) {
+		key := NormalizeACText(ac.text)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, ac.text)
+	}
+	return out
+}
+
+// NoACsMarker is the hidden marker on the one note posted when an issue has
+// no acceptance criteria (#2906), so the note is posted once per issue.
+const NoACsMarker = "<!-- nightgauge:no-acceptance-criteria -->"
+
+// NoACsComment is the zero-criteria note for issueNumber.
+func NoACsComment(issueNumber int) string {
+	return NoACsMarker + "\n" +
+		"Nightgauge found no acceptance criteria in this issue. Add a `## Acceptance Criteria` " +
+		"(or `## Verification` / `## Done when`) section with checkbox, numbered or bulleted " +
+		fmt.Sprintf("items; without one, the pull request will say `Refs #%d` and this issue ", issueNumber) +
+		"will not close on merge.\n"
 }

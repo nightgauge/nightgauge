@@ -105,6 +105,19 @@ func vouchingGitHub(t *testing.T) string {
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/permission"):
 			_, _ = w.Write([]byte(`{"permission":"admin","role_name":"admin","user":{"login":"e2e-maintainer"}}`))
 			return
+		case r.URL.Path == "/graphql" && strings.Contains(string(body), "subIssues") &&
+			strings.Contains(string(body), "issue(number:"):
+			// The pre-planning ac-reconcile regeneration reads the issue body
+			// (#3228). Answer it with one criterion.
+			var req struct {
+				Variables struct {
+					Number int `json:"number"`
+				} `json:"variables"`
+			}
+			_ = json.Unmarshal(body, &req)
+			_, _ = fmt.Fprintf(w, `{"data":{"repository":{"issue":{"id":"I_e2e","number":%d,"title":"e2e issue",`+
+				`"body":"## Acceptance Criteria\n\n- [ ] The pipeline runs end to end\n","state":"OPEN"}}}}`, req.Variables.Number)
+			return
 		case r.URL.Path == "/graphql" && strings.Contains(string(body), "timelineItems"):
 			_, _ = w.Write([]byte(`{"data":{"repository":{"issue":{"author":{"login":"e2e-maintainer","__typename":"User"},` +
 				`"lastEditedAt":null,"labels":{"nodes":[]},"timelineItems":{"nodes":[]}}}}}`))

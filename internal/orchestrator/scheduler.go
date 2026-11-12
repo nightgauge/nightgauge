@@ -793,6 +793,11 @@ type Scheduler struct {
 	// tree verifier and comment post in tests (#3160). nil in production.
 	partialRemainderVerify func(workdir string, issue int, criteria []string) []pmstages.ACVerdict
 	issueCommentPost       func(ctx context.Context, repo string, issue int, body string) error
+	// acReconcileBody and acEmptyNotify replace the issue-body read and the
+	// no-criteria note behind the pre-planning ac-reconcile regeneration
+	// (#3228), in tests. nil in production.
+	acReconcileBody func(ctx context.Context, item types.BoardItem) (string, error)
+	acEmptyNotify   func(ctx context.Context, item types.BoardItem) error
 	// partialCheckoutAtBase replaces checkoutAtBase, the re-admit vet's
 	// check that its checkout is clean and on origin's base, in tests. nil in
 	// production.
@@ -6729,6 +6734,19 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		if prereqCtxOK {
 			effectiveContextType = string(prereqCtxType)
 		}
+		// The orchestrator, not the planning model, writes the scope every
+		// later stage judges (#3228): ac-reconcile-{N}.json is rebuilt from the
+		// issue body as it is now, on every planning attempt, overwriting any
+		// earlier run's report. A failure fails the stage; the old report is
+		// never a fallback.
+		if stage == state.StageFeaturePlanning {
+			if err := s.regenerateACReconcileFor(ctx, item, ws); err != nil {
+				terminalFailureKind, workRecovered = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
+					"ac-reconcile", "ac-reconcile regeneration failed: "+err.Error())
+				return
+			}
+		}
+
 		prompt := execution.BuildPrompt(stage, skillData.Content, item.Number, filepath.Dir(skillData.SkillPath), effectiveContextType, contextFile)
 
 		// Epic project-memory forward injection (#4096): for a sub-issue that

@@ -366,8 +366,12 @@ runs whose own trace showed the fast-track firing. That was the state of
 
 ### ac-reconcile-{N}.json
 
-**Created by**: `/nightgauge-feature-planning` (Phase 1.7 — `ac-reconcile`)
-**Read by**: the **orchestrator**, which splices the report verbatim into
+**Created by**: the **orchestrator**, before every feature-planning dispatch,
+from the issue body as it is then (#3228). The Go scheduler
+(`internal/orchestrator/ac_reconcile_regen.go`) and the extension's pipeline
+loop (`acReconcileRegen.ts`) both overwrite any earlier run's report, and a
+failed regeneration fails feature-planning. The skill's Phase 1.7 only reads it.
+**Read by**: feature-planning (routing); the **orchestrator**, which splices the report verbatim into
 `planning.ac_reconcile` after the stage exits; `/nightgauge-feature-dev` reads it
 transitively from there.
 

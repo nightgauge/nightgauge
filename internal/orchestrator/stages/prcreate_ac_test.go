@@ -351,11 +351,14 @@ func TestReadCreateContext_ResolvesACVerdicts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// The fingerprint of the body the report was built from: the issue has
+	// not changed since, so pr-create keeps the report's scope (#3228).
+	fp := preflight.ACFingerprint(acCheckboxBody([]string{"File present.md exists", "File missing.md exists", "The widget behaves"}))
 	write("ac-reconcile-42.json", map[string]any{"acceptance_criteria": []map[string]any{
 		{"index": 0, "text": "File present.md exists"},
 		{"index": 1, "text": "File missing.md exists"},
 		{"index": 2, "text": "The widget behaves"},
-	}, "ac_fingerprint": "sha256:abc"})
+	}, "ac_fingerprint": fp})
 	write("validate-42.json", map[string]any{
 		"validation_status": "passed",
 		"acceptance_criteria_verdicts": []map[string]any{
@@ -377,7 +380,7 @@ func TestReadCreateContext_ResolvesACVerdicts(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("verdicts = %v, want %v", got, want)
 	}
-	if snap.ACFingerprint != "sha256:abc" {
+	if snap.ACFingerprint != fp {
 		t.Errorf("ACFingerprint = %q, want the ac-reconcile value (#2623)", snap.ACFingerprint)
 	}
 }

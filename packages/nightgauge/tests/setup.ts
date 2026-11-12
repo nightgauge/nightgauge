@@ -162,6 +162,14 @@ vi.mock("../src/services/AutoRetroService", async (orig) =>
   (await import("./helpers/autoRetroMock")).mockAutoRetroModule(orig)
 );
 
+// The extension pipeline loop rebuilds ac-reconcile-{N}.json before
+// feature-planning by running the binary (#3228). A test that does not say what
+// the binary answered gets a regeneration that succeeds without running it;
+// tests/services/acReconcileRegen.test.ts exercises the real module.
+vi.mock("../src/services/acReconcileRegen", () => ({
+  regenerateAcReconcileReport: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock("../src/services/ConfigBridge", () => ({
   ConfigBridge: {
     getInstance: vi.fn(() => mockConfigBridgeInstance),
