@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **pr-create's acceptance-criteria check reads `it(...)` as a call, not literal text (#3226).**
+  A criterion naming a call with a placeholder argument list, such as `it(...)` or `run(…)`, now
+  matches any call of that name, so a met criterion closes its issue instead of only referencing it.
 - **A re-run judges the issue's current acceptance criteria, not an earlier run's (#3228).**
   The orchestrator now rebuilds `ac-reconcile-{N}.json` from the issue body
   before every feature-planning dispatch, on the Go scheduler and in the

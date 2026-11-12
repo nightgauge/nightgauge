@@ -1112,3 +1112,46 @@ func TestVerifyACAgainstDiff_Issue3154(t *testing.T) {
 		t.Errorf("absent identifier: got %+v, want not met", got)
 	}
 }
+
+func TestACSpanMatcher_PlaceholderCall(t *testing.T) {
+	cases := []struct {
+		tok, line string
+		want      bool
+	}{
+		{"it(...)", `  it("gives each cell its own clone", async () => {`, true},
+		{"obj.run(…)", "x.run(a)", true},
+		{"it( ... )", "it(", true},
+		{"it(...)", "split(", false},
+		{"it(...)", "it", false},
+		{"run(ctx, opts)", "run(ctx, opts)", true},
+		{"run(ctx, opts)", "run(a)", false},
+	}
+	for _, c := range cases {
+		if got := acSpanMatcher(c.tok)(c.line); got != c.want {
+			t.Errorf("acSpanMatcher(%q)(%q) = %v, want %v", c.tok, c.line, got, c.want)
+		}
+	}
+}
+
+func TestVerifyACAgainstDiff_Issue3225(t *testing.T) {
+	path := "src/test/worktreeWorkspace.test.ts"
+	content := "describe(\"w\", () => {\n  it(\"gives each cell its own clone\", async () => {\n" +
+		"    // Cloning is slow on CI; allow 30 s.\n    await run();\n  }, 30_000);\n});"
+	d := memDiff(`diff --git a/`+path+` b/`+path+`
+--- a/`+path+`
++++ b/`+path+`
+@@ -3,2 +3,3 @@
++    // Cloning is slow on CI; allow 30 s.
+     await run();
+-  });
++  }, 30_000);
+`, map[string]string{path: content})
+	crit := "The clone-isolation `it(...)` case in `worktreeWorkspace.test.ts` declares an explicit timeout greater than 5000 ms"
+	got, ok := VerifyACAgainstDiff(crit, nil, d, ACTestState{})
+	if ok && got.Status == ACUnmet {
+		t.Errorf("got %+v, want not unmet", got)
+	}
+	if strings.Contains(got.Evidence, "does not add `it(...)`") {
+		t.Errorf("evidence still reports it(...) missing: %+v", got)
+	}
+}
