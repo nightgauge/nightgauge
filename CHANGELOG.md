@@ -27,6 +27,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `nightgauge doctor`'s orphaned-process check now names a `ps` or `lsof` scan that
+  timed out on a loaded host, instead of describing it as a failed or unexpected-shape
+  scan. Its real-process-table test no longer fails as "parser drift" under gate load.
+  (#3097)
 - **An RC's VirusTotal scan spends about half the requests it did (#3202).**
   rc.3 sent 108 requests, 63 of them re-analysing unchanged, clean hooks and
   scripts. A text file now reuses a clean, complete report for 14 days
