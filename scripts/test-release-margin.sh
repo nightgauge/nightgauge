@@ -82,25 +82,29 @@ chmod +x "$STUBS/make" "$STUBS/sign.sh"
 OUT="$TMP/margin-ok"
 MAKE="$STUBS/make" MARGIN_SIGN_SCRIPT="$STUBS/sign.sh" bash "$BUILDS" 0.8.6-rc.3 "$OUT" >"$TMP/ok.log" 2>&1
 check "six margin builds exit 0" "0" "$?"
-check "six margin archives" "6" "$(find "$OUT" -maxdepth 1 -name 'nightgauge-margin_*.tar.gz' | wc -l | tr -d ' ')"
+check "six raw margin binaries" "6" "$(find "$OUT" -maxdepth 1 -type f -perm -u+x -name 'nightgauge-margin_*_*' | wc -l | tr -d ' ')"
+check "no margin archive is written (#3202)" "0" "$(find "$OUT" -maxdepth 1 -name 'nightgauge-margin_*.tar.gz' | wc -l | tr -d ' ')"
 check "manifest names the three strings" "0.8.6 0.8.6-rc.4 0.8.7-rc.1" \
   "$(awk '{print $1}' "$OUT/margin-manifest.txt" | sort -u | tr '\n' ' ' | sed 's/ $//')"
 check "manifest has six lines" "6" "$(wc -l <"$OUT/margin-manifest.txt" | tr -d ' ')"
-check "archive holds one nightgauge binary" "nightgauge" \
-  "$(tar -tzf "$OUT/nightgauge-margin_0.8.6_linux_amd64.tar.gz" 2>/dev/null)"
-check "archive carries the linux build of its version" "linux-amd64 0.8.6" \
-  "$(tar -xzOf "$OUT/nightgauge-margin_0.8.6_linux_amd64.tar.gz" nightgauge 2>/dev/null)"
+check "the linux file is the linux build of its version" "linux-amd64 0.8.6" \
+  "$(cat "$OUT/nightgauge-margin_0.8.6_linux_amd64" 2>/dev/null)"
+check "the universal file is the universal build of its version" \
+  "$(cat "$OUT/build/0.8.7-rc.1/nightgauge-darwin-universal")" \
+  "$(cat "$OUT/nightgauge-margin_0.8.7-rc.1_darwin_universal" 2>/dev/null)"
+check "manifest records each file's own sha256" "ok" \
+  "$(bad="$(cd "$OUT" && while read -r v f s; do [ "$(shasum -a 256 "$f" | cut -d' ' -f1)" = "$s" ] || echo "bad $v $f"; done <margin-manifest.txt)"; [ -n "$bad" ] && echo bad || echo ok)"
 check "every universal file was signed" "3" "$(cat "$OUT"/build/*/signed.log 2>/dev/null | wc -l | tr -d ' ')"
 
 OUT="$TMP/margin-short"
 STUB_SKIP_LINUX=0.8.6-rc.4 MAKE="$STUBS/make" MARGIN_SIGN_SCRIPT="$STUBS/sign.sh" \
   bash "$BUILDS" 0.8.6-rc.3 "$OUT" >"$TMP/short.log" 2>&1
-check "a missing build fails with fewer than six archives" "1" "$?"
+check "a missing build fails with fewer than six binaries" "1" "$?"
 
 OUT="$TMP/margin-extra"
-mkdir -p "$OUT" && : >"$OUT/nightgauge-margin_stale_linux_amd64.tar.gz"
+mkdir -p "$OUT" && : >"$OUT/nightgauge-margin_stale_linux_amd64"
 MAKE="$STUBS/make" MARGIN_SIGN_SCRIPT="$STUBS/sign.sh" bash "$BUILDS" 0.8.6-rc.3 "$OUT" >/dev/null 2>&1
-check "a stray archive in OUT_DIR fails the count" "1" "$?"
+check "a stray margin file in OUT_DIR fails the count" "1" "$?"
 
 printf '#!/usr/bin/env bash\nexit 1\n' >"$STUBS/sign-fail.sh"
 MAKE="$STUBS/make" MARGIN_SIGN_SCRIPT="$STUBS/sign-fail.sh" bash "$BUILDS" 0.8.6-rc.3 "$TMP/margin-nosign" >/dev/null 2>&1
@@ -161,7 +165,7 @@ JSON
 JSON
   echo '{"jobs":[{"name":"Build all artifacts (no publish)","conclusion":"success"},{"name":"VirusTotal scan of the RC","conclusion":"success"}]}' >"$d/jobs-42.json"
   echo '{"artifacts":[{"name":"rc-margin-scan-v0.8.6-rc.4","expired":false}]}' >"$d/artifacts-42.json"
-  printf '0.8.6 a.tar.gz x\n0.8.6-rc.5 b.tar.gz y\n0.8.7-rc.1 c.tar.gz z\n' >"$d/artifact-42/margin-manifest.txt"
+  printf '0.8.6 a x\n0.8.6-rc.5 b y\n0.8.7-rc.1 c z\n' >"$d/artifact-42/margin-manifest.txt"
   echo "$d"
 }
 
@@ -201,7 +205,7 @@ FX_DIR="$(fixture noartifact)"; echo '{"artifacts":[]}' >"$FX_DIR/artifacts-42.j
 check "a missing margin artifact fails" "1" "$(gate "$FX_DIR")"
 
 FX_DIR="$(fixture uncovered)"
-printf '0.8.5 a.tar.gz x\n0.8.6-rc.5 b.tar.gz y\n' >"$FX_DIR/artifact-42/margin-manifest.txt"
+printf '0.8.5 a x\n0.8.6-rc.5 b y\n' >"$FX_DIR/artifact-42/margin-manifest.txt"
 check "a manifest without the release string fails" "1" "$(gate "$FX_DIR")"
 grep -q "did not cover 0.8.6" "$TMP/gate.log"
 check "the coverage failure names the version" "0" "$?"

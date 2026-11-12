@@ -594,8 +594,11 @@ func TestStagingWorkflowBuildsMarginBinaries(t *testing.T) {
 		t.Errorf("staging.yml %q does not run scripts/release-margin-builds.sh on the RC version:\n%s",
 			marginStepName, block)
 	}
-	if !strings.Contains(block, "./cmd/release-dwarf-check") || !strings.Contains(block, "nightgauge-margin_*.tar.gz") {
-		t.Errorf("staging.yml %q does not DWARF-check the margin archives:\n%s", marginStepName, block)
+	// Raw binaries, not archives (#3202): the scan gate scans an archive and
+	// then the binary inside it, two uploads for one build.
+	if !strings.Contains(block, "./cmd/release-dwarf-check") || !strings.Contains(block, "nightgauge-margin_*_*") ||
+		strings.Contains(block, "nightgauge-margin_*.tar.gz") {
+		t.Errorf("staging.yml %q does not DWARF-check the raw margin binaries:\n%s", marginStepName, block)
 	}
 	// The margin builds are scan inputs only. Notarizing them cannot change a
 	// bare Mach-O and can stall dry-run on Apple's queue (#3192).
@@ -617,7 +620,7 @@ func TestStagingWorkflowBuildsMarginBinaries(t *testing.T) {
 		t.Errorf("staging.yml %q must follow the margin build inside dry-run", marginUploadName)
 	}
 	for _, want := range []string{"name: rc-margin-${{ steps.version.outputs.tag }}", "if-no-files-found: error",
-		"nightgauge-margin_*.tar.gz", "margin-manifest.txt", rcScanCondition} {
+		"nightgauge-margin_*_*", "margin-manifest.txt", rcScanCondition} {
 		if !strings.Contains(upload, want) {
 			t.Errorf("staging.yml %q lacks %q:\n%s", marginUploadName, want, upload)
 		}
@@ -643,11 +646,17 @@ func TestRCScanScansMarginBinaries(t *testing.T) {
 		t.Fatalf("staging.yml %q must follow the margin download inside rc-scan", rcScanStepName)
 	}
 	assertNoSwallow(t, "staging.yml", rcScanStepName, scan)
-	for _, want := range []string{"-eq 6", "margin-manifest.txt", `"${MARGIN[@]}"`, "release-scan-gate.sh local"} {
+	// The raw margin binaries, counted and scanned under the workflow's request
+	// budget (#3202): the gate fails a run that would pass VT_MAX_REQUESTS.
+	for _, want := range []string{"-eq 6", "margin-manifest.txt", `"${MARGIN[@]}"`, "release-scan-gate.sh local",
+		`margin/nightgauge-margin_*_*)`, `VT_MAX_REQUESTS: "160"`} {
 		if !strings.Contains(scan, want) {
-			t.Errorf("staging.yml %q lacks %q; it must count the margin archives and scan them:\n%s",
+			t.Errorf("staging.yml %q lacks %q; it must count the raw margin binaries and scan them in budget:\n%s",
 				rcScanStepName, want, scan)
 		}
+	}
+	if strings.Contains(scan, "nightgauge-margin_*.tar.gz") {
+		t.Errorf("staging.yml %q still scans margin archives; each would be uploaded twice:\n%s", rcScanStepName, scan)
 	}
 	rec, recAt := stepBlock(t, wf, marginRecordName)
 	if recAt < scanAt || recAt > scanEnd {

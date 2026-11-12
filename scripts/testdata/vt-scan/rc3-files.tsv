@@ -1,0 +1,55 @@
+# rc.3's VirusTotal scan (run 43029170580, 2026-11-11), one line per unique
+# file, replayed by scripts/test-vt-scan.sh (#3202).
+#
+# Derived from that run's vt-scan-report-rc artifact (source, size) and its
+# log: "reanalysing ... Ns ago" gives the age the lookup saw, and the
+# "polling analysis of ..." lines give the polls each analysis took. The two
+# reused files were analysed minutes before their lookup; 180 s stands for
+# that. The run sent 108 requests: 31 lookups, 21 reanalyses, 13 upload
+# requests (8 POST /files, and 5 GET /files/upload_url for files over 32 MB)
+# and 43 polls.
+#
+# Columns, space separated:
+#   name    the file's base name; the two VSIXes' inner bin/nightgauge are
+#           -1 and -2
+#   kind    text or binary, as vt-scan.sh decides it from the bytes
+#   size    bytes in rc.3
+#   source  how rc.3 handled it: reused, reanalysed or uploaded
+#   age     seconds from its last analysis to rc.3's lookup; - for a file
+#           VirusTotal did not know
+#   polls   polls its analysis took in rc.3; 0 for a reused file
+#
+# The replay makes one file per line, of the recorded kind. Only the size class
+# (over or under 32 MB) changes a file's requests, so an over-32 MB file is
+# made 32 MB + 1 byte and the rest are small.
+gates.js text 30701 reused 180 0
+sdk-cli.cjs text 3511811 reused 180 0
+nightgauge-darwin-arm64-0.8.6-rc.3.vsix binary 56371409 uploaded - 1
+nightgauge-1 binary 162349280 uploaded - 1
+binary-check.sh text 436 reanalysed 134201 1
+careful-gate.sh text 205 reanalysed 134216 1
+check-dependencies.sh text 203 reanalysed 134231 1
+format-on-save.sh text 199 reanalysed 134247 5
+gate-background.sh text 208 reanalysed 134262 8
+inject-context.sh text 207 reanalysed 134277 4
+guard.sh text 26689 reanalysed 134292 1
+notify.sh text 199 reanalysed 134306 1
+prompt-sanitize.sh text 329 reanalysed 134320 1
+skill-usage-log.sh text 204 reanalysed 134337 1
+stage-gate.sh text 203 reanalysed 134352 1
+stop-verification.sh text 204 reanalysed 134366 1
+test-quality.sh text 2879 reanalysed 134381 1
+version-check.sh text 206 reanalysed 134396 1
+workflow-gate.sh text 245 reanalysed 134411 1
+snapshot-diff.sh text 3407 reanalysed 134428 1
+check-agent-guidance.sh text 26546 reanalysed 134441 1
+extension.cjs text 10919176 uploaded - 1
+nightgauge.js text 6088 reanalysed 134471 1
+edit.js text 13969 reanalysed 134485 1
+session.js text 27128 reanalysed 134500 1
+marked.umd.js text 50548 reanalysed 134517 1
+nightgauge-darwin-x64-0.8.6-rc.3.vsix binary 56371408 uploaded - 1
+nightgauge-linux-x64-0.8.6-rc.3.vsix binary 32088332 uploaded - 1
+nightgauge-2 binary 51854117 uploaded - 1
+nightgauge_0.8.6-rc.3_darwin_amd64.tar.gz binary 51124496 uploaded - 1
+nightgauge_0.8.6-rc.3_linux_amd64.tar.gz binary 26848770 uploaded - 1

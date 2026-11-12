@@ -45,6 +45,22 @@ Run-wide state and failures are selected by files in <state-dir>:
   pending-polls        holds N: each analysis stays incomplete for the first N
                        polls of it (GET /analyses/{id} or GET /files/{sha256}),
                        then completes
+  pending-<sha256>     the same as pending-polls, for that file only; it wins
+                       over pending-polls (a replay records polls per file)
+  fold-analyse-dated   with fold-analyse, the completed analysis is dated now
+                       (VirusTotal dates an analysis at creation); the file's
+                       date still does not move
+  fold-analyse         a reanalysis (POST /files/{sha256}/analyse) is folded
+                       into the file's existing analysis: GET /analyses/{id}
+                       answers completed at once, and the file's
+                       last_analysis_date never moves (2026-11-11, #3202)
+  file-lag             holds N: when an analysis completes, the file object
+                       keeps its old last_analysis_date for the next N GETs
+                       of it, while GET /analyses/{id} already answers
+                       completed with the new date
+  analysis-age         holds N: a completed analysis is dated N seconds ago
+                       (still later than the file's previous date)
+  analysis-status      GET /analyses/{id} answers this status string instead
   quota                answer every request with HTTP 429
   wrong-sha            analyses and file objects name a different sha256
   upload-url           GET /files/upload_url serves this file's content
@@ -62,9 +78,10 @@ FIXTURES = sys.argv[1]
 STATE = sys.argv[2]
 EXPECTED_KEY = os.environ.get("STUB_VT_KEY", "")
 UPLOADS = {}  # analysis id -> sha256
-POLLS = {}  # analysis id -> polls answered so far
 DATES = {}  # sha256 -> last_analysis_date of a file the stub knows
 PENDING = {}  # sha256 -> polls of its running analysis answered so far
+ANALYSED = {}  # sha256 -> date of its latest completed analysis object
+LAG = {}  # sha256 -> [new last_analysis_date, file GETs still showing the old]
 SEEDED = set()  # sha256s already loaded from <state-dir>/seed
 EPOCH = [None]
 ENGINES = 70
@@ -116,11 +133,12 @@ def file_object(sha, content):
     return doc
 
 
-def pending_polls():
-    if not flag("pending-polls"):
-        return 0
-    with open(os.path.join(STATE, "pending-polls"), encoding="utf-8") as f:
-        return int(f.read().strip() or "0")
+def pending_polls(sha):
+    for name in ("pending-" + sha, "pending-polls"):
+        if flag(name):
+            with open(os.path.join(STATE, name), encoding="utf-8") as f:
+                return int(f.read().strip() or "0")
+    return 0
 
 
 def verdict(content):
@@ -157,16 +175,21 @@ def verdict(content):
     return stats, results
 
 
-def analysis_object(sha, content, polls=1):
+def analysis_object(sha, content):
     stats, results = verdict(content)
-    queued = flag("never-complete") or polls <= pending_polls()
-    status = "queued" if queued else "completed"
+    status = "queued" if sha in PENDING else "completed"
+    if flag("analysis-status"):
+        with open(os.path.join(STATE, "analysis-status"), encoding="utf-8") as f:
+            status = f.read().strip()
     reported = "0" * 64 if flag("wrong-sha") else sha
     return {
         "data": {
             "type": "analysis",
             "id": "an-" + sha,
-            "attributes": {"status": status, "stats": stats, "results": results},
+            "attributes": dict(
+                {"status": status, "stats": stats, "results": results},
+                **({"date": ANALYSED[sha]} if sha in ANALYSED and status == "completed" else {}),
+            ),
         },
         "meta": {"file_info": {"sha256": reported}},
     }
@@ -184,7 +207,7 @@ def sync_state():
         epoch = None
     if epoch != EPOCH[0]:
         EPOCH[0] = epoch
-        for table in (UPLOADS, POLLS, DATES, PENDING, CONTENTS):
+        for table in (UPLOADS, DATES, PENDING, CONTENTS, ANALYSED, LAG):
             table.clear()
         SEEDED.clear()
     try:
@@ -208,14 +231,35 @@ def start_analysis(sha):
 
 
 def poll_file(sha):
-    """One GET of a file: completes its running analysis once it is due."""
+    """One poll of a file or its analysis: completes the running analysis once
+    it is due."""
     if sha not in PENDING:
         return
     PENDING[sha] += 1
-    if flag("never-complete") or PENDING[sha] <= pending_polls():
+    if flag("never-complete") or PENDING[sha] <= pending_polls(sha):
         return
     del PENDING[sha]
-    DATES[sha] = max(int(time.time()), DATES.get(sha, 0) + 1)
+    age = 0
+    if flag("analysis-age"):
+        with open(os.path.join(STATE, "analysis-age"), encoding="utf-8") as f:
+            age = int(f.read().strip() or "0")
+    date = max(int(time.time()) - age, DATES.get(sha, 0) + 1)
+    ANALYSED[sha] = date
+    if flag("file-lag") and sha in DATES:
+        with open(os.path.join(STATE, "file-lag"), encoding="utf-8") as f:
+            LAG[sha] = [date, int(f.read().strip() or "0")]
+    else:
+        DATES[sha] = date
+
+
+def file_date_moves(sha):
+    """One GET of a file: a lagging file object shows its new date late."""
+    if sha not in LAG:
+        return
+    if LAG[sha][1] > 0:
+        LAG[sha][1] -= 1
+        return
+    DATES[sha] = LAG.pop(sha)[0]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -278,7 +322,13 @@ class Handler(BaseHTTPRequestHandler):
             sha = self.path.split("/")[-2]
             if sha not in DATES:
                 return self.answer("analyse", 404, {"error": {"code": "NotFoundError"}})
-            start_analysis(sha)
+            if flag("fold-analyse"):
+                # Folded: the analysis exists and is complete, the file's date
+                # is the one it already had.
+                UPLOADS["an-" + sha] = sha
+                ANALYSED[sha] = int(time.time()) if flag("fold-analyse-dated") else DATES[sha]
+            else:
+                start_analysis(sha)
             with open(os.path.join(STATE, "analyses.log"), "a", encoding="utf-8") as f:
                 f.write(f"{sha}\n")
             return self.answer(
@@ -306,13 +356,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.answer(
                     "analysis", 404, {"error": {"code": "NotFoundError"}}
                 )
-            POLLS[aid] = POLLS.get(aid, 0) + 1
-            return self.answer(
-                "analysis", 200, analysis_object(sha, CONTENTS[sha], POLLS[aid])
-            )
+            # A poll of either kind counts toward an analysis's completion:
+            # it stands for time passing, as on VirusTotal.
+            poll_file(sha)
+            return self.answer("analysis", 200, analysis_object(sha, CONTENTS[sha]))
         if self.path.startswith("/api/v3/files/"):
             sha = self.path.rsplit("/", 1)[-1]
             poll_file(sha)
+            file_date_moves(sha)
             if sha not in DATES:
                 return self.answer("file", 404, {"error": {"code": "NotFoundError"}})
             return self.answer("file", 200, file_object(sha, CONTENTS[sha]))

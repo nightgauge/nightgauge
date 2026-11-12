@@ -328,12 +328,14 @@ the vendor as a false positive and never allowlisted.
 builds the Linux amd64 binary and the signed universal darwin file at `X.Y.Z`
 (the release string), `X.Y.Z-rc.(N+1)` and `X.Y.(Z+1)-rc.1`. It uses the
 Makefile's `build-release-targets` and `darwin-universal` targets, so the flags
-are the RC's own, and packs six `nightgauge-margin_<v>_<target>.tar.gz` files
-and a `margin-manifest.txt`. In `staging.yml`:
+are the RC's own, and writes six raw, executable `nightgauge-margin_<v>_<target>`
+binaries and a `margin-manifest.txt` (`<version> <file> <sha256>` per line).
+They are not archived: the scan gate scans an archive and then the binary
+inside it, so an archive cost each build two uploads (#3202). In `staging.yml`:
 
 - `dry-run` builds them on RC tag pushes, DWARF-checks them and uploads
   `rc-margin-<tag>`. They never enter `rc-artifacts-*` or a GitHub Release.
-- `rc-scan` fails unless it holds six archives and the manifest, then scans them
+- `rc-scan` fails unless it holds six binaries and the manifest, then scans them
   with the RC's own files in one `release-scan-gate.sh local` call. Any finding
   fails the RC. After a clean scan it uploads `rc-margin-scan-<tag>` (the
   manifest and the report), kept 90 days.
@@ -349,5 +351,57 @@ successful `rc-scan`, and its unexpired `rc-margin-scan-*` manifest names
 `TestRCScanScansMarginBinaries` and `TestReleaseWorkflowRequiresMarginScannedRC`
 in `cmd/release-dwarf-check` fail if a step is removed, moved, made
 non-failing, or stops feeding the scan. `scripts/test-release-margin.sh` (run by
-`scripts/ci-local.sh`) covers the version strings, the six-archive count, and
+`scripts/ci-local.sh`) covers the version strings, the six-binary count, and
 each verdict of the release gate against a stub `gh`.
+
+### The RC scan request budget
+
+The free VirusTotal key allows 4 requests a minute and 500 a day. One RC scan,
+margin builds included, is budgeted at 160 requests (`VT_MAX_REQUESTS: "160"`
+on `staging.yml`'s rc-scan step), so a second RC and a release fit in the same
+day. A scan that would pass the budget stops before sending the request, with a
+HARNESS ERROR, and the RC fails.
+
+- **The RC's own files: about 60.** rc.3 sent 108 requests for 31 unique files.
+  63 of them re-analysed 21 unchanged, clean hooks and scripts whose last
+  analysis was older than 24 hours. A text file now reuses a clean, complete
+  report for 14 days (`VT_REUSE_MAX_AGE_TEXT`), so it costs one lookup.
+  Binaries, VSIXes and archives keep the 24-hour window
+  (`VT_REUSE_MAX_AGE`): a classifier verdict on them moves without a byte
+  changing. A report with any finding is never reused under the long window.
+  The kind comes from the bytes: an ELF, Mach-O, PE, zip or gzip header, or a
+  NUL byte in the first 8 KiB, makes a file a binary. `scripts/test-vt-scan.sh`
+  replays rc.3's file list through the offline API double: 108 requests
+  recorded, 52 under these rules.
+- **The text files' window running out: about 58 more.** Reuse never moves
+  VirusTotal's report date, so an RC cut 14 or more days after the text files
+  were last analysed re-analyses all of them again. The same replay with every
+  text file re-analysed takes 111 requests: rc.3's 21 reanalyses took 35
+  polls, not one each. Their new reports then carry the next 14 days.
+- **The six margin binaries: about 24.** Each is new to VirusTotal: a lookup,
+  `upload_url` (they are over 32 MB), the upload and a poll.
+- **Headroom: about 16** for polls of slow analyses. A report counts as
+  reanalysed only when its date is later than the lookup's and within the
+  file's window: 24 hours for a binary, VSIX, archive or any report with a
+  finding, the long window only for a clean text file. A file poll that shows no
+  newer date switches to polling the analysis object alone, one request per
+  poll, until it completes; then the file is read again. When that analysis
+  completes without a newer report (2026-11-11), the scan stops at once with
+  exit 2 and the step is re-run; the lookup's report is never judged as the
+  reanalysis. A newer analysis may mean the file object lags, so the file is
+  read up to three more times; if its date still has not moved, the scan stops
+  with exit 2 the same way (VirusTotal dates an analysis when it is created, so
+  a folded one can look newer).
+
+Every `vt-scan.sh` run ends with a line counting its requests by class
+(lookups, uploads, reanalyses, polls), and the report carries the same counts
+as `requests_by_class`; each entry records the reuse window that applied
+(`reuse_window`) and the analysis date.
+
+A measurement scan, such as an ad-hoc `vt-scan.sh` or `release-scan-gate.sh
+local` run to test a hypothesis, spends the same daily quota as the release
+path. Plan it against the day's remaining quota before the first request is
+sent: count the requests already spent today (each report's `requests`), add
+the planned scan's estimate from the rules above, and keep room for any RC or
+release still due that day. Set `VT_MAX_REQUESTS` to that estimate so the scan
+stops instead of spending the rest.
