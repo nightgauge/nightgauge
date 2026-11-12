@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -17,6 +18,11 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/terminalkind"
+
+	// The fixture database is written in-process; production reads it through
+	// the sqlite3 CLI. This test-only import also keeps the score-sensitive
+	// modernc pins in go.mod (cmd/release-dwarf-check/pins_test.go, #3192).
+	_ "modernc.org/sqlite"
 )
 
 // endpointFakeAdapter spawns a stage that prints one step_start event and then
@@ -265,11 +271,13 @@ func TestModelStreamWatchdog_SessionProgress(t *testing.T) {
 		err  error
 		fire bool
 	}{
-		"tool running":   {p: sessionProgress{toolRunning: true, lastUpdate: stale}},
-		"recent update":  {p: sessionProgress{lastUpdate: now.Add(-10 * time.Second)}},
-		"quiet database": {p: sessionProgress{lastUpdate: stale}, fire: true},
-		"empty database": {p: sessionProgress{}, fire: true},
-		"unreadable":     {err: os.ErrNotExist, fire: true},
+		"tool running":               {p: sessionProgress{toolRunning: true, lastUpdate: stale}},
+		"tool unknown":               {p: sessionProgress{toolUnknown: true, lastUpdate: stale}},
+		"tool unknown, no heartbeat": {p: sessionProgress{toolUnknown: true}, fire: true},
+		"recent update":              {p: sessionProgress{lastUpdate: now.Add(-10 * time.Second)}},
+		"quiet database":             {p: sessionProgress{lastUpdate: stale}, fire: true},
+		"empty database":             {p: sessionProgress{}, fire: true},
+		"unreadable":                 {err: os.ErrNotExist, fire: true},
 	} {
 		w := newModelStreamWatchdog("ep", time.Minute, "dir")
 		w.lastEvent.Store(stale.UnixNano())
@@ -280,6 +288,17 @@ func TestModelStreamWatchdog_SessionProgress(t *testing.T) {
 		if w.hasFired() != tc.fire {
 			t.Errorf("%s: hasFired = %v", name, w.hasFired())
 		}
+	}
+	// With the tool state unknown, a heartbeat and stream quiet past the
+	// grace stops the stage.
+	old := now.Add(-11 * time.Minute)
+	w0 := newModelStreamWatchdog("ep", time.Minute, "dir")
+	w0.lastEvent.Store(old.UnixNano())
+	w0.session = func(string) (sessionProgress, error) {
+		return sessionProgress{toolUnknown: true, lastUpdate: old}, nil
+	}
+	if !w0.check(now) {
+		t.Error("tool unknown, past grace: the watchdog did not fire")
 	}
 	// Under the bound nothing is read at all.
 	w := newModelStreamWatchdog("ep", time.Minute, "dir")
@@ -307,25 +326,43 @@ func TestModelStreamWatchdog_SessionProgress(t *testing.T) {
 	}
 }
 
-// TestReadSessionProgress reads OpenCode's part table as 1.18.32 lays it out.
-func TestReadSessionProgress(t *testing.T) {
-	dir := t.TempDir()
+// writeOpenCodeDB creates opencode.db in dir with OpenCode 1.18.32's part
+// table and returns an insert function for it.
+func writeOpenCodeDB(t *testing.T, dir string) func(id string, updated int64, data string) {
+	t.Helper()
 	db, err := sql.Open("sqlite", filepath.Join(dir, "opencode.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec("CREATE TABLE `part` (`id` text PRIMARY KEY, `message_id` text NOT NULL, `session_id` text NOT NULL, `time_created` integer NOT NULL, `time_updated` integer NOT NULL, `data` text NOT NULL)"); err != nil {
 		t.Fatal(err)
 	}
-	insert := func(id string, updated int64, data string) {
+	return func(id string, updated int64, data string) {
 		if _, err := db.Exec("INSERT INTO part VALUES (?, 'm', 's', ?, ?, ?)", id, updated, updated, data); err != nil {
 			t.Fatal(err)
 		}
 	}
+}
+
+// TestReadSessionProgress reads OpenCode's part table as 1.18.32 lays it out,
+// through the sqlite3 CLI.
+func TestReadSessionProgress(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 CLI not on PATH; TestReadSessionProgress_NoSQLiteCLI covers the fallback")
+	}
+	dir := t.TempDir()
+	insert := writeOpenCodeDB(t, dir)
+	p, err := readSessionProgress(dir)
+	if err != nil {
+		t.Fatalf("empty part table: %v", err)
+	}
+	if p.toolRunning || !p.lastUpdate.IsZero() {
+		t.Fatalf("empty part table: progress = %+v", p)
+	}
 	insert("a", 1790140887133, `{"type":"tool","state":{"status":"completed"}}`)
 	insert("b", 1790140880000, `{"type":"text"}`)
-	p, err := readSessionProgress(dir)
+	p, err = readSessionProgress(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,5 +411,70 @@ func TestReadSessionProgress_StreamHeartbeat(t *testing.T) {
 	w.lastEvent.Store(time.Now().Add(-2 * time.Minute).UnixNano())
 	if !w.check(time.Now()) {
 		t.Fatal("a heartbeat older than the bound hid a stall")
+	}
+}
+
+// TestReadSessionProgress_NoSQLiteCLI: with no sqlite3 on PATH the database
+// cannot be read, the stream heartbeat still counts as progress, a database
+// with no heartbeat is the sentinel error, and the fallback is logged once.
+func TestReadSessionProgress_NoSQLiteCLI(t *testing.T) {
+	origLook, origOnce, origLog := lookSQLite3, sqliteFallbackOnce, sqliteFallbackLog
+	t.Cleanup(func() { lookSQLite3, sqliteFallbackOnce, sqliteFallbackLog = origLook, origOnce, origLog })
+	lookSQLite3 = func() (string, error) { return "", exec.ErrNotFound }
+	sqliteFallbackOnce = &sync.Once{}
+	var logged []string
+	sqliteFallbackLog = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+
+	dir := t.TempDir()
+	writeOpenCodeDB(t, dir)("a", 1790140887133, `{"type":"tool","state":{"status":"running"}}`)
+
+	if _, err := readSessionProgress(dir); !errors.Is(err, errSQLiteCLIUnavailable) {
+		t.Fatalf("database, no heartbeat, no CLI: err = %v, want errSQLiteCLIUnavailable", err)
+	}
+
+	hb := filepath.Join(dir, streamHeartbeatFile)
+	if err := os.WriteFile(hb, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	beat := time.Now().Add(-3 * time.Second).Truncate(time.Second)
+	if err := os.Chtimes(hb, beat, beat); err != nil {
+		t.Fatal(err)
+	}
+	p, err := readSessionProgress(dir)
+	if err != nil {
+		t.Fatalf("heartbeat, no CLI: %v", err)
+	}
+	if !p.lastUpdate.Equal(beat) || p.toolRunning || !p.toolUnknown {
+		t.Fatalf("heartbeat, no CLI: progress = %+v, want the heartbeat's %v and an unknown tool state", p, beat)
+	}
+	// With no CLI the heartbeat alone judges progress, allowed
+	// unknownToolGraceBounds bounds: inside them the stage runs on, past
+	// them a dead stream stops it.
+	w := newModelStreamWatchdog("ep", time.Second, dir)
+	w.lastEvent.Store(beat.UnixNano())
+	if w.check(beat.Add(5 * time.Second)) {
+		t.Fatal("no CLI, heartbeat within the grace: the watchdog stopped the stage")
+	}
+	if !w.check(beat.Add(time.Hour)) {
+		t.Fatal("no CLI, heartbeat past the grace: the watchdog never fired")
+	}
+
+	if len(logged) != 1 || !strings.Contains(logged[0], "sqlite3 not on PATH") {
+		t.Fatalf("fallback log lines = %q, want exactly one", logged)
+	}
+}
+
+func TestParseSessionProgressRow(t *testing.T) {
+	p, err := parseSessionProgressRow("1790140887133|2")
+	if err != nil || !p.lastUpdate.Equal(time.UnixMilli(1790140887133)) || !p.toolRunning {
+		t.Fatalf("progress = %+v, %v", p, err)
+	}
+	if p, err = parseSessionProgressRow("|0"); err != nil || !p.lastUpdate.IsZero() || p.toolRunning {
+		t.Fatalf("empty table: progress = %+v, %v", p, err)
+	}
+	for _, bad := range []string{"", "x|0", "1|y"} {
+		if _, err := parseSessionProgressRow(bad); err == nil {
+			t.Errorf("parseSessionProgressRow(%q) accepted", bad)
+		}
 	}
 }

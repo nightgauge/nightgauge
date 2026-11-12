@@ -5,8 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	gogit "github.com/go-git/go-git/v5"
-
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/platform"
 )
 
@@ -84,16 +83,14 @@ func TestResolveWindow_DeclaresWhatTheExtensionDeclaresForTheWindow(t *testing.T
 	t.Run("the root is what the daemon's git.root answers for the first folder", func(t *testing.T) {
 		// A repository opened at its top: git.root answers the folder itself.
 		top := t.TempDir()
-		if _, err := gogit.PlainInit(top, false); err != nil {
-			t.Fatal(err)
-		}
+		gittest.InitRepo(t, top, "-q")
 		write(t, filepath.Join(top, ".nightgauge", "config.yaml"), "owner: acme\nrepo: mono\n")
 		if decl, _ := ResolveWindow([]string{top}); !reflect.DeepEqual(repos(decl), []platform.AgentRepo{{Owner: "acme", Repo: "mono"}}) {
 			t.Errorf("repository top: repos = %v, want acme/mono", repos(decl))
 		}
 
 		// A subfolder of it: the daemon's git.root does not look upwards
-		// (go-git without DetectDotGit), so it fails, and the extension falls
+		// (git.NewService opens repository roots only), so it fails, and the extension falls
 		// back to the folder itself, which declares nothing here. The daemon
 		// must answer the same, not the repository it happens to sit in.
 		sub := filepath.Join(top, "packages", "app")

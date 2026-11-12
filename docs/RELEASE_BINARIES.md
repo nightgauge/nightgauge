@@ -150,6 +150,9 @@ scan needs no change.
   darwin/arm64 stripped, with compressed DWARF and with uncompressed DWARF, and
   check each raw, in a `.tar.gz` and in a `.vsix`. `scripts/ci-local.sh` runs
   them through `go test ./...`.
+- The checker also fails a Linux amd64 binary over 30 MiB stripped, and a test
+  fails if the release CLI links go-git or `modernc.org/` packages. See
+  [Structural fix](#structural-fix-the-release-cli-drops-go-git-and-sqlite).
 - The margin scan and the release gate are described in
   [their own section](#linux-amd64-margin-and-the-margin-scan-3192).
 
@@ -355,6 +358,42 @@ in `cmd/release-dwarf-check` fail if a step is removed, moved, made
 non-failing, or stops feeding the scan. `scripts/test-release-margin.sh` (run by
 `scripts/ci-local.sh`) covers the version strings, the six-binary count, and
 each verdict of the release gate against a stub `gh`.
+
+### Structural fix: the release CLI drops go-git and SQLite
+
+The residual above is a margin, not a cause. The cause is how much code the
+Linux binary carries that this model scores. Two dependencies were most of it:
+go-git (with its SSH stack, OpenPGP and a second SHA-1) and `modernc.org/sqlite`,
+an embedded C-to-Go SQLite engine. A build without them measured 28.84 MB
+stripped, against 36.86 MB for `main`. The release CLI no longer links either:
+
+- `internal/git` runs the `git` CLI for every read as well as every mutation.
+  The test-only init, commit and remote helpers live in `internal/gittest`.
+  `go.mod` no longer requires go-git or the modules only it needed.
+- The GitLab webhook dedupe cache is a JSON file store with the same window
+  semantics (`internal/gitlab/webhook_dedup.go`).
+- The model-stream watchdog reads OpenCode's `opencode.db` through the `sqlite3`
+  CLI. When `sqlite3` is not on `PATH` it logs that once and uses the plugin's
+  stream-heartbeat file alone. Without the CLI it cannot see a running tool, so
+  it stops the stage only after ten bounds with no heartbeat or stream event.
+- `modernc.org/sqlite` and its pinned dependencies stay in `go.mod` through a
+  test-only import (the watchdog's fixture database), so
+  `TestScoreSensitiveModulesStayPinned` still holds the pins. The binary does
+  not link them.
+
+The build settings are unchanged: unstripped, with uncompressed DWARF. Two
+guards in `cmd/release-dwarf-check` keep the dependencies out:
+
+- `TestReleaseCLIDoesNotLinkGoGitOrSQLite` runs `go list -deps` for the
+  linux/amd64 CLI and fails, naming the importer, on any `github.com/go-git/`,
+  `modernc.org/`, ProtonMail or circl package.
+- The checker itself fails (exit `1`) a Linux amd64 binary whose stripped size —
+  file size less its DWARF sections, `.symtab` and `.strtab` — exceeds 30 MiB.
+  `staging.yml` and `release.yml` already run it on every packaged binary.
+
+The RC margin scan stays the gate. An RC cut after this change must pass it,
+and the operator scans `main`'s Linux amd64 binary at eight or more version
+strings and records each verdict on #3192.
 
 ### Cause measurement: the four required variants
 

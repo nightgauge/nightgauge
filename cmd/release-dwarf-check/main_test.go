@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"debug/elf"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -710,5 +711,96 @@ func TestReleaseWorkflowRequiresMarginScannedRC(t *testing.T) {
 	}
 	if !strings.Contains(wf[relStart:at], "actions: read") {
 		t.Errorf("release.yml release job lacks `actions: read`; the gate cannot read the RC's run and artifact")
+	}
+}
+
+// withStrippedSizeLimit sets the stripped-size limit for one test.
+func withStrippedSizeLimit(t *testing.T, limit int64) {
+	t.Helper()
+	orig := strippedSizeLimit
+	strippedSizeLimit = limit
+	t.Cleanup(func() { strippedSizeLimit = orig })
+}
+
+// TestStrippedSizeMatchesAStrippedBuild: the size computed for the unstripped
+// fixture is what `-s -w` actually produces, to within 2%, so the limit is
+// measured against the number it claims to be.
+func TestStrippedSizeMatchesAStrippedBuild(t *testing.T) {
+	dir := buildFixtures(t)
+	size, measured, err := linuxAMD64StrippedSize(filepath.Join(dir, "linux-unstripped"))
+	if err != nil || !measured {
+		t.Fatalf("linuxAMD64StrippedSize = %d, %v, %v; want a measurement", size, measured, err)
+	}
+	full, err := os.Stat(filepath.Join(dir, "linux-unstripped"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stripped, err := os.Stat(filepath.Join(dir, "linux-stripped"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size >= full.Size() {
+		t.Fatalf("stripped size %d is not below the file size %d", size, full.Size())
+	}
+	if diff := size - stripped.Size(); diff > stripped.Size()/50 || -diff > stripped.Size()/50 {
+		t.Errorf("computed stripped size %d, a -s -w build is %d: more than 2%% apart", size, stripped.Size())
+	}
+	if _, measured, err := linuxAMD64StrippedSize(filepath.Join(dir, "darwin-unstripped")); err == nil || measured {
+		t.Errorf("a Mach-O file was measured as Linux amd64 (err %v)", err)
+	}
+}
+
+// TestStrippedSizeLimitVerdict: a Linux amd64 binary over the limit fails with
+// exit 1, naming the record; at the limit it passes; a darwin binary is not
+// held to it.
+func TestStrippedSizeLimitVerdict(t *testing.T) {
+	dir := buildFixtures(t)
+	bin := filepath.Join(dir, "linux-unstripped")
+	size, _, err := linuxAMD64StrippedSize(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withStrippedSizeLimit(t, size)
+	if code, out := runCheck(t, bin); code != 0 || !strings.Contains(out, "stripped)") {
+		t.Fatalf("at the limit: exit %d, want 0; output:\n%s", code, out)
+	}
+
+	withStrippedSizeLimit(t, size-1)
+	code, out := runCheck(t, bin)
+	if code != 1 || !strings.Contains(out, "over the") || !strings.Contains(out, record) {
+		t.Fatalf("over the limit: exit %d, want 1 naming %s; output:\n%s", code, record, out)
+	}
+	tgz := filepath.Join(t.TempDir(), "nightgauge_linux_amd64.tar.gz")
+	data, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTarGz(t, tgz, map[string][]byte{"nightgauge": data})
+	if code, out := runCheck(t, tgz); code != 1 {
+		t.Fatalf("over the limit in an archive: exit %d, want 1; output:\n%s", code, out)
+	}
+
+	withStrippedSizeLimit(t, 1)
+	if code, out := runCheck(t, filepath.Join(dir, "darwin-unstripped")); code != 0 {
+		t.Fatalf("darwin binary held to the Linux amd64 limit: exit %d; output:\n%s", code, out)
+	}
+}
+
+func TestStrippedSizeDiscountsOnlyWhatStripRemoves(t *testing.T) {
+	sec := func(name string, typ elf.SectionType, size uint64) *elf.Section {
+		return &elf.Section{SectionHeader: elf.SectionHeader{Name: name, Type: typ, FileSize: size}}
+	}
+	sections := []*elf.Section{
+		sec(".text", elf.SHT_PROGBITS, 1000),
+		sec(".debug_info", elf.SHT_PROGBITS, 300),
+		sec(".zdebug_line", elf.SHT_PROGBITS, 20),
+		sec(".symtab", elf.SHT_SYMTAB, 100),
+		sec(".strtab", elf.SHT_STRTAB, 50),
+		sec(".shstrtab", elf.SHT_STRTAB, 7),
+		sec(".bss", elf.SHT_NOBITS, 4000),
+	}
+	if got := strippedSize(2000, sections); got != 2000-300-20-100-50 {
+		t.Errorf("strippedSize = %d, want %d", got, 2000-300-20-100-50)
 	}
 }

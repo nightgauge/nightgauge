@@ -90,7 +90,8 @@ The Go binary includes these improvements over the shell scripts:
    text/JSON errors
 2. **Single process** — eliminates bash→jq→gh→awk pipeline overhead
 3. **Compiled regex** — gate patterns compiled once at startup vs per-invocation
-4. **go-git** — native Git operations without spawning `git` subprocesses
+4. **One git service** — every git operation goes through `internal/git`, which
+   runs the `git` CLI with its worktree safety rules
 
 ## Performance
 

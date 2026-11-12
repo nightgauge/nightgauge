@@ -48,6 +48,7 @@ package gittest
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -252,4 +253,24 @@ func ClonedRepo(t testing.TB) (string, string) {
 	Run(t, clone, "config", "user.email", "fixture@example.invalid")
 	Run(t, clone, "config", "user.name", "Fixture")
 	return clone, origin
+}
+
+// InitialCommit writes an empty .gitkeep into the checkout at dir and commits
+// it as "Initial commit", returning the commit hash. It is the subprocess
+// replacement for the go-git fixture helper internal/git used to export
+// (#3192), so the release CLI no longer links go-git for a test's sake.
+func InitialCommit(t testing.TB, dir string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, ".gitkeep"), nil, 0o644); err != nil {
+		t.Fatalf("write .gitkeep: %v", err)
+	}
+	Run(t, dir, "add", ".gitkeep")
+	Run(t, dir, "commit", "-q", "-m", "Initial commit")
+	return Run(t, dir, "rev-parse", "HEAD")
+}
+
+// SetRemote adds url as the origin remote of the checkout at dir.
+func SetRemote(t testing.TB, dir, url string) {
+	t.Helper()
+	Run(t, dir, "remote", "add", "origin", url)
 }

@@ -1169,7 +1169,7 @@ type GitLabInboundConfig struct {
 	SecretEnvVar    string `json:"secret_env_var,omitempty"   yaml:"secret_env_var"`     // env var holding shared secret
 	ReplayWindowSec int    `json:"replay_window_sec,omitempty" yaml:"replay_window_sec"` // default: 300
 	DedupeWindowSec int    `json:"dedupe_window_sec,omitempty" yaml:"dedupe_window_sec"` // default: 3600
-	DedupeDBPath    string `json:"dedupe_db_path,omitempty"   yaml:"dedupe_db_path"`     // default: ":memory:"
+	DedupeDBPath    string `json:"dedupe_db_path,omitempty"   yaml:"dedupe_db_path"`     // dedupe store file; default ":memory:" (in-process only)
 }
 
 // DefaultGitLabInboundPort is the default port for the GitLab webhook receiver.
