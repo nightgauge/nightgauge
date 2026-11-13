@@ -72,6 +72,45 @@ func TestOnPipelineComplete_ApiConnectionLost_TransientNoPause(t *testing.T) {
 	}
 }
 
+// TestOnPipelineComplete_ClaudeAPIErrorLine_TransientNoPause_3238 drives the
+// exact failure text a mid-stage network outage produces through the
+// classifier and the completion path: no lifetime increment, no pause, and
+// the short per-issue backoff.
+func TestOnPipelineComplete_ClaudeAPIErrorLine_TransientNoPause_3238(t *testing.T) {
+	for _, line := range []string{apiErrENOTFOUND, apiErrECONNREFUSED} {
+		reason, _ := cliFailureText("", line+"\n")
+		text := terminalFailureReason(1, nil, reason)
+		kind := ClassifyTerminalKind(text)
+		if kind != TerminalKindApiConnectionLost {
+			t.Fatalf("ClassifyTerminalKind(%q) = %q, want %q", text, kind, TerminalKindApiConnectionLost)
+		}
+		as := &AutonomousScheduler{
+			trustGateOverride: allWritersGate(),
+			config:            AutonomousConfig{MaxConcurrent: 3},
+			state: &AutonomousState{
+				Status:                "running",
+				Running:               []RunningItem{{Repo: "nightgauge/nightgauge", Number: 3231, Title: "outage"}},
+				LifetimeIssueFailures: map[string]int{},
+			},
+			rescanCh:             make(chan struct{}, 1),
+			perIssueFailureCount: map[string]int{},
+			retryBackoff:         map[string]retryPlan{},
+		}
+		as.onPipelineComplete("nightgauge/nightgauge", 3231, false, false, kind, text, false)
+		as.drainBackground()
+		key := "nightgauge/nightgauge#3231"
+		if got := as.state.LifetimeIssueFailures[key]; got != 0 {
+			t.Errorf("%s: LifetimeIssueFailures = %d, want 0", line, got)
+		}
+		if as.state.Status == "paused" {
+			t.Errorf("%s: scheduler paused; a network outage must not halt the repository", line)
+		}
+		if _, ok := retryDeadline(as, key); !ok {
+			t.Errorf("%s: retryBackoff not set", line)
+		}
+	}
+}
+
 // TestOnPipelineComplete_GitHubNetworkOutage_ShortGlobalCooldownNoPause
 // verifies the pipeline-start connectivity kind: a SHORT (~2m) GLOBAL
 // dispatch cooldown (every repo is equally unreachable), matching per-issue

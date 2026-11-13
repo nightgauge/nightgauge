@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { inferProcessError } from "../../src/utils/skillRunner";
+import { classifyTerminalKind } from "@nightgauge/sdk";
+import { inferProcessError, apiRetryExhaustionMarker } from "../../src/utils/skillRunner";
 
 describe("inferProcessError", () => {
   it("returns undefined when success=true", () => {
@@ -101,5 +102,62 @@ describe("inferProcessError", () => {
       const err = inferProcessError(false, "", "", 137);
       expect(err?.message).toBe("Process exited with code 137");
     });
+  });
+});
+
+// #3238: a mid-stage network outage was booked unclassified because the CLI's
+// final `API Error:` line never reached the classifier.
+describe("inferProcessError — API Error line and api_retry exhaustion (#3238)", () => {
+  const ENOTFOUND =
+    "API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)";
+  const ECONNREFUSED =
+    "API Error: Connection refused — a firewall or proxy may be blocking it (ECONNREFUSED)";
+  const noise = "hook: post-tool ok\n[skillRunner] self-check passed\nwarning: deprecated flag\n";
+  const assistant = JSON.stringify({ type: "assistant", message: { content: [] } });
+  const retry = (status: number | null) =>
+    JSON.stringify({
+      type: "system",
+      subtype: "api_retry",
+      error_status: status,
+      error: "unknown",
+    });
+
+  const kindOf = (stderr: string, stdout: string) =>
+    classifyTerminalKind(inferProcessError(false, stderr, stdout, 1)?.message);
+
+  for (const line of [ENOTFOUND, ECONNREFUSED]) {
+    it(`books ${line.slice(-13)} on stderr, followed by noise, as api_connection_lost`, () => {
+      expect(kindOf(`${line}\n${noise}`, "")).toBe("api_connection_lost");
+    });
+    it(`books ${line.slice(-13)} on stderr with a trailing newline as api_connection_lost`, () => {
+      expect(kindOf(`${line}\n`, "")).toBe("api_connection_lost");
+    });
+    it(`books ${line.slice(-13)} as plain stdout beside the transcript as api_connection_lost`, () => {
+      expect(kindOf("", `${assistant}\n${line}\n`)).toBe("api_connection_lost");
+    });
+  }
+
+  it("books api_retry exhaustion with null error_status as api_connection_lost", () => {
+    const stdout = `${assistant}\n${Array(10).fill(retry(null)).join("\n")}\n`;
+    expect(kindOf("", stdout)).toBe("api_connection_lost");
+  });
+
+  it("lets a kind the reason already carries win over the api_retry fallback", () => {
+    expect(kindOf("API Error: Overloaded", `${assistant}\n${retry(null)}\n`)).toBe(
+      "api_overloaded"
+    );
+  });
+
+  it("does not treat api_retry with an HTTP status as transport loss", () => {
+    expect(apiRetryExhaustionMarker(`${assistant}\n${retry(529)}\n`)).toBe("");
+  });
+
+  it("does not excuse an ECONNREFUSED with no API Error line", () => {
+    expect(kindOf("integration test failed: ECONNREFUSED 127.0.0.1:5432", "")).toBeUndefined();
+  });
+
+  it("never reads an API Error line out of transcript JSON", () => {
+    const stdout = JSON.stringify({ type: "assistant", text: "API Error: x (ENOTFOUND)" });
+    expect(kindOf("", stdout)).toBeUndefined();
   });
 });

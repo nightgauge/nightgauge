@@ -298,6 +298,24 @@
       "rationale": "A DNS-class transport failure. Pinned because the SDK mirror knew only the `connection closed` alternative and none of the error-code alternatives, so every DNS blip classified one way in the record and another way in the published SDK."
     },
     {
+      "id": "api-connection-lost-enotfound-3238",
+      "input": "exit 1: API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)",
+      "expected": "api_connection_lost",
+      "expected_signal": "api_connection_lost",
+      "source": "synthetic",
+      "producer": "internal/orchestrator/scheduler.go: cliFailureText / packages/nightgauge/src/utils/skillRunner.ts: inferProcessError, carrying the Claude CLI's final API Error line (#3238)",
+      "rationale": "The exact line the CLI printed when the #3231 session lost DNS. It was booked unclassified because the producers dropped it, which halted the repository and spent a lifetime attempt on a network outage. Recorded from that session's log, not mined by the capture script, hence synthetic."
+    },
+    {
+      "id": "api-connection-lost-econnrefused-3238",
+      "input": "exit 1: API Error: Connection refused — a firewall or proxy may be blocking it (ECONNREFUSED)",
+      "expected": "api_connection_lost",
+      "expected_signal": "api_connection_lost",
+      "source": "synthetic",
+      "producer": "internal/orchestrator/scheduler.go: cliFailureText / packages/nightgauge/src/utils/skillRunner.ts: inferProcessError, carrying the Claude CLI's final API Error line (#3238)",
+      "rationale": "The second line from the same #3231 outage, three minutes later. `Connection refused` here is spaced and the code is the Node errno, so both the `connection refused` and `econnrefused` alternatives claim it; the row pins that an outage is transient, not a lifetime failure."
+    },
+    {
       "id": "api-connection-lost-negative-unrelated-econnreset",
       "input": "Integration test failed: ECONNRESET while connecting to the local fixture server",
       "expected": "",
