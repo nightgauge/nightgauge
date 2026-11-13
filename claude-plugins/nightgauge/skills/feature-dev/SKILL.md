@@ -6,7 +6,7 @@ description: Implement features following the approved PLAN.md and documented st
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.18.0"
+  version: "1.19.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 orchestration:
@@ -235,6 +235,10 @@ schema documentation.
 
 ## Gotchas
 
+- **The plan's focus criteria outrank the partial-delivery list (#3235).** When
+  `planning-{N}.json` `partial_delivery.criteria` and the plan's focus criteria
+  disagree, implement the plan's focus criteria and say so in the stage output.
+  Never emit `NOT_PIPELINE_ACTIONABLE` while the plan names an unmet criterion.
 - **Never run bare `vitest`.** Use the repository's documented test command in
   single-run mode (`vitest run`, scoped to the touched workspace) — bare
   `vitest` mis-resolves the workspace and can hang in watch mode.

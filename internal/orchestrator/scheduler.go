@@ -798,6 +798,12 @@ type Scheduler struct {
 	// (#3228), in tests. nil in production.
 	acReconcileBody func(ctx context.Context, item types.BoardItem) (string, error)
 	acEmptyNotify   func(ctx context.Context, item types.BoardItem) error
+	// issueBodyEditedAt replaces the issue body's last-edit read behind the
+	// partial-delivery scope reconcile (#3235), in tests. nil in production.
+	issueBodyEditedAt func(ctx context.Context, item types.BoardItem) (*time.Time, error)
+	// partialPRRead replaces the partial PR's creation-time and body read
+	// behind the same reconcile (#3235), in tests. nil in production.
+	partialPRRead func(ctx context.Context, repo string, pr int) (partialPR, error)
 	// partialCheckoutAtBase replaces checkoutAtBase, the re-admit vet's
 	// check that its checkout is clean and on origin's base, in tests. nil in
 	// production.

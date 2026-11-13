@@ -81,6 +81,11 @@ func PartialRerunNoDiffComment(issueNumber, pr int, branch, base string, criteri
 	b.WriteString(fmt.Sprintf("<!-- nightgauge:partial-rerun-no-diff pr=%d -->\n", pr))
 	b.WriteString(fmt.Sprintf("A re-run of #%d targeting the criteria PR #%d left unmet ended after feature-dev with no diff between `%s` and `%s`, so feature-validate and pr-create did not run (#3160).\n\n",
 		issueNumber, pr, CommentSafeACText(branch), CommentSafeACText(base)))
+	if len(criteria) == 0 {
+		b.WriteString("Every criterion the partial-delivery comment listed has since been removed from the issue body, and the body adds none, so nothing remains open (#3235).\n\n")
+		b.WriteString("The issue waits in Backlog: close it if it is done, or add the criteria a run should deliver.\n")
+		return b.String()
+	}
 	b.WriteString("Still open:\n\n")
 	for _, c := range criteria {
 		b.WriteString("- " + CommentSafeACText(c) + "\n")

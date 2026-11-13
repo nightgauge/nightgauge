@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A partial-delivery re-run now reconciles the comment's remaining criteria
+  with the current issue body. Its brief is the listed criteria still in the
+  body plus only criteria new since the partial PR: added to a body edited
+  after the PR opened, and named in neither the comment nor the PR's met or
+  unmet sections. Listed criteria removed from the body are dropped and
+  logged. Planning keeps `focus_acs` to that brief, and feature-dev follows
+  the plan's focus criteria when they name more than the list (#3235).
 - The Go ac-reconcile regeneration before feature-planning now decides whether
   the issue is still vouched for after it reads the body, on a fresh cache, as
   `forge issue view --vouched` does. An outsider's edit landing after the
