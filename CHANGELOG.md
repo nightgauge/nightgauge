@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The local gate's publication-boundary hermeticity step no longer fails under
+  load because a SIGTERMed suite run took more than 30s to clean up. The arm now
+  tells a stopped run from a resumed one by its exit status (143 from the TERM
+  trap), keeps time only as a 180s hang watchdog, and checks itself against a
+  stub trap that resumes (#3217).
+
 - The issue comment pr-create posts when a branch has no diff, and the unmet
   criteria a pull request leaves open, now write `<!--` in quoted criterion
   text as `&lt;!--`. Issue text can no longer plant a comment the pipeline

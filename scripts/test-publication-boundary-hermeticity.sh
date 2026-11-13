@@ -639,6 +639,96 @@ else
   printf '    vanished:\n%s\n' "$VANISHED"
 fi
 
+# ── SIGTERM stop verdict (#713, #3217) ──────────────────────────────────────
+#
+# term_stop_verdict <pid>: after a SIGTERM, decide whether a background job
+# stopped, resumed past its trap, or hung. Sets TERM_VERDICT to `stopped`,
+# `resumed:<rc>` or `hung`. It assigns rather than echoes: `wait` only reaps a
+# child of the calling shell, so it must not run inside a `$(...)` subshell.
+#
+# Two separate questions, two separate signals:
+#
+# - Stopped vs resumed is decided by EXIT STATUS, not by time. The suite's TERM
+#   trap ends `cleanup; exit 143` (128+SIGTERM). A run that stops exits 143; a
+#   run whose trap returns resumes and leaves through the normal tally exit, 0
+#   or 1. A wall-clock bound cannot tell these apart: a resumed run fails its
+#   remaining cases fast and exits anyway, while a correct run's cleanup()
+#   (worktree removal, sandbox deletion) can take tens of seconds under gate
+#   load. The old 30s bound reported the second case as the first (#3217).
+#
+# - Liveness is only a HANG WATCHDOG. TERM_HANG_BUDGET_S is the uncontended
+#   full-length suite (~41s) times a load factor of ~3 for a contended
+#   ci-local run, plus cleanup headroom: 180s. A run still alive at the deadline
+#   is force-killed and reported `hung`. The poll count is derived from the
+#   budget, never written as a literal.
+TERM_HANG_BUDGET_S="${TERM_HANG_BUDGET_S:-180}"
+TERM_POLL_INTERVAL_S="0.2"
+term_stop_verdict() {
+  local pid="$1" polls rc alive=true
+  polls="$(awk -v b="$TERM_HANG_BUDGET_S" -v i="$TERM_POLL_INTERVAL_S" \
+    'BEGIN { n = int(b / i); if (n < 1) n = 1; print n }')"
+  for _ in $(seq 1 "$polls"); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      alive=false
+      break
+    fi
+    sleep "$TERM_POLL_INTERVAL_S"
+  done
+  if [ "$alive" = true ]; then
+    kill -9 -"$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    TERM_VERDICT=hung
+    return
+  fi
+  wait "$pid" 2>/dev/null
+  rc=$?
+  if [ "$rc" -eq 143 ]; then
+    TERM_VERDICT=stopped
+  else
+    TERM_VERDICT="resumed:$rc"
+  fi
+}
+
+# Self-check: the verdict must be able to go red. One stub's TERM trap returns
+# (the #713 regression shape) and must read `resumed`; one ends `exit 143` and
+# must read `stopped`. Both run from this run's sandbox root, never the repo.
+term_stub_verdict() {
+  local trap_body="$1" stub ready pid
+  TERM_VERDICT=harness
+  mkdir -p "$RUN_SANDBOX_ROOT" || return
+  stub="$RUN_SANDBOX_ROOT/term-stub-$RANDOM.sh"
+  ready="$stub.ready"
+  cat >"$stub" <<STUB
+trap '$trap_body' TERM
+: >"$ready"
+for _ in 1 2 3 4 5 6 7 8 9 10; do sleep 0.1; done
+exit 0
+STUB
+  bash "$stub" >/dev/null 2>&1 &
+  pid=$!
+  for _ in $(seq 1 100); do
+    [ -e "$ready" ] && break
+    sleep 0.05
+  done
+  kill -TERM "$pid" 2>/dev/null
+  term_stop_verdict "$pid"
+  rm -f "$stub" "$ready"
+}
+
+term_stub_verdict ':'
+STUB_RESUME="$TERM_VERDICT"
+case "$STUB_RESUME" in
+  resumed:*) ok "the stop assertion reports a resuming TERM trap as resumed (#3217)" ;;
+  *) bad "the stop assertion read a resuming TERM trap as '$STUB_RESUME' (#3217)" ;;
+esac
+term_stub_verdict ':; exit 143'
+STUB_STOP="$TERM_VERDICT"
+if [ "$STUB_STOP" = stopped ]; then
+  ok "the stop assertion reports an exiting TERM trap as stopped (#3217)"
+else
+  bad "the stop assertion read an exiting TERM trap as '$STUB_STOP' (#3217)"
+fi
+
 # ── 3b. SIGTERM, which runs the trap and must NOT resume ────────────────────
 #
 # SIGKILL runs no handler, so step 1 can never observe what a handler does
@@ -676,27 +766,18 @@ sleep 2
 # leader, which is what this models.
 kill -TERM "$SUITE_PID" 2>/dev/null
 
-# A signalled run must not hang. This arm is a liveness bound, NOT the
-# regression arm: a resumed run whose sandbox cleanup() already deleted fails
-# its remaining cases quickly and exits anyway, so it passes either way. The
-# tree assertion below is the one that discriminates -- keep both, but do not
-# read a green here as evidence the trap is right.
-TERM_STOPPED=false
-for _ in $(seq 1 150); do
-  if ! kill -0 "$SUITE_PID" 2>/dev/null; then
-    TERM_STOPPED=true
-    break
-  fi
-  sleep 0.2
-done
-wait "$SUITE_PID" 2>/dev/null
-if [ "$TERM_STOPPED" = true ]; then
-  ok "a SIGTERMed suite run stops rather than resuming after its trap (#713)"
-else
-  bad "a SIGTERMed suite run kept going — the trap ran and execution resumed"
-  kill -9 -"$SUITE_PID" 2>/dev/null || kill -9 "$SUITE_PID" 2>/dev/null
-  wait "$SUITE_PID" 2>/dev/null
-fi
+term_stop_verdict "$SUITE_PID"
+case "$TERM_VERDICT" in
+  stopped)
+    ok "a SIGTERMed suite run stops rather than resuming after its trap (#713)"
+    ;;
+  hung)
+    bad "a SIGTERMed suite run did not exit within ${TERM_HANG_BUDGET_S}s of SIGTERM"
+    ;;
+  *)
+    bad "a SIGTERMed suite run kept going — the trap ran and execution resumed (exit ${TERM_VERDICT#resumed:}, want 143)"
+    ;;
+esac
 for _ in $(seq 1 100); do
   pgrep -g "$SUITE_PID" >/dev/null 2>&1 || break
   sleep 0.1
