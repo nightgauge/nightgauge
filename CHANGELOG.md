@@ -23,6 +23,12 @@ changelog, and the release workflow refuses a tag that does not.
   unmet sections. Listed criteria removed from the body are dropped and
   logged. Planning keeps `focus_acs` to that brief, and feature-dev follows
   the plan's focus criteria when they name more than the list (#3235).
+- A Claude Code stage that loses the network mid-run is now booked
+  `api_connection_lost` and retried after a short backoff, instead of being
+  booked unclassified, halting the repository and spending one of the issue's
+  lifetime attempts. The failure reason now carries the CLI's final
+  `API Error:` line from stderr or stdout, and a run that ends after
+  `api_retry` events with no HTTP status counts as a lost connection (#3238).
 - The Go ac-reconcile regeneration before feature-planning now decides whether
   the issue is still vouched for after it reads the body, on a fresh cache, as
   `forge issue view --vouched` does. An outsider's edit landing after the

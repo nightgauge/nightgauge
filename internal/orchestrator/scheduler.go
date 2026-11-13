@@ -607,7 +607,120 @@ func cliFailureText(stdout, stderr string) (errorText, lastOutputLines string) {
 		// carries no transcript (#1556).
 		reason = vendorStdoutFailureReason(stdout)
 	}
+	reason = withAPIErrorEvidence(reason, stderr, stdout)
 	return reason, state.TruncateOutputTail(combined)
+}
+
+// apiErrorLinePrefix opens the line the Claude CLI prints when it gives up on
+// the model API, e.g. `API Error: Can't reach the API server — check your
+// internet or DNS (ENOTFOUND)`.
+const apiErrorLinePrefix = "API Error:"
+
+// withAPIErrorEvidence adds the two pieces of transport evidence the bounded
+// reason tail can miss (#3238). A network outage mid-stage was booked
+// unclassified because the CLI's final `API Error:` line fell outside the
+// last-three-lines window (later stderr noise pushed it out), or was written
+// to stdout beside a transcript, which vendorStdoutFailureReason refuses.
+//
+//  1. The last `API Error:` line from stderr, or from a stdout line that is
+//     not transcript JSON, is appended when the reason lacks it. Only lines
+//     that START with the prefix are taken, so transcript prose and tool
+//     output never reach the classifier (#533, #1556).
+//  2. When the reason still classifies to nothing and the transcript ends on
+//     api_retry events with a null error_status and no is_error envelope, an
+//     `[api_connection_lost]` marker is appended. It runs only on an
+//     otherwise-unclassified reason, so any kind the text does carry wins.
+func withAPIErrorEvidence(reason, stderr, stdout string) string {
+	if line := lastAPIErrorLine(stderr, stdout); line != "" && !strings.Contains(reason, line) {
+		reason = appendReasonLine(reason, line)
+	}
+	if terminalkind.Classify(reason) != "" {
+		return reason
+	}
+	if marker := apiRetryExhaustionMarker(stdout); marker != "" {
+		reason = appendReasonLine(reason, marker)
+	}
+	return reason
+}
+
+func appendReasonLine(reason, line string) string {
+	if len(line) > stderrReasonMaxBytes {
+		line = line[:stderrReasonMaxBytes]
+	}
+	if reason == "" {
+		return strings.Clone(line)
+	}
+	return reason + "\n" + line
+}
+
+// lastAPIErrorLine returns the last line starting with `API Error:` in
+// stderr, else in the non-JSON lines of stdout. "" when neither has one.
+func lastAPIErrorLine(stderr, stdout string) string {
+	if line := lastPrefixedLine(stderr, false); line != "" {
+		return line
+	}
+	return lastPrefixedLine(stdout, true)
+}
+
+func lastPrefixedLine(text string, skipJSON bool) string {
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		t := strings.TrimSpace(lines[i])
+		if t == "" || (skipJSON && (t[0] == '{' || t[0] == '[')) {
+			continue
+		}
+		if strings.HasPrefix(t, apiErrorLinePrefix) {
+			return strings.Clone(t)
+		}
+	}
+	return ""
+}
+
+// transcriptEvent models the stream-json fields apiRetryExhaustionMarker reads.
+type transcriptEvent struct {
+	Type        string          `json:"type"`
+	Subtype     string          `json:"subtype"`
+	IsError     bool            `json:"is_error"`
+	ErrorStatus json.RawMessage `json:"error_status"`
+}
+
+// apiRetryExhaustionMarker returns an `[api_connection_lost]` marker when the
+// stdout transcript ends on api_retry system events whose error_status is
+// null: the CLI retried the model API with no HTTP answer at all, which is
+// transport loss. It walks back from the end over the trailing system events
+// and stops at the first assistant or result event. An is_error result, or
+// any api_retry carrying an HTTP status, yields "" — that run has a reason of
+// its own.
+func apiRetryExhaustionMarker(stdout string) string {
+	lines := strings.Split(stdout, "\n")
+	retries := 0
+	for i := len(lines) - 1; i >= 0; i-- {
+		t := strings.TrimSpace(lines[i])
+		if t == "" || t[0] != '{' {
+			continue
+		}
+		var ev transcriptEvent
+		if json.Unmarshal([]byte(t), &ev) != nil {
+			continue
+		}
+		if ev.Type != "system" {
+			if ev.Type == "result" && ev.IsError {
+				return ""
+			}
+			break
+		}
+		if ev.Subtype != "api_retry" {
+			continue
+		}
+		if s := strings.TrimSpace(string(ev.ErrorStatus)); s != "" && s != "null" {
+			return ""
+		}
+		retries++
+	}
+	if retries == 0 {
+		return ""
+	}
+	return fmt.Sprintf("[api_connection_lost] API retries exhausted: %d api_retry event(s), error_status null", retries)
 }
 
 // stageFailureText is the single text every terminal-failure classification
