@@ -958,6 +958,10 @@ type Scheduler struct {
 	// nil → fall back to the default issueSvc.
 	clientResolver func(ctx context.Context, owner, repo string) (*gh.Client, error)
 
+	// issueStateRead, when set, replaces the stage-boundary issue-state read
+	// (#3151). nil in production: readIssueState resolves the per-repo client.
+	issueStateRead issueStateReader
+
 	// repoPathResolver, when set, maps an "owner/repo" slug to that repo's
 	// filesystem root. A run's on-disk state — trace, runtime-{issue}-{runId}.json,
 	// stage-context, exit-records, worktrees — must all root at the run's
@@ -6284,6 +6288,20 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			continue
 		}
 
+		// Stage-boundary issue-state check (#3151): an issue closed after
+		// pickup ends the run as issue_closed — the same non-failure booking
+		// pickup's own closed check gets — instead of spending the next stage
+		// and holding the repository's slot. Skipped for issue-pickup and once
+		// this run has merged; fails open on a read error.
+		if closed, detail := s.issueClosedAtBoundary(ctx, item, stage, runtime); closed {
+			log.Printf("#%d: %s — ending the run before dispatch", item.Number, detail)
+			runtime.BeginStage(stage)
+			runtime.SetStageError(stage, detail)
+			s.emitStateChanged(item.Repo, item.Number, runtime)
+			terminalFailureKind = TerminalKindIssueClosed
+			return
+		}
+
 		lifecycle.stage(stage, runtime.FeatureBranch())
 
 		// For merge stage, acquire the per-repo lock; for any other stage, drop a
@@ -7337,6 +7355,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// local model.
 		ctxProbe.record(runtime, stage, result, skillData.ContextWindow)
 		err = stageRunErr
+		// pr-merge refused because the issue closed while the PR waited
+		// (#3151): not a stage failure — end the run issue_closed.
+		if errors.Is(err, errMergeRefusedIssueClosed) {
+			log.Printf("#%d: %v — ending the run without merging", item.Number, err)
+			runtime.SetStageError(stage, err.Error())
+			s.emitStateChanged(item.Repo, item.Number, runtime)
+			terminalFailureKind = TerminalKindIssueClosed
+			return
+		}
 		// The stage's endpoint slot is free once its session has ended.
 		endpointHeld.Release()
 
@@ -11743,6 +11770,11 @@ func classifyMergeBlocker(pr *types.PullRequest) string {
 	}
 }
 
+// errMergeRefusedIssueClosed marks a pr-merge refusal for an issue closed
+// mid-run (#3151). Its text starts with the issue_closed kind so the stage
+// error classifies as TerminalKindIssueClosed.
+var errMergeRefusedIssueClosed = errors.New("issue_closed")
+
 // tryDeterministicPRMerge runs the deterministic-first hook for the pr-merge
 // stage (Issue #3264). When the runner reports `merged`, it records
 // execution_path="deterministic" on the runtime, emits a telemetry event,
@@ -11793,6 +11825,14 @@ func (s *Scheduler) tryDeterministicPRMerge(
 		log.Printf("#%d: pr-merge deterministic path rate-limited — deferring (no LLM fallback) until GitHub bucket resets [#3976]",
 			item.Number)
 		return false, detResult.PRState, true, nil
+	}
+	if detErr == nil && detResult.Path == pmstages.PathRefused && detResult.Reason == pmstages.ReasonIssueClosed {
+		// The issue closed while the PR waited and the PR body would close it
+		// again on merge (#3151): never merge, never fall back to the LLM.
+		runtime.RecordExecutionPath(stage, "deterministic")
+		runtime.RecordStagePuntReason(stage, detResult.Reason)
+		return false, detResult.PRState, false, fmt.Errorf("%w: #%d was closed before pr-merge merged PR #%d",
+			errMergeRefusedIssueClosed, item.Number, detResult.PRNumber)
 	}
 	if detErr == nil && detResult.Path == pmstages.PathRefused {
 		// A refusal is a gate, not a punt: no LLM fallback (issue 1675). A

@@ -162,6 +162,10 @@ const (
 	// ReasonReviewReadFailed (PathPunt): the review or its ledger could not be
 	// read. The LLM stage runs the same gate before it merges.
 	ReasonReviewReadFailed = "review-read-failed"
+	// ReasonIssueClosed (PathRefused): the issue was closed while the PR
+	// waited and the PR body would close it again on merge (#3151). The
+	// scheduler ends the run issue_closed; the PR is left unmerged.
+	ReasonIssueClosed = "issue-closed"
 )
 
 // CI-wait budget for the deterministic pr-merge path (Issue #297). When the
@@ -321,6 +325,13 @@ type prBodyClient interface {
 	PRBody(ctx context.Context, prNumber int) (string, error)
 	EditPRBody(ctx context.Context, prNumber int, body string) error
 	IssueBody(ctx context.Context, issueNumber int) (string, error)
+}
+
+// issueStateClient is implemented by ghClients that can read an issue's
+// state (#3151). A client without it never refuses on a closed issue.
+type issueStateClient interface {
+	// IssueState returns "OPEN" or "CLOSED".
+	IssueState(ctx context.Context, issueNumber int) (string, error)
 }
 
 // mergeQueueClient is implemented by ghClients that can see and drive
@@ -730,6 +741,13 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		return finish(*refused, nil)
 	}
 
+	// The issue may have closed during the waits above (#3151). Checked
+	// immediately before both the direct merge and the enqueue.
+	if refused := r.refuseClosedIssue(ctx, gh, workdir, issueNumber, prNumber, snap); refused != nil {
+		ph.supersedeInFlight()
+		return finish(*refused, nil)
+	}
+
 	// Queue-protected base (#2214): a direct merge would only enqueue (gh)
 	// or be rejected (GraphQL), so enqueue and wait for the queue's verdict.
 	if mq != nil {
@@ -1117,6 +1135,45 @@ func (r *DeterministicRunner) QueueWaitTimeout() time.Duration {
 		return r.queueWait.Timeout
 	}
 	return github.DefaultMergeQueueWaitTimeout
+}
+
+// refuseClosedIssue refuses the merge when the issue is CLOSED and the PR
+// body still closes it (#3151): merging would land work for an issue someone
+// closed mid-run. A body that only refers to the issue (`Refs #N`) merges as
+// before. Fails open: a client without issueStateClient or prBodyClient, or a
+// failed read, never refuses.
+func (r *DeterministicRunner) refuseClosedIssue(ctx context.Context, gh ghClient, workdir string, issueNumber, prNumber int, snap PRViewSnapshot) *PRMergeResult {
+	sc, ok := gh.(issueStateClient)
+	if !ok {
+		return nil
+	}
+	bc, ok := gh.(prBodyClient)
+	if !ok {
+		return nil
+	}
+	st, err := sc.IssueState(ctx, issueNumber)
+	if err != nil {
+		log.Printf("pr-merge: issue-state check skipped for #%d: %v", issueNumber, err)
+		return nil
+	}
+	if !strings.EqualFold(st, "CLOSED") {
+		return nil
+	}
+	prBody, err := bc.PRBody(ctx, prNumber)
+	if err != nil {
+		log.Printf("pr-merge: issue-state check skipped for PR #%d: read PR body: %v", prNumber, err)
+		return nil
+	}
+	if !BodyClosesIssue(prBody, readPRContextRepo(workdir, issueNumber), issueNumber) {
+		return nil
+	}
+	log.Printf("pr-merge: #%d was closed while PR #%d waited and the PR body closes it — refusing to merge", issueNumber, prNumber)
+	return &PRMergeResult{
+		Path:     PathRefused,
+		PRNumber: prNumber,
+		PRState:  snap.State,
+		Reason:   ReasonIssueClosed,
+	}
 }
 
 // acBackstop re-reads the issue body and, when the PR body still closes the
@@ -1876,6 +1933,23 @@ func (c *execGhClient) PRBody(ctx context.Context, prNumber int) (string, error)
 // IssueBody implements prBodyClient.
 func (c *execGhClient) IssueBody(ctx context.Context, issueNumber int) (string, error) {
 	return c.viewBody(ctx, "issue", issueNumber)
+}
+
+// IssueState implements issueStateClient with one REST call, normalised to
+// "OPEN"/"CLOSED".
+func (c *execGhClient) IssueState(ctx context.Context, issueNumber int) (string, error) {
+	stdout, err := github.RunGhSubprocess(ctx, c.workdir,
+		"api", fmt.Sprintf("repos/{owner}/{repo}/issues/%d", issueNumber), "--jq", ".state")
+	if err != nil {
+		return "", normalizeGhError(err)
+	}
+	switch strings.ToLower(strings.TrimSpace(string(stdout))) {
+	case "open":
+		return "OPEN", nil
+	case "closed":
+		return "CLOSED", nil
+	}
+	return "", fmt.Errorf("unexpected issue state %q", strings.TrimSpace(string(stdout)))
 }
 
 func (c *execGhClient) viewBody(ctx context.Context, kind string, number int) (string, error) {
