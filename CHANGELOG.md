@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A failure whose text merely quoted an earlier `[host-slept]` message is no longer booked as
+  host sleep. The extension no longer signals `host_slept`, and the scheduler accepts it only
+  with its own recorded host-sleep verdict from the run being completed, so such failures now
+  count an attempt. The extension's repository-halt policy still reads the marker text (#3255).
+
 - The OpenCode plugin tests' notification guard now also catches a hook binary
   set by bare key (`upsertEnv(env, "NIGHTGAUGE_BIN", bin)`, `t.Setenv`), and every
   harness that applies an `extraEnv` map pairs it with the notification opt-out,

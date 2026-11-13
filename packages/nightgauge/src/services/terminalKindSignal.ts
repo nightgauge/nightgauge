@@ -23,6 +23,12 @@
  * lower-precedence signal rule could claim text that a higher-precedence
  * non-signal rule owns.
  *
+ * host_slept IS NEVER SIGNALLED (#3255). Its rule is `signal: false`: only the
+ * scheduler's structured verdict (RuntimeState.StageHostSlept) books it, and
+ * the extension cannot see that verdict, so `[host-slept]` text echoed into
+ * another failure must not reach Go as host_slept. Go's NotifyComplete also
+ * refuses a host_slept kind that arrives without the verdict.
+ *
  * ONE DECLARED EXCEPTION, and it is data. When the ladder projects no SIGNAL,
  * the table's `signal_extensions` are consulted; today there is one, for an
  * Anthropic/Codex session-or-usage-limit line (#3792). Say its bound exactly:

@@ -178,13 +178,13 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
     {
       "id": "host-slept",
       "kind": "host_slept",
-      "signal": true,
+      "signal": false,
       "clauses": [
         [
           "[host-slept]"
         ]
       ],
-      "why": "The scheduler measured that the failed stage's wall-clock span exceeded its monotonic (awake) span by more than 60 s, so whatever limit expired did so while the host slept (#3136). It replaces the stage error with `[host-slept] the host slept for \u003cd\u003e during \u003cstage\u003e ...` (orchestrator.HostSleptStageError). First in the ladder because the verdict is the orchestrator's own, measured from the clock, and must outrank every reading of the text; a signal rule so the extension's halt policy skips the repository halt and the failure comment explains the sleep instead of reporting a validation failure."
+      "why": "The scheduler measured that the failed stage's wall-clock span exceeded its monotonic (awake) span by more than 60 s, so whatever limit expired did so while the host slept (#3136). It replaces the stage error with `[host-slept] the host slept for \u003cd\u003e during \u003cstage\u003e ...` (orchestrator.HostSleptStageError). First in the ladder because the verdict is the orchestrator's own, measured from the clock, and must outrank every reading of the text; it serves the extension's halt policy and display. Not a signal rule (#3255): only the structured verdict (RuntimeState.StageHostSlept) books host_slept, and the extension cannot see it, so marker text echoed into another failure must not signal host_slept."
     },
     {
       "id": "merge-conflict",
