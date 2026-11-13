@@ -14,6 +14,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- In a multi-repo workspace, the scheduler now refuses to dispatch an issue whose body points at
+  another repository's files, before any stage runs. A misfiled issue gets an Action Center card
+  naming the repository it belongs to. An issue whose acceptance criteria span repositories gets a
+  card proposing linked issues. Issues it cannot judge dispatch as before, and single-repo
+  workspaces are unaffected (#139).
+
 ### Fixed
 
 - A failure whose text merely quoted an earlier `[host-slept]` message is no longer booked as

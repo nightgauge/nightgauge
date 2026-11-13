@@ -90,6 +90,9 @@ const (
 	EdgeViolates     EdgeKind = "violates"
 	EdgeServesBand   EdgeKind = "serves-band"
 	EdgeRunsOn       EdgeKind = "runs-on"
+	// EdgeReferences joins an issue to a path its body mentions (#139). It is
+	// dangling by design until a file set is merged in.
+	EdgeReferences EdgeKind = "references"
 )
 
 var edgeKinds = map[EdgeKind]bool{
@@ -97,7 +100,7 @@ var edgeKinds = map[EdgeKind]bool{
 	EdgeDocuments: true, EdgeTests: true, EdgeConsumes: true,
 	EdgeProduces: true, EdgeBlocks: true, EdgeSupersedes: true,
 	EdgeDiscoveredIn: true, EdgeViolates: true, EdgeServesBand: true,
-	EdgeRunsOn: true,
+	EdgeRunsOn: true, EdgeReferences: true,
 }
 
 // Valid reports whether k is one of ADR-005 Decision 3's edge kinds.

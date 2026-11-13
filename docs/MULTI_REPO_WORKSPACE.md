@@ -644,6 +644,31 @@ one PR, on the issue's own repo branch — it has no way to express a change set
 spanning repos, so an issue whose implementation needs cross-repo writes will
 never produce a landable PR no matter how the stages report their status.
 
+### Pre-dispatch repo affinity (#139)
+
+Before the scheduler dispatches an issue in a workspace of two or more
+repositories, it resolves the paths the issue body mentions against each
+repository's tracked files (`git ls-files`). The body is parsed once, by the
+graph extractor `extract.References`, which emits `references` edges from the
+issue to each path with its body line.
+
+- **Misfiled**: no path resolves in the filed repository, at least two resolve
+  only in one sibling, and that sibling holds a strict majority. The issue is
+  refused and an Action Center card names the sibling and proposes a transfer.
+- **Cross-repo**: paths resolve in the filed repository, and the
+  `## Acceptance criteria` section names a path that resolves only in a sibling.
+  The card proposes one linked issue per repository. Nothing is transferred.
+- **Everything else dispatches**: a path tracked in the filed repository always
+  counts as its own, a sibling path mentioned outside the acceptance criteria
+  never refuses, and a body with no resolving paths is inconclusive.
+- **Fail-open**: if the body, a repository's file list or the workspace
+  registry cannot be read, the issue dispatches and the log says why.
+- **Single-repo workspaces**: the check does nothing.
+
+The gate runs in `PickNext`, `RunQueue` and the queue dequeue. A refused queue
+item is paused with kind `repo_affinity`. No refusal state is stored: transfer
+the issue or edit its body, and the next scan dispatches it.
+
 ### Epic Decomposition
 
 Epics can span multiple repositories. The `nightgauge-issue-create` skill

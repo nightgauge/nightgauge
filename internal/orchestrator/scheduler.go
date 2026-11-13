@@ -974,6 +974,11 @@ type Scheduler struct {
 	// than root it at the launch repo.
 	repoPathResolver func(repo string) string
 
+	// affinity caches per-repo file sets for one scan, and affinityDeps are the
+	// pre-dispatch repo-affinity gate's test seams (#139). Zero in production.
+	affinity     affinityCycle
+	affinityDeps affinityDeps
+
 	// repoRootsResolver, when set, enumerates every registered repo filesystem
 	// root the scheduler can dispatch to. Crash recovery reads the
 	// current-run.json sidecar, but since #229 the sidecar is written at the
@@ -2413,6 +2418,7 @@ func (s *Scheduler) permissionBlockedEscalation(item types.BoardItem, runID stri
 func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 	// One scan, one permission-cache cycle (#2130, #842).
 	s.resetTrustCycle()
+	s.resetAffinityCycle()
 	items, err := s.boardSvc.ListItems(ctx, "Ready")
 	if err != nil {
 		return nil, fmt.Errorf("fetch ready items: %w", err)
@@ -2546,7 +2552,18 @@ func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 		return candidates[i].Number < candidates[j].Number
 	})
 
-	return &candidates[0], nil
+	// Pre-dispatch repo affinity (#139): checked only for the candidate about
+	// to dispatch, since the body costs a read. A refusal falls through to the
+	// next candidate.
+	for i := range candidates {
+		c := candidates[i]
+		if v := s.repoAffinity(ctx, c.Repo, c.Number, c.Title); v.Refused() {
+			log.Printf("#%d: skipping — %s", c.Number, v.Reason)
+			continue
+		}
+		return &candidates[i], nil
+	}
+	return nil, nil
 }
 
 // SetDispatchThrottle holds the auto-scheduler loop (RunAuto) to the
@@ -2754,6 +2771,7 @@ func (s *Scheduler) RunQueue(ctx context.Context) (QueueRunSummary, error) {
 
 	summary := QueueRunSummary{}
 	s.resetTrustCycle()
+	s.resetAffinityCycle()
 	record := func(entry QueueItem, kind QueueOutcomeKind, terminalKind, detail string) {
 		summary.Outcomes = append(summary.Outcomes, QueueOutcome{
 			Repo:         entry.Repo,
@@ -2840,6 +2858,13 @@ func (s *Scheduler) RunQueue(ctx context.Context) (QueueRunSummary, error) {
 		if blocked {
 			log.Printf("queue: skipping #%d — has open blockers", entry.IssueNumber)
 			record(entry, QueueOutcomeBlocked, "", "has open blockers")
+			continue
+		}
+
+		// Pre-dispatch repo affinity (#139).
+		if v := s.repoAffinity(ctx, item.Repo, item.Number, item.Title); v.Refused() {
+			log.Printf("queue: skipping #%d — %s", entry.IssueNumber, v.Reason)
+			record(entry, QueueOutcomeNotDispatched, "", v.Reason)
 			continue
 		}
 
@@ -3413,6 +3438,9 @@ func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, 
 	// autonomous.dispatch handler, cloud queue_add, Action Center retries,
 	// EnqueueEpic sub-issues and `nightgauge queue add`.
 	verdicts := s.queueEligibility(ctx)
+	// Pre-dispatch repo affinity (#139), decided before the lock for the same
+	// reason: it reads the forge and git.
+	affinity := s.queueAffinity(ctx, verdicts)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3468,6 +3496,14 @@ func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, 
 			// An item held only because no writer had vouched for it is
 			// released once one has (#2130): applying pipeline:approved is the
 			// whole approval, with no second step in the queue.
+			if item.PausedReason != nil && item.PausedReason.Kind == pausedRepoAffinity {
+				if v, ok := affinity[repoIssueKey(item.Repo, item.IssueNumber)]; ok && !v.Refused() {
+					log.Printf("DequeueIndependent: releasing #%d — repo affinity now dispatches (%s)", item.IssueNumber, v.Reason)
+					s.queue[i].Status = "pending"
+					s.queue[i].PausedReason = nil
+					pausedByLabel = true
+				}
+			}
 			if item.PausedReason != nil && item.PausedReason.Kind == pausedNotVouchedFor {
 				if d, ok := verdicts[repoIssueKey(item.Repo, item.IssueNumber)]; ok && d.Eligible {
 					log.Printf("DequeueIndependent: releasing #%d — now vouched for (%s)", item.IssueNumber, d.Via)
@@ -3526,6 +3562,13 @@ func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, 
 			log.Printf("DequeueIndependent: holding #%d — %s", item.IssueNumber, d.Reason)
 			s.queue[i].Status = "paused"
 			s.queue[i].PausedReason = &QueuePausedReason{Kind: pausedNotVouchedFor, Summary: d.Reason}
+			pausedByLabel = true
+			continue
+		}
+		if v, ok := affinity[repoIssueKey(item.Repo, item.IssueNumber)]; ok && v.Refused() {
+			log.Printf("DequeueIndependent: holding #%d — %s", item.IssueNumber, v.Reason)
+			s.queue[i].Status = "paused"
+			s.queue[i].PausedReason = &QueuePausedReason{Kind: pausedRepoAffinity, Summary: v.Reason}
 			pausedByLabel = true
 			continue
 		}
