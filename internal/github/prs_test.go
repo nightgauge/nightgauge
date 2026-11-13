@@ -40,6 +40,7 @@ func TestPRService_GetPR_HappyPath(t *testing.T) {
 		"mergeStateStatus":"CLEAN",
 		"isDraft":false,
 		"reviewDecision":"APPROVED",
+		"createdAt":"2026-11-01T12:00:00Z",
 		"labels":{"nodes":[{"name":"bug"},{"name":"priority:high"}]},
 		"commits":{"nodes":[{
 			"commit":{"statusCheckRollup":{"state":"SUCCESS"}}
@@ -56,6 +57,9 @@ func TestPRService_GetPR_HappyPath(t *testing.T) {
 	}
 	if pr.NodeID != "PR_NODE_ID" {
 		t.Errorf("NodeID = %q, want PR_NODE_ID", pr.NodeID)
+	}
+	if pr.CreatedAt != "2026-11-01T12:00:00Z" {
+		t.Errorf("CreatedAt = %q, want 2026-11-01T12:00:00Z", pr.CreatedAt)
 	}
 	if pr.Number != 7 {
 		t.Errorf("Number = %d, want 7", pr.Number)
@@ -122,6 +126,9 @@ func TestPRService_GetPR_NoCheckRollup(t *testing.T) {
 	}
 	if pr.CheckStatus != "" {
 		t.Errorf("CheckStatus = %q, want empty string when no rollup", pr.CheckStatus)
+	}
+	if pr.CreatedAt != "" {
+		t.Errorf("CreatedAt = %q, want empty when the response omits createdAt", pr.CreatedAt)
 	}
 	if !pr.IsDraft {
 		t.Error("IsDraft should be true")

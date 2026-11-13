@@ -115,6 +115,7 @@ func (s *PRService) GetPR(ctx context.Context, owner, repo string, number int) (
 		Additions:        int(pr.Additions),
 		Deletions:        int(pr.Deletions),
 		MergedAt:         string(pr.MergedAt),
+		CreatedAt:        string(pr.CreatedAt),
 	}
 	if pr.ChangedFiles != nil {
 		n := int(*pr.ChangedFiles)

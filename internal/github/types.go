@@ -567,6 +567,7 @@ type pullRequestQuery struct {
 			// the post-merge ground-truth breadcrumb (#4133). MergeCommit is a
 			// pointer because it is null on un-merged PRs.
 			MergedAt    graphql.String
+			CreatedAt   graphql.String
 			MergeCommit *struct {
 				OID graphql.String
 			}

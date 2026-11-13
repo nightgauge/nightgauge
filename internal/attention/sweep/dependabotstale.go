@@ -237,10 +237,10 @@ func (p *DependabotStaleRemediation) Evaluate(ctx context.Context, in Input) ([]
 // THE WAIT IS MEASURED FROM THE ADVISORY'S first-seen TIMESTAMP, not from the
 // pull request's creation date, and that is a constraint of the forge
 // abstraction rather than a preference. `forgetypes.PullRequest.CreatedAt` is
-// populated by GitHub's ListPRs alone: GitHub's GetPR does not select it and
-// the GitLab adapter never sets it at all (internal/gitlab/mrs.go's
-// toForgePR), so a producer keyed on it would silently measure zero on GitLab
-// and card every remediation PR the instant it appeared. The alert's
+// populated by the GitHub adapter only: the GitLab adapter never sets it at
+// all (internal/gitlab/mrs.go's toForgePR), so a producer keyed
+// on it would silently measure zero on GitLab and card every remediation PR
+// the instant it appeared. The alert's
 // FirstSeenAt is required of every adapter, costs no extra request, and
 // survives a process that was not running when the alert appeared — the same
 // argument DependabotAlertGrace already makes one file over.
