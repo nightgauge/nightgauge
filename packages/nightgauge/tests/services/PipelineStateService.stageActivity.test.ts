@@ -87,6 +87,25 @@ describe("stage activity ingestion", () => {
     expect(state?.escalation_history).toEqual([escalation]);
   });
 
+  it("maps the structured stageHostSlept verdict from a snapshot (#3273)", async () => {
+    const svc = await makeService();
+    svc.applyRuntimeSnapshot({
+      issueNumber: ISSUE,
+      stage: "feature-dev",
+      stageStart: "2026-10-01T10:00:00Z",
+      stageHostSlept: { "feature-dev": true },
+    });
+    expect((await svc.getState())?.stage_host_slept).toEqual({ "feature-dev": true });
+  });
+
+  it("a snapshot without stageHostSlept clears an earlier verdict (#3273)", async () => {
+    const svc = await makeService();
+    const base = { issueNumber: ISSUE, stage: "feature-dev", stageStart: "2026-10-01T10:00:00Z" };
+    svc.applyRuntimeSnapshot({ ...base, stageHostSlept: { "feature-dev": true } });
+    svc.applyRuntimeSnapshot(base);
+    expect((await svc.getState())?.stage_host_slept).toBeUndefined();
+  });
+
   it("recordToolCall fires onToolCallRecorded", async () => {
     const svc = await makeService();
     const seen: unknown[] = [];

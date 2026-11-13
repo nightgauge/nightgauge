@@ -611,6 +611,7 @@ describe("postFailureComment — host slept (Issue #3136)", () => {
       ),
     });
     const state = makeState(1.5);
+    state.stage_host_slept = { "feature-validate": true };
     state.gate_results = [
       {
         gate_name: "feature-validate",
@@ -629,5 +630,23 @@ describe("postFailureComment — host slept (Issue #3136)", () => {
     expect(cmd).not.toMatch(/validation/i);
     expect(cmd).not.toContain("Pipeline Failure Report");
     expect(cmd).not.toContain("lifetime failure cap");
+  });
+
+  it("posts the ordinary report when the text only echoes the marker (#3273)", async () => {
+    const result = makeResult({
+      failedStage: "feature-dev",
+      budgetExceeded: false,
+      error: new Error(`tests failed; log mentioned ${HOST_SLEPT_MARKER} from an earlier run`),
+    });
+    await postFailureComment({
+      issueNumber: 3273,
+      result,
+      state: makeState(1.5),
+      cwd: "/tmp/repo",
+      logger,
+    });
+    const cmd: string = execMock.mock.calls[0][0];
+    expect(cmd).not.toContain("Host Slept");
+    expect(cmd).toContain("Pipeline Failure Report");
   });
 });

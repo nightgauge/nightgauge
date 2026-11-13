@@ -84,6 +84,7 @@ vi.mock("../../src/utils/failureComment", () => ({
   postFailureComment: (...args: unknown[]) => postFailureComment(...args),
   ARCHITECTURE_APPROVAL_REQUIRED_MARKER: "ARCHITECTURE APPROVAL REQUIRED",
   BLOCKED_DEPENDENCY_MARKER: "[blocked-dependency]",
+  HOST_SLEPT_MARKER: "[host-slept]",
 }));
 
 const mockAutonomousPause = vi.fn().mockResolvedValue(undefined);

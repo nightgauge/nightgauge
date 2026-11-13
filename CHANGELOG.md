@@ -14,6 +14,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- The queue no longer skips its halt, or shows a host-sleep warning, when a failure only echoes `[host-slept]` text. Only the scheduler's structured host-sleep verdict now counts as a host sleep, as in the Go layer (#3273).
+
 ### Added
 
 - In a multi-repo workspace, the scheduler now refuses to dispatch an issue whose body points at
