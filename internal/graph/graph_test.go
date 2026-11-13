@@ -42,7 +42,7 @@ func TestNodeKindsAreExactlyTheADRSet(t *testing.T) {
 func TestEdgeKindsAreExactlyTheADRSet(t *testing.T) {
 	want := []EdgeKind{
 		"blocks", "consumes", "discovered-in", "documents", "implements",
-		"owns-file", "part-of", "produces", "runs-on", "serves-band",
+		"owns-file", "part-of", "produces", "references", "runs-on", "serves-band",
 		"supersedes", "tests", "violates",
 	}
 	got := EdgeKinds()
