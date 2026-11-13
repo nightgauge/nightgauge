@@ -16,6 +16,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `PRService.GetPR` now returns the pull request's `CreatedAt`; it was always
+  empty on that path because the query never selected `createdAt`.
 - `nightgauge issue partial-delivery --json` now reconciles a pending
   remainder against the current, vouched issue body with the same function the
   scheduler uses: criteria added after the partial PR join the brief and
