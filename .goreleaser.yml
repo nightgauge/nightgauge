@@ -45,9 +45,13 @@ builds:
     # paths agree. -trimpath keeps builds reproducible from the tag.
     flags:
       - -trimpath
-    # Unstripped on purpose: no -s, no -w. Defender's model flagged the stripped
-    # Go ELF, and DWARF debug information is what keeps it clean. DWARF is also
-    # left uncompressed, matching the Makefile's RELEASE_LDFLAGS: the Linux ELF
+    # Unstripped on purpose: no -s, no -w. release-dwarf-check gates release
+    # artifacts on carrying DWARF, and TestNoLinkerStripFlags fails on a strip
+    # flag. What keeps the binary clean for Defender's model is the dependency
+    # set: the score-sensitive module pins (#3104, docs/RELEASE_BINARIES.md
+    # "Dependencies that move the Microsoft model's score", guarded by
+    # TestScoreSensitiveModulesStayPinned). DWARF is left uncompressed,
+    # matching the Makefile's RELEASE_LDFLAGS: the Linux ELF
     # sits at that model's threshold, and go1.27.3 with uncompressed DWARF was
     # the lowest-rate build of 86 measured (#3192). The shipped bytes come from
     # bin/ (hooks.post below); this keeps the two build paths the same. A test
