@@ -3,33 +3,81 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
+	"github.com/nightgauge/nightgauge/internal/trust"
 )
 
-// partialDeliveryReaderFactory builds the reader `issue partial-delivery` uses;
-// tests replace it.
-var partialDeliveryReaderFactory = func() (hooks.PartialDeliveryReader, error) {
+// partialDeliveryDepsFactory builds the reader `issue partial-delivery` uses
+// and the forge reads its remainder is reconciled through (#3242); tests
+// replace it.
+var partialDeliveryDepsFactory = func(owner, repo string, number int) (hooks.PartialDeliveryReader, orchestrator.PartialScopeReads, error) {
 	client, err := clientFromConfig()
 	if err != nil {
-		return nil, err
+		return nil, orchestrator.PartialScopeReads{}, err
 	}
-	var bots []string
+	var cfg *config.Config
 	if wd, err := os.Getwd(); err == nil {
-		if cfg, err := config.Load(wd); err == nil && cfg != nil && cfg.Autonomous != nil {
-			bots = cfg.Autonomous.TrustedBots
+		if c, err := config.Load(wd); err == nil {
+			cfg = c
 		}
 	}
-	return hooks.NewPartialDeliveryReader(client, bots), nil
+	var bots []string
+	if cfg != nil && cfg.Autonomous != nil {
+		bots = cfg.Autonomous.TrustedBots
+	}
+	gate := newConfiguredTrustGate(gh.NewTrustForge(client), cfg)
+	reads := orchestrator.PartialScopeReads{
+		// The body reaches a prompt, so it is vouched for after the read,
+		// as the scheduler's readACReconcileBody does (#3231), by a gate
+		// configured like the scheduler's.
+		Body: func(ctx context.Context) (string, error) {
+			issue, err := gh.NewIssueService(client).GetIssueWithRelations(ctx, owner, repo, number, gh.NoRelations)
+			if err != nil {
+				return "", err
+			}
+			if issue == nil {
+				return "", errors.New("issue not found")
+			}
+			d := gate.Decide(ctx, trust.Subject{Owner: owner, Repo: repo, Number: number})
+			if !d.Eligible {
+				return "", fmt.Errorf("issue body not vouched for at read time: %s", d.Reason)
+			}
+			return issue.Body, nil
+		},
+		PR: func(ctx context.Context, pr int) (time.Time, string, error) {
+			return client.PRCreatedAtAndBody(ctx, owner, repo, pr)
+		},
+		BodyEditedAt: func(ctx context.Context) (*time.Time, error) {
+			return client.IssueLastEditedAt(ctx, owner, repo, number)
+		},
+	}
+	return hooks.NewPartialDeliveryReader(client, bots), reads, nil
+}
+
+// partialDeliveryWorkspace is the tree the criteria report reads: the
+// repository holding the working directory, else the directory itself.
+func partialDeliveryWorkspace(ctx context.Context) string {
+	if out, err := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel").Output(); err == nil {
+		if top := strings.TrimSpace(string(out)); top != "" {
+			return top
+		}
+	}
+	wd, _ := os.Getwd()
+	return wd
 }
 
 // issuePartialDeliveryCmd reports whether an issue carries a recorded
@@ -78,7 +126,7 @@ func runIssuePartialDelivery(ctx context.Context, stdout, stderr io.Writer, owne
 		fmt.Fprintln(stderr, "issue partial-delivery: owner and repo are required")
 		return 2
 	}
-	reader, err := partialDeliveryReaderFactory()
+	reader, reads, err := partialDeliveryDepsFactory(owner, repo, number)
 	if err != nil {
 		fmt.Fprintf(stderr, "issue partial-delivery: %v\n", err)
 		return 2
@@ -91,11 +139,22 @@ func runIssuePartialDelivery(ctx context.Context, stdout, stderr io.Writer, owne
 	if outputJSON {
 		// prompt_blocks: the extension's stage loop appends these to the
 		// feature-planning and feature-dev prompts, so a run it starts on an
-		// issue with a pending remainder is scoped like the Go path's (#3095).
-		data, err := json.MarshalIndent(struct {
+		// issue with a pending remainder is scoped like the Go path's (#3095),
+		// from the same reconciled brief (#3242). criteria stays the comment's
+		// list; scope is the brief and dropped what left the body. The
+		// reconcile logs to stderr, so stdout stays JSON.
+		out := struct {
 			hooks.PartialDeliveryStatus
+			Scope        []string          `json:"scope,omitempty"`
+			Dropped      []string          `json:"dropped,omitempty"`
 			PromptBlocks map[string]string `json:"prompt_blocks,omitempty"`
-		}{status, orchestrator.PartialRerunPromptBlocks(status)}, "", "  ")
+		}{PartialDeliveryStatus: status}
+		if status.Pending && !status.Unlisted && len(status.Criteria) > 0 {
+			out.Scope, out.Dropped = orchestrator.ReconcilePartialScope(ctx, reads, partialDeliveryWorkspace(ctx),
+				number, status.Criteria, status.PR)
+			out.PromptBlocks = orchestrator.PartialRerunScopeBlocks(status.PR, out.Scope)
+		}
+		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
 			fmt.Fprintf(stderr, "issue partial-delivery: %v\n", err)
 			return 2
