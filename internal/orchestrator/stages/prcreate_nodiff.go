@@ -18,7 +18,7 @@ func NoDiffOutcome(issueNumber int, branch, base string, verdicts []ACVerdict) (
 	}
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("pr-create found no diff between `%s` and `%s`: this issue's code is already on `%s`, so no pull request was opened (#2941).\n\n",
-		UntrustedACText(branch), UntrustedACText(base), UntrustedACText(base)))
+		CommentSafeACText(branch), CommentSafeACText(base), CommentSafeACText(base)))
 	closeIssue = IssueClosedBy(verdicts)
 	var met []ACVerdict
 	for _, v := range verdicts {
@@ -29,9 +29,9 @@ func NoDiffOutcome(issueNumber int, branch, base string, verdicts []ACVerdict) (
 	if len(met) > 0 {
 		b.WriteString("Met, with the evidence recorded for each:\n\n")
 		for _, v := range met {
-			b.WriteString("- " + UntrustedACText(v.Text))
+			b.WriteString("- " + CommentSafeACText(v.Text))
 			if v.Evidence != "" {
-				b.WriteString(fmt.Sprintf(" (%s: %s)", v.Source, UntrustedACText(v.Evidence)))
+				b.WriteString(fmt.Sprintf(" (%s: %s)", v.Source, CommentSafeACText(v.Evidence)))
 			}
 			b.WriteString("\n")
 		}
@@ -47,11 +47,11 @@ func NoDiffOutcome(issueNumber int, branch, base string, verdicts []ACVerdict) (
 	} else {
 		b.WriteString("Still unmet or not verifiable:\n\n")
 		for _, v := range open {
-			b.WriteString(fmt.Sprintf("- %s — _%s", UntrustedACText(v.Text), acStatusLabel(v.Status)))
+			b.WriteString(fmt.Sprintf("- %s — _%s", CommentSafeACText(v.Text), acStatusLabel(v.Status)))
 			if v.Status == ACNotVerifiable && v.Step != "" {
-				b.WriteString(" — needs: " + v.Step)
+				b.WriteString(" — needs: " + CommentSafeACText(v.Step))
 			} else if v.Evidence != "" {
-				b.WriteString(fmt.Sprintf(" — %s: %s", v.Source, UntrustedACText(v.Evidence)))
+				b.WriteString(fmt.Sprintf(" — %s: %s", v.Source, CommentSafeACText(v.Evidence)))
 			}
 			b.WriteString("_\n")
 		}

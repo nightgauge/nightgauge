@@ -457,7 +457,7 @@ func UntrustedACText(s string) string {
 func AppendUnmetACs(body string, issueNumber int, criteria []string) string {
 	var items strings.Builder
 	for _, c := range criteria {
-		items.WriteString("- " + UntrustedACText(c) + "\n")
+		items.WriteString("- " + CommentSafeACText(c) + "\n")
 	}
 	if i := strings.Index(body, UnmetACHeading); i >= 0 {
 		// Insert at the end of the existing section (next heading or EOF).
