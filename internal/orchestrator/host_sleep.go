@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -100,13 +99,6 @@ func HostSleptStageError(stage string, wall, slept time.Duration) string {
 const HostSleptPrevention = "To keep the host awake: the daemon holds a `caffeinate -i -s` assertion while " +
 	"the autonomous scheduler runs (see `nightgauge autonomous status`), or disable sleep on AC power " +
 	"with `sudo pmset -c sleep 0`."
-
-// HasHostSleptMarker reports whether a stage error was written by
-// HostSleptStageError. The marker is the orchestrator's own, so it outranks a
-// gate's structured kind in ResolveTerminalKind.
-func HasHostSleptMarker(errorText string) bool {
-	return strings.Contains(errorText, HostSleptMarker)
-}
 
 // formatSleep renders a duration to the second ("15m27s").
 func formatSleep(d time.Duration) string {

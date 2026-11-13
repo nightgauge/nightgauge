@@ -1161,3 +1161,22 @@ func TestCurrentStageReportsBegunStage(t *testing.T) {
 		t.Errorf("CurrentStage() = %q, want %q", got, StageFeatureDev)
 	}
 }
+
+// The host-slept verdict is current-attempt state paired with StageErrors
+// (#3158): a later plain SetStageError clears it, and the snapshot copies it.
+func TestStageHostSleptVerdictContract(t *testing.T) {
+	rs := NewRuntimeState("o/r", 1, "", "run")
+	rs.SetStageHostSleptError(StageFeatureDev, "[host-slept] slept")
+	snap := rs.Snapshot()
+	if !snap.StageHostSlept[string(StageFeatureDev)] {
+		t.Fatal("snapshot lacks the host-slept verdict")
+	}
+	snap.StageHostSlept[string(StageFeatureDev)] = false
+	if !rs.Snapshot().StageHostSlept[string(StageFeatureDev)] {
+		t.Fatal("snapshot map aliases the live map")
+	}
+	rs.SetStageError(StageFeatureDev, "[host-slept] echoed by an agent")
+	if rs.Snapshot().StageHostSlept[string(StageFeatureDev)] {
+		t.Error("SetStageError did not clear the host-slept verdict")
+	}
+}

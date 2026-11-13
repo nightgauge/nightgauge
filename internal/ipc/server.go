@@ -4167,7 +4167,8 @@ func (s *Server) registerMethods() {
 					gateRan = true
 					gateTerminalKind = gateResults[len(gateResults)-1].TerminalKind
 				}
-				kind := orchestrator.ResolveTerminalKind(gateRan, gateTerminalKind, errMsg)
+				kind := orchestrator.ResolveTerminalKind(gateRan, gateTerminalKind,
+					snap.StageHostSlept[string(snap.Stage)], errMsg)
 				if kind == orchestrator.TerminalKindGatePluginMissing {
 					orchestrator.RaiseGatePluginMissing(s.attentionStore(), recordRepo, p.IssueNumber, runID, string(snap.Stage), errMsg)
 				}

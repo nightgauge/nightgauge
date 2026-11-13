@@ -224,6 +224,15 @@ type RuntimeState struct {
 	// survives.
 	StageErrors map[string]string `json:"stageErrors"` // stage → most recent attempt's error message
 
+	// StageHostSlept is the scheduler's structured host-sleep verdict for a
+	// stage's most recent attempt (#3158), paired with its StageErrors entry
+	// and sharing that current-attempt contract. Only SetStageHostSleptError
+	// sets it; SetStageError and the StageErrors clear site delete it. The
+	// "[host-slept]" text in the error is display-only: terminal-kind
+	// resolution reads this verdict, so agent output echoing the marker
+	// cannot reclassify a real failure as infrastructure.
+	StageHostSlept map[string]bool `json:"stageHostSlept,omitempty"`
+
 	// Pause state (persisted to runtime-{issue}-{runId}.json for reload recovery)
 	Paused bool `json:"paused,omitempty"`
 
@@ -1232,6 +1241,7 @@ func (rs *RuntimeState) completeStageInternalLocked(exitCode, inputTokens, outpu
 	// Do not reintroduce a "recovered" status here.
 	if exitCode == 0 {
 		delete(rs.StageErrors, string(rs.Stage))
+		delete(rs.StageHostSlept, string(rs.Stage))
 		// THE CLEAR SITE for the phase-verdict contract (#1850): a phase
 		// cannot report `failed` on a stage whose exit code is 0 and whose
 		// StageErrors entry is empty — which, one line up, is exactly the
@@ -1999,6 +2009,20 @@ func (rs *RuntimeState) SetStageError(stage PipelineStage, errMsg string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	rs.StageErrors[string(stage)] = errMsg
+	delete(rs.StageHostSlept, string(stage))
+}
+
+// SetStageHostSleptError records a stage error together with the scheduler's
+// structured host-sleep verdict, under one lock (#3158). It is the only
+// writer of StageHostSlept; a later SetStageError for the stage clears it.
+func (rs *RuntimeState) SetStageHostSleptError(stage PipelineStage, errMsg string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.StageErrors[string(stage)] = errMsg
+	if rs.StageHostSlept == nil {
+		rs.StageHostSlept = make(map[string]bool)
+	}
+	rs.StageHostSlept[string(stage)] = true
 }
 
 // RecordStageOutputTail stores the last lines of a stage's subagent output for
@@ -3362,6 +3386,13 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 	snap.StageErrors = make(map[string]string, len(rs.StageErrors))
 	for k, v := range rs.StageErrors {
 		snap.StageErrors[k] = v
+	}
+	snap.StageHostSlept = nil
+	if len(rs.StageHostSlept) > 0 {
+		snap.StageHostSlept = make(map[string]bool, len(rs.StageHostSlept))
+		for k, v := range rs.StageHostSlept {
+			snap.StageHostSlept[k] = v
+		}
 	}
 	snap.RetryCount = rs.RetryCount
 	snap.EscalationHistory = make([]EscalationRecord, len(rs.EscalationHistory))

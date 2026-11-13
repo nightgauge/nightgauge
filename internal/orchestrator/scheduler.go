@@ -5662,7 +5662,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// skip the calibration update entirely (Issue #3296).
 		if !pipelineSuccess && terminalFailureKind == "" && snap.Stage != "" {
 			if errMsg, ok := snap.StageErrors[string(snap.Stage)]; ok {
-				terminalFailureKind = ClassifyTerminalKind(errMsg)
+				terminalFailureKind = ResolveTerminalKind(false, "", snap.StageHostSlept[string(snap.Stage)], errMsg)
 				if terminalFailureKind == "" {
 					// Unclassifiable — fall back to the most generic kind so
 					// the record still distinguishes "failed" from "complete"
@@ -7970,7 +7970,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if !exitPayload.Success {
 				if failText := stageFailureText(err, result); failText != "" {
 					exitPayload.TerminalKind = ReclassifyForHostSleep(
-						ResolveTerminalKind(gateRan, gateRes.TerminalKind, failText),
+						ResolveTerminalKind(gateRan, gateRes.TerminalKind, false, failText),
 						HostSleptDuration(stageStartedAt, time.Now()))
 				}
 			}
@@ -8011,7 +8011,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// escalation and stall recovery — none of them addresses a sleeping
 			// host — and book it as infrastructure.
 			if s.bookHostSleptStage(item.Number, stage, runtime, stageStartedAt,
-				ResolveTerminalKind(gateRan, gateRes.TerminalKind, stageFailureText(err, result)),
+				ResolveTerminalKind(gateRan, gateRes.TerminalKind, false, stageFailureText(err, result)),
 				stageFailureText(err, result)) {
 				terminalFailureKind = TerminalKindHostSlept
 				s.emitStateChanged(item.Repo, item.Number, runtime)
@@ -8087,7 +8087,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// before every retry, escalation and recovery path, none of which
 			// can help a server that stopped answering.
 			if endpointHeld.Endpoint != "" {
-				lostKind := ResolveTerminalKind(gateRan, gateRes.TerminalKind, stageFailureText(err, result))
+				lostKind := ResolveTerminalKind(gateRan, gateRes.TerminalKind, false, stageFailureText(err, result))
 				noStep := result == nil || (result.InputTokens == 0 && result.OutputTokens == 0)
 				if endpointFailoverDecision(endpointHeld, lostKind, noStep, endpointFailovers) {
 					endpointFailovers++
@@ -8228,7 +8228,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// are NEVER retried — operator's per-stage cap contract takes
 			// precedence. See ADR-004.
 			stallErrMsg := stageFailureText(err, result)
-			stallKind := ResolveTerminalKind(gateRan, gateRes.TerminalKind, stallErrMsg)
+			stallKind := ResolveTerminalKind(gateRan, gateRes.TerminalKind, false, stallErrMsg)
 			isStallKill := terminalkind.IsStallShapedKill(stallKind)
 			isCostCapKill := HasCostCapKillMarker(stallErrMsg)
 			softQuotaStall := isStallKill && IsWarningOnlyQuotaDetail(stallErrMsg)
@@ -8408,7 +8408,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					Reason:         "",
 					Evidence:       nil,
 					StageError:     stageErrText,
-					TerminalKind:   ResolveTerminalKind(gateRan, gateRes.TerminalKind, stageErrText),
+					TerminalKind:   ResolveTerminalKind(gateRan, gateRes.TerminalKind, false, stageErrText),
 					PRNumber:       loadPRNumberForRecovery(recoveryWS, item.Number),
 					Workspace:      recoveryWS,
 					IssueNumber:    item.Number,
@@ -8628,7 +8628,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					}
 				}
 			}
-			resolvedFailureKind := ResolveTerminalKind(gateRan, gateRes.TerminalKind, failText)
+			resolvedFailureKind := ResolveTerminalKind(gateRan, gateRes.TerminalKind, false, failText)
 			modelRejected := resolvedFailureKind == TerminalKindModelUnavailable
 			// Auth-shaped failure (#591): the adapter CLI itself is not logged
 			// in, or the pipeline-start auth gate refused to launch. No
@@ -8985,7 +8985,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// unmatched).
 			terminalFailureKind = TerminalKindValidationError
 			if firstCause != "" {
-				if causeKind := ClassifyTerminalKind(firstCause); causeKind != "" {
+				if causeKind := ResolveTerminalKind(false, "", false, firstCause); causeKind != "" {
 					terminalFailureKind = causeKind
 				}
 			}
@@ -12385,7 +12385,7 @@ func (s *Scheduler) bookHostSleptStage(issue int, stage state.PipelineStage, run
 	if wall < slept {
 		wall = slept
 	}
-	runtime.SetStageError(stage, HostSleptStageError(string(stage), wall, slept))
+	runtime.SetStageHostSleptError(stage, HostSleptStageError(string(stage), wall, slept))
 	log.Printf("#%d: stage %s failed after the host slept %s — booked host_slept, no retry in this run, no escalation (was %q: %s)",
 		issue, stage, formatSleep(slept), kind, failText)
 	return true

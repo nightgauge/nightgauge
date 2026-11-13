@@ -190,8 +190,10 @@ const (
 	// monotonic (awake) span. Whatever limit expired, it expired while the
 	// host slept, so the run is infrastructure, not a defect of the issue:
 	// stall_kill's recovery (backoff, no lifetime-cap increment, board back to
-	// Ready, no repo halt). The scheduler writes HostSleptMarker into the stage
-	// error, which the rule table matches. Issue #3136.
+	// Ready, no repo halt). The verdict is structured runtime state
+	// (RuntimeState.StageHostSlept, #3158); the HostSleptMarker the scheduler
+	// writes into the stage error is display-only for the Go failure charge.
+	// Issue #3136.
 	TerminalKindHostSlept = "host_slept"
 	// TerminalKindApiOverloaded is set when the Anthropic API returns a 529
 	// "Overloaded" response — the service was momentarily at capacity. Surfaced
@@ -888,16 +890,21 @@ func ClassifyTerminalKind(errorText string) string {
 // back to ClassifyTerminalKind for non-gate failures and for gate
 // failures that didn't set a structured kind (including all historical
 // records persisted before this field existed).
-func ResolveTerminalKind(gateRan bool, gateTerminalKind string, errorText string) string {
-	// The scheduler's own host-sleep verdict (#3136) outranks the gate: the
-	// gate judged a stage that ran out of wall clock while the host slept.
-	if HasHostSleptMarker(errorText) {
+//
+// hostSlept is the scheduler's structured host-sleep verdict
+// (RuntimeState.StageHostSlept, #3158). It outranks the gate (#3136): the gate
+// judged a stage that ran out of wall clock while the host slept. The
+// "[host-slept]" marker in errorText is display-only and is stripped before
+// prose classification, so text echoing it keeps the kind it would otherwise
+// have had instead of becoming uncharged infrastructure.
+func ResolveTerminalKind(gateRan bool, gateTerminalKind string, hostSlept bool, errorText string) string {
+	if hostSlept {
 		return TerminalKindHostSlept
 	}
 	if gateRan && gateTerminalKind != "" {
 		return gateTerminalKind
 	}
-	return ClassifyTerminalKind(errorText)
+	return ClassifyTerminalKind(strings.ReplaceAll(errorText, HostSleptMarker, ""))
 }
 
 // OutcomeTypeForTerminalFailure maps a terminal failure's error text to a

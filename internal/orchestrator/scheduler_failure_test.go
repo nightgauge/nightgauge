@@ -532,7 +532,7 @@ func TestResolveTerminalKind(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ResolveTerminalKind(tc.gateRan, tc.gateTerminalKind, tc.errorText)
+			got := ResolveTerminalKind(tc.gateRan, tc.gateTerminalKind, false, tc.errorText)
 			if got != tc.want {
 				t.Errorf("ResolveTerminalKind(%v, %q, %q) = %q, want %q",
 					tc.gateRan, tc.gateTerminalKind, tc.errorText, got, tc.want)
@@ -1243,7 +1243,7 @@ func TestCLIStageErrorTextReachesClassification_GrokUnknownModel(t *testing.T) {
 	// The point of the carry: classification now sees the real reason and
 	// routes to the #42 sticky downgrade instead of escalating on a
 	// subagent_crash misread.
-	if got := ResolveTerminalKind(false, "", res.ErrorText); got != TerminalKindModelUnavailable {
+	if got := ResolveTerminalKind(false, "", false, res.ErrorText); got != TerminalKindModelUnavailable {
 		t.Errorf("ResolveTerminalKind(ErrorText) = %q, want %q", got, TerminalKindModelUnavailable)
 	}
 	// And the pre-fix classification input really was the wrong answer, so the
@@ -2171,7 +2171,7 @@ func TestTerminalReasonClassification_CLIShapeParity(t *testing.T) {
 			// sticky downgrade and `stallErrMsg` drives the stall rewind; both
 			// read the bare string, never the prefixed reason, so the prefixed
 			// assertion above does not cover them.
-			bare := ResolveTerminalKind(false, "", failText)
+			bare := ResolveTerminalKind(false, "", false, failText)
 			if bare == "" {
 				bare = TerminalKindSubagentCrash
 			}

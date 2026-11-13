@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A stage failure is booked as `host_slept` only when the scheduler itself
+  measured the host sleeping, recorded as structured runtime state. Agent
+  output that echoes the `[host-slept]` marker no longer turns a real failure
+  into uncharged infrastructure that skips the failure charge and retry cap.
+  The operator-facing `[host-slept]` text is unchanged.
 - A run whose issue is closed after pickup now stops at the next stage
   boundary as `issue_closed` (no failure booked, board moved to Done) instead
   of running on and holding the repository's slot. pr-merge also refuses to

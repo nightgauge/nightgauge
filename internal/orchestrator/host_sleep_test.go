@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"github.com/nightgauge/nightgauge/internal/terminalkind"
 	"strings"
 	"testing"
 	"time"
@@ -59,18 +60,42 @@ func TestHostSleptIsTransient(t *testing.T) {
 	}
 }
 
-// The marker outranks a gate's structured kind and every text rule, on the
-// path the autonomous callback takes from the stage error.
-func TestResolveTerminalKindHonoursHostSleptMarker(t *testing.T) {
-	text := HostSleptStageError("feature-validate", 20*time.Minute, 15*time.Minute+27*time.Second)
-	if got := ResolveTerminalKind(true, TerminalKindValidationError, text); got != TerminalKindHostSlept {
-		t.Errorf("gate kind won over the host-slept marker: %q", got)
+// modelUnavailableSpoofText classifies on its own; prefixed with a spoofed
+// marker it must keep that kind.
+const modelUnavailableSpoofText = "Error: unknown model id claude-nope"
+
+// Only the structured verdict yields host_slept (#3158): a "[host-slept]"
+// marker in error text keeps the kind the text would have had without it.
+func TestResolveTerminalKindHostSleptVerdict(t *testing.T) {
+	genuine := HostSleptStageError("feature-validate", 20*time.Minute, 15*time.Minute+27*time.Second)
+	cases := []struct {
+		name      string
+		gateRan   bool
+		gateKind  string
+		hostSlept bool
+		text      string
+		want      string
+	}{
+		{"genuine verdict outranks gate", true, TerminalKindValidationError, true, genuine, TerminalKindHostSlept},
+		{"spoofed marker keeps gate kind", true, TerminalKindValidationError, false, genuine, TerminalKindValidationError},
+		{"spoofed marker keeps prose kind", false, "", false,
+			HostSleptMarker + " " + modelUnavailableSpoofText, ClassifyTerminalKind(modelUnavailableSpoofText)},
+		{"bare spoofed marker is unclassified", false, "", false, HostSleptMarker, ""},
+		{"no marker, gate kind stands", true, TerminalKindValidationError, false, "stage gate failed: timed out", TerminalKindValidationError},
 	}
-	if got := ClassifyTerminalKind(text); got != TerminalKindHostSlept {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ResolveTerminalKind(tc.gateRan, tc.gateKind, tc.hostSlept, tc.text); got != tc.want {
+				t.Errorf("ResolveTerminalKind = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	if ClassifyTerminalKind(modelUnavailableSpoofText) == "" || ClassifyTerminalKind(modelUnavailableSpoofText) == TerminalKindHostSlept {
+		t.Fatalf("fixture text must classify to a real kind, got %q", ClassifyTerminalKind(modelUnavailableSpoofText))
+	}
+	// AC5: the operator-facing text still matches the shared rule table.
+	if got := terminalkind.Classify(genuine); got != TerminalKindHostSlept {
 		t.Errorf("rule table classifies the marker as %q, want host_slept", got)
-	}
-	if got := ResolveTerminalKind(true, TerminalKindValidationError, "stage gate failed: timed out"); got != TerminalKindValidationError {
-		t.Errorf("without the marker the gate kind stands: %q", got)
 	}
 }
 
@@ -94,6 +119,10 @@ func TestBookHostSleptStage(t *testing.T) {
 	got := rt.Snapshot().StageErrors[string(state.StageFeatureValidate)]
 	if !strings.HasPrefix(got, HostSleptMarker) || !strings.Contains(got, "15m0s") {
 		t.Errorf("stage error = %q, want the marker and the sleep", got)
+	}
+	snap := rt.Snapshot()
+	if !snap.StageHostSlept[string(state.StageFeatureValidate)] {
+		t.Fatal("bookHostSleptStage did not set the structured host-slept verdict")
 	}
 	if s.bookHostSleptStage(1, state.StageFeatureValidate, rt, time.Now(), TerminalKindOperatorStop, "") {
 		t.Error("an operator stop was rebooked as host_slept")

@@ -81,7 +81,7 @@ func TestRunPipeline_IssueClosedAfterPickup_EndsIssueClosed(t *testing.T) {
 	if !strings.HasPrefix(errMsg, "issue_closed: #993151 was closed before stage ") {
 		t.Fatalf("stage error = %q", errMsg)
 	}
-	if got := ResolveTerminalKind(false, "", errMsg); got != TerminalKindIssueClosed {
+	if got := ResolveTerminalKind(false, "", false, errMsg); got != TerminalKindIssueClosed {
 		t.Fatalf("stage error classifies %q, want %q", got, TerminalKindIssueClosed)
 	}
 }

@@ -1762,7 +1762,8 @@ func (as *AutonomousScheduler) runLoop(ctx context.Context) error {
 						gateRan = true
 						gateTerminalKind = grs[len(grs)-1].TerminalKind
 					}
-					terminalKind = ResolveTerminalKind(gateRan, gateTerminalKind, errMsg)
+					terminalKind = ResolveTerminalKind(gateRan, gateTerminalKind,
+						snap.StageHostSlept[string(snap.Stage)], errMsg)
 					failureDetail = errMsg
 				}
 			}
@@ -2105,7 +2106,7 @@ func (as *AutonomousScheduler) OnDispatch(fn func(owner, repo string, issueNumbe
 // (#3434) and re-enabling the multi-issue cascade #3434 was meant to fix.
 func (as *AutonomousScheduler) NotifyComplete(repo string, issueNumber int, success bool, conflictRestart bool, terminalFailureKind string, failureDetail string) {
 	if !success && terminalFailureKind == "" && failureDetail != "" {
-		if reclassified := ClassifyTerminalKind(failureDetail); reclassified != "" {
+		if reclassified := ResolveTerminalKind(false, "", false, failureDetail); reclassified != "" {
 			log.Printf("autonomous: NotifyComplete reclassified empty terminalFailureKind from failureDetail: %s (issue %s#%d)",
 				reclassified, repo, issueNumber)
 			terminalFailureKind = reclassified

@@ -260,7 +260,7 @@ func TestWriteStageExitRecord_CLIFailureCarriesTerminalKindAndStderrTail(t *test
 	// record wrote. No gate ran on this fixture, so gateRan=false and
 	// gateTerminalKind="" match what writeStageExitRecord read off the empty
 	// runtime snapshot.
-	want := ResolveTerminalKind(false, "", stageFailureText(nil, result))
+	want := ResolveTerminalKind(false, "", false, stageFailureText(nil, result))
 	if got.TerminalKind != want {
 		t.Errorf("TerminalKind = %q, disagrees with history-record classification %q", got.TerminalKind, want)
 	}
@@ -856,5 +856,47 @@ func TestWriteStageExitRecord_OmitsStashFieldWhenNothingLeaked(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "unreclaimed_stashes") {
 		t.Errorf("the key is present on a clean exit: %s", raw)
+	}
+}
+
+// A genuine host-sleep booking (#3158) carries the structured verdict through
+// to the exit record as host_slept, while a stage error that merely echoes
+// the "[host-slept]" marker keeps the kind of the rest of its text.
+func TestWriteStageExitRecord_HostSleptFromStructuredVerdict(t *testing.T) {
+	prev := measureHostSleep
+	t.Cleanup(func() { measureHostSleep = prev })
+	measureHostSleep = func(time.Time, time.Time) time.Duration { return 900 * time.Second }
+
+	for _, tc := range []struct {
+		name    string
+		genuine bool
+		want    string
+	}{
+		{"genuine", true, TerminalKindHostSlept},
+		{"spoofed", false, ClassifyTerminalKind(modelUnavailableSpoofText)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSchedulerForDeterministicTest()
+			root := layouttest.Repo(t)
+			runtime := state.NewRuntimeState("nightgauge/nightgauge", 3158, "item-id", testRunID())
+			item := types.BoardItem{Number: 3158, Repo: "nightgauge/nightgauge"}
+			if tc.genuine {
+				if !s.bookHostSleptStage(3158, state.StageFeatureDev, runtime, time.Now(),
+					TerminalKindValidationError, "stage gate failed") {
+					t.Fatal("did not book host_slept")
+				}
+			} else {
+				runtime.SetStageError(state.StageFeatureDev, HostSleptMarker+" "+modelUnavailableSpoofText)
+			}
+			s.writeStageExitRecord(item, state.StageFeatureDev, runtime, &StageRunResult{ExitCode: 1},
+				1, nil, 0, "m", 0, 0, 0, time.Now().Add(-time.Second), root, "", "")
+			recs := readExitRecords(t, root)
+			if len(recs) != 1 {
+				t.Fatalf("expected 1 record, got %d", len(recs))
+			}
+			if recs[0].TerminalKind != tc.want {
+				t.Errorf("TerminalKind = %q, want %q", recs[0].TerminalKind, tc.want)
+			}
+		})
 	}
 }
