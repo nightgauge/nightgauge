@@ -14,6 +14,7 @@ import (
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
+	"github.com/nightgauge/nightgauge/internal/preflight"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -44,8 +45,11 @@ const partialDeliveryReadTimeout = 30 * time.Second
 // partialDeliveryFile is the on-disk shape of partial-delivery-{N}.json and of
 // planning-{N}.json's `partial_delivery` field.
 type partialDeliveryFile struct {
-	PR        int        `json:"pr"`
-	Criteria  []string   `json:"criteria"`
+	PR       int      `json:"pr"`
+	Criteria []string `json:"criteria"`
+	// Dropped lists criteria the comment named that the current issue body
+	// no longer contains (#3235).
+	Dropped   []string   `json:"dropped,omitempty"`
 	CommentAt *time.Time `json:"comment_at,omitempty"`
 }
 
@@ -101,14 +105,249 @@ func (s *Scheduler) scopePartialRerun(ctx context.Context, runtime *state.Runtim
 	if !status.Pending || status.Unlisted || len(status.Criteria) == 0 {
 		return
 	}
-	runtime.SetPartialRerun(status.PR, status.Criteria)
+	scope, dropped := s.reconcilePartialScope(ctx, item, ws, status.Criteria, status.PR)
+	if len(scope) == 0 {
+		// Every listed criterion left the body and none is new: the remainder
+		// is resolved. Scope the run to nothing, never to the whole issue,
+		// which would re-open what the partial PR delivered [#3235].
+		log.Printf("#%d: partial-delivery remainder after PR #%d reconciles to no criteria — the run is scoped to no work [#3235]",
+			item.Number, status.PR)
+	}
+	runtime.SetPartialRerun(status.PR, scope)
 	if err := writePartialDeliveryContext(ws, item.Number, partialDeliveryFile{
-		PR: status.PR, Criteria: status.Criteria, CommentAt: status.CommentAt,
+		PR: status.PR, Criteria: scope, Dropped: dropped, CommentAt: status.CommentAt,
 	}); err != nil {
 		log.Printf("#%d: could not write the partial-delivery context: %v", item.Number, err)
 	}
 	log.Printf("#%d: partial-delivery re-run after PR #%d — scope is the %d remaining criteria [#3160]",
-		item.Number, status.PR, len(status.Criteria))
+		item.Number, status.PR, len(scope))
+}
+
+// reconcilePartialScope builds the re-run brief from the comment's remainder
+// and a criteria report regenerated from the current, vouched issue body
+// (#3235). The comment is a snapshot: criteria added to the body after the
+// partial PR would otherwise never reach the re-run, and criteria removed from
+// it would linger. The brief is the listed criteria still in the body plus
+// only criteria new since the partial PR: in the body, but neither listed nor
+// named in that PR's met or unmet acceptance-criteria sections. It never
+// re-adds every criterion the report fails to judge satisfied: prose criteria
+// are always undetectable, so that would re-open what the partial PR already
+// delivered. When the body cannot be read or has no criteria, the comment
+// list stands unchanged.
+func (s *Scheduler) reconcilePartialScope(ctx context.Context, item types.BoardItem, ws string, listed []string, pr int) (scope, dropped []string) {
+	body, err := s.readACReconcileBody(ctx, item)
+	if err != nil {
+		log.Printf("#%d: partial-delivery scope not reconciled with the issue body (%v) — using the comment's list [#3235]",
+			item.Number, err)
+		return listed, nil
+	}
+	rec := preflight.ReconcileACs(ws, item.Number, body)
+	if rec == nil || len(rec.AcceptanceCriteria) == 0 {
+		log.Printf("#%d: issue body has no acceptance criteria — using the partial-delivery comment's list [#3235]", item.Number)
+		return listed, nil
+	}
+	var prCriteria []string
+	addNew := false
+	got, err := s.readPartialPR(ctx, item.Repo, pr)
+	if err != nil {
+		// Without the PR's met and unmet sections nothing can be told apart
+		// from what it delivered (prose criteria are always undetectable), so
+		// adding would re-open delivered work: add nothing new.
+		log.Printf("#%d: partial PR #%d unreadable (%v) — no criteria are added beyond the comment's list [#3235]",
+			item.Number, pr, err)
+	} else {
+		prCriteria = partialPRCriteria(got.Body)
+		addNew = s.bodyEditedSince(ctx, item, got.CreatedAt, pr)
+	}
+	scope, added, dropped := reconcilePartialRemainder(listed, prCriteria, rec, addNew)
+	for _, a := range added {
+		log.Printf("#%d: criterion new since partial PR #%d — added to the brief: %q [#3235]", item.Number, pr, a)
+	}
+	for _, d := range dropped {
+		log.Printf("#%d: partial-delivery criterion no longer in the issue body — dropped: %q [#3235]", item.Number, d)
+	}
+	return scope, dropped
+}
+
+// partialPR is what the reconcile reads from the partial PR: when it was
+// opened, the earliest moment its unmet list could have been computed, and
+// its body, whose acceptance-criteria sections name what it covered.
+type partialPR struct {
+	CreatedAt time.Time
+	Body      string
+}
+
+func (s *Scheduler) readPartialPR(ctx context.Context, repo string, pr int) (partialPR, error) {
+	if s.partialPRRead != nil {
+		return s.partialPRRead(ctx, repo, pr)
+	}
+	return forgePartialPR(s, ctx, repo, pr)
+}
+
+// bodyEditedSince reports whether the issue body changed after partial PR pr
+// was opened. An unedited body holds no criteria new since the PR. An
+// unreadable edit time answers true: the body may hold criteria the PR never
+// saw.
+func (s *Scheduler) bodyEditedSince(ctx context.Context, item types.BoardItem, opened time.Time, pr int) bool {
+	var edited *time.Time
+	var err error
+	if s.issueBodyEditedAt != nil {
+		edited, err = s.issueBodyEditedAt(ctx, item)
+	} else {
+		edited, err = forgeIssueBodyEditedAt(s, ctx, item)
+	}
+	if err != nil {
+		log.Printf("#%d: issue body edit time unreadable (%v) — treating the body as edited since PR #%d [#3235]",
+			item.Number, err, pr)
+		return true
+	}
+	return edited != nil && edited.After(opened)
+}
+
+// forgePartialPR is the production read behind readPartialPR.
+var forgePartialPR = func(s *Scheduler, ctx context.Context, repo string, pr int) (partialPR, error) {
+	owner, name := splitRepo(repo)
+	if owner == "" || name == "" || pr <= 0 {
+		return partialPR{}, fmt.Errorf("no PR %s#%d", repo, pr)
+	}
+	client, err := s.repoClient(ctx, owner, name)
+	if err != nil {
+		return partialPR{}, err
+	}
+	created, body, err := client.PRCreatedAtAndBody(ctx, owner, name, pr)
+	if err != nil {
+		return partialPR{}, err
+	}
+	return partialPR{CreatedAt: created, Body: body}, nil
+}
+
+// forgeIssueBodyEditedAt is the production read behind bodyEditedSince.
+var forgeIssueBodyEditedAt = func(s *Scheduler, ctx context.Context, item types.BoardItem) (*time.Time, error) {
+	owner, name := splitRepo(item.Repo)
+	if owner == "" || name == "" {
+		return nil, fmt.Errorf("repo %q is not owner/name", item.Repo)
+	}
+	client, err := s.repoClient(ctx, owner, name)
+	if err != nil {
+		return nil, err
+	}
+	return client.IssueLastEditedAt(ctx, owner, name, item.Number)
+}
+
+// partialPRMetHeading heads the met criteria in a pr-create body
+// (stages.RenderBody); each bullet reads `- <label>: <text> (<source>: …)`.
+const partialPRMetHeading = "## Acceptance criteria"
+
+// partialPRCriteria returns the criteria a partial PR's body names under its
+// met and unmet acceptance-criteria sections. A met bullet keeps its trailing
+// evidence, which matching by containment tolerates; its status label is cut.
+func partialPRCriteria(body string) []string {
+	out := hooks.UnmetCriteria(body)
+	for _, c := range partialPRSectionBullets(body, partialPRMetHeading) {
+		out = append(out, strings.TrimPrefix(c, partialPRMetLabel))
+	}
+	return out
+}
+
+// partialPRMetLabel prefixes a met bullet's text in a pr-create body.
+const partialPRMetLabel = "✅ met: "
+
+// partialPRSectionBullets returns the top-level bullets under heading, the
+// way hooks.UnmetCriteria reads the unmet section.
+func partialPRSectionBullets(body, heading string) []string {
+	var out []string
+	in := false
+	for _, line := range strings.Split(body, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "#") {
+			in = t == heading
+			continue
+		}
+		if in && strings.HasPrefix(t, "- ") {
+			out = append(out, strings.TrimSpace(t[2:]))
+		}
+	}
+	return out
+}
+
+// partialRemainderKey normalises a criterion for matching. The comment and
+// the PR body were rendered through CommentSafeACText or UntrustedACText, so
+// the body text takes the same transform before whitespace is normalised
+// (preflight.NormalizeACText) and case folded, and trailing punctuation is
+// trimmed.
+func partialRemainderKey(t string) string {
+	k := strings.ToLower(preflight.NormalizeACText(pmstages.CommentSafeACText(t)))
+	return strings.TrimRight(k, ".;:, ")
+}
+
+// partialRemainderMinOverlap is the shortest key that may match another by
+// containment rather than equality.
+const partialRemainderMinOverlap = 24
+
+// partialRemainderMatch reports whether two keys name one criterion. The
+// remainder list and the PR body may have been shortened or trimmed by a
+// model or a person, and a met bullet carries trailing evidence, so a long
+// enough key contained in the other matches too.
+func partialRemainderMatch(a, b string) bool {
+	if a == b {
+		return true
+	}
+	short, long := a, b
+	if len(short) > len(long) {
+		short, long = long, short
+	}
+	return len(short) >= partialRemainderMinOverlap && strings.Contains(long, short)
+}
+
+func partialRemainderMatchAny(k string, keys []string) bool {
+	for _, o := range keys {
+		if partialRemainderMatch(k, o) {
+			return true
+		}
+	}
+	return false
+}
+
+// reconcilePartialRemainder returns the brief, in issue-body order, the
+// criteria it added as new since the partial PR, and the listed criteria the
+// body no longer contains. A listed criterion still in the body stays whatever
+// its classification (#3089: code on main does not prove a listed criterion
+// met). With addNew, a body criterion joins the brief only when it is new: it
+// matches neither a listed entry nor a criterion the partial PR named (met or
+// unmet), and the report does not judge it satisfied.
+func reconcilePartialRemainder(listed, prCriteria []string, rec *preflight.ACReconcileResult, addNew bool) (scope, added, dropped []string) {
+	listedKeys := make([]string, len(listed))
+	found := make([]bool, len(listed))
+	for i, l := range listed {
+		listedKeys[i] = partialRemainderKey(l)
+	}
+	prKeys := make([]string, len(prCriteria))
+	for i, p := range prCriteria {
+		prKeys[i] = partialRemainderKey(p)
+	}
+	for _, c := range rec.AcceptanceCriteria {
+		k := partialRemainderKey(c.Text)
+		isListed := false
+		for i, lk := range listedKeys {
+			if partialRemainderMatch(lk, k) {
+				found[i] = true
+				isListed = true
+			}
+		}
+		switch {
+		case isListed:
+			scope = append(scope, c.Text)
+		case addNew && c.Classification != preflight.ACSatisfied && !partialRemainderMatchAny(k, prKeys):
+			scope = append(scope, c.Text)
+			added = append(added, c.Text)
+		}
+	}
+	for i, l := range listed {
+		if !found[i] {
+			dropped = append(dropped, l)
+		}
+	}
+	return scope, added, dropped
 }
 
 func writePartialDeliveryContext(ws string, issue int, f partialDeliveryFile) error {
@@ -194,17 +433,29 @@ func partialRerunPromptBlock(stage state.PipelineStage, scope *state.PartialReru
 // planning context and stops a no-diff feature-dev before feature-validate.
 // The extension's stage loop does neither, so its block omits them (#3095).
 func renderPartialRerunPromptBlock(stage state.PipelineStage, scope *state.PartialRerun, goPath bool) string {
-	if scope == nil || len(scope.Criteria) == 0 {
+	if scope == nil || scope.PR <= 0 {
 		return ""
 	}
 	if stage != state.StageFeaturePlanning && stage != state.StageFeatureDev {
 		return ""
 	}
 	var b strings.Builder
+	if len(scope.Criteria) == 0 {
+		b.WriteString("\n\n" + partialRerunPromptHeading + "\n\n")
+		b.WriteString(fmt.Sprintf("PR #%d already delivered the rest of this issue, and that work is already on `main`. "+
+			"Every criterion its partial-delivery comment listed as still unmet has since been removed from "+
+			"the issue body, and the body adds none, so nothing remains: plan nothing beyond what is "+
+			"already delivered and write no code.\n", scope.PR))
+		return b.String()
+	}
 	b.WriteString("\n\n" + partialRerunPromptHeading + "\n\n")
 	b.WriteString(fmt.Sprintf("PR #%d already delivered the rest of this issue, and that work is already on `main`. "+
 		"This run's whole scope is the acceptance criteria that PR's partial-delivery comment "+
-		"listed as still unmet:\n\n", scope.PR))
+		"listed as still unmet", scope.PR))
+	if goPath {
+		b.WriteString(", reconciled against the current issue body")
+	}
+	b.WriteString(":\n\n")
 	for _, c := range scope.Criteria {
 		b.WriteString("- " + pmstages.CommentSafeACText(c) + "\n")
 	}
@@ -215,14 +466,18 @@ func renderPartialRerunPromptBlock(stage state.PipelineStage, scope *state.Parti
 		if goPath {
 			b.WriteString(" The planning context records them under `partial_delivery`.")
 		}
-		b.WriteString("\n")
+		b.WriteString(" `focus_acs` is exactly these criteria: do not widen it with criteria the regenerated " +
+			"`ac-reconcile-{N}.json` reports unmet or undetectable. When that report's route differs, " +
+			"say so in the stage output.\n")
 	case state.StageFeatureDev:
 		b.WriteString("Implement only these criteria and change nothing else. If they are already met on this " +
 			"branch, write no code")
 		if goPath {
 			b.WriteString(": the run then ends after this stage, without feature-validate")
 		}
-		b.WriteString(".\n")
+		b.WriteString(". When the plan's focus criteria name criteria that this list does not, the plan wins: " +
+			"implement them and say so in the stage output. Write no code only when every focus criterion " +
+			"is already met on this branch.\n")
 	}
 	return b.String()
 }

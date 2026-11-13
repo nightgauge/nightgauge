@@ -7,7 +7,7 @@ description: Documentation-first feature planning. Read docs before code, propos
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.19.0"
+  version: "1.20.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 context: fork
@@ -200,7 +200,9 @@ plan whose `approach` is `"verify-and-close"`, with empty `files_to_create` and
 AC. When `mostly-satisfied` **or `undetectable`**, the plan-generation prompt
 MUST be passed `focus_acs` so it scopes to exactly that subset — `undetectable`
 means none of the criteria could be evaluated, so `focus_acs` carries every
-index and the plan must cover all of them.
+index and the plan must cover all of them. On a partial-delivery re-run the
+scope block's criteria are `focus_acs` instead, and this report never widens
+them (#3235).
 
 **Do NOT write the `ac_reconcile` field.** The orchestrator splices the whole
 report into `planning-{N}.json` from `ac-reconcile-{N}.json` after this stage
@@ -591,6 +593,13 @@ signal instead of a normal plan:
   delivery itself, not proof of the remainder. Plan those criteria as
   `focus_acs`; never answer verify-and-close over them. The orchestrator
   refuses such a close and raises an Action Center card (#3089).
+- On a partial-delivery re-run `focus_acs` is exactly the scope block's
+  criteria: the comment's remaining list plus criteria new since the partial
+  PR, already reconciled with the current issue body. Do not widen it with
+  criteria the regenerated `ac-reconcile-{N}.json` reports unmet or
+  undetectable: prose criteria are always undetectable, so that re-opens work
+  the partial PR delivered. Say so in the stage output when the report's
+  route differs (#3235).
 
 The orchestrator detects this signal after feature-planning completes and
 short-circuits the remaining stages (feature-dev, feature-validate, pr-create,

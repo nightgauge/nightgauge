@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A partial-delivery re-run now reconciles the comment's remaining criteria
+  with the current issue body. Its brief is the listed criteria still in the
+  body plus only criteria new since the partial PR: added to a body edited
+  after the PR opened, and named in neither the comment nor the PR's met or
+  unmet sections. Listed criteria removed from the body are dropped and
+  logged. Planning keeps `focus_acs` to that brief, and feature-dev follows
+  the plan's focus criteria when they name more than the list (#3235).
 - A Claude Code stage that loses the network mid-run is now booked
   `api_connection_lost` and retried after a short backoff, instead of being
   booked unclassified, halting the repository and spending one of the issue's

@@ -1910,12 +1910,14 @@ type PartialRerun struct {
 	Criteria []string `json:"criteria"`
 }
 
-// SetPartialRerun records this run's partial-delivery scope (#3160). An empty
-// criteria list clears it: an unlisted remainder is no scope.
+// SetPartialRerun records this run's partial-delivery scope (#3160). A zero
+// PR clears it. An empty criteria list with a PR is a resolved remainder: every
+// listed criterion left the issue body, so the run is scoped to nothing rather
+// than widened to the whole issue (#3235).
 func (rs *RuntimeState) SetPartialRerun(pr int, criteria []string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	if len(criteria) == 0 {
+	if pr <= 0 {
 		rs.PartialRerun = nil
 		return
 	}
