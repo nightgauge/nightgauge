@@ -143,7 +143,8 @@ func (s *Scheduler) writeStageExitRecord(
 			errText = snap.StageErrors[string(stage)]
 		}
 		if errText != "" {
-			rec.TerminalKind = ResolveTerminalKind(gateRan, gateTerminalKind, errText)
+			rec.TerminalKind = ResolveTerminalKind(gateRan, gateTerminalKind,
+				snap != nil && snap.StageHostSlept[string(stage)], errText)
 		}
 	}
 

@@ -177,7 +177,7 @@ func buildStageExitRecordFromIPC(p RecordStageExitParams) diagnostics.StageExitR
 	// has a gates.GateResult in scope to read one from, so there is nothing
 	// for ResolveTerminalKind's gate-preference branch to prefer here.
 	if rec.TerminalKind == "" && p.ErrorText != "" {
-		rec.TerminalKind = orchestrator.ClassifyTerminalKind(p.ErrorText)
+		rec.TerminalKind = orchestrator.ResolveTerminalKind(false, "", false, p.ErrorText)
 	}
 
 	return rec

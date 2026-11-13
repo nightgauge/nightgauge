@@ -185,7 +185,7 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 			// must happen here because RecordDowngrade must land before the
 			// scheduler re-resolves the dispatch model.
 			capDecision := orchestrator.DecideCapRecovery(orchestrator.CapRecoveryInput{
-				Kind:          orchestrator.ClassifyTerminalKind(result.ErrorText),
+				Kind:          orchestrator.ResolveTerminalKind(false, "", false, result.ErrorText),
 				DispatchModel: params.Model,
 				ServedModel:   result.ServedModel,
 				Engine:        r.retryEngine,

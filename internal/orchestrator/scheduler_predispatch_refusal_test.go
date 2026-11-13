@@ -890,7 +890,7 @@ func TestCapacityRefusal_PlannerOnlySizeRefusedAtTheSizeSensitiveStage(t *testin
 	// The CLI autonomous wrapper re-derives the kind from the failed stage:
 	// the structured gate result must carry it, since prose never does.
 	gates := snap.StageGateResults[string(state.StageFeatureDev)]
-	if len(gates) == 0 || ResolveTerminalKind(true, gates[len(gates)-1].TerminalKind, reason) != TerminalKindContextWindowExceeded {
+	if len(gates) == 0 || ResolveTerminalKind(true, gates[len(gates)-1].TerminalKind, false, reason) != TerminalKindContextWindowExceeded {
 		t.Errorf("gate results %+v do not resolve to %q", gates, TerminalKindContextWindowExceeded)
 	}
 	if got := ParkedRemediation(TerminalKindContextWindowExceeded, reason); !strings.Contains(got, "decompose the issue") {
