@@ -123,9 +123,9 @@ func gateStartName(argv, declared []string) string {
 	}
 	run := argv
 	if shellNames[baseName(run[0])] {
-		run = run[1:]
-		for len(run) > 0 && strings.HasPrefix(run[0], "-") && run[0] != "-c" {
-			run = run[1:]
+		var noexec bool
+		if run, noexec = skipShellOptions(run[1:]); noexec {
+			return ""
 		}
 	}
 	if len(run) > 0 && isGateScript(run[0]) {
@@ -138,6 +138,38 @@ func gateStartName(argv, declared []string) string {
 		}
 	}
 	return ""
+}
+
+// skipShellOptions drops the shell's leading option words and reports whether
+// they set noexec (`-n` in any short cluster, or `-o noexec`): such a shell
+// parses the script and runs nothing, so it starts no gate (#3139). `-o`/`+o`
+// consume their value word; `-c` and `--` end the walk.
+func skipShellOptions(run []string) ([]string, bool) {
+	for len(run) > 0 {
+		word := run[0]
+		switch {
+		case word == "-c":
+			return run, false
+		case word == "--":
+			return run[1:], false
+		case word == "-o" || word == "+o":
+			if len(run) > 1 && run[1] == "noexec" && word == "-o" {
+				return nil, true
+			}
+			run = run[min(2, len(run)):]
+			continue
+		case strings.HasPrefix(word, "--"):
+		case strings.HasPrefix(word, "-") && len(word) > 1:
+			if strings.ContainsRune(word[1:], 'n') {
+				return nil, true
+			}
+		case strings.HasPrefix(word, "+") && len(word) > 1:
+		default:
+			return run, false
+		}
+		run = run[1:]
+	}
+	return run, false
 }
 
 func isGateScript(word string) bool {
