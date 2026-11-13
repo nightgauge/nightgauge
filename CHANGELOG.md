@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The OpenCode plugin tests' notification guard now also catches a hook binary
+  set by bare key (`upsertEnv(env, "NIGHTGAUGE_BIN", bin)`, `t.Setenv`), and every
+  harness that applies an `extraEnv` map pairs it with the notification opt-out,
+  so no test run can post a real desktop notification (#3250).
+
 - `PRService.GetPR` now returns the pull request's `CreatedAt`; it was always
   empty on that path because the query never selected `createdAt`.
 - `nightgauge issue partial-delivery --json` now reconciles a pending

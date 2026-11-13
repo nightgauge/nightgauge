@@ -1,6 +1,7 @@
 package opencodeplugin
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -10,6 +11,9 @@ import (
 	"strings"
 	"testing"
 )
+
+// hookBinKey is split so this file's own literals do not trip the guard.
+const hookBinKey = "NIGHTGAUGE_" + "BIN"
 
 // TestRealHookBinariesDisableNotifications guards #3137: every real hook
 // binary these tests spawn must carry NIGHTGAUGE_NOTIFY_DISABLE=1. Env lists
@@ -22,28 +26,100 @@ func TestRealHookBinariesDisableNotifications(t *testing.T) {
 
 	files, err := filepath.Glob("*_test.go")
 	if err != nil || len(files) == 0 {
-		t.Fatalf("HARNESS ERROR: could not list test files (err=%v, n=%d); the literal arm did not run", err, len(files))
+		t.Fatalf("HARNESS ERROR: could not list test files (err=%v, n=%d); the guard did not run", err, len(files))
 	}
 	fset := token.NewFileSet()
 	for _, name := range files {
 		f, err := parser.ParseFile(fset, name, nil, 0)
 		if err != nil {
-			t.Fatalf("HARNESS ERROR: could not parse %s: %v; the literal arm did not run", name, err)
+			t.Fatalf("HARNESS ERROR: could not parse %s: %v; the guard did not run", name, err)
 		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name == "hookBinEnv" && fn.Recv == nil {
+		for _, v := range hookBinViolations(fset, f) {
+			t.Errorf("%s; set the hook binary with hookBinEnv or withHookBin "+
+				"so the spawned build cannot post a desktop notification", v)
+		}
+	}
+}
+
+// hookBinViolations reports every place outside func hookBinEnv that names
+// the hook binary: a string literal prefixed "NIGHTGAUGE_BIN=" (plain or the
+// left operand of a concatenation), or the bare key passed as a call argument
+// to anything but removeEnv (upsertEnv, os.Setenv, t.Setenv, #3250).
+func hookBinViolations(fset *token.FileSet, f *ast.File) []string {
+	var out []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.FuncDecl:
+			if n.Name.Name == "hookBinEnv" && n.Recv == nil {
 				return false
 			}
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
+		case *ast.CallExpr:
+			if calleeName(n.Fun) == "removeEnv" {
 				return true
 			}
-			v, err := strconv.Unquote(lit.Value)
-			if err == nil && strings.HasPrefix(v, "NIGHTGAUGE_BIN"+"=") {
-				t.Errorf("%s: set the hook binary with hookBinEnv(...), not a %q literal, "+
-					"so the spawned build cannot post a desktop notification", fset.Position(lit.Pos()), v)
+			for _, arg := range n.Args {
+				if v, ok := stringLit(arg); ok && v == hookBinKey {
+					out = append(out, fmt.Sprintf("%s: %s passes %q as a key",
+						fset.Position(arg.Pos()), calleeName(n.Fun), v))
+				}
 			}
-			return true
+		case *ast.BasicLit:
+			if v, ok := stringLit(n); ok && strings.HasPrefix(v, hookBinKey+"=") {
+				out = append(out, fmt.Sprintf("%s: %q literal", fset.Position(n.Pos()), v))
+			}
+		}
+		return true
+	})
+	return out
+}
+
+func calleeName(fun ast.Expr) string {
+	switch f := fun.(type) {
+	case *ast.Ident:
+		return f.Name
+	case *ast.SelectorExpr:
+		return f.Sel.Name
+	}
+	return ""
+}
+
+func stringLit(e ast.Expr) (string, bool) {
+	lit, ok := e.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	v, err := strconv.Unquote(lit.Value)
+	return v, err == nil
+}
+
+// TestHookBinGuardReportsEachForm proves each arm of hookBinViolations can go
+// red, and that the hookBinEnv route and removeEnv stay allowed (#3250).
+func TestHookBinGuardReportsEachForm(t *testing.T) {
+	key := hookBinKey
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"literal", `env = append(env, "` + key + `=/x")`, 1},
+		{"concatenation", `env = append(env, "` + key + `="+bin)`, 1},
+		{"upsertEnv key", `env = upsertEnv(env, "` + key + `", bin)`, 1},
+		{"t.Setenv key", `t.Setenv("` + key + `", bin)`, 1},
+		{"hookBinEnv route", `env = append(env, hookBinEnv(bin)...)`, 0},
+		{"removeEnv", `env = removeEnv(env, "` + key + `")`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "package p\n\nfunc hookBinEnv(bin string) []string {\n\treturn []string{\"" +
+				key + "=\" + bin}\n}\n\nfunc f(t T, env []string, bin string) {\n\t" + tc.body + "\n}\n"
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, "snippet.go", src, 0)
+			if err != nil {
+				t.Fatalf("HARNESS ERROR: could not parse snippet: %v", err)
+			}
+			if got := hookBinViolations(fset, f); len(got) != tc.want {
+				t.Errorf("violations = %d %v, want %d", len(got), got, tc.want)
+			}
 		})
 	}
 }
