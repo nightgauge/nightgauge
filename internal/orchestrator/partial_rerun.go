@@ -135,36 +135,65 @@ func (s *Scheduler) scopePartialRerun(ctx context.Context, runtime *state.Runtim
 // delivered. When the body cannot be read or has no criteria, the comment
 // list stands unchanged.
 func (s *Scheduler) reconcilePartialScope(ctx context.Context, item types.BoardItem, ws string, listed []string, pr int) (scope, dropped []string) {
-	body, err := s.readACReconcileBody(ctx, item)
+	reads := PartialScopeReads{
+		Body: func(ctx context.Context) (string, error) { return s.readACReconcileBody(ctx, item) },
+		PR: func(ctx context.Context, pr int) (time.Time, string, error) {
+			got, err := s.readPartialPR(ctx, item.Repo, pr)
+			return got.CreatedAt, got.Body, err
+		},
+		BodyEditedAt: func(ctx context.Context) (*time.Time, error) {
+			if s.issueBodyEditedAt != nil {
+				return s.issueBodyEditedAt(ctx, item)
+			}
+			return forgeIssueBodyEditedAt(s, ctx, item)
+		},
+	}
+	return ReconcilePartialScope(ctx, reads, ws, item.Number, listed, pr)
+}
+
+// PartialScopeReads are the forge reads behind ReconcilePartialScope. Body
+// must return the current issue body only once it is vouched for; an error
+// leaves the comment's list standing.
+type PartialScopeReads struct {
+	Body         func(ctx context.Context) (string, error)
+	PR           func(ctx context.Context, pr int) (created time.Time, body string, err error)
+	BodyEditedAt func(ctx context.Context) (*time.Time, error)
+}
+
+// ReconcilePartialScope is the one reconcile both the scheduler and
+// `nightgauge issue partial-delivery --json` run (#3235, #3242): see
+// Scheduler.reconcilePartialScope for the rules.
+func ReconcilePartialScope(ctx context.Context, reads PartialScopeReads, ws string, issue int, listed []string, pr int) (scope, dropped []string) {
+	body, err := reads.Body(ctx)
 	if err != nil {
 		log.Printf("#%d: partial-delivery scope not reconciled with the issue body (%v) — using the comment's list [#3235]",
-			item.Number, err)
+			issue, err)
 		return listed, nil
 	}
-	rec := preflight.ReconcileACs(ws, item.Number, body)
+	rec := preflight.ReconcileACs(ws, issue, body)
 	if rec == nil || len(rec.AcceptanceCriteria) == 0 {
-		log.Printf("#%d: issue body has no acceptance criteria — using the partial-delivery comment's list [#3235]", item.Number)
+		log.Printf("#%d: issue body has no acceptance criteria — using the partial-delivery comment's list [#3235]", issue)
 		return listed, nil
 	}
 	var prCriteria []string
 	addNew := false
-	got, err := s.readPartialPR(ctx, item.Repo, pr)
+	created, prBody, err := reads.PR(ctx, pr)
 	if err != nil {
 		// Without the PR's met and unmet sections nothing can be told apart
 		// from what it delivered (prose criteria are always undetectable), so
 		// adding would re-open delivered work: add nothing new.
 		log.Printf("#%d: partial PR #%d unreadable (%v) — no criteria are added beyond the comment's list [#3235]",
-			item.Number, pr, err)
+			issue, pr, err)
 	} else {
-		prCriteria = partialPRCriteria(got.Body)
-		addNew = s.bodyEditedSince(ctx, item, got.CreatedAt, pr)
+		prCriteria = partialPRCriteria(prBody)
+		addNew = bodyEditedSince(ctx, reads.BodyEditedAt, issue, created, pr)
 	}
 	scope, added, dropped := reconcilePartialRemainder(listed, prCriteria, rec, addNew)
 	for _, a := range added {
-		log.Printf("#%d: criterion new since partial PR #%d — added to the brief: %q [#3235]", item.Number, pr, a)
+		log.Printf("#%d: criterion new since partial PR #%d — added to the brief: %q [#3235]", issue, pr, a)
 	}
 	for _, d := range dropped {
-		log.Printf("#%d: partial-delivery criterion no longer in the issue body — dropped: %q [#3235]", item.Number, d)
+		log.Printf("#%d: partial-delivery criterion no longer in the issue body — dropped: %q [#3235]", issue, d)
 	}
 	return scope, dropped
 }
@@ -188,17 +217,11 @@ func (s *Scheduler) readPartialPR(ctx context.Context, repo string, pr int) (par
 // was opened. An unedited body holds no criteria new since the PR. An
 // unreadable edit time answers true: the body may hold criteria the PR never
 // saw.
-func (s *Scheduler) bodyEditedSince(ctx context.Context, item types.BoardItem, opened time.Time, pr int) bool {
-	var edited *time.Time
-	var err error
-	if s.issueBodyEditedAt != nil {
-		edited, err = s.issueBodyEditedAt(ctx, item)
-	} else {
-		edited, err = forgeIssueBodyEditedAt(s, ctx, item)
-	}
+func bodyEditedSince(ctx context.Context, editedAt func(context.Context) (*time.Time, error), issue int, opened time.Time, pr int) bool {
+	edited, err := editedAt(ctx)
 	if err != nil {
 		log.Printf("#%d: issue body edit time unreadable (%v) — treating the body as edited since PR #%d [#3235]",
-			item.Number, err, pr)
+			issue, err, pr)
 		return true
 	}
 	return edited != nil && edited.After(opened)
@@ -406,18 +429,19 @@ func splicePartialDelivery(workspaceRoot string, issueNumber int, planningFile s
 // feature-dev prompts.
 const partialRerunPromptHeading = "## Partial-Delivery Re-run Scope"
 
-// PartialRerunPromptBlocks renders the scope block for each stage that
+// PartialRerunScopeBlocks renders the scope block for each stage that
 // carries one, keyed by stage name, for the extension's stage loop (#3095):
 // `nightgauge issue partial-delivery --json` hands it over so the text has one
-// source. Nil when the remainder is not pending or lists no criteria.
-func PartialRerunPromptBlocks(status hooks.PartialDeliveryStatus) map[string]string {
-	if !status.Pending || status.Unlisted || len(status.Criteria) == 0 {
+// source. scope is the reconciled brief (ReconcilePartialScope, #3242); an
+// empty scope renders the "nothing remains" block, as on the Go path.
+func PartialRerunScopeBlocks(pr int, scope []string) map[string]string {
+	if pr <= 0 {
 		return nil
 	}
-	scope := &state.PartialRerun{PR: status.PR, Criteria: status.Criteria}
+	rerun := &state.PartialRerun{PR: pr, Criteria: scope}
 	return map[string]string{
-		string(state.StageFeaturePlanning): renderPartialRerunPromptBlock(state.StageFeaturePlanning, scope, false),
-		string(state.StageFeatureDev):      renderPartialRerunPromptBlock(state.StageFeatureDev, scope, false),
+		string(state.StageFeaturePlanning): renderPartialRerunPromptBlock(state.StageFeaturePlanning, rerun, false),
+		string(state.StageFeatureDev):      renderPartialRerunPromptBlock(state.StageFeatureDev, rerun, false),
 	}
 }
 
@@ -428,7 +452,8 @@ func partialRerunPromptBlock(stage state.PipelineStage, scope *state.PartialReru
 	return renderPartialRerunPromptBlock(stage, scope, true)
 }
 
-// renderPartialRerunPromptBlock renders the block. goPath adds the two
+// renderPartialRerunPromptBlock renders the block. Both paths reconcile the
+// list against the issue body (#3242). goPath adds the two
 // sentences only the Go scheduler keeps: it splices the record into the
 // planning context and stops a no-diff feature-dev before feature-validate.
 // The extension's stage loop does neither, so its block omits them (#3095).
@@ -452,10 +477,7 @@ func renderPartialRerunPromptBlock(stage state.PipelineStage, scope *state.Parti
 	b.WriteString(fmt.Sprintf("PR #%d already delivered the rest of this issue, and that work is already on `main`. "+
 		"This run's whole scope is the acceptance criteria that PR's partial-delivery comment "+
 		"listed as still unmet", scope.PR))
-	if goPath {
-		b.WriteString(", reconciled against the current issue body")
-	}
-	b.WriteString(":\n\n")
+	b.WriteString(", reconciled against the current issue body:\n\n")
 	for _, c := range scope.Criteria {
 		b.WriteString("- " + pmstages.CommentSafeACText(c) + "\n")
 	}

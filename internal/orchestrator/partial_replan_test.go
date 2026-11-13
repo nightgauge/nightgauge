@@ -56,7 +56,7 @@ func runReplan(t *testing.T, read func(context.Context, string, int) (hooks.Part
 // #3095 AC 1-2: the replan card carries no scope in queue.add, yet the run it
 // starts is scoped, because run start re-reads the newest trusted comment.
 // The extension path gets the same scope from `issue partial-delivery
-// --json`'s prompt_blocks (PartialRerunPromptBlocks, asserted below).
+// --json`'s prompt_blocks (PartialRerunScopeBlocks, asserted below).
 func TestPartialReplan_RunIsScopedToTheRemainder(t *testing.T) {
 	read := pendingRemainder(3141, partialRerunCriterion)
 	snap, runner := runReplan(t, read)
@@ -70,7 +70,7 @@ func TestPartialReplan_RunIsScopedToTheRemainder(t *testing.T) {
 	}
 
 	status, _ := read(context.Background(), "nightgauge/test", 3160)
-	blocks := PartialRerunPromptBlocks(status)
+	blocks := PartialRerunScopeBlocks(status.PR, status.Criteria)
 	for _, stage := range []state.PipelineStage{state.StageFeaturePlanning, state.StageFeatureDev} {
 		ext := blocks[string(stage)]
 		if !strings.Contains(ext, partialRerunPromptHeading) || !strings.Contains(ext, partialRerunCriterion) {
@@ -101,12 +101,8 @@ func TestPartialReplan_NothingPendingIsUnscoped(t *testing.T) {
 	if prompt, _ := runner.prompt(state.StageFeaturePlanning); strings.Contains(prompt, partialRerunPromptHeading) {
 		t.Fatal("unscoped feature-planning prompt carries the scope block")
 	}
-	if PartialRerunPromptBlocks(hooks.PartialDeliveryStatus{}) != nil {
+	if PartialRerunScopeBlocks(0, nil) != nil {
 		t.Fatal("no remainder rendered extension prompt blocks")
-	}
-	unlisted := hooks.PartialDeliveryStatus{Pending: true, PR: 3141, Unlisted: true}
-	if PartialRerunPromptBlocks(unlisted) != nil {
-		t.Fatal("an unlisted remainder rendered extension prompt blocks")
 	}
 }
 

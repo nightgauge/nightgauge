@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Fixed
 
+- A partial-delivery re-run started from the extension is now scoped to the
+  remainder reconciled against the current issue body, like a Go-started run
+  (#3242).
+
 - A stage that loses the network mid-run no longer halts the queue: the CLI's
   final `API Error:` line (or a run of `api_retry` events with no HTTP status)
   now classifies as a lost connection and is retried after a short backoff

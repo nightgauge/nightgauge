@@ -560,14 +560,22 @@ func TestPartialRerunPromptBlock_FocusIsTheBrief(t *testing.T) {
 	}
 }
 
-// (#3235) The extension path renders the raw comment list, so its block does
-// not claim the list was reconciled.
-func TestPartialRerunPromptBlock_ReconciledClaimGoPathOnly(t *testing.T) {
-	scope := &state.PartialRerun{PR: 1, Criteria: []string{"A is handled"}}
-	if !strings.Contains(renderPartialRerunPromptBlock(state.StageFeatureDev, scope, true), "reconciled against the current issue body") {
-		t.Fatal("Go-path block lacks the reconciled claim")
+// (#3242) Both paths reconcile the list against the issue body, so both
+// blocks say so; an empty reconciled scope renders "nothing remains".
+func TestPartialRerunScopeBlocks_ReconciledAndEmpty(t *testing.T) {
+	for _, goPath := range []bool{true, false} {
+		scope := &state.PartialRerun{PR: 1, Criteria: []string{"A is handled"}}
+		if !strings.Contains(renderPartialRerunPromptBlock(state.StageFeatureDev, scope, goPath), "reconciled against the current issue body") {
+			t.Errorf("goPath=%v block lacks the reconciled claim", goPath)
+		}
 	}
-	if strings.Contains(renderPartialRerunPromptBlock(state.StageFeatureDev, scope, false), "reconciled") {
-		t.Fatal("extension block claims a reconcile it never ran")
+	blocks := PartialRerunScopeBlocks(7, nil)
+	for _, stage := range []state.PipelineStage{state.StageFeaturePlanning, state.StageFeatureDev} {
+		if !strings.Contains(blocks[string(stage)], "nothing remains") {
+			t.Errorf("empty scope %s block = %q, want the nothing-remains block", stage, blocks[string(stage)])
+		}
+	}
+	if PartialRerunScopeBlocks(0, []string{"x"}) != nil {
+		t.Error("no PR rendered blocks")
 	}
 }

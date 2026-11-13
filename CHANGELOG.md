@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `nightgauge issue partial-delivery --json` now reconciles a pending
+  remainder against the current, vouched issue body with the same function the
+  scheduler uses: criteria added after the partial PR join the brief and
+  removed ones are dropped and logged. The output adds `scope` and `dropped`,
+  and `prompt_blocks` render from `scope` (#3242).
+
 - The local gate's publication-boundary hermeticity step no longer fails under
   load because a SIGTERMed suite run took more than 30s to clean up. The arm now
   tells a stopped run from a resumed one by its exit status (143 from the TERM

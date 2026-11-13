@@ -104,20 +104,14 @@ is eligible; 1 means at least one is not.`,
 			if err != nil {
 				return err
 			}
-			var bots []string
-			var appOwners, logins []string
+			var cfg *config.Config
 			if wd, err := os.Getwd(); err == nil {
-				if cfg, err := config.Load(wd); err == nil && cfg != nil {
-					appOwners = cfg.AppOwners()
-					logins = cfg.ConfiguredGitHubLogins()
-					if cfg.Autonomous != nil {
-						bots = cfg.Autonomous.TrustedBots
-					}
+				if c, err := config.Load(wd); err == nil {
+					cfg = c
 				}
 			}
 			forge := gh.NewTrustForge(client)
-			gate := trust.NewGate(forge, bots).WithAppOwners(appOwners...).
-				WithStageIdentities(func(ctx context.Context) ([]string, error) { return gh.StageIdentities(ctx, logins) })
+			gate := newConfiguredTrustGate(forge, cfg)
 			if !gate.LabelApprovalAvailable(ownerPart) {
 				fmt.Fprintf(os.Stderr, "note: label approval (%s) is unavailable for %s: no GitHub App installation is "+
 					"configured there, so only issues opened by users with write access are eligible\n", trust.ApprovedLabel, ownerPart)
