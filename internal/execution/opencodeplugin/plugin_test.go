@@ -413,13 +413,16 @@ func runNodeHarness(t *testing.T, node, cwd, command, nightgaugeBin string, extr
 		"NG_COMMAND="+command,
 	)
 	if nightgaugeBin != "" {
-		env = upsertEnv(env, "NIGHTGAUGE_BIN", nightgaugeBin)
+		env = withHookBin(env, nightgaugeBin)
 	} else {
 		env = removeEnv(env, "NIGHTGAUGE_BIN")
 	}
 	for k, v := range extraEnv {
 		env = upsertEnv(env, k, v)
 	}
+	// An extraEnv map may set NIGHTGAUGE_BIN under a dynamic key the guard
+	// cannot see, so the harness pairs it with the opt-out itself (#3250).
+	env = upsertEnv(env, notifyDisableEnv, "1")
 	cmd.Env = env
 	cmd.Dir = cwd
 	out, err := cmd.Output()
@@ -762,4 +765,12 @@ const notifyDisableEnv = "NIGHTGAUGE_NOTIFY_DISABLE"
 // cannot spawn a real build that posts a banner (#3137).
 func hookBinEnv(bin string) []string {
 	return []string{"NIGHTGAUGE_BIN=" + bin, notifyDisableEnv + "=1"}
+}
+
+// withHookBin sets the hook binary on an existing env list, replacing any
+// NIGHTGAUGE_BIN and opt-out already there, through hookBinEnv (#3250).
+func withHookBin(env []string, bin string) []string {
+	env = removeEnv(env, "NIGHTGAUGE_BIN")
+	env = removeEnv(env, notifyDisableEnv)
+	return append(env, hookBinEnv(bin)...)
 }

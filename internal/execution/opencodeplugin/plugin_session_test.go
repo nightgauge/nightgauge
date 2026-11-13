@@ -125,6 +125,9 @@ func runSessionHarness(t *testing.T, node, cwd string, calls []sessionCall, extr
 	for k, v := range extraEnv {
 		env = upsertEnv(env, k, v)
 	}
+	// An extraEnv map may set NIGHTGAUGE_BIN under a dynamic key the guard
+	// cannot see, so the harness pairs it with the opt-out itself (#3250).
+	env = upsertEnv(env, notifyDisableEnv, "1")
 	cmd.Env = env
 	cmd.Dir = cwd
 	out, err := cmd.Output()
@@ -540,7 +543,7 @@ func runSkillToolHarness(t *testing.T, node, cwd, skill, nightgaugeBin string) n
 		"NG_SKILL="+skill,
 	)
 	if nightgaugeBin != "" {
-		env = upsertEnv(env, "NIGHTGAUGE_BIN", nightgaugeBin)
+		env = withHookBin(env, nightgaugeBin)
 	} else {
 		env = removeEnv(env, "NIGHTGAUGE_BIN")
 	}

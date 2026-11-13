@@ -189,13 +189,16 @@ process.stdout.write(JSON.stringify(Object.keys(mod.TOOL_CLASSIFICATION || {})))
 func applyHarnessEnv(env []string, nightgaugeBin string, extraEnv map[string]string) []string {
 	env = removeEnv(env, "NIGHTGAUGE_STAGE")
 	if nightgaugeBin != "" {
-		env = upsertEnv(env, "NIGHTGAUGE_BIN", nightgaugeBin)
+		env = withHookBin(env, nightgaugeBin)
 	} else {
 		env = removeEnv(env, "NIGHTGAUGE_BIN")
 	}
 	for k, v := range extraEnv {
 		env = upsertEnv(env, k, v)
 	}
+	// An extraEnv map may set NIGHTGAUGE_BIN under a dynamic key the guard
+	// cannot see, so the harness pairs it with the opt-out itself (#3250).
+	env = upsertEnv(env, notifyDisableEnv, "1")
 	return env
 }
 
