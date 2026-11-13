@@ -264,7 +264,10 @@ function buildCommentBody(
   const sections: string[] = [];
 
   const errMsg = result.error?.message ?? "";
-  if (errMsg.includes(HOST_SLEPT_MARKER)) {
+  // Only the scheduler's structured verdict means the host slept (#3273);
+  // text that merely echoes the marker gets the ordinary failure report.
+  const hostSlept = state?.stage_host_slept?.[result.failedStage ?? ""] === true;
+  if (hostSlept && errMsg.includes(HOST_SLEPT_MARKER)) {
     return buildHostSleptBody(issueNumber, result, errMsg);
   }
   const isApprovalPause = errMsg.includes(ARCHITECTURE_APPROVAL_REQUIRED_MARKER);

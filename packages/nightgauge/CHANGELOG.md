@@ -11,6 +11,7 @@ and this project adheres to
 
 ### Fixed
 
+- The queue no longer skips its halt, or shows a host-sleep warning, when a failure only echoes `[host-slept]` text. Only the scheduler's structured host-sleep verdict now counts as a host sleep, as in the Go layer (#3273).
 - A partial-delivery re-run started from the extension is now scoped to the
   remainder reconciled against the current issue body, like a Go-started run
   (#3242).

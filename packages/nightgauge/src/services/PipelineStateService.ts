@@ -394,6 +394,8 @@ export interface PipelineState {
   ralph_iterations?: Record<string, number>;
   /** Post-condition gate outcomes per stage, from Go `stageGateResults` (#1897). */
   stage_gate_results?: Record<string, StageGateResultRecord[]>;
+  /** Structured host-sleep verdict per stage, from Go `stageHostSlept` (#3273). */
+  stage_host_slept?: Record<string, boolean>;
   /** FailureRecovery outcomes per stage, from Go `stageRecoveryAttempts` (#1897). */
   stage_recovery_attempts?: Record<string, StageRecoveryAttemptRecord[]>;
   gate_results?: Array<{
@@ -524,6 +526,7 @@ export interface GoRuntimeState {
   }>;
   ralphIterations?: Record<string, number>;
   stageGateResults?: Record<string, StageGateResultRecord[]>;
+  stageHostSlept?: Record<string, boolean>;
   stageRecoveryAttempts?: Record<string, StageRecoveryAttemptRecord[]>;
   gateResults?: Array<{
     gate_name: string;
@@ -873,6 +876,7 @@ export class PipelineStateService implements vscode.Disposable {
       escalation_history: goState.escalationHistory,
       ralph_iterations: goState.ralphIterations,
       stage_gate_results: goState.stageGateResults,
+      stage_host_slept: goState.stageHostSlept,
       stage_recovery_attempts: goState.stageRecoveryAttempts,
       gate_results: goState.gateResults,
       pr_url: goState.prUrl,
@@ -2747,6 +2751,8 @@ export class PipelineStateService implements vscode.Disposable {
               : this._lastState?.escalation_history,
           ralph_iterations: goState.ralphIterations ?? this._lastState?.ralph_iterations,
           stage_gate_results: goState.stageGateResults ?? this._lastState?.stage_gate_results,
+          // Authoritative: Go omits the field once a later error withdraws the verdict.
+          stage_host_slept: goState.stageHostSlept,
           stage_recovery_attempts:
             goState.stageRecoveryAttempts ?? this._lastState?.stage_recovery_attempts,
           gate_results:
