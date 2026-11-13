@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Claude Code notifications are titled by their `notification_type` (for
+  example "Nightgauge - Permission Required") instead of always "Nightgauge -
+  Pipeline Complete", and `NIGHTGAUGE_NOTIFY_DISABLE=1` turns desktop
+  notifications off. The OpenCode plugin tests set it, so a gate run no longer
+  posts real macOS banners (#3137).
+
 - The clean-install gate (G1) records its two bundle-read rows as `SKIP` on
   scheduled runs instead of failing them, and the summary's _Result_ row counts
   the skipped rows so a scheduled green is never read as a full pass. Manual

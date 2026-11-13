@@ -362,6 +362,10 @@ func TestMain(m *testing.M) {
 	// Tests here set NIGHTGAUGE_STATE_HOME for the CLI they spawn; HOME moves
 	// with it so no spawned CLI pairs a temp STATE with the real HOME (#2311).
 	cleanupHome := hometest.Isolate()
+	// Real hook binaries spawned from os.Environ() must never post a desktop
+	// banner during a gate run (#3137); TestRealHookBinariesDisableNotifications
+	// pins this and the from-scratch env lists built with hookBinEnv.
+	_ = os.Setenv(notifyDisableEnv, "1")
 	code := m.Run()
 	if nightgaugeBinPath != "" {
 		_ = os.Remove(nightgaugeBinPath)
@@ -748,4 +752,14 @@ func TestCarefulGateParity(t *testing.T) {
 			}
 		})
 	}
+}
+
+// notifyDisableEnv mirrors hooks.NotifyDisableEnv for the spawned binaries.
+const notifyDisableEnv = "NIGHTGAUGE_NOTIFY_DISABLE"
+
+// hookBinEnv is the only place a test names the hook binary: it pairs
+// NIGHTGAUGE_BIN with the notification opt-out so a from-scratch env list
+// cannot spawn a real build that posts a banner (#3137).
+func hookBinEnv(bin string) []string {
+	return []string{"NIGHTGAUGE_BIN=" + bin, notifyDisableEnv + "=1"}
 }
