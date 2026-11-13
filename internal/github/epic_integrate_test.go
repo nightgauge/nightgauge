@@ -12,6 +12,14 @@ import (
 	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
+// Load safety (#3236): the TestIntegrateEpic_* tests have no wall-clock bound
+// to miss, so machine load can only slow them, up to `go test -timeout`.
+//   - git.Service runs git through exec.Command with no context or deadline.
+//   - fakeEpicPRs returns synchronously; nothing polls or sleeps.
+//   - MergeQueueTimeout in the red-CI test is a constructed error value, not a wait.
+//   - Each test builds its own gittest.ClonedRepo under t.TempDir(), so no
+//     on-disk state is shared between tests or packages.
+
 // noEpicBranchCheckout resolves every epic repository to a checkout whose
 // origin has no epic branch, so closing is decided by sub-issue state alone.
 func noEpicBranchCheckout(t *testing.T) EpicCheckoutResolver {
