@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A run whose issue is closed after pickup now stops at the next stage
+  boundary as `issue_closed` (no failure booked, board moved to Done) instead
+  of running on and holding the repository's slot. pr-merge also refuses to
+  merge a PR whose body would close an issue that was closed while it waited
+  (#3151).
 - The foreground-gate hook no longer refuses `bash -n scripts/ci-local.sh` (a
   syntax check that runs nothing) or `bash -o noexec ...`, and now recognizes
   `bash -o pipefail scripts/ci-local.sh` as a gate start.

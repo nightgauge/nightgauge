@@ -1826,3 +1826,43 @@ func TestIssueService_ListIssuesExcludingLabels_CompleteListNotExcluded(t *testi
 			len(issues), issues)
 	}
 }
+
+// TestGetIssueState_UsesREST asserts the transport and the normalisation
+// (#3151): one REST GET, lowercase REST states mapped to OPEN/CLOSED, and an
+// unknown state or error status surfaced as an error.
+func TestGetIssueState_UsesREST(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  int
+		body    string
+		want    string
+		wantErr bool
+	}{
+		{"open", http.StatusOK, `{"state":"open"}`, "OPEN", false},
+		{"closed", http.StatusOK, `{"state":"closed"}`, "CLOSED", false},
+		{"unknown state", http.StatusOK, `{"state":""}`, "", true},
+		{"not found", http.StatusNotFound, `{"message":"Not Found"}`, "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var seen []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				seen = append(seen, r.Method+" "+r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			got, err := NewIssueService(newClientForRESTTest(srv)).GetIssueState(context.Background(), "o", "r", 7)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Errorf("state = %q, want %q", got, tc.want)
+			}
+			if len(seen) != 1 || seen[0] != "GET /repos/o/r/issues/7" {
+				t.Errorf("requests = %v, want exactly [GET /repos/o/r/issues/7]", seen)
+			}
+		})
+	}
+}

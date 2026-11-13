@@ -6401,11 +6401,16 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// NOT count toward the per-session circuit breaker, do NOT pause
 		// autonomous. Move the board to Done (not Ready) since the issue is
 		// genuinely closed.
+		// #3151: a stage-boundary or pr-merge check that saw the close
+		// mid-run books the same way; its detail names the boundary.
 		if terminalFailureKind == TerminalKindIssueClosed {
-			as.recordFailureLocked(repo, issue, title, now,
-				"issue-closed (non-failure) — issue was already closed when pipeline started", terminalFailureKind)
-			log.Printf("autonomous: %s#%d pipeline-start-failure:issue-closed — already closed, moving board to Done (no lifetime-cap increment)",
-				repo, issue)
+			detail := failureDetail
+			if detail == "" {
+				detail = "issue-closed (non-failure) — issue was already closed when pipeline started"
+			}
+			as.recordFailureLocked(repo, issue, title, now, detail, terminalFailureKind)
+			log.Printf("autonomous: %s#%d issue-closed (non-failure) — %s; moving board to Done (no lifetime-cap increment)",
+				repo, issue, detail)
 			if as.safetyRails != nil {
 				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()

@@ -157,6 +157,40 @@ func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number 
 	return s.GetIssueWithRelations(ctx, owner, repo, number, AllRelations)
 }
 
+// GetIssueState reads one issue's state with a single REST call
+// (GET /repos/{owner}/{repo}/issues/{number}) and returns it normalised to
+// "OPEN" or "CLOSED", the GraphQL spelling every other caller compares
+// against. The orchestrator calls it at each stage boundary (#3151), so it
+// stays on the REST quota and reads no relationship lists. A non-2xx status,
+// an undecodable body or a state that is neither open nor closed is an error,
+// never a guessed state.
+func (s *IssueService) GetIssueState(ctx context.Context, owner, repo string, number int) (string, error) {
+	if owner == "" || repo == "" || number <= 0 {
+		return "", fmt.Errorf("get issue state: owner, repo and a positive number are required")
+	}
+	path := fmt.Sprintf("/repos/%s/%s/issues/%d", url.PathEscape(owner), url.PathEscape(repo), number)
+	body, status, err := s.client.restDoStatus(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return "", fmt.Errorf("get issue state for %s/%s#%d: %w", owner, repo, number, err)
+	}
+	if status < 200 || status >= 300 {
+		return "", fmt.Errorf("get issue state for %s/%s#%d: %w", owner, repo, number, restStatusErr(status, body))
+	}
+	var resp struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("get issue state for %s/%s#%d: decode: %w", owner, repo, number, err)
+	}
+	switch strings.ToLower(resp.State) {
+	case "open":
+		return "OPEN", nil
+	case "closed":
+		return "CLOSED", nil
+	}
+	return "", fmt.Errorf("get issue state for %s/%s#%d: unexpected state %q", owner, repo, number, resp.State)
+}
+
 // GetIssueWithRelations is GetIssue for a caller that uses only some of an
 // issue's relationships. Only the connections in rels are read to their end
 // and returned. SubIssues, BlockedBy and Blocking are empty for the others,
