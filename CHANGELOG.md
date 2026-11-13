@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The foreground-gate hook no longer refuses `bash -n scripts/ci-local.sh` (a
+  syntax check that runs nothing) or `bash -o noexec ...`, and now recognizes
+  `bash -o pipefail scripts/ci-local.sh` as a gate start.
 - Claude Code notifications are titled by their `notification_type` (for
   example "Nightgauge - Permission Required") instead of always "Nightgauge -
   Pipeline Complete", and `NIGHTGAUGE_NOTIFY_DISABLE=1` turns desktop
