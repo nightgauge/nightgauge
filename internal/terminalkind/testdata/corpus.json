@@ -1003,7 +1003,7 @@
       "id": "host-slept-stage-error",
       "input": "[host-slept] the host slept for 15m27s during feature-validate (wall clock 20m0s, awake 4m33s). This run was booked as infrastructure, not as a failure of this issue, and will retry. To keep the host awake: the daemon holds a `caffeinate -i -s` assertion while the autonomous scheduler runs (see `nightgauge autonomous status`), or disable sleep on AC power with `sudo pmset -c sleep 0`.",
       "expected": "host_slept",
-      "expected_signal": "host_slept",
+      "expected_signal": "",
       "source": "synthetic",
       "producer": "orchestrator.HostSleptStageError",
       "rationale": "A stage that lost 15 minutes to host sleep (#3136). Before the marker, the same run was booked validation_error from its gate timeout, halted the repository and charged a lifetime attempt."
@@ -1012,10 +1012,19 @@
       "id": "host-slept-outranks-timeout-text",
       "input": "[host-slept] the host slept for 2m0s during pr-merge (wall clock 50m0s, awake 48m0s). exceeded stage_hard_cap stall timeout",
       "expected": "host_slept",
-      "expected_signal": "host_slept",
+      "expected_signal": "",
       "source": "synthetic",
       "producer": "orchestrator.HostSleptStageError, with trailing text a later rule would claim",
       "rationale": "The marker is first in the ladder: a cap or stall wording elsewhere in the text must not take the run back to a kind the sleep explains."
+    },
+    {
+      "id": "host-slept-echoed-no-verdict",
+      "input": "Previous attempt said: [host-slept] the host slept for 2m0s during feature-dev (wall clock 30m0s, awake 28m0s) — but this run failed: validation_error: go test failed",
+      "expected": "host_slept",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "a failure comment or log line quoting an earlier HostSleptStageError",
+      "rationale": "Echoed marker text with no structured verdict (#3255). The table still answers host_slept for display, but the extension must not signal it, and Go's ResolveTerminalKind without the verdict must not book it."
     },
     {
       "id": "stage-cap-kill-hard-cap-reason",

@@ -983,6 +983,12 @@ type AutonomousScheduler struct {
 
 	workspaceRoot string
 
+	// hostSleptVerdict answers whether the scheduler recorded the structured
+	// host-sleep verdict (RuntimeState.StageHostSlept) for the issue's failed
+	// stage (#3255). nil → persistedHostSleptVerdict. NotifyComplete consults
+	// it so `[host-slept]` text alone can never book host_slept.
+	hostSleptVerdict func(repo string, issue int) bool
+
 	// attention is the single authoritative writer for the Action Center
 	// DecisionRequest store (ADR 015). Producers (work exhaustion, owner-action
 	// handoff, cascade pause, blockedBy deferral, watchdog) raise through this
@@ -2105,12 +2111,8 @@ func (as *AutonomousScheduler) OnDispatch(fn func(owner, repo string, issueNumbe
 // exhausted failure into the GENERIC branch, bypassing the global cooldown
 // (#3434) and re-enabling the multi-issue cascade #3434 was meant to fix.
 func (as *AutonomousScheduler) NotifyComplete(repo string, issueNumber int, success bool, conflictRestart bool, terminalFailureKind string, failureDetail string) {
-	if !success && terminalFailureKind == "" && failureDetail != "" {
-		if reclassified := ResolveTerminalKind(false, "", false, failureDetail); reclassified != "" {
-			log.Printf("autonomous: NotifyComplete reclassified empty terminalFailureKind from failureDetail: %s (issue %s#%d)",
-				reclassified, repo, issueNumber)
-			terminalFailureKind = reclassified
-		}
+	if !success {
+		terminalFailureKind = as.gateNotifyTerminalKind(repo, issueNumber, terminalFailureKind, failureDetail)
 	}
 	// merged is always false on this path (#1969): the
 	// post-merge ground-truth breadcrumb is Go-only
@@ -2120,6 +2122,98 @@ func (as *AutonomousScheduler) NotifyComplete(repo string, issueNumber int, succ
 	// board-status-failure-sync note for the fuller "no extension change
 	// owed" analysis this mirrors.
 	as.onPipelineComplete(repo, issueNumber, success, conflictRestart, terminalFailureKind, failureDetail, false)
+}
+
+// gateNotifyTerminalKind applies the host-sleep verdict gate to a kind that
+// arrived over IPC (#3255). host_slept is booked only on the scheduler's
+// structured verdict (#3158 ADR-001): a caller-supplied host_slept without
+// one is re-derived from the text, which ResolveTerminalKind strips of the
+// marker, and an empty kind is re-derived with the verdict threaded in so a
+// genuine sleep still books host_slept. Any other non-empty kind is returned
+// unchanged.
+func (as *AutonomousScheduler) gateNotifyTerminalKind(repo string, issue int, kind, failureDetail string) string {
+	if kind != "" && kind != TerminalKindHostSlept {
+		return kind
+	}
+	verdict := as.lookupHostSleptVerdict(repo, issue)
+	if kind == TerminalKindHostSlept {
+		if verdict {
+			return kind
+		}
+		derived := ResolveTerminalKind(false, "", false, failureDetail)
+		log.Printf("autonomous: NotifyComplete downgraded terminalFailureKind host_slept to %q — no structured host-sleep verdict for %s#%d (#3255)",
+			derived, repo, issue)
+		return derived
+	}
+	if failureDetail == "" && !verdict {
+		return ""
+	}
+	reclassified := ResolveTerminalKind(false, "", verdict, failureDetail)
+	if reclassified != "" {
+		log.Printf("autonomous: NotifyComplete reclassified empty terminalFailureKind from failureDetail: %s (issue %s#%d)",
+			reclassified, repo, issue)
+	}
+	return reclassified
+}
+
+func (as *AutonomousScheduler) lookupHostSleptVerdict(repo string, issue int) bool {
+	if as.hostSleptVerdict != nil {
+		return as.hostSleptVerdict(repo, issue)
+	}
+	root := as.workspaceRoot
+	if as.scheduler != nil {
+		if r := as.scheduler.runRoot(repo); r != "" {
+			root = r
+		}
+	}
+	if root == "" {
+		return false
+	}
+	since, ok := as.runningSince(repo, issue)
+	if !ok {
+		return false
+	}
+	stateDir, err := layout.PipelineStateDir(root)
+	if err != nil {
+		return false
+	}
+	return persistedHostSleptVerdict(stateDir, issue, since)
+}
+
+// runningSince reports when the scheduler dispatched the issue's in-flight
+// run, truncated to the second its RFC 3339 stamp carries. ok is false when
+// the issue is not running here, so no snapshot can be attributed to it.
+func (as *AutonomousScheduler) runningSince(repo string, issue int) (time.Time, bool) {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	if as.state == nil {
+		return time.Time{}, false
+	}
+	for _, r := range as.state.Running {
+		if r.Repo == repo && r.Number == issue {
+			t, err := time.Parse(time.RFC3339, r.StartedAt)
+			return t, err == nil
+		}
+	}
+	return time.Time{}, false
+}
+
+// persistedHostSleptVerdict reads the newest persisted runtime snapshot for
+// the issue and reports its failed stage's StageHostSlept verdict. Any error,
+// no snapshot (sealed and removed, or never written by an extension run), or
+// a newest snapshot that started before the completing run was dispatched
+// (a prior run's leftover) answers false: without this run's verdict the run
+// is not booked host_slept.
+func persistedHostSleptVerdict(stateDir string, issue int, since time.Time) bool {
+	states, err := state.FindPersistedStatesForIssue(stateDir, issue)
+	if err != nil || len(states) == 0 {
+		return false
+	}
+	snap := states[0].Snapshot()
+	if snap.StartedAt.Before(since.Truncate(time.Second)) {
+		return false
+	}
+	return snap.StageHostSlept[string(snap.Stage)]
 }
 
 // FilterRepos restricts the scheduler to only scan repos in the given set.
