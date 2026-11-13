@@ -128,6 +128,7 @@ Documented plugin install works
 RC VSIX fetch regression suite
 Bundle skill read counter regression suite
 Bundle skill source regression suite
+Bundle-read run-kind rule regression suite
 Plugin hooks run from a path with a space
 Stable move regression suite
 Mirror drift gate regression suite

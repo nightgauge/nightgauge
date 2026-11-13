@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The clean-install gate (G1) records its two bundle-read rows as `SKIP` on
+  scheduled runs instead of failing them, and the summary's _Result_ row counts
+  the skipped rows so a scheduled green is never read as a full pass. Manual
+  dispatch, RC dispatch and local runs still hard-fail both rows. This
+  supersedes the every-run-kind rule from #2997 (#3135).
+
 - The clean-install gate (G1) now runs `npm ci` in a fresh worktree with no
   `node_modules` and names an SDK build failure instead of dying on a bare
   `tsc: not found`. It packages the bundled Linux binary with the release's
