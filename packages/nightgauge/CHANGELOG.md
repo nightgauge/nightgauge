@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Fixed
 
+- A stage that loses the network mid-run no longer halts the queue: the CLI's
+  final `API Error:` line (or a run of `api_retry` events with no HTTP status)
+  now classifies as a lost connection and is retried after a short backoff
+  (#3238).
 - A pipeline run rebuilds the acceptance-criteria report from the issue's current body before planning, so criteria added since an earlier run are judged; if the rebuild fails, planning fails instead of reusing the old report (#3228).
 - Re-running an issue from the "not closed: PR left criteria unmet" card now
   plans and implements only the criteria that PR left unmet, instead of

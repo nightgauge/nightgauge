@@ -46,6 +46,7 @@ import type { PipelineStage } from "@nightgauge/sdk";
 import type { StallEvent } from "../schemas/stallEvents";
 import type { StallEscalationLevel, PauseForStallPayload } from "../schemas/pipelineState";
 import {
+  classifyTerminalKind,
   AutoModelSelector,
   ExperimentManager,
   GeminiContextGenerator,
@@ -2138,7 +2139,99 @@ export function inferProcessError(
   if (success) {
     return undefined;
   }
+  const base = inferBaseProcessError(stderrText, stdoutText, exitCode);
+  if (!base) {
+    return undefined;
+  }
+  const message = withApiErrorEvidence(base.message, stderrText, stdoutText);
+  return message === base.message ? base : new Error(message);
+}
 
+const API_ERROR_LINE_PREFIX = "API Error:";
+
+/**
+ * Add the transport evidence the bounded reason can miss (#3238), mirroring
+ * Go's `withAPIErrorEvidence` in internal/orchestrator/scheduler.go:
+ *
+ *  1. The CLI's last `API Error:` line (stderr first, then non-JSON stdout
+ *     lines) is appended when the reason lacks it. Later stderr noise used to
+ *     push it out of the 3-line tail, booking a network outage unclassified.
+ *  2. When the reason still classifies to nothing and the transcript ends on
+ *     `api_retry` events with a null `error_status`, an
+ *     `[api_connection_lost]` marker is appended. Any kind the text already
+ *     carries wins.
+ *
+ * @internal Exported for testing only
+ */
+export function withApiErrorEvidence(
+  reason: string,
+  stderrText: string,
+  stdoutText: string
+): string {
+  const line = lastApiErrorLine(stderrText, stdoutText);
+  let out = reason;
+  if (line && !out.includes(line)) {
+    out = out ? `${out}\n${line}` : line;
+  }
+  if (classifyTerminalKind(out) !== undefined) {
+    return out;
+  }
+  const marker = apiRetryExhaustionMarker(stdoutText);
+  return marker ? (out ? `${out}\n${marker}` : marker) : out;
+}
+
+/** @internal Exported for testing only */
+export function lastApiErrorLine(stderrText: string, stdoutText: string): string {
+  return lastPrefixedLine(stderrText, false) || lastPrefixedLine(stdoutText, true);
+}
+
+function lastPrefixedLine(text: string, skipJson: boolean): string {
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].trim();
+    if (!t || (skipJson && (t[0] === "{" || t[0] === "["))) continue;
+    if (t.startsWith(API_ERROR_LINE_PREFIX)) return t;
+  }
+  return "";
+}
+
+/**
+ * `[api_connection_lost]` marker when the stream-json transcript ends on
+ * `api_retry` system events with a null `error_status` (no HTTP answer at
+ * all), with no assistant/result event after them. "" otherwise.
+ *
+ * @internal Exported for testing only
+ */
+export function apiRetryExhaustionMarker(stdoutText: string): string {
+  const lines = stdoutText.split("\n");
+  let retries = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].trim();
+    if (!t || t[0] !== "{") continue;
+    let ev: { type?: unknown; subtype?: unknown; is_error?: unknown; error_status?: unknown };
+    try {
+      ev = JSON.parse(t);
+    } catch {
+      continue;
+    }
+    if (ev.type !== "system") {
+      if (ev.type === "result" && ev.is_error === true) return "";
+      break;
+    }
+    if (ev.subtype !== "api_retry") continue;
+    if (ev.error_status !== null && ev.error_status !== undefined) return "";
+    retries++;
+  }
+  return retries > 0
+    ? `[api_connection_lost] API retries exhausted: ${retries} api_retry event(s), error_status null`
+    : "";
+}
+
+function inferBaseProcessError(
+  stderrText: string,
+  stdoutText: string,
+  exitCode: number | null
+): Error | undefined {
   if (stderrText.length > 0) {
     return new Error(stderrText.split("\n").slice(-3).join("\n"));
   }

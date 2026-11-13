@@ -38,6 +38,17 @@ const SKIP_CASES: { text: string; kind: string; branch: string }[] = [
     branch: "transient network blip",
   },
   {
+    // #3238 — the Claude CLI's own lines from a mid-stage network outage.
+    text: "API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)",
+    kind: "api_connection_lost",
+    branch: "transient network blip",
+  },
+  {
+    text: "API Error: Connection refused — a firewall or proxy may be blocking it (ECONNREFUSED)",
+    kind: "api_connection_lost",
+    branch: "transient network blip",
+  },
+  {
     text: "[pipeline-start-failure] github-network-outage: api.github.com unreachable",
     kind: "github_network_outage",
     branch: "transient network blip",
