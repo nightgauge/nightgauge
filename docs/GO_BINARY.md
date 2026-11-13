@@ -5118,6 +5118,13 @@ nightgauge hook sanitize-prompt --input <text>  # manual: screen raw text
 nightgauge hook notify --message <msg>          # manual: send a notification
 ```
 
+`hook notify` takes its title from `--event` when given, and otherwise from the
+payload's `notification_type` (`permission_prompt`, `idle_prompt`,
+`auth_success`, `elicitation_dialog`). An unknown or missing type gets the
+generic "Nightgauge" title (#3137). Set `NIGHTGAUGE_NOTIFY_DISABLE=1` to send
+nothing: the command reports `sent: false` with the reason. The real-binary
+tests set it so a gate run never posts a desktop banner.
+
 #### `claude-statusline` — the Claude Max usage feed (Issue #730)
 
 The one hook verb that is not a Claude Code _hook_. It is wired into the

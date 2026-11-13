@@ -6989,8 +6989,14 @@ path the hook itself uses. With neither, there is nothing to announce and no
 notification is sent.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// A manual --message never reads stdin; the hook path takes both the
+			// message and, unless --event is given, the event from the payload.
 			if message == "" {
-				message = hooks.NotifyMessageFromHook(readHookInput(cmd))
+				payloadEvent, payloadMessage := hooks.NotifyFromHook(readHookInput(cmd))
+				message = payloadMessage
+				if event == "" {
+					event = string(payloadEvent)
+				}
 			}
 			if message == "" {
 				return printJSON(hooks.NotifyResult{Sent: false, Error: "no notification message"})
@@ -6999,7 +7005,7 @@ notification is sent.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&event, "event", "pipeline_complete", "Notification event type")
+	cmd.Flags().StringVar(&event, "event", "", "Notification event type (default: the payload's notification_type)")
 	cmd.Flags().StringVar(&message, "message", "", "Notification message (default: read the hook payload from stdin)")
 	return cmd
 }

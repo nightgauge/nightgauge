@@ -133,8 +133,8 @@ func TestNotifyMessageFromHook(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := NotifyMessageFromHook([]byte(tc.payload)); got != tc.want {
-				t.Fatalf("NotifyMessageFromHook() = %q, want %q", got, tc.want)
+			if _, got := NotifyFromHook([]byte(tc.payload)); got != tc.want {
+				t.Fatalf("NotifyFromHook() message = %q, want %q", got, tc.want)
 			}
 		})
 	}

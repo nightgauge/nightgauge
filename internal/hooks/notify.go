@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -18,31 +19,52 @@ type NotifyResult struct {
 type NotifyEvent string
 
 const (
-	EventPermissionPrompt NotifyEvent = "permission_prompt"
-	EventIdle             NotifyEvent = "idle"
-	EventAuthSuccess      NotifyEvent = "auth_success"
-	EventDialogElicit     NotifyEvent = "dialog_elicit"
-	EventPipelineComplete NotifyEvent = "pipeline_complete"
-	EventPipelineError    NotifyEvent = "pipeline_error"
+	EventPermissionPrompt  NotifyEvent = "permission_prompt"
+	EventIdlePrompt        NotifyEvent = "idle_prompt"
+	EventAuthSuccess       NotifyEvent = "auth_success"
+	EventElicitationDialog NotifyEvent = "elicitation_dialog"
+	EventPipelineComplete  NotifyEvent = "pipeline_complete"
+	EventPipelineError     NotifyEvent = "pipeline_error"
 )
 
 // defaultTitles maps events to notification titles.
 var defaultTitles = map[NotifyEvent]string{
-	EventPermissionPrompt: "Nightgauge - Permission Required",
-	EventIdle:             "Nightgauge - Idle",
-	EventAuthSuccess:      "Nightgauge - Authenticated",
-	EventDialogElicit:     "Nightgauge - Input Needed",
-	EventPipelineComplete: "Nightgauge - Pipeline Complete",
-	EventPipelineError:    "Nightgauge - Pipeline Error",
+	EventPermissionPrompt:  "Nightgauge - Permission Required",
+	EventIdlePrompt:        "Nightgauge - Idle",
+	EventAuthSuccess:       "Nightgauge - Authenticated",
+	EventElicitationDialog: "Nightgauge - Input Needed",
+	EventPipelineComplete:  "Nightgauge - Pipeline Complete",
+	EventPipelineError:     "Nightgauge - Pipeline Error",
 }
 
-// EvaluateNotify sends a desktop notification.
-func EvaluateNotify(event NotifyEvent, message string) NotifyResult {
-	title := defaultTitles[event]
-	if title == "" {
-		title = "Nightgauge"
-	}
+// NotifyDisableEnv names the variable that switches desktop notifications off.
+// Only the value "1" disables them; tests that spawn a real hook binary set it
+// so a gate run never posts a banner to the operator's desktop (#3137).
+const NotifyDisableEnv = "NIGHTGAUGE_NOTIFY_DISABLE"
 
+// deliverNotification posts the notification. Tests replace it to count
+// deliveries without starting osascript, notify-send or PowerShell.
+var deliverNotification = deliverForPlatform
+
+// NotifyTitle returns the banner title for event, or the generic "Nightgauge"
+// title for an empty or unknown event.
+func NotifyTitle(event NotifyEvent) string {
+	if title := defaultTitles[event]; title != "" {
+		return title
+	}
+	return "Nightgauge"
+}
+
+// EvaluateNotify sends a desktop notification unless NotifyDisableEnv is "1".
+func EvaluateNotify(event NotifyEvent, message string) NotifyResult {
+	title := NotifyTitle(event)
+	if os.Getenv(NotifyDisableEnv) == "1" {
+		return NotifyResult{Sent: false, Error: "notifications disabled (" + NotifyDisableEnv + "=1)"}
+	}
+	return deliverNotification(title, message)
+}
+
+func deliverForPlatform(title, message string) NotifyResult {
 	switch runtime.GOOS {
 	case "darwin":
 		return notifyMacOS(title, message)
@@ -55,20 +77,25 @@ func EvaluateNotify(event NotifyEvent, message string) NotifyResult {
 	}
 }
 
-// NotifyMessageFromHook extracts the message from a Notification hook payload.
+// NotifyFromHook extracts the event and message from a Notification hook payload.
 //
-// Notification hooks are invoked with the payload on stdin and no argv, so this
-// is the path notify.sh actually exercises — the --message flag it used to
-// require was never supplied by the harness (#354). An unparseable payload
-// yields an empty message, which the caller treats as "nothing to announce".
-func NotifyMessageFromHook(inputJSON []byte) string {
+// Notification hooks are invoked with the payload on stdin and no argv (#354),
+// so the event comes from Claude Code's notification_type. A type outside the
+// known vocabulary, or none, yields "" and the generic title (#3137). An
+// unparseable payload yields an empty message: nothing to announce.
+func NotifyFromHook(inputJSON []byte) (NotifyEvent, string) {
 	var input struct {
-		Message string `json:"message"`
+		Message          string `json:"message"`
+		NotificationType string `json:"notification_type"`
 	}
 	if err := json.Unmarshal(inputJSON, &input); err != nil {
-		return ""
+		return "", ""
 	}
-	return input.Message
+	event := NotifyEvent(input.NotificationType)
+	if _, ok := defaultTitles[event]; !ok {
+		event = ""
+	}
+	return event, input.Message
 }
 
 // EvaluateNotifyJSON returns the notification result as JSON bytes.

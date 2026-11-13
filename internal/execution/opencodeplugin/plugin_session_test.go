@@ -935,10 +935,10 @@ process.stdout.write(JSON.stringify({ idleMs, permMs }));
 	env := append(os.Environ(),
 		"NG_SESSION_PATH="+sessionPath,
 		"NG_CWD="+root,
-		"NIGHTGAUGE_BIN="+shim,
 		"NIGHTGAUGE_OUTPUT_FILE="+outputFile,
 		"NIGHTGAUGE_RUN_ID=run-nonblock-1",
 	)
+	env = append(env, hookBinEnv(shim)...)
 	cmd.Env = env
 	cmd.Dir = root
 	out, err := cmd.Output()

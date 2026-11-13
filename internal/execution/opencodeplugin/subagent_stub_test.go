@@ -159,14 +159,13 @@ func TestRealPluginDeniesTaskAgainstRealOpenCode(t *testing.T) {
 	}
 	// Build first: the budget times the run, not a go build (#2347).
 	hookBin, waitForHooks := trackedHookBin(t, buildNightgaugeBin(t))
-	task := runTaskStub(t, real, sh.pluginEntry, sh, stub, []string{
+	task := runTaskStub(t, real, sh.pluginEntry, sh, stub, append([]string{
 		EnvNonce + "=" + nonce,
 		EnvSentinel + "=" + filepath.Join(runDir, "sentinel.json"),
 		EnvPluginPath + "=" + sh.pluginEntry,
-		"NIGHTGAUGE_BIN=" + hookBin,
 		"NIGHTGAUGE_OUTPUT_FILE=" + outputFile,
 		"NIGHTGAUGE_RUN_ID=task-deny-stub-" + strconv.FormatInt(time.Now().UnixNano(), 36),
-	})
+	}, hookBinEnv(hookBin)...))
 	waitForHooks()
 	if task.status != "error" || !strings.Contains(task.err, "[nightgauge-gate:task-denied]") {
 		t.Fatalf("the shipped plugin did not refuse the task call: %+v", task)

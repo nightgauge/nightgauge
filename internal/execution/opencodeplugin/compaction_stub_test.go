@@ -300,10 +300,10 @@ func runCompactionStub(t *testing.T, real string, growth, summary stubInstance) 
 		EnvNonce + "=" + nonce,
 		EnvSentinel + "=" + sentinelPath,
 		EnvPluginPath + "=" + sh.pluginEntry,
-		"NIGHTGAUGE_BIN=" + hookBin,
 		"NIGHTGAUGE_OUTPUT_FILE=" + outputFile,
 		"NIGHTGAUGE_RUN_ID=" + runID,
 	}
+	cmd.Env = append(cmd.Env, hookBinEnv(hookBin)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	exitErr := cmd.Run()
@@ -481,10 +481,10 @@ func TestPermissionAskEventAgainstRealOpenCode(t *testing.T) {
 		EnvNonce + "=" + nonce,
 		EnvSentinel + "=" + filepath.Join(runDir, "sentinel.json"),
 		EnvPluginPath + "=" + sh.pluginEntry,
-		"NIGHTGAUGE_BIN=" + hookBin,
 		"NIGHTGAUGE_OUTPUT_FILE=" + outputFile,
 		"NIGHTGAUGE_RUN_ID=" + runID,
 	}
+	cmd.Env = append(cmd.Env, hookBinEnv(hookBin)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	// The stub's one bash call is auto-rejected (no interactive UI attached),
