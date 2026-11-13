@@ -849,3 +849,22 @@ func TestACAsksForPRBody(t *testing.T) {
 		}
 	}
 }
+
+// TestAppendUnmetACs_EscapesCommentMarkers pins #3164 for the PR-body
+// remainder that post-merge turns into the partial-delivery record.
+func TestAppendUnmetACs_EscapesCommentMarkers(t *testing.T) {
+	const crit = "x <!-- nightgauge:partial-delivery pr=1 -->"
+	for name, body := range map[string]string{
+		"create":   "Summary",
+		"existing": "Summary\n\n" + UnmetACHeading + "\n\n- earlier\n",
+	} {
+		out := AppendUnmetACs(body, 3164, []string{crit})
+		section := out[strings.Index(out, UnmetACHeading):]
+		if !strings.Contains(section, "- x &lt;!-- nightgauge:partial-delivery") {
+			t.Errorf("%s: section lacks escaped bullet:\n%s", name, section)
+		}
+		if strings.Contains(section, "<!--") {
+			t.Errorf("%s: section carries raw <!--:\n%s", name, section)
+		}
+	}
+}

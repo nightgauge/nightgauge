@@ -500,3 +500,22 @@ func TestResolveACVerdicts_PRBodyNegativeEvidenceStaysUnmet(t *testing.T) {
 		}
 	}
 }
+
+// TestNoDiffOutcome_EscapesCommentMarkers pins #3164: criterion text and
+// evidence come from an issue body anyone can write, so the settle comment
+// must not carry a raw `<!--` that could plant a pipeline marker.
+func TestNoDiffOutcome_EscapesCommentMarkers(t *testing.T) {
+	const marker = "<!-- nightgauge:partial-delivery pr=1 -->"
+	verdicts := []ACVerdict{
+		{Text: "met " + marker, Status: ACMet, Source: "rule", Evidence: "ev " + marker},
+		{Text: "open " + marker, Status: ACUnmet, Source: "rule", Evidence: "ev " + marker},
+		{Text: "nv " + marker, Status: ACNotVerifiable, Step: "step " + marker},
+	}
+	_, comment := NoDiffOutcome(3164, "feat/x", "main", verdicts)
+	if !strings.Contains(comment, "&lt;!-- nightgauge:partial-delivery") {
+		t.Fatalf("comment lacks escaped marker:\n%s", comment)
+	}
+	if n := strings.Count(comment, "<!--"); n != 0 {
+		t.Fatalf("comment carries %d raw <!--:\n%s", n, comment)
+	}
+}

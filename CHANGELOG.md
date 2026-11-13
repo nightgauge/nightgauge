@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The issue comment pr-create posts when a branch has no diff, and the unmet
+  criteria a pull request leaves open, now write `<!--` in quoted criterion
+  text as `&lt;!--`. Issue text can no longer plant a comment the pipeline
+  reads as one of its own markers.
+
 - A stage failure is booked as `host_slept` only when the scheduler itself
   measured the host sleeping, recorded as structured runtime state. Agent
   output that echoes the `[host-slept]` marker no longer turns a real failure
