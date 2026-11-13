@@ -183,9 +183,26 @@ else
 VSIX_SOURCE="packaged from tree $(git rev-parse --short HEAD)"
 step "package the VSIX for $VSCE_TARGET from $(git rev-parse --short HEAD)"
 BIN_VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
-npm run -w @nightgauge/sdk build >/dev/null
+# A fresh worktree has no node_modules, and the SDK build would die on a bare
+# "tsc: not found". Install the workspace once; a populated tree is left alone.
+if [[ ! -d "$ROOT/node_modules" ]]; then
+  step "install workspace dependencies (npm ci): no node_modules at $ROOT"
+  if ! (cd "$ROOT" && npm ci) >"$RUN_DIR/npm-ci.log" 2>&1; then
+    echo "ERROR: npm ci failed — last 40 lines of $RUN_DIR/npm-ci.log:" >&2
+    tail -n 40 "$RUN_DIR/npm-ci.log" >&2
+    die "npm ci failed; full output in $RUN_DIR/npm-ci.log"
+  fi
+fi
+if ! (cd "$ROOT" && npm run -w @nightgauge/sdk build) >"$RUN_DIR/sdk-build.log" 2>&1; then
+  echo "ERROR: SDK build failed — last 40 lines of $RUN_DIR/sdk-build.log:" >&2
+  tail -n 40 "$RUN_DIR/sdk-build.log" >&2
+  die "SDK build failed (npm run -w @nightgauge/sdk build)"
+fi
 mkdir -p "$PKG/dist/bin"
-CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build -ldflags "-s -w -X main.version=$BIN_VERSION" \
+# The release's flags, from the Makefile's GOFLAGS_BUILD and RELEASE_LDFLAGS:
+# unstripped, -trimpath, uncompressed DWARF, vendor stamped. A test pins them.
+CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build -trimpath \
+  -ldflags "-compressdwarf=false -X main.version=$BIN_VERSION -X 'main.vendor=Edibu, LLC'" \
   -o "$PKG/dist/bin/nightgauge" ./cmd/nightgauge
 chmod +x "$PKG/dist/bin/nightgauge"
 (cd "$PKG" && npm run build >/dev/null)

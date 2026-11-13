@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The clean-install gate (G1) now runs `npm ci` in a fresh worktree with no
+  `node_modules` and names an SDK build failure instead of dying on a bare
+  `tsc: not found`. It packages the bundled Linux binary with the release's
+  flags (unstripped, `-trimpath`, uncompressed DWARF, vendor stamped), so it
+  tests the binary that ships. The `.goreleaser.yml` comment no longer
+  credits DWARF for the binary's Defender score; the dependency pins do
+  (#3114).
 - A partial-delivery re-run now reconciles the comment's remaining criteria
   with the current issue body. Its brief is the listed criteria still in the
   body plus only criteria new since the partial PR: added to a body edited
