@@ -534,6 +534,8 @@ REQUIRED_FILES=(
   scripts/test-count-bundle-skill-reads.sh
   docker/clean-install/bundle-skill-source.sh
   scripts/test-bundle-skill-source.sh
+  scripts/lib/clean-install-bundle-rule.sh
+  scripts/test-clean-install-bundle-rule.sh
   scripts/test-plugin-hooks-path.sh
   scripts/advance-stable.sh
   scripts/test-advance-stable.sh
@@ -2325,6 +2327,7 @@ run_group "Documented plugin install works" bash scripts/check-plugin-install-do
 run_group "RC VSIX fetch regression suite" bash scripts/test-fetch-rc-vsix.sh
 run_group "Bundle skill read counter regression suite" bash scripts/test-count-bundle-skill-reads.sh
 run_group "Bundle skill source regression suite" bash scripts/test-bundle-skill-source.sh
+run_group "Bundle-read run-kind rule regression suite" bash scripts/test-clean-install-bundle-rule.sh
 run_group "Plugin hooks run from a path with a space" bash scripts/test-plugin-hooks-path.sh
 run_group "Stable move regression suite" bash scripts/test-advance-stable.sh
 

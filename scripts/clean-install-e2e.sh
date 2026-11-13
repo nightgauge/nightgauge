@@ -29,19 +29,22 @@
 # (check-runtime-assets, check-shipped-code, preflight skill-bundle against ./skills).
 # On an RC run CLEAN_INSTALL_SKILLS_SOURCE points the skill-bundle source at the tag's tree.
 # When GITHUB_STEP_SUMMARY is set the summary table is appended to it.
-# The two bundle-read rows hard-fail on EVERY run kind (schedule, manual
-# dispatch, RC dispatch, local); --smoke evaluates neither. The summary's
-# "Bundle-read rows (G1)" row names the rule and this run's kind (#2997).
+# The two bundle-read rows are recorded as SKIP (never PASS) on schedule runs
+# and hard-fail on manual dispatch, RC dispatch and local; --smoke evaluates
+# neither. The summary's "Bundle-read rows (G1)" row names the rule and this
+# run's kind (#3135, superseding #2997).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=lib/clean-install-bundle-rule.sh
+. "$ROOT/scripts/lib/clean-install-bundle-rule.sh"
 
 SMOKE=0
 for arg in "$@"; do
   case "$arg" in
     --smoke) SMOKE=1 ;;
-    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -54,11 +57,7 @@ case "${GITHUB_EVENT_NAME:-}" in
   "") RUN_KIND="local" ;;
   *) RUN_KIND="$GITHUB_EVENT_NAME" ;;
 esac
-if [[ "$SMOKE" == "1" ]]; then
-  BUNDLE_RULE="not evaluated (--smoke) — this run: $RUN_KIND"
-else
-  BUNDLE_RULE="hard-fail on every run kind — this run: $RUN_KIND"
-fi
+BUNDLE_RULE="$(bundle_rule_text "$RUN_KIND" "$SMOKE")"
 
 OWNER="${E2E_OWNER:-nightgauge}"
 OWNER_TYPE="${E2E_OWNER_TYPE:-org}"
@@ -295,6 +294,10 @@ FAILED=0
 check() { # name ok evidence
   if [[ "$2" == "1" ]]; then printf 'PASS  %-52s %s\n' "$1" "$3"; else printf 'FAIL  %-52s %s\n' "$1" "$3"; FAILED=1; fi
 }
+SKIPPED=0
+skip() { # name evidence — recorded, never PASS, never touches FAILED
+  printf 'SKIP  %-52s %s\n' "$1" "$2"; SKIPPED=$((SKIPPED + 1))
+}
 [[ -f "$REPORT" ]] || { check "driver wrote a report" 0 "missing $REPORT"; exit 1; }
 DRIVER_STATUS="$(jq -r .status "$REPORT")"
 check "driver status" "$([[ "$DRIVER_STATUS" == "pass" ]] && echo 1 || echo 0)" "$DRIVER_STATUS"
@@ -321,8 +324,8 @@ if [[ "$SMOKE" == "0" ]]; then
   check "PR exists on the throwaway repo" "$([[ -n "$PR_URL" ]] && echo 1 || echo 0)" "${PR_URL:-none}"
   check "PR is MERGED (forge says so)" "$([[ "$PR_STATE" == "MERGED" ]] && echo 1 || echo 0)" "$PR_STATE"
   check "issue is CLOSED" "$([[ "$ISSUE_STATE" == "CLOSED" ]] && echo 1 || echo 0)" "#$ISSUE_NUM $ISSUE_STATE"
-  # Both rows hard-fail on every run kind (schedule, dispatch, RC, local); a
-  # missing bundle-read.json fails both and never passes (#2722, #3036, #2997).
+  # Schedule runs record both rows as SKIP; every other kind hard-fails them,
+  # and a missing bundle-read.json fails both and never passes (#2722, #3036, #3135).
   BUNDLE_READ="$OUT_DIR/bundle-read.json"
   USER_DIRS="$(jq -r '.user_additional_dirs // "missing"' "$BUNDLE_READ" 2>/dev/null || echo missing)"
   BUNDLE_READS="$(jq -r '.bundle_skill_reads // "missing"' "$BUNDLE_READ" 2>/dev/null || echo missing)"
@@ -330,11 +333,16 @@ if [[ "$SMOKE" == "0" ]]; then
   SKILL_SOURCE_OK="$(jq -r '.skill_source_ok == true' "$BUNDLE_READ" 2>/dev/null || echo false)"
   SKILL_PATHS_IN="$(jq -r '((.skill_paths // []) - (.outside_bundle // [])) | length' "$BUNDLE_READ" 2>/dev/null || echo 0)"
   SKILL_PATHS_OUT="$(jq -r '(.outside_bundle // []) | length' "$BUNDLE_READ" 2>/dev/null || echo 0)"
-  check "no user-level additionalDirectories" "$([[ "$USER_DIRS" == "0" ]] && echo 1 || echo 0)" \
-    "user_additional_dirs=$USER_DIRS"
-  check "stage skills were loaded from the bundle path" \
-    "$([[ "$SKILL_SOURCE_OK" == "true" ]] && echo 1 || echo 0)" \
-    "$SKILL_PATHS_IN skill_path(s) under $BUNDLE_PATH, $SKILL_PATHS_OUT outside; $BUNDLE_READS tool-call read(s)"
+  SOURCE_EVIDENCE="$SKILL_PATHS_IN skill_path(s) under $BUNDLE_PATH, $SKILL_PATHS_OUT outside; $BUNDLE_READS tool-call read(s)"
+  if bundle_rows_skip "$RUN_KIND"; then
+    skip "no user-level additionalDirectories" "skipped on schedule runs — user_additional_dirs=$USER_DIRS"
+    skip "stage skills were loaded from the bundle path" "skipped on schedule runs — $SOURCE_EVIDENCE"
+  else
+    check "no user-level additionalDirectories" "$([[ "$USER_DIRS" == "0" ]] && echo 1 || echo 0)" \
+      "user_additional_dirs=$USER_DIRS"
+    check "stage skills were loaded from the bundle path" \
+      "$([[ "$SKILL_SOURCE_OK" == "true" ]] && echo 1 || echo 0)" "$SOURCE_EVIDENCE"
+  fi
 fi
 # The summary falls back to the state the pipeline recorded (pr-{N}.json)
 # when the forge could not be asked; the MERGED check above stays forge-only.
@@ -365,7 +373,7 @@ SUMMARY="$(cat <<TABLE
 | Bundle-read rows (G1)     | $BUNDLE_RULE |
 | Cost / duration           | ${COST} USD / $((DURATION_MS / 1000)) s |
 | Findings                  | $(( $(jq -r '.findings | length' "$REPORT") + $([[ -f "$OUT_DIR/findings.txt" ]] && wc -l < "$OUT_DIR/findings.txt" || echo 0) )) (report.json + findings.txt) |
-| Result                    | $([[ "$FAILED" == "0" ]] && echo PASS || echo FAIL) |
+| Result                    | $([[ "$FAILED" == "0" ]] && echo PASS || echo FAIL)$([[ "$SKIPPED" -gt 0 ]] && echo " ($SKIPPED skipped)") |
 TABLE
 )"
 printf '%s\n' "$SUMMARY"

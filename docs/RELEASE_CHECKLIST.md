@@ -363,8 +363,10 @@ names it in the run summary's _Artifact tested_ row. If the artifact is missing
 or expired (14-day retention) the run fails; it never falls back to the tree.
 Re-run staging for the tag first. The same run also asserts a stage read its
 skills from the installed bundle, and validates the cached plugin copy that
-`claude plugin install` writes. The bundle-read rows hard-fail on every run
-kind, scheduled included; the summary's _Bundle-read rows_ row names the run kind.
+`claude plugin install` writes. Scheduled runs record both
+bundle-read rows as SKIP, never PASS; manual dispatch, RC dispatch and local runs
+hard-fail them, including when `bundle-read.json` is missing. The summary's
+_Bundle-read rows_ row names the rule and the run kind.
 
 ### The steps
 
