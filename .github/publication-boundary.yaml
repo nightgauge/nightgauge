@@ -282,6 +282,7 @@ deny:
       - "docs/spikes/1272-ai-native-sdlc-playbook-gap-analysis.md"
       - "docs/spikes/1650-opencode-server-mode-warm-serve-run-attach-http-permission.md"
       - "docs/spikes/1568-conversational-agent-sessions-across-adapters.md"
+      - "docs/spikes/3197-opencode-2x-port-plan.md"
     rationale: >-
       Company research artifacts require an explicit publication decision.
       The public README documents the product contract without publishing the
