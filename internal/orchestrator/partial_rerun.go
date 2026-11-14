@@ -553,3 +553,23 @@ func stagesInclude(stages []state.PipelineStage, stage state.PipelineStage) bool
 	}
 	return false
 }
+
+// stopNoDiffBeforePRCreate runs StopNoDiffBeforePRCreate for the scheduler,
+// reading the issue's current body and commenting through the repo client.
+func (s *Scheduler) stopNoDiffBeforePRCreate(ctx context.Context, item types.BoardItem, ws string) (string, bool) {
+	owner, name := splitRepo(item.Repo)
+	fetch := func(ctx context.Context) (*types.Issue, error) {
+		svc := s.issueServiceFor(ctx, owner, name)
+		if svc == nil {
+			return nil, fmt.Errorf("no issue service")
+		}
+		return svc.GetIssueWithRelations(ctx, owner, name, item.Number, gh.NoRelations)
+	}
+	commenter := s.noDiffCommenter
+	if commenter == nil {
+		if c, err := s.repoClient(ctx, owner, name); err == nil {
+			commenter = gh.NewIssueService(c)
+		}
+	}
+	return StopNoDiffBeforePRCreate(ctx, ws, item.Number, fetch, commenter)
+}

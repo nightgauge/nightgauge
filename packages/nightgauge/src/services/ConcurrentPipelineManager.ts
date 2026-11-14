@@ -177,6 +177,17 @@ export function resolveHaltKind(errMsg: string, hostSleptVerdict: boolean): stri
   return classifyTerminalKind(errMsg.split(HOST_SLEPT_MARKER).join(""));
 }
 
+/**
+ * The terminal kind a typed pipeline-start refusal books (#3269). Mirrors Go's
+ * `terminalKindForStartRefusal` (internal/ipc/diagnostics_stage_exit.go): the
+ * closed-issue guard's error text carries no classifiable marker, so the kind
+ * travels on the run result's `startRefusal` field instead. Other refusals
+ * return undefined and keep the text classification.
+ */
+export function startRefusalTerminalKind(refusal: string | undefined): string | undefined {
+  return refusal === "issue-closed" ? "issue_closed" : undefined;
+}
+
 import type { IssueQueueService } from "./IssueQueueService";
 import type { HeadlessOrchestrator } from "./HeadlessOrchestrator";
 import type { PipelineRunResult, RequestedPin } from "./HeadlessOrchestrator";
@@ -506,7 +517,12 @@ export interface ConcurrentPipelineCallbacks {
     issueNumber: number,
     error: Error,
     costUsd: number,
-    repoSlug?: string
+    repoSlug?: string,
+    /**
+     * #3269: a terminal kind the run result names structurally (a typed
+     * start refusal), which outranks classifying the error text.
+     */
+    terminalKind?: string
   ) => void;
   /**
    * Called when a slot DEFERRED — pickup found the issue's native blockedBy
@@ -2279,7 +2295,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       pipelineSucceeded = result.success;
       this.recordRunawayStreak(
         slot,
-        result.success ? undefined : classifyTerminalKind(result.error?.message ?? "")
+        result.success
+          ? undefined
+          : (startRefusalTerminalKind(result.startRefusal) ??
+              classifyTerminalKind(result.error?.message ?? ""))
       );
       pipelineDeferred = result.deferred ?? false;
       isAlreadyResolved = result.outcomeType === "already-resolved";
@@ -2429,7 +2448,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           slot.issueNumber,
           slotError,
           slotCostUsd,
-          slot.repo
+          slot.repo,
+          startRefusalTerminalKind(result.startRefusal)
         );
       }
       // The dispatch reported its OWN outcome. Set only here and in the catch
@@ -3126,6 +3146,17 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // fault a human must clear — that one still halts. Sniffing a substring
       // out of `blocker` would make the two indistinguishable the first time
       // either string is reworded.
+      // #3269: a run refused because its issue is already closed did nothing
+      // wrong and spent nothing; Go books it issue_closed, a non-failure.
+      // Keyed on the typed refusal, not the guard's error text.
+      if (startRefusalTerminalKind(pipelineResult?.startRefusal) === "issue_closed") {
+        this.logger.info(
+          "Skipping haltQueueOnSlotFailure — the issue was already closed; the run was refused at the door",
+          { failedIssue: slot.issueNumber }
+        );
+        return;
+      }
+
       if (pipelineResult?.blocked?.outOfScopeFinding) {
         this.logger.info(
           "Skipping haltQueueOnSlotFailure — blocked terminal with a durable finding; the run diagnosed itself and the queue keeps flowing",

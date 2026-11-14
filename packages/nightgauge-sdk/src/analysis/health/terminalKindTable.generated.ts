@@ -176,6 +176,22 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
   ],
   "rules": [
     {
+      "id": "api-cloudflare-challenge",
+      "kind": "api_overloaded",
+      "signal": true,
+      "clauses": [
+        [
+          "attention required!",
+          "cloudflare"
+        ],
+        [
+          "403",
+          "cloudflare"
+        ]
+      ],
+      "why": "A Cloudflare challenge in front of the model API (#3256, folded into #3269): the Claude CLI reports `Failed to authenticate. API Error: 403 Attention Required! | Cloudflare` (api_error_status 403) for an upstream, transient edge block — a probe minutes later succeeded with nothing changed on the machine. It is not a logged-out CLI, so it must not reach adapter-auth-failed and send the operator to re-authenticate, and it is not an issue defect. It reuses api_overloaded rather than adding a kind: that kind already routes to a short per-issue backoff with no lifetime-cap increment and no queue pause, and the distinct rule id keeps it separable in dashboards. FIRST in the table because `Failed to authenticate` is exactly the wording an auth rule would claim. Every clause requires `cloudflare`, so a 403 without a Cloudflare marker (a GitHub throttle, a permission_error) keeps its current classification, pinned by a negative corpus row."
+    },
+    {
       "id": "host-slept",
       "kind": "host_slept",
       "signal": false,

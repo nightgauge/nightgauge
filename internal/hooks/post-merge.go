@@ -10,6 +10,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/intelligence/acparse"
 	"github.com/nightgauge/nightgauge/internal/trust"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -195,6 +196,14 @@ type PostMergeResult struct {
 	// ReadyWithheld is set on a partial delivery that must not return to Ready:
 	// the run merged nothing, or the issue carries an excluded label (#2878).
 	ReadyWithheld bool `json:"readyWithheld,omitempty"`
+	// OwnerOnlyRemainder is set on a partial delivery whose every remaining
+	// criterion is marked for the supervisor or owner (#3269). No pipeline
+	// run can deliver it, so the row stays In review instead of Ready.
+	OwnerOnlyRemainder bool `json:"ownerOnlyRemainder,omitempty"`
+	// AllCriteriaTicked is set on a partial delivery whose issue body ticks
+	// every criterion (#3269): nothing is left to re-dispatch, so the row
+	// stays In review for the supervisor to close instead of Ready.
+	AllCriteriaTicked bool `json:"allCriteriaTicked,omitempty"`
 	// EmptyDelivery is set on a partial delivery whose merged PR is known to
 	// have changed no files (#3012). Ready is withheld and the row parks in
 	// Backlog: re-running an issue whose last PR delivered nothing loops.
@@ -391,7 +400,12 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	// part of the issue: pr-create found an unmet acceptance criterion. Leave
 	// the issue open, return it to Ready and name the remainder. Only a body
 	// we actually read can say this; an unread body keeps the close below.
-	if IsPartialDelivery(merge.Body, input.RepositoryOwner+"/"+input.RepositoryName, input.IssueNumber) {
+	//
+	// (#3269) An issue already CLOSED is not partly delivered, whatever the
+	// PR's keyword: someone closed it on evidence, so it takes the close path
+	// below (board → Done) instead of returning to Ready with a stale count.
+	if IsPartialDelivery(merge.Body, input.RepositoryOwner+"/"+input.RepositoryName, input.IssueNumber) &&
+		!strings.EqualFold(issue.State, "CLOSED") {
 		return partialDelivery(ctx, boardSvc, input, issue, merge)
 	}
 
@@ -696,6 +710,50 @@ func UnmetCriteria(body string) []string {
 	return out
 }
 
+// issueUnmetCriteria returns the unticked criteria in the issue's current
+// body, parsed the way `issue ac-check` and `ac-mark --list` parse it (#3269).
+// ok is false when the body has no checkbox criteria at all, so the caller
+// can fall back to the list the PR body names.
+func issueUnmetCriteria(body string) (unmet []string, ok bool) {
+	items := acparse.List(body)
+	if len(items) == 0 {
+		return nil, false
+	}
+	unmet = []string{}
+	for _, it := range items {
+		if !it.Checked {
+			unmet = append(unmet, it.Text)
+		}
+	}
+	return unmet, true
+}
+
+// ownerOnlyPrefixes open a criterion reserved to the supervisor or owner.
+var ownerOnlyPrefixes = []string{"**supervisor", "**owner"}
+
+// isOwnerOnlyRemainder reports whether every remaining criterion is marked
+// for the supervisor or owner (#3269): a re-dispatch could deliver none of
+// them, so the issue must not return to Ready.
+func isOwnerOnlyRemainder(unmet []string) bool {
+	if len(unmet) == 0 {
+		return false
+	}
+	for _, c := range unmet {
+		lower := strings.ToLower(strings.TrimSpace(c))
+		owned := false
+		for _, p := range ownerOnlyPrefixes {
+			if strings.HasPrefix(lower, p) {
+				owned = true
+				break
+			}
+		}
+		if !owned {
+			return false
+		}
+	}
+	return true
+}
+
 // partialDelivery handles a merged PR that did not close its issue: no close,
 // no Done, no epic rollup and no survival record. The board returns to Ready
 // so the remainder is scheduled, unless readyWithheld says otherwise, and a
@@ -704,7 +762,6 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 	out = PostMergeResult{
 		Reason:          "partial_delivery",
 		PartialDelivery: true,
-		UnmetCriteria:   UnmetCriteria(merge.Body),
 		IssueDoneSync:   BoardSyncNotAttempted,
 		MergedCommitSha: merge.SHA,
 		MergedAt:        merge.MergedAt,
@@ -713,7 +770,17 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 		ReadyWithheld:   readyWithheld(input, issue.Labels),
 		EmptyDelivery:   merge.ChangedFilesKnown && merge.ChangedFiles == 0,
 	}
-	if out.EmptyDelivery {
+	// (#3269) The remainder is what the issue body leaves unticked now, not
+	// what the PR body listed when it was written: the supervisor may have
+	// ticked criteria since.
+	if unmet, ok := issueUnmetCriteria(issue.Body); ok {
+		out.UnmetCriteria = unmet
+		out.AllCriteriaTicked = len(unmet) == 0
+	} else {
+		out.UnmetCriteria = UnmetCriteria(merge.Body)
+	}
+	out.OwnerOnlyRemainder = isOwnerOnlyRemainder(out.UnmetCriteria)
+	if out.EmptyDelivery || out.OwnerOnlyRemainder || out.AllCriteriaTicked {
 		out.ReadyWithheld = true
 	}
 	fmt.Fprintf(os.Stderr, "Post-merge: PR #%d does not close issue #%d — leaving it open (partial delivery)\n", input.PRNumber, input.IssueNumber)
@@ -725,6 +792,14 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 	if boardSvc != nil && input.ProjectNumber > 0 && !out.ReadyWithheld {
 		if err := boardSvc.SyncStatus(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber, "Ready"); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: post-merge board sync to Ready failed for #%d: %v\n", input.IssueNumber, err)
+			out.Failed = true
+			out.Error = err.Error()
+		}
+	}
+	if boardSvc != nil && input.ProjectNumber > 0 && (out.OwnerOnlyRemainder || out.AllCriteriaTicked) && !out.EmptyDelivery {
+		fmt.Fprintf(os.Stderr, "Post-merge: every criterion left on #%d is for the supervisor or owner — keeping it In review instead of Ready\n", input.IssueNumber)
+		if err := boardSvc.SyncStatus(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber, "In review"); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: post-merge board sync to In review failed for #%d: %v\n", input.IssueNumber, err)
 			out.Failed = true
 			out.Error = err.Error()
 		}
@@ -744,7 +819,7 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 			out.RemainderComment = "present"
 			return out
 		}
-		if err := input.Remainder.AddComment(ctx, issue.NodeID, remainderComment(input.PRNumber, out.UnmetCriteria, !out.ReadyWithheld, out.EmptyDelivery)); err != nil {
+		if err := input.Remainder.AddComment(ctx, issue.NodeID, remainderComment(input.PRNumber, out.UnmetCriteria, !out.ReadyWithheld, out.EmptyDelivery, out.OwnerOnlyRemainder, out.AllCriteriaTicked)); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: post-merge remainder comment failed for #%d: %v\n", input.IssueNumber, err)
 			out.RemainderComment = "failed"
 			out.Failed = true
@@ -797,7 +872,7 @@ func remainderCommentPosted(ctx context.Context, input PostMergeInput) bool {
 	return false
 }
 
-func remainderComment(prNumber int, unmet []string, backInReady, empty bool) string {
+func remainderComment(prNumber int, unmet []string, backInReady, empty, ownerOnly, allTicked bool) string {
 	var b strings.Builder
 	b.WriteString(remainderMarker(prNumber) + "\n")
 	if empty {
@@ -809,6 +884,13 @@ func remainderComment(prNumber int, unmet []string, backInReady, empty bool) str
 		b.WriteString(" and is back in Ready")
 	}
 	b.WriteString(".\n\n")
+	if ownerOnly && !empty {
+		b.WriteString("Every remaining criterion is for the supervisor or owner, so the pipeline cannot deliver it: the issue stays In review and is not re-queued.\n\n")
+	}
+	if allTicked && !empty {
+		b.WriteString("Every acceptance criterion in the issue body is ticked, so nothing is left to re-dispatch: the issue stays In review for the supervisor to verify and close.\n")
+		return b.String()
+	}
 	if len(unmet) == 0 {
 		b.WriteString("The PR did not list the remaining acceptance criteria; check them against the issue body.\n")
 		return b.String()

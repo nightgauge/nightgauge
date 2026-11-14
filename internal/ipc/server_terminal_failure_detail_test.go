@@ -14,6 +14,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
+	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -154,4 +155,54 @@ func TestBuildV2Record_TerminalFailureDetailIsTailTruncated(t *testing.T) {
 func strconvQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// issue3114ClosedDetail is the failure_detail the closed-issue start guard
+// produced for issue 3114 (#3269 part B): it carries no classifiable marker.
+const issue3114ClosedDetail = "Issue #3114 is already CLOSED. Pipeline halted — zero AI tokens consumed.\n\n" +
+	"Use forceRerun: true to override this guard for legitimate re-runs."
+
+// notifyPreStageFailure claims a run and completes it as a pre-stage failure
+// with the given extra JSON fields, returning the run and exit records.
+func notifyPreStageFailure(t *testing.T, runID, extra string) (state.V2RunRecord, diagnostics.StageExitRecord) {
+	t.Helper()
+	dir := layouttest.Repo(t)
+	s := NewServer(nil, WithWorkspaceRoot(dir))
+	if _, err := s.methods["pipeline.notifyStageTransition"](t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3114,"stage":"issue-pickup","status":"running","runId":"`+runID+`"}`)); err != nil {
+		t.Fatalf("notifyStageTransition(running): %v", err)
+	}
+	if _, err := s.methods["pipeline.notifyComplete"](t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3114,"success":false,"totalDurationMs":12,"failureDetail":`+strconvQuote(issue3114ClosedDetail)+extra+`,"runId":"`+runID+`"}`)); err != nil {
+		t.Fatalf("notifyComplete: %v", err)
+	}
+	records := readHistoryRecords(t, dir)
+	exits := readExitRecords(t, dir)
+	if len(records) != 1 || len(exits) != 1 {
+		t.Fatalf("want one run record and one exit record, got %d and %d", len(records), len(exits))
+	}
+	return records[0], exits[0]
+}
+
+// A closed-issue start refusal travels structurally as startRefusal and books
+// issue_closed on both the run record and the pre-dispatch exit record, so
+// the scheduler's non-failure branch applies (#3269).
+func TestNotifyComplete_ClosedIssueStartRefusalBooksIssueClosed(t *testing.T) {
+	rec, ex := notifyPreStageFailure(t, "019001c1-0002-7000-8000-000000003269", `,"startRefusal":"issue-closed"`)
+	if rec.TerminalFailureKind != orchestrator.TerminalKindIssueClosed {
+		t.Errorf("record terminal kind = %q, want issue_closed", rec.TerminalFailureKind)
+	}
+	if ex.TerminalKind != orchestrator.TerminalKindIssueClosed {
+		t.Errorf("exit record terminal_kind = %q, want issue_closed", ex.TerminalKind)
+	}
+	if ex.FailureDetail != issue3114ClosedDetail {
+		t.Errorf("exit record failure_detail = %q, want the guard's message", ex.FailureDetail)
+	}
+}
+
+// The same text without the start refusal is not booked issue_closed: the
+// kind comes from the structured field, never from the prose.
+func TestNotifyComplete_ClosedIssueTextWithoutRefusalIsNotIssueClosed(t *testing.T) {
+	rec, ex := notifyPreStageFailure(t, "019001c1-0003-7000-8000-000000003269", "")
+	if rec.TerminalFailureKind == orchestrator.TerminalKindIssueClosed || ex.TerminalKind == orchestrator.TerminalKindIssueClosed {
+		t.Errorf("kind = %q / %q without startRefusal, want not issue_closed", rec.TerminalFailureKind, ex.TerminalKind)
+	}
 }

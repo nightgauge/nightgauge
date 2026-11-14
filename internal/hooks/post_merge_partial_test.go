@@ -232,7 +232,7 @@ func TestUnmetCriteriaIgnoresIndentedStatusLine(t *testing.T) {
 }
 
 func TestRemainderCommentCannotCarryValidationMarker(t *testing.T) {
-	body := remainderComment(7, []string{"x " + forge.ValidationMarkerComment("main", "abc")}, true, false)
+	body := remainderComment(7, []string{"x " + forge.ValidationMarkerComment("main", "abc")}, true, false, false, false)
 	if forge.HasValidationMarker(body) {
 		t.Fatalf("remainder comment carries a validation marker: %q", body)
 	}
@@ -350,5 +350,112 @@ func TestPartialDeliveryEmptyMergeParksInBacklog(t *testing.T) {
 				t.Errorf("comment Ready claim wrong: %s", commenter.body)
 			}
 		})
+	}
+}
+
+// runPartialIssue is runPartial with the fetched issue's state and body set.
+func runPartialIssue(t *testing.T, state, issueBody string, closeErr error) (PostMergeResult, *mockIssueCloser, *mockBoardSyncer, *recordingCommenter) {
+	t.Helper()
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#600": {NodeID: "I_node600", Number: 600, State: state, Body: issueBody, ParentIssueNumber: 12},
+	}}
+	closer := &mockIssueCloser{err: closeErr}
+	epic := &mockEpicAutoCloser{result: &gh.AutoCloseSingleResult{Status: "skipped", Reason: "has_open"}}
+	board := &mockBoardSyncer{}
+	commenter := &recordingCommenter{}
+	verifier := &mockPRVerifierWithMerge{state: "MERGED", sha: "abc", mergedAt: "2026-10-26T00:00:00Z", body: partialBody}
+	res := EvaluatePostMerge(context.Background(), fetcher, closer, epic, verifier, board, PostMergeInput{
+		IssueNumber:     600,
+		RepositoryOwner: "nightgauge",
+		RepositoryName:  "nightgauge",
+		ProjectNumber:   6,
+		PRNumber:        77,
+		Remainder:       commenter,
+	})
+	return res, closer, board, commenter
+}
+
+// #3269 part D: an issue the supervisor already closed with every criterion
+// ticked goes to Done even though the merged PR said Refs.
+func TestPostMergeRefsPRClosedIssueGoesToDone(t *testing.T) {
+	body := "## Acceptance criteria\n\n- [x] first\n- [x] second\n- [x] third\n"
+	res, _, board, commenter := runPartialIssue(t, "CLOSED", body, errors.New("already closed"))
+	if res.PartialDelivery || res.Reason == "partial_delivery" {
+		t.Errorf("closed issue reported as partial delivery (left open): %+v", res)
+	}
+	if !res.IssueClosed {
+		t.Error("IssueClosed = false, want true for an already-closed issue")
+	}
+	if board.calledWith.status != "Done" {
+		t.Errorf("board synced to %q, want Done", board.calledWith.status)
+	}
+	if commenter.calls != 0 {
+		t.Errorf("remainder comment posted %d time(s) on a closed issue", commenter.calls)
+	}
+}
+
+// #3269 part D: an open issue with unticked criteria and a Refs PR stays in
+// Ready, and the count is the issue body's, not the PR body's stale list.
+func TestPostMergeRefsPROpenIssueCountsCurrentBody(t *testing.T) {
+	body := "## Acceptance criteria\n\n- [x] first\n- [x] second\n- [ ] third\n"
+	res, closer, board, commenter := runPartialIssue(t, "OPEN", body, nil)
+	if closer.called {
+		t.Error("CloseIssue must not run for an open issue with a Refs PR")
+	}
+	if !res.PartialDelivery || board.calledWith.status != "Ready" {
+		t.Errorf("PartialDelivery=%v board=%q, want true/Ready", res.PartialDelivery, board.calledWith.status)
+	}
+	if got := strings.Join(res.UnmetCriteria, "|"); got != "third" {
+		t.Errorf("UnmetCriteria = %q, want the issue body's one unticked criterion (the PR listed second|third)", got)
+	}
+	if !strings.Contains(commenter.body, "- third") || strings.Contains(commenter.body, "- second") {
+		t.Errorf("remainder comment names the stale list:\n%s", commenter.body)
+	}
+}
+
+// #3269 part E: a remainder made only of supervisor/owner criteria is not
+// re-queued — the row stays In review and the comment says why.
+func TestPostMergeOwnerOnlyRemainderStaysInReview(t *testing.T) {
+	body := "## Acceptance criteria\n\n- [x] code change\n" +
+		"- [ ] **Supervisor:** run the failure drill after merge\n" +
+		"- [ ] **Owner** signs off the rollout\n"
+	res, _, board, commenter := runPartialIssue(t, "OPEN", body, nil)
+	if !res.PartialDelivery || !res.OwnerOnlyRemainder || !res.ReadyWithheld {
+		t.Errorf("PartialDelivery=%v OwnerOnlyRemainder=%v ReadyWithheld=%v, want all true", res.PartialDelivery, res.OwnerOnlyRemainder, res.ReadyWithheld)
+	}
+	if board.calledWith.status != "In review" || board.syncs != 1 {
+		t.Errorf("board synced %d time(s), last to %q; want once to In review", board.syncs, board.calledWith.status)
+	}
+	if !strings.Contains(commenter.body, "stays In review and is not re-queued") || strings.Contains(commenter.body, "back in Ready") {
+		t.Errorf("comment does not say the issue stays In review:\n%s", commenter.body)
+	}
+}
+
+// A mixed remainder (one criterion the pipeline can deliver) still returns
+// to Ready.
+func TestPostMergeMixedRemainderReturnsToReady(t *testing.T) {
+	body := "- [ ] **Supervisor:** drill\n- [ ] add the flag\n"
+	res, _, board, _ := runPartialIssue(t, "OPEN", body, nil)
+	if res.OwnerOnlyRemainder || board.calledWith.status != "Ready" {
+		t.Errorf("OwnerOnlyRemainder=%v board=%q, want false/Ready", res.OwnerOnlyRemainder, board.calledWith.status)
+	}
+}
+
+// #3269 review: an open issue whose body ticks every criterion is not
+// re-queued — nothing is left to deliver, so it stays In review.
+func TestPostMergeAllTickedOpenIssueStaysInReview(t *testing.T) {
+	body := "## Acceptance criteria\n\n- [x] first\n- [x] second\n"
+	res, closer, board, commenter := runPartialIssue(t, "OPEN", body, nil)
+	if closer.called {
+		t.Error("CloseIssue must not run for an open issue with a Refs PR")
+	}
+	if !res.AllCriteriaTicked || !res.ReadyWithheld {
+		t.Errorf("AllCriteriaTicked=%v ReadyWithheld=%v, want true/true", res.AllCriteriaTicked, res.ReadyWithheld)
+	}
+	if board.calledWith.status != "In review" || board.syncs != 1 {
+		t.Errorf("board synced %d time(s), last to %q; want once to In review", board.syncs, board.calledWith.status)
+	}
+	if strings.Contains(commenter.body, "did not list") || strings.Contains(commenter.body, "back in Ready") {
+		t.Errorf("comment misdescribes a fully ticked issue:\n%s", commenter.body)
 	}
 }

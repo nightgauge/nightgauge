@@ -5638,3 +5638,47 @@ func TestDescribeEdgeSource_NamesTheBodyLine(t *testing.T) {
 		t.Errorf("edge provenance %q does not name the responsible body line", got)
 	}
 }
+
+// TestNotifyComplete_ClosedIssueRefusal_BookingDependsOnStructuredKind feeds
+// the exact failure_detail of the closed-issue start guard (#3269 part B).
+// With the kind the IPC layer derives from startRefusal it is a non-failure;
+// the same text without that kind is booked as a failure.
+func TestNotifyComplete_ClosedIssueRefusal_BookingDependsOnStructuredKind(t *testing.T) {
+	const detail = "Issue #3114 is already CLOSED. Pipeline halted — zero AI tokens consumed.\n\n" +
+		"Use forceRerun: true to override this guard for legitimate re-runs."
+	newScheduler := func() *AutonomousScheduler {
+		return &AutonomousScheduler{
+			trustGateOverride: allWritersGate(),
+			config:            AutonomousConfig{MaxConcurrent: 3},
+			state: &AutonomousState{
+				Status:                "running",
+				Running:               []RunningItem{{Repo: "nightgauge/nightgauge", Number: 3114, Title: "closed"}},
+				LifetimeIssueFailures: map[string]int{},
+			},
+			rescanCh:             make(chan struct{}, 1),
+			perIssueFailureCount: map[string]int{},
+			retryBackoff:         map[string]retryPlan{},
+		}
+	}
+	key := "nightgauge/nightgauge#3114"
+
+	as := newScheduler()
+	as.NotifyComplete("nightgauge/nightgauge", 3114, false, false, TerminalKindIssueClosed, detail)
+	as.drainBackground()
+	if got := as.state.LifetimeIssueFailures[key]; got != 0 {
+		t.Errorf("with issue_closed: LifetimeIssueFailures = %d, want 0", got)
+	}
+	if got := as.perIssueFailureCount[key]; got != 0 {
+		t.Errorf("with issue_closed: perIssueFailureCount = %d, want 0", got)
+	}
+	if as.state.Status != "running" {
+		t.Errorf("with issue_closed: Status = %q, want running", as.state.Status)
+	}
+
+	neg := newScheduler()
+	neg.NotifyComplete("nightgauge/nightgauge", 3114, false, false, "", detail)
+	neg.drainBackground()
+	if got := neg.state.LifetimeIssueFailures[key]; got == 0 {
+		t.Errorf("without the start refusal: LifetimeIssueFailures = 0, want the text booked as a failure")
+	}
+}

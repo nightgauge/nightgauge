@@ -13,6 +13,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/queuewait"
+	"github.com/nightgauge/nightgauge/pkg/types"
 	"github.com/spf13/cobra"
 )
 
@@ -57,6 +58,7 @@ or the PR is cleanly mergeable, waiting out in-flight CI (merge) — mirroring t
 scheduler contract instead of maintaining a second, divergent implementation.`,
 	}
 	cmd.AddCommand(prStageCreateCmd())
+	cmd.AddCommand(prStageNoDiffStopCmd())
 	cmd.AddCommand(prStageMergeCmd())
 	cmd.AddCommand(prStageBudgetCmd())
 	cmd.AddCommand(prStageQueueWaitCmd())
@@ -671,5 +673,69 @@ func prStageReviewGateCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit JSON instead of human output")
+	return cmd
+}
+
+// prStageNoDiffStopJSON is the wire shape of `pr-stage no-diff-stop`, parsed
+// by HeadlessOrchestrator before it dispatches pr-create (#3269).
+type prStageNoDiffStopJSON struct {
+	Stopped        bool   `json:"stopped"`
+	TerminalDetail string `json:"terminal_detail,omitempty"`
+}
+
+// prStageNoDiffStopCmd runs orchestrator.StopNoDiffBeforePRCreate, the
+// boundary the Go scheduler applies before pr-create (#3269): a branch level
+// with its base, with criteria still open, ends the run as a no-op instead of
+// reaching pr-create. Exit 0 with {"stopped":false} means continue to
+// pr-create; a non-zero exit is a setup error and the caller continues too.
+func prStageNoDiffStopCmd() *cobra.Command {
+	var (
+		repo       string
+		workdir    string
+		timeoutSec int
+	)
+	cmd := &cobra.Command{
+		Use:          "no-diff-stop <issue-number>",
+		Short:        "End a run before pr-create when its branch is level with its base (#3269)",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			issueNumber, err := parseIssueNumberArg(args[0])
+			if err != nil {
+				return err
+			}
+			if repo == "" {
+				return fmt.Errorf("--repo owner/name is required for pr-stage no-diff-stop")
+			}
+			workspace, err := resolvePrStageWorkspace(workdir)
+			if err != nil {
+				return err
+			}
+			cfg := authenticatePrStageGh(workspace)
+			var resolver gh.TokenResolver
+			owner := ""
+			if cfg != nil {
+				resolver = cfg
+				owner = cfg.Owner
+			}
+			client, clientErr := gh.NewClientFromConfig(resolver, owner, "")
+			if clientErr != nil {
+				return fmt.Errorf("build GitHub client: %w", clientErr)
+			}
+			ctx, cancel := prStageContext(cmd, timeoutSec)
+			defer cancel()
+
+			svc := gh.NewIssueService(client)
+			repoOwner, repoName := splitRepo("", repo)
+			fetch := func(ctx context.Context) (*types.Issue, error) {
+				return svc.GetIssueWithRelations(ctx, repoOwner, repoName, issueNumber, gh.NoRelations)
+			}
+			detail, stopped := orchestrator.StopNoDiffBeforePRCreate(ctx, workspace, issueNumber, fetch, svc)
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(prStageNoDiffStopJSON{Stopped: stopped, TerminalDetail: detail})
+		},
+	}
+	cmd.Flags().StringVar(&repo, "repo", "", "owner/name of the repository (required)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Run workspace (worktree) holding the pipeline context")
+	cmd.Flags().IntVar(&timeoutSec, "timeout", 60, "Timeout in seconds")
 	return cmd
 }

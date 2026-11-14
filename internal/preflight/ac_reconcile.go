@@ -586,26 +586,88 @@ func resolveMainSHA(workdir string) string {
 var (
 	acPathRE         = regexp.MustCompile(`([A-Za-z0-9_./-]+\.(?:md|ts|tsx|js|jsx|json|sh|ya?ml|toml|go|py|rs))`)
 	acPresenceVerbRE = regexp.MustCompile(`(?i)\b(exists|created|present|added|new\s+file)\b`)
+	// acClauseSplitRE splits a criterion into clauses: clause punctuation
+	// followed by whitespace or the end (never a bare `.`, so `scripts/x.sh`
+	// survives), and the subordinators that open a new clause. The presence
+	// verb must refer to the path, so both have to sit in one clause (#3269).
+	acClauseSplitRE = regexp.MustCompile(`(?i)[.,;:!?](?:\s+|$)|\b(?:when|if|unless|while|whereas|but)\b`)
 )
 
+// fileExistsPath returns the path a presence verb refers to: the first path
+// in the first clause that holds both a presence verb and a path, or "".
+func fileExistsPath(text string) string {
+	for _, clause := range acClauseSplitRE.Split(text, -1) {
+		if !acPresenceVerbRE.MatchString(clause) {
+			continue
+		}
+		if m := acPathRE.FindStringSubmatch(clause); m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+// findFilesByBasename walks workdir (skipping acExcludedDirs) for regular
+// files named base, stopping once limit matches are found.
+func findFilesByBasename(workdir, base string, limit int) []string {
+	var found []string
+	_ = filepath.WalkDir(workdir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if path != workdir && acExcludedDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() != base {
+			return nil
+		}
+		rel, relErr := filepath.Rel(workdir, path)
+		if relErr != nil {
+			rel = path
+		}
+		found = append(found, filepath.ToSlash(rel))
+		if len(found) >= limit {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
+}
+
+// fileExistsRule checks a file a criterion says exists. Only an exact path
+// with a directory component that is absent is unsatisfied; a bare basename
+// is resolved by searching the tree, and none or several matches leave the
+// criterion undetectable for the model's diff check (#3269).
 func fileExistsRule() acRule {
 	return acRule{
 		name: "file-exists",
 		applies: func(text string) map[string]string {
-			if !acPresenceVerbRE.MatchString(text) {
+			path := fileExistsPath(text)
+			if path == "" {
 				return nil
 			}
-			m := acPathRE.FindStringSubmatch(text)
-			if m == nil {
-				return nil
-			}
-			return map[string]string{"path": m[1]}
+			return map[string]string{"path": path}
 		},
 		evaluate: func(workdir string, x map[string]string) (string, string, []string) {
-			if _, err := os.Stat(filepath.Join(workdir, x["path"])); err == nil {
-				return ACSatisfied, "File present: " + x["path"], []string{x["path"]}
+			target := x["path"]
+			if strings.Contains(target, "/") {
+				if _, err := os.Stat(filepath.Join(workdir, target)); err == nil {
+					return ACSatisfied, "File present: " + target, []string{target}
+				}
+				return ACUnsatisfied, "File not found: " + target, nil
 			}
-			return ACUnsatisfied, "File not found: " + x["path"], nil
+			found := findFilesByBasename(workdir, target, 2)
+			switch len(found) {
+			case 1:
+				return ACSatisfied, "File present: " + found[0], found
+			case 0:
+				return ACUndetectable, "No file named " + target + " in the working tree", nil
+			default:
+				return ACUndetectable, "Several files named " + target + " in the working tree", nil
+			}
 		},
 	}
 }

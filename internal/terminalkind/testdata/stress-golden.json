@@ -26,6 +26,51 @@
       "signal": ""
     },
     {
+      "input": "attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "exit 1: attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "ATTENTION REQUIRED! CLOUDFLARE",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required!",
+      "kind": "",
+      "signal": ""
+    },
+    {
+      "input": "cloudflare",
+      "kind": "",
+      "signal": ""
+    },
+    {
+      "input": "403 cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "exit 1: 403 cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "403 CLOUDFLARE",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "403",
+      "kind": "",
+      "signal": ""
+    },
+    {
       "input": "[host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -2881,6 +2926,296 @@
       "signal": ""
     },
     {
+      "input": "attention required! cloudflare | [host-slept]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [merge-conflict]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | merge-queue-enqueue-exhausted",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | merge-queue-infra-exhausted",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | stage_budget_exceeded:",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | network unavailable: extended github connectivity loss",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | adapter_incompatible",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [model-stream-stalled]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | stream idle timeout",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | socket connection was closed",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [rate-limit-quota-exhausted]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [adapter-auth-failed]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [environment-halt]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [gate-plugin-missing]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | ai_apicallerror context_length_exceeded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | not_found_error model",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | pipeline-start-failure issue-closed",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [blocked-dependency]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | architecture approval required",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | github-quota-low",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | github-network-outage",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | secondary rate limit",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [pr-merge-unmerged",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [stage:worktree-containment]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [not-pipeline-actionable]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [dev-produced-no-changes]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [dev-handoff-missing]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [dev-step-cap-reached]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [dev-step-progress-unproven]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [push-auth-failed]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | premature turn end",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | worktree_uncommitted",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | budget_ceiling_hit",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [runaway-progress-exceeded]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [runaway-ceiling-exceeded]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [cost-cap-exceeded]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | stage-no-output-timeout",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [stage-cap-killed]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [stall-killed]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | pipeline_budget_exceeded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | schema validation",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [no-changes-produced]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [review-cap-reached]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [validation-failed]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [validation-inconclusive]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [branch-forked]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [commit-orphaned]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [adapter-permission-rejected]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [permission-denied]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | stage_context_unreadable",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | dev_build_verification_missing",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | dev_build_verification_failed",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [dev-context-stale]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | dev_tests_failed",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | pr_merge_lookup_failed",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | subagent crash",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[host-slept] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "[host-slept] | [merge-conflict]",
       "kind": "host_slept",
       "signal": ""
@@ -3159,6 +3494,11 @@
       "input": "[host-slept] | subagent crash",
       "kind": "host_slept",
       "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[merge-conflict] | [host-slept]",
@@ -3441,6 +3781,11 @@
       "signal": ""
     },
     {
+      "input": "merge-queue-enqueue-exhausted | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "merge-queue-enqueue-exhausted | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -3719,6 +4064,11 @@
       "input": "merge-queue-enqueue-exhausted | subagent crash",
       "kind": "merge_queue_enqueue_failed",
       "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "merge-queue-infra-exhausted | [host-slept]",
@@ -4001,6 +4351,11 @@
       "signal": ""
     },
     {
+      "input": "stage_budget_exceeded: | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "stage_budget_exceeded: | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -4279,6 +4634,11 @@
       "input": "stage_budget_exceeded: | subagent crash",
       "kind": "budget_exceeded",
       "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "network unavailable: extended github connectivity loss | [host-slept]",
@@ -4561,6 +4921,11 @@
       "signal": ""
     },
     {
+      "input": "adapter_incompatible | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "adapter_incompatible | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -4839,6 +5204,11 @@
       "input": "adapter_incompatible | subagent crash",
       "kind": "adapter_incompatible",
       "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[model-stream-stalled] | [host-slept]",
@@ -5121,6 +5491,11 @@
       "signal": ""
     },
     {
+      "input": "stream idle timeout | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "stream idle timeout | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -5401,6 +5776,11 @@
       "signal": "stream_idle_timeout"
     },
     {
+      "input": "overloaded | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "overloaded | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -5677,6 +6057,11 @@
     },
     {
       "input": "overloaded | subagent crash",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "socket connection was closed | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
     },
@@ -5961,6 +6346,11 @@
       "signal": "api_connection_lost"
     },
     {
+      "input": "[rate-limit-quota-exhausted] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "[rate-limit-quota-exhausted] | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -6239,6 +6629,11 @@
       "input": "[rate-limit-quota-exhausted] | subagent crash",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[adapter-auth-failed] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[adapter-auth-failed] | [host-slept]",
@@ -6521,6 +6916,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[environment-halt] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "[environment-halt] | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -6799,6 +7199,11 @@
       "input": "[environment-halt] | subagent crash",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[gate-plugin-missing] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[gate-plugin-missing] | [host-slept]",
@@ -7081,6 +7486,11 @@
       "signal": "gate_plugin_missing"
     },
     {
+      "input": "ai_apicallerror context_length_exceeded | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "ai_apicallerror context_length_exceeded | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -7359,6 +7769,11 @@
       "input": "ai_apicallerror context_length_exceeded | subagent crash",
       "kind": "context_window_exceeded",
       "signal": ""
+    },
+    {
+      "input": "not_found_error model | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "not_found_error model | [host-slept]",
@@ -7641,6 +8056,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline-start-failure issue-closed | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "pipeline-start-failure issue-closed | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -7919,6 +8339,11 @@
       "input": "pipeline-start-failure issue-closed | subagent crash",
       "kind": "issue_closed",
       "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[blocked-dependency] | [host-slept]",
@@ -8201,6 +8626,11 @@
       "signal": ""
     },
     {
+      "input": "architecture approval required | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "architecture approval required | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -8479,6 +8909,11 @@
       "input": "architecture approval required | subagent crash",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
+    },
+    {
+      "input": "github-quota-low | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "github-quota-low | [host-slept]",
@@ -8761,6 +9196,11 @@
       "signal": "github_quota_low"
     },
     {
+      "input": "github-network-outage | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "github-network-outage | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -9039,6 +9479,11 @@
       "input": "github-network-outage | subagent crash",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "secondary rate limit | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "secondary rate limit | [host-slept]",
@@ -9321,6 +9766,11 @@
       "signal": ""
     },
     {
+      "input": "[pr-merge-unmerged | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "[pr-merge-unmerged | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -9599,6 +10049,11 @@
       "input": "[pr-merge-unmerged | subagent crash",
       "kind": "pr_merge_unmerged",
       "signal": ""
+    },
+    {
+      "input": "[stage:worktree-containment] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[stage:worktree-containment] | [host-slept]",
@@ -9881,6 +10336,11 @@
       "signal": ""
     },
     {
+      "input": "[not-pipeline-actionable] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "[not-pipeline-actionable] | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -10159,6 +10619,11 @@
       "input": "[not-pipeline-actionable] | subagent crash",
       "kind": "not_pipeline_actionable",
       "signal": ""
+    },
+    {
+      "input": "[dev-produced-no-changes] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[dev-produced-no-changes] | [host-slept]",
@@ -10441,6 +10906,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-handoff-missing] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "[dev-handoff-missing] | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -10719,6 +11189,11 @@
       "input": "[dev-handoff-missing] | subagent crash",
       "kind": "dev_handoff_missing",
       "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[dev-step-cap-reached] | [host-slept]",
@@ -11001,6 +11476,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-step-progress-unproven] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "[dev-step-progress-unproven] | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -11279,6 +11759,11 @@
       "input": "[dev-step-progress-unproven] | subagent crash",
       "kind": "dev_step_progress_unproven",
       "signal": ""
+    },
+    {
+      "input": "[push-auth-failed] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[push-auth-failed] | [host-slept]",
@@ -11561,6 +12046,11 @@
       "signal": ""
     },
     {
+      "input": "premature turn end | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "premature turn end | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -11839,6 +12329,11 @@
       "input": "premature turn end | subagent crash",
       "kind": "premature_turn_end",
       "signal": ""
+    },
+    {
+      "input": "worktree_uncommitted | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "worktree_uncommitted | [host-slept]",
@@ -12121,6 +12616,11 @@
       "signal": ""
     },
     {
+      "input": "budget_ceiling_hit | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "budget_ceiling_hit | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -12399,6 +12899,11 @@
       "input": "budget_ceiling_hit | subagent crash",
       "kind": "budget_ceiling_hit",
       "signal": ""
+    },
+    {
+      "input": "[runaway-progress-exceeded] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[runaway-progress-exceeded] | [host-slept]",
@@ -12681,6 +13186,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-ceiling-exceeded] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "[runaway-ceiling-exceeded] | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -12959,6 +13469,11 @@
       "input": "[runaway-ceiling-exceeded] | subagent crash",
       "kind": "stall_kill",
       "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[cost-cap-exceeded] | [host-slept]",
@@ -13241,6 +13756,11 @@
       "signal": ""
     },
     {
+      "input": "stage-no-output-timeout | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "stage-no-output-timeout | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -13519,6 +14039,11 @@
       "input": "stage-no-output-timeout | subagent crash",
       "kind": "stall_kill",
       "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[stage-cap-killed] | [host-slept]",
@@ -13801,6 +14326,11 @@
       "signal": ""
     },
     {
+      "input": "[stall-killed] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "[stall-killed] | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -14079,6 +14609,11 @@
       "input": "[stall-killed] | subagent crash",
       "kind": "stall_kill",
       "signal": ""
+    },
+    {
+      "input": "pipeline_budget_exceeded | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "pipeline_budget_exceeded | [host-slept]",
@@ -14361,6 +14896,11 @@
       "signal": ""
     },
     {
+      "input": "schema validation | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "schema validation | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -14639,6 +15179,11 @@
       "input": "schema validation | subagent crash",
       "kind": "validation_error",
       "signal": ""
+    },
+    {
+      "input": "[no-changes-produced] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[no-changes-produced] | [host-slept]",
@@ -14921,6 +15466,11 @@
       "signal": ""
     },
     {
+      "input": "[review-cap-reached] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "[review-cap-reached] | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -15199,6 +15749,11 @@
       "input": "[review-cap-reached] | subagent crash",
       "kind": "review_cap_reached",
       "signal": ""
+    },
+    {
+      "input": "[validation-failed] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[validation-failed] | [host-slept]",
@@ -15481,6 +16036,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-inconclusive] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "[validation-inconclusive] | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -15759,6 +16319,11 @@
       "input": "[validation-inconclusive] | subagent crash",
       "kind": "validation_inconclusive",
       "signal": ""
+    },
+    {
+      "input": "[branch-forked] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[branch-forked] | [host-slept]",
@@ -16041,6 +16606,11 @@
       "signal": ""
     },
     {
+      "input": "[commit-orphaned] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "[commit-orphaned] | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -16319,6 +16889,11 @@
       "input": "[commit-orphaned] | subagent crash",
       "kind": "commit_orphaned",
       "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "[adapter-permission-rejected] | [host-slept]",
@@ -16601,6 +17176,11 @@
       "signal": ""
     },
     {
+      "input": "[permission-denied] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "[permission-denied] | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -16879,6 +17459,11 @@
       "input": "[permission-denied] | subagent crash",
       "kind": "permission_denied",
       "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "stage_context_unreadable | [host-slept]",
@@ -17161,6 +17746,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_missing | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "dev_build_verification_missing | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -17439,6 +18029,11 @@
       "input": "dev_build_verification_missing | subagent crash",
       "kind": "dev_build_verification_missing",
       "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "dev_build_verification_failed | [host-slept]",
@@ -17721,6 +18316,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-context-stale] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "[dev-context-stale] | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -17999,6 +18599,11 @@
       "input": "[dev-context-stale] | subagent crash",
       "kind": "dev_context_stale",
       "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "dev_tests_failed | [host-slept]",
@@ -18281,6 +18886,11 @@
       "signal": ""
     },
     {
+      "input": "pr_merge_lookup_failed | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "pr_merge_lookup_failed | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -18561,6 +19171,11 @@
       "signal": ""
     },
     {
+      "input": "subagent crash | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "subagent crash | [host-slept]",
       "kind": "host_slept",
       "signal": ""
@@ -18839,6 +19454,26 @@
       "input": "subagent crash | pr_merge_lookup_failed",
       "kind": "pr_merge_lookup_failed",
       "signal": ""
+    },
+    {
+      "input": "attention required! cloudflare | session limit",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "session limit | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | usage limit",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "usage limit | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
     },
     {
       "input": "stream idle timeout | session limit",

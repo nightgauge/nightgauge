@@ -1471,6 +1471,12 @@ type PipelineNotifyCompleteParams struct {
 	// from it. When a stage did fail, the stage's own error wins and this is
 	// only the classification fallback. Optional; empty on success.
 	FailureDetail string `json:"failureDetail,omitempty"`
+	// StartRefusal is the run result's typed pipeline-start refusal
+	// (`PipelineRunResult.startRefusal`), carried structurally so the
+	// terminal kind does not depend on a marker in the error text (#3269).
+	// "issue-closed" books the run issue_closed, a non-failure. Empty for a
+	// run that started.
+	StartRefusal string `json:"startRefusal,omitempty"`
 	// RunID is the run identity the server keys on (ADR-017 step 4, Decision
 	// 1). REQUIRED: absent is run_id_required, non-canonical is
 	// run_id_invalid. TERMINAL class (Decision 3) — this is THE CLAIM, so a

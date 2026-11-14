@@ -446,3 +446,58 @@ func TestParseACs_ParityFixture(t *testing.T) {
 		t.Errorf("got %+v, want first, second, third that wraps, box covers both cases: case a case b, last", got)
 	}
 }
+
+// issue3114Criterion is the criterion from PR 3244 that the file-exists rule
+// used to mis-select: "present" is about node_modules, a different clause
+// from the script name (#3269 part A).
+const issue3114Criterion = "When `node_modules` is missing at the repository root, " +
+	"`clean-install-e2e.sh` runs `npm ci` as a named step before it packages. " +
+	"When it is present, the script does not reinstall. If `npm ci` fails, " +
+	"the script stops with a named error and npm's output."
+
+func TestFileExistsRule_ClauseScoped(t *testing.T) {
+	rule := fileExistsRule()
+	if got := rule.applies(issue3114Criterion); got != nil {
+		t.Errorf("quoted #3114 criterion selected file-exists: %v", got)
+	}
+	for text, want := range map[string]string{
+		"`scripts/x.sh` exists":          "scripts/x.sh",
+		"adds a new file `docs/y.md`":    "docs/y.md",
+		"New file `docs/FOO.md` exists.": "docs/FOO.md",
+	} {
+		got := rule.applies(text)
+		if got == nil || got["path"] != want {
+			t.Errorf("applies(%q) = %v, want path %q", text, got, want)
+		}
+	}
+}
+
+func TestFileExistsRule_BareBasenameFoundUnderScripts(t *testing.T) {
+	dir := t.TempDir()
+	writeTreeFile(t, dir, "scripts/clean-install-e2e.sh", "#!/bin/sh\n")
+	writeTreeFile(t, dir, "node_modules/x/clean-install-e2e.sh", "excluded\n")
+	cls, _, ev := fileExistsRule().evaluate(dir, map[string]string{"path": "clean-install-e2e.sh"})
+	if cls != ACSatisfied || len(ev) != 1 || ev[0] != "scripts/clean-install-e2e.sh" {
+		t.Errorf("got %s %v, want satisfied [scripts/clean-install-e2e.sh]", cls, ev)
+	}
+}
+
+func TestFileExistsRule_BareBasenameAmbiguousOrMissing(t *testing.T) {
+	dir := t.TempDir()
+	writeTreeFile(t, dir, "scripts/run.sh", "a\n")
+	writeTreeFile(t, dir, "tools/run.sh", "b\n")
+	if cls, _, _ := fileExistsRule().evaluate(dir, map[string]string{"path": "run.sh"}); cls != ACUndetectable {
+		t.Errorf("two matches: got %s, want undetectable", cls)
+	}
+	if cls, _, _ := fileExistsRule().evaluate(dir, map[string]string{"path": "absent.sh"}); cls != ACUndetectable {
+		t.Errorf("no match: got %s, want undetectable", cls)
+	}
+}
+
+func TestFileExistsRule_ExactMissingPathUnsatisfied(t *testing.T) {
+	dir := t.TempDir()
+	writeTreeFile(t, dir, "other/x.sh", "a\n")
+	if cls, _, _ := fileExistsRule().evaluate(dir, map[string]string{"path": "dir/x.sh"}); cls != ACUnsatisfied {
+		t.Errorf("got %s, want unsatisfied", cls)
+	}
+}

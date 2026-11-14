@@ -7343,6 +7343,9 @@ cause the command to exit non-zero.`,
 			case "partial_delivery":
 				fmt.Printf("PR #%d does not close issue #%d (Refs, not Closes) — left open; %d unmet criteria named.\n",
 					prNumber, issueNumber, len(result.UnmetCriteria))
+				if result.OwnerOnlyRemainder {
+					fmt.Printf("Every criterion left on #%d is for the supervisor or owner — kept In review, not re-queued.\n", issueNumber)
+				}
 			case "pr_verify_error", "pr_not_merged", "issue_fetch_error", "auto_close_error":
 				// Already reported to stderr above, in both output modes.
 			default:

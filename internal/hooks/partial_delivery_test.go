@@ -27,7 +27,7 @@ func (f fakePartialReader) LatestClosingMerge(context.Context, string, string, i
 }
 
 func TestParsePartialDeliveryCommentRoundTripsWriter(t *testing.T) {
-	body := remainderComment(3085, []string{"criterion one", "two <!-- x"}, false, false)
+	body := remainderComment(3085, []string{"criterion one", "two <!-- x"}, false, false, false, false)
 	pr, criteria, ok := ParsePartialDeliveryComment(body)
 	if !ok || pr != 3085 {
 		t.Fatalf("got pr=%d ok=%v", pr, ok)
@@ -39,7 +39,7 @@ func TestParsePartialDeliveryCommentRoundTripsWriter(t *testing.T) {
 	if _, _, ok := ParsePartialDeliveryComment("plain comment"); ok {
 		t.Fatal("comment without marker parsed")
 	}
-	if pr, c, ok := ParsePartialDeliveryComment(remainderComment(9, nil, false, true)); !ok || pr != 9 || len(c) != 0 {
+	if pr, c, ok := ParsePartialDeliveryComment(remainderComment(9, nil, false, true, false, false)); !ok || pr != 9 || len(c) != 0 {
 		t.Fatalf("unlisted: pr=%d c=%v ok=%v", pr, c, ok)
 	}
 }
@@ -47,7 +47,7 @@ func TestParsePartialDeliveryCommentRoundTripsWriter(t *testing.T) {
 func TestPendingPartialDelivery(t *testing.T) {
 	t0 := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	marker := func(pr int, at time.Time, criteria ...string) trust.Comment {
-		return trust.Comment{Body: remainderComment(pr, criteria, false, false), CreatedAt: at}
+		return trust.Comment{Body: remainderComment(pr, criteria, false, false, false, false), CreatedAt: at}
 	}
 	cases := []struct {
 		name      string

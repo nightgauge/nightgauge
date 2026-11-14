@@ -91,6 +91,51 @@
       "rationale": "A merge group that failed in the repository's own check. It is a real failure of the PR: it must not take the non-fault merge_queue_infra_failed kind, and the recovery that sends it back to feature-dev matches it before any terminal kind is stamped."
     },
     {
+      "id": "cloudflare-challenge-403",
+      "input": "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare",
+      "expected": "api_overloaded",
+      "expected_signal": "api_overloaded",
+      "source": "synthetic",
+      "producer": "Claude CLI result envelope (issue 3164 feature-planning, 2026-11-13T09:50:41Z; reported in #3256)",
+      "rationale": "The Cloudflare challenge line exactly as the CLI printed it. It was unclassified, so the exit record carried no terminal_kind and haltQueueOnSlotFailure halted the whole repository for 1.5 hours over an upstream block that cleared on its own. As api_overloaded it retries after a short backoff with no lifetime-cap increment and no queue pause; `Failed to authenticate` must not send the operator to re-authenticate a CLI that was signed in."
+    },
+    {
+      "id": "cloudflare-challenge-api-error-status",
+      "input": "exit 1: {\"api_error_status\":403,\"error\":\"authentication_failed\",\"result\":\"API Error: 403 <title>Just a moment...</title> cloudflare\"}",
+      "expected": "api_overloaded",
+      "expected_signal": "api_overloaded",
+      "source": "synthetic",
+      "producer": "Claude CLI result envelope fields api_error_status / error (#3256)",
+      "rationale": "The structured form: `api_error_status` 403 with a Cloudflare marker and no `Attention Required!` title. It must classify the same as the page title does, and it must beat the `exit ` crash fallback, which would feed the cascade breaker a false crash."
+    },
+    {
+      "id": "cloudflare-challenge-negative-plain-403",
+      "input": "exit 1: Failed to authenticate. API Error: 403 Forbidden",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Claude CLI result envelope, 403 with no Cloudflare marker",
+      "rationale": "A 403 without a Cloudflare marker keeps its current classification (the crash fallback). 403 is also a refusal and a throttle code, so the challenge rule keys on `cloudflare`, never on the status alone; this row goes red if it ever widens."
+    },
+    {
+      "id": "cloudflare-challenge-negative-attention-only",
+      "input": "Attention required! Review the plan before merging.",
+      "expected": "",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Model prose quoted in a stage's stderr tail",
+      "rationale": "Pins the `attention required!` half of the challenge clause: the phrase alone is ordinary prose, not an edge block. Without a Cloudflare marker it must stay unclassified, so the conjunction cannot be loosened into a disjunction with every suite green."
+    },
+    {
+      "id": "cloudflare-challenge-negative-cloudflare-only",
+      "input": "deploy notice: assets served via cloudflare cache",
+      "expected": "",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Unrelated stage log line naming the CDN",
+      "rationale": "Pins the `cloudflare` half of both challenge clauses: naming the CDN is not a challenge. Without a 403 or the challenge page title the text stays unclassified, so a mention of Cloudflare in a log can never retry a run as an overload."
+    },
+    {
       "id": "captured-api-overloaded",
       "input": "API Error: Overloaded",
       "expected": "api_overloaded",

@@ -1652,6 +1652,11 @@ export class PipelineStateService implements vscode.Disposable {
      * first stage records only the generic `subagent_crash` kind.
      */
     failureDetail?: string;
+    /**
+     * #3269: the typed pipeline-start refusal (`PipelineRunResult.startRefusal`).
+     * Go books "issue-closed" as issue_closed, not a crash.
+     */
+    startRefusal?: string;
   }): Promise<void> {
     // A terminal claim needs a run to close (Decision 3's terminal class), so
     // an identity-less service has nothing to claim and sends nothing — the
@@ -1680,6 +1685,7 @@ export class PipelineStateService implements vscode.Disposable {
         stageExecutionPaths: result.stageExecutionPaths ?? {},
         stagePuntReasons: result.stagePuntReasons ?? {},
         ...(result.failureDetail ? { failureDetail: result.failureDetail } : {}),
+        ...(result.startRefusal ? { startRefusal: result.startRefusal } : {}),
         ...(meta?.budget_estimate_source
           ? {
               budgetEstimateUsd: meta.budget_estimate_usd ?? 0,

@@ -131,6 +131,11 @@ export interface NotifyCompleteParams {
    * `success` is false. The only reason a pre-stage failure leaves on disk.
    */
   failureDetail?: string;
+  /**
+   * #3269: the run result's typed pipeline-start refusal. Go maps
+   * "issue-closed" to the issue_closed terminal kind (a non-failure).
+   */
+  startRefusal?: string;
   /** The run being claimed terminal. Accepted and ignored until step 4. */
   runId: string;
   /** "private" for a run started private (#2400); raises it before its record. */

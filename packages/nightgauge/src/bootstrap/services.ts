@@ -1885,7 +1885,7 @@ export async function initializeServices(
             });
         }
       },
-      onSlotFailed: (slotIndex, issueNumber, error, costUsd, repoSlug) => {
+      onSlotFailed: (slotIndex, issueNumber, error, costUsd, repoSlug, terminalKind) => {
         const key = slotKey(repoSlug, issueNumber);
         slotPhaseTrackers.get(key)?.completeAllStages();
         slotPhaseTrackers.delete(key);
@@ -1979,7 +1979,9 @@ export async function initializeServices(
           // projects the canonical rule table (internal/terminalkind/table.json)
           // through services/terminalKindSignal.ts: the answer is either
           // nothing, or exactly the kind Go will write into the run record.
-          const terminalFailureKind = classifyTerminalKindForSignal(errMsg);
+          // #3269: a kind the run result names structurally (a closed-issue
+          // start refusal → issue_closed) outranks the text classification.
+          const terminalFailureKind = terminalKind ?? classifyTerminalKindForSignal(errMsg);
           // #3431: forward the raw failure text so the autonomous
           // scheduler can extract `resetsAt=<unix>` from the
           // `[rate-limit-quota-exhausted]` kill marker and run the
