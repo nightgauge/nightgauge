@@ -113,6 +113,12 @@ type ResolvedBinary struct {
 	// are invisible, which is exactly the cwd-dependence that made #356
 	// impossible to notice.
 	Bundles VSCodeBundleScan
+	// ShimRejected: step 3a found the per-user shim but refused it because its
+	// target (followed through symlinks) could not be resolved to an
+	// executable file or failed verifyBundleSignature (#3286). ShimTarget is
+	// the resolved target, empty when it could not be resolved.
+	ShimRejected bool
+	ShimTarget   string
 }
 
 // VSCodeBundle is one nightgauge VSCode extension bundle directory whose
@@ -442,27 +448,38 @@ func ResolveBinary() ResolvedBinary {
 		}
 	}
 
-	// 3a. The per-user shim the extension writes on activation (#2765).
+	// 3a. The per-user shim the extension writes on activation (#2765). Its
+	// target, followed through symlinks, must pass the step-4 signature gate
+	// (#3286); otherwise anyone able to write the shim bypasses that gate.
+	shimRejected, shimTarget := false, ""
 	if home != "" {
 		if shim := UserShimPath(home); isExecutable(shim) {
-			return ResolvedBinary{Path: shim, Step: StepUserShim, Bundles: bundles}
+			target, err := filepath.EvalSymlinks(shim)
+			if err == nil && isExecutable(target) && verifyBundleSignature(target) {
+				return ResolvedBinary{Path: shim, Step: StepUserShim, Bundles: bundles}
+			}
+			shimRejected = true
+			if err == nil {
+				shimTarget = target
+			}
 		}
 	}
 
 	// 4. VSCode extension bundle — the RECORDED install (#356).
 	if bundles.SelectedPath != "" {
-		return ResolvedBinary{Path: bundles.SelectedPath, Step: StepVSCodeExtension, Bundles: bundles}
+		return ResolvedBinary{Path: bundles.SelectedPath, Step: StepVSCodeExtension, Bundles: bundles,
+			ShimRejected: shimRejected, ShimTarget: shimTarget}
 	}
 
 	// 5. ~/go/bin/nightgauge.
 	if home != "" {
 		candidate := filepath.Join(home, "go", "bin", "nightgauge")
 		if isExecutable(candidate) {
-			return ResolvedBinary{Path: candidate, Step: StepGoBin, Bundles: bundles}
+			return ResolvedBinary{Path: candidate, Step: StepGoBin, Bundles: bundles,
+				ShimRejected: shimRejected, ShimTarget: shimTarget}
 		}
 	}
-
-	return ResolvedBinary{Bundles: bundles}
+	return ResolvedBinary{Bundles: bundles, ShimRejected: shimRejected, ShimTarget: shimTarget}
 }
 
 // repoBinTrusted reports whether root is a verified Nightgauge core checkout

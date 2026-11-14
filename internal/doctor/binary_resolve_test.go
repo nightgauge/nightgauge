@@ -1963,3 +1963,76 @@ func gitRepoRootForTest() (string, error) {
 	}
 	return trimTrailingNewline(string(out)), nil
 }
+
+// TestResolveBinary_UserShimSignatureGate covers #3286: step 3a verifies the
+// shim's symlink target against the same requirement as step 4.
+func TestResolveBinary_UserShimSignatureGate(t *testing.T) {
+	linkShim := func(t *testing.T, home, target string) string {
+		t.Helper()
+		shim := UserShimPath(home)
+		if err := os.MkdirAll(filepath.Dir(shim), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, shim); err != nil {
+			t.Fatal(err)
+		}
+		return shim
+	}
+
+	t.Run("unsigned target is refused, bundle selected", func(t *testing.T) {
+		isolateCascade(t)
+		home := os.Getenv("HOME")
+		bundle := installBundle(t, home, bundleDirPrefix+"0.2.1-darwin-arm64", true)
+		writeExtensionsIndex(t, home, bundleDirPrefix+"0.2.1-darwin-arm64")
+		target := filepath.Join(home, "evil", "nightgauge")
+		writeFakeBinary(t, target)
+		unsignBundle(t, target)
+		linkShim(t, home, target)
+
+		got := ResolveBinary()
+		wantTarget, _ := filepath.EvalSymlinks(target)
+		if got.Path != bundle || got.Step != StepVSCodeExtension || !got.ShimRejected || got.ShimTarget != wantTarget {
+			t.Fatalf("got %q via %q rejected=%v target=%q", got.Path, got.Step, got.ShimRejected, got.ShimTarget)
+		}
+		msg := withShimRejection(got, "")
+		for _, want := range []string{UserShimPath(home), wantTarget, "code signature did not verify", bundle} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("message %q missing %q", msg, want)
+			}
+		}
+	})
+
+	t.Run("dangling target is refused", func(t *testing.T) {
+		isolateCascade(t)
+		home := os.Getenv("HOME")
+		linkShim(t, home, filepath.Join(home, "missing"))
+		got := ResolveBinary()
+		if got.Step == StepUserShim || got.ShimRejected && got.ShimTarget != "" {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("signed target selects the shim", func(t *testing.T) {
+		isolateCascade(t)
+		home := os.Getenv("HOME")
+		target := filepath.Join(home, "ok", "nightgauge")
+		writeFakeBinary(t, target)
+		shim := linkShim(t, home, target)
+		if got := ResolveBinary(); got.Path != shim || got.Step != StepUserShim || got.ShimRejected {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("non-darwin keeps an unsigned shim", func(t *testing.T) {
+		isolateCascade(t)
+		bundleSignatureGOOS = "linux"
+		home := os.Getenv("HOME")
+		target := filepath.Join(home, "x", "nightgauge")
+		writeFakeBinary(t, target)
+		unsignBundle(t, target)
+		shim := linkShim(t, home, target)
+		if got := ResolveBinary(); got.Path != shim || got.Step != StepUserShim {
+			t.Fatalf("got %+v", got)
+		}
+	})
+}

@@ -427,7 +427,10 @@ func TestGuardShellUserShim(t *testing.T) {
 	writeExe(shim)
 	writeExe(filepath.Join(home, ".vscode", "extensions", "nightgauge.nightgauge-0.8.0", "dist", "bin", "nightgauge"))
 
-	stdout, _, code := runGuard(t, guardPath, map[string]string{"PATH": "/nonexistent", "HOME": home}, t.TempDir())
+	// The signature stub makes step 3a's code-signature gate (#3286) behave
+	// identically on every host; the real codesign would reject these stubs.
+	stubs := signatureStubDir(t)
+	stdout, _, code := runGuard(t, guardPath, map[string]string{"PATH": stubs, "HOME": home}, t.TempDir())
 	if code != 0 || strings.TrimSpace(stdout) != shim {
 		t.Fatalf("shim must win over the VS Code bundle, got code=%d stdout=%q", code, stdout)
 	}
@@ -439,4 +442,85 @@ func TestGuardShellUserShim(t *testing.T) {
 	if strings.TrimSpace(stdout) != onPath {
 		t.Fatalf("PATH must win over the shim, got stdout=%q", stdout)
 	}
+}
+
+// TestGuardShellUserShimSignature covers #3286: step 3a verifies the shim's
+// symlink target against the step-4 code-signature requirement.
+func TestGuardShellUserShimSignature(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("guard.sh is bash-only")
+	}
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		t.Fatalf("findRepoRoot: %v", err)
+	}
+	guardPath := filepath.Join(repoRoot, "claude-plugins", "nightgauge", "hooks", "lib", "guard.sh")
+	writeExe := func(path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setup := func(t *testing.T, unsigned bool) (home, shim, target, bundle string) {
+		home = t.TempDir()
+		target = filepath.Join(home, "elsewhere", "nightgauge")
+		writeExe(target)
+		if unsigned {
+			unsign(t, target)
+		}
+		shim = filepath.Join(home, ".nightgauge", "bin", "nightgauge")
+		if err := os.MkdirAll(filepath.Dir(shim), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// Relative link, exercising the resolve-against-link-dir branch.
+		if err := os.Symlink("../../elsewhere/nightgauge", shim); err != nil {
+			t.Fatal(err)
+		}
+		bundle = filepath.Join(home, ".vscode", "extensions", "nightgauge.nightgauge-0.8.0", "dist", "bin", "nightgauge")
+		writeExe(bundle)
+		return
+	}
+
+	t.Run("unsigned target refused, bundle selected", func(t *testing.T) {
+		home, shim, _, bundle := setup(t, true)
+		stdout, stderr, code := runGuard(t, guardPath, map[string]string{
+			"PATH": signatureStubDir(t), "HOME": home, "NIGHTGAUGE_HOOK_SILENT": "false",
+		}, t.TempDir())
+		if code != 0 || strings.TrimSpace(stdout) != bundle {
+			t.Fatalf("want bundle %q, got code=%d stdout=%q", bundle, code, stdout)
+		}
+		for _, want := range []string{"[stale-binary] per-user shim " + shim, "elsewhere/nightgauge",
+			"its code signature did not verify", "resolution fell through to bundle 0.8.0, running " + bundle} {
+			if !strings.Contains(stderr, want) {
+				t.Errorf("stderr %q missing %q", stderr, want)
+			}
+		}
+	})
+
+	t.Run("signed target selects the shim silently", func(t *testing.T) {
+		home, shim, _, _ := setup(t, false)
+		stdout, stderr, _ := runGuard(t, guardPath, map[string]string{
+			"PATH": signatureStubDir(t), "HOME": home, "NIGHTGAUGE_HOOK_SILENT": "false",
+		}, t.TempDir())
+		if strings.TrimSpace(stdout) != shim || strings.Contains(stderr, "[stale-binary]") {
+			t.Fatalf("stdout=%q stderr=%q", stdout, stderr)
+		}
+	})
+
+	t.Run("non-darwin keeps an unsigned shim", func(t *testing.T) {
+		// The signature stubs with uname reporting Linux: the gate must not run
+		// at all, so a rejecting codesign on PATH cannot refuse the shim.
+		stubs := signatureStubDir(t)
+		if err := os.WriteFile(filepath.Join(stubs, "uname"), []byte("#!/bin/sh\necho Linux\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		home, shim, _, _ := setup(t, true)
+		stdout, _, _ := runGuard(t, guardPath, map[string]string{"PATH": stubs, "HOME": home}, t.TempDir())
+		if strings.TrimSpace(stdout) != shim {
+			t.Fatalf("stdout=%q", stdout)
+		}
+	})
 }

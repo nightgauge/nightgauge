@@ -696,6 +696,7 @@ func probeBinary() binaryProbe {
 		if resolved.Bundles.Divergence == DivergenceSignatureRejected {
 			p.stale = divergenceMessage(resolved)
 		}
+		p.stale = withShimRejection(resolved, p.stale)
 		return p
 	}
 	p.found = true
@@ -745,7 +746,35 @@ func probeBinary() binaryProbe {
 		p.recordedPath, p.recordedVersion = "", resolved.Bundles.RecordedVersion
 		p.stale = divergenceMessage(resolved)
 	}
+	if resolved.ShimRejected {
+		p.recordedPath, p.recordedVersion = "", resolved.Bundles.RecordedVersion
+	}
+	p.stale = withShimRejection(resolved, p.stale)
 	return p
+}
+
+// withShimRejection prefixes stale with the step-3a shim refusal (#3286),
+// mirroring guard.sh, which joins both refusals into one [stale-binary] line.
+func withShimRejection(resolved ResolvedBinary, stale string) string {
+	if !resolved.ShimRejected {
+		return stale
+	}
+	reason := "its code signature did not verify against the Nightgauge Developer ID requirement"
+	target := resolved.ShimTarget
+	if target == "" {
+		reason, target = "its target could not be resolved", "unresolved"
+	}
+	outcome := "no bundle"
+	if resolved.Path != "" {
+		outcome = fmt.Sprintf("%s (via %s)", resolved.Path, resolved.Step)
+	}
+	home, _ := os.UserHomeDir()
+	msg := fmt.Sprintf("stale binary: per-user shim %s (target %s) was not run: %s; resolution fell through to %s",
+		UserShimPath(home), target, reason, outcome)
+	if stale == "" {
+		return msg
+	}
+	return msg + "; " + strings.TrimPrefix(stale, "stale binary: ")
 }
 
 // bundleInventory renders the step-4 VSCode-extension inventory: how many
