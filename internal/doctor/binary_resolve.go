@@ -1,12 +1,15 @@
 package doctor
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
+	"time"
 )
 
 // ResolveBinaryStep identifies which cascade step resolved the binary.
@@ -66,7 +69,39 @@ const (
 	// zero/multiple nightgauge entries in it) AND more than one bundle is on
 	// disk, so the selection is a guess between real candidates.
 	DivergenceUnrecorded BundleDivergence = "unrecorded_ambiguous"
+	// DivergenceSignatureRejected — at least one runnable bundle the cascade
+	// considered was refused because its code signature did not verify
+	// against bundleCodeRequirement (#2776). Unlike the other values it is
+	// reported whether or not a bundle was finally selected.
+	DivergenceSignatureRejected BundleDivergence = "signature_rejected"
 )
+
+// bundleCodeRequirement is the designated requirement a VS Code bundle binary
+// must satisfy before step 4 runs it (#2776): Apple anchor, Developer ID
+// intermediate, Developer ID Application leaf, Nightgauge team RZJPN7Y7BG.
+// A bare `codesign --verify` is not enough — an ad-hoc re-signed tampered
+// binary passes it. guard.sh carries this exact string; a parity test pins it.
+const bundleCodeRequirement = `anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "RZJPN7Y7BG"`
+
+// bundleSignatureGOOS is the platform the signature check keys on. Only
+// darwin binaries carry a platform code signature; elsewhere the check is
+// unsupported and selection is unchanged. A var so tests can exercise the
+// darwin branch (with a stub codesign on PATH) on any host.
+var bundleSignatureGOOS = runtime.GOOS
+
+// verifyBundleSignature reports whether path may be run by step 4: true on a
+// non-darwin platform (no signature to check), otherwise only when
+// `codesign --verify --strict -R=<bundleCodeRequirement>` succeeds. codesign
+// is PATH-resolved, as in guard.sh; whoever controls PATH already wins at
+// step 1. A missing codesign or a timeout is a failure to verify.
+func verifyBundleSignature(path string) bool {
+	if bundleSignatureGOOS != "darwin" {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "codesign", "--verify", "--strict", "-R="+bundleCodeRequirement, path).Run() == nil
+}
 
 // ResolvedBinary is the result of walking the cascade.
 type ResolvedBinary struct {
@@ -88,6 +123,9 @@ type VSCodeBundle struct {
 	Path       string // <bundle-dir>/dist/bin/nightgauge
 	Executable bool
 	Recorded   bool // this directory is the one extensions.json records
+	// SignatureRejected: step 4 considered this bundle and refused it because
+	// its code signature did not verify (#2776).
+	SignatureRejected bool
 }
 
 // VSCodeBundleScan summarizes the step-4 candidate set and how the selection
@@ -109,9 +147,15 @@ type VSCodeBundleScan struct {
 	// RecordedUsed reports that the selection came from the record.
 	RecordedUsed bool
 
+	// Rejected lists, in the order considered, the versions of bundles that
+	// were refused because their code signature did not verify (#2776).
+	Rejected []string
+
 	// Divergence is empty when the resolution is confirmed (recorded bundle
-	// used) or unambiguous (a single unrecorded bundle). It is meaningful only
-	// when SelectedPath != "".
+	// used) or unambiguous (a single unrecorded bundle). It is
+	// DivergenceSignatureRejected whenever Rejected is non-empty, selected
+	// bundle or not; the other values are meaningful only when
+	// SelectedPath != "".
 	Divergence BundleDivergence
 }
 
@@ -157,6 +201,14 @@ type VSCodeBundleScan struct {
 // caller can signal it; a single unrecorded bundle is not ambiguous and stays
 // silent.
 //
+// # Code signature (#2776)
+//
+// A bundle is selected only when its binary is executable AND its code
+// signature verifies (verifyBundleSignature). Candidates are verified lazily,
+// in selection order — the recorded bundle first, then glob order — and each
+// at most once; a refused bundle is never selected, and is listed in Rejected.
+// If none verifies, step 4 yields nothing and the cascade continues.
+//
 // guard.sh implements this identically; see the parity tests in
 // binary_resolve_test.go (#277).
 func ScanVSCodeBundles(home string) VSCodeBundleScan {
@@ -172,12 +224,7 @@ func ScanVSCodeBundles(home string) VSCodeBundleScan {
 
 	matches, _ := filepath.Glob(filepath.Join(home, ".vscode", "extensions", bundleDirPrefix+"[0-9]*", "dist", "bin", "nightgauge"))
 
-	var (
-		recordedPath      string
-		recordedRunnable  bool
-		firstRunnablePath string
-		firstRunnableVer  string
-	)
+	recordedIdx := -1
 	for _, candidate := range matches {
 		info, err := os.Stat(candidate)
 		if err != nil || info.IsDir() {
@@ -198,29 +245,42 @@ func ScanVSCodeBundles(home string) VSCodeBundleScan {
 			Executable: info.Mode()&0o111 != 0,
 			Recorded:   scan.RecordedDir != "" && dir == scan.RecordedDir,
 		}
-		scan.Bundles = append(scan.Bundles, bundle)
-
 		if bundle.Recorded && bundle.Executable {
-			recordedPath, recordedRunnable = candidate, true
+			recordedIdx = len(scan.Bundles)
 		}
-		if bundle.Executable && firstRunnablePath == "" {
-			firstRunnablePath, firstRunnableVer = candidate, version
-		}
+		scan.Bundles = append(scan.Bundles, bundle)
 	}
 
-	switch {
-	case recordedRunnable:
-		scan.SelectedPath = recordedPath
+	accept := func(i int) bool {
+		if verifyBundleSignature(scan.Bundles[i].Path) {
+			return true
+		}
+		scan.Bundles[i].SignatureRejected = true
+		scan.Rejected = append(scan.Rejected, scan.Bundles[i].Version)
+		return false
+	}
+
+	if recordedIdx >= 0 && accept(recordedIdx) {
+		scan.SelectedPath = scan.Bundles[recordedIdx].Path
 		scan.SelectedVersion = scan.RecordedVersion
 		scan.RecordedUsed = true
-	case firstRunnablePath != "":
-		scan.SelectedPath = firstRunnablePath
-		scan.SelectedVersion = firstRunnableVer
-		if scan.RecordedDir != "" {
-			scan.Divergence = DivergenceRecordUnusable
-		} else if len(scan.Bundles) > 1 {
-			scan.Divergence = DivergenceUnrecorded
+	} else {
+		for i := range scan.Bundles {
+			if i == recordedIdx || !scan.Bundles[i].Executable || !accept(i) {
+				continue
+			}
+			scan.SelectedPath = scan.Bundles[i].Path
+			scan.SelectedVersion = scan.Bundles[i].Version
+			if scan.RecordedDir != "" {
+				scan.Divergence = DivergenceRecordUnusable
+			} else if len(scan.Bundles) > 1 {
+				scan.Divergence = DivergenceUnrecorded
+			}
+			break
 		}
+	}
+	if len(scan.Rejected) > 0 {
+		scan.Divergence = DivergenceSignatureRejected
 	}
 	return scan
 }

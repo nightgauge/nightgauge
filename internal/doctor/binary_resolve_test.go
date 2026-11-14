@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -156,9 +157,164 @@ func isolateCascade(t *testing.T) {
 	if gitBinPath != "" {
 		safePath = filepath.Dir(gitBinPath)
 	}
-	t.Setenv("PATH", safePath)
+	stubs := useSignatureStub(t)
+	if safePath != "" {
+		stubs += string(os.PathListSeparator) + safePath
+	}
+	t.Setenv("PATH", stubs)
 	t.Setenv("HOME", t.TempDir())
 	t.Chdir(t.TempDir())
+}
+
+// useSignatureStub forces the darwin signature branch (#2776) and returns a
+// directory holding stub `uname` (Darwin) and `codesign` scripts, so Go and
+// guard.sh verify bundles identically on every host. The stub codesign
+// accepts a file unless it contains the NG_UNSIGNED marker. The caller puts
+// the directory on PATH.
+func useSignatureStub(t *testing.T) string {
+	t.Helper()
+	prev := bundleSignatureGOOS
+	bundleSignatureGOOS = "darwin"
+	t.Cleanup(func() { bundleSignatureGOOS = prev })
+	dir := t.TempDir()
+	stubs := map[string]string{
+		"uname":    "#!/bin/sh\necho Darwin\n",
+		"codesign": "#!/bin/sh\nfor last in \"$@\"; do :; done\n! grep -q NG_UNSIGNED \"$last\"\n",
+	}
+	for name, body := range stubs {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			t.Fatalf("write %s stub: %v", name, err)
+		}
+	}
+	return dir
+}
+
+// unsignBundle appends the NG_UNSIGNED marker so the stub codesign rejects it.
+func unsignBundle(t *testing.T, binary string) {
+	t.Helper()
+	f, err := os.OpenFile(binary, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open %s: %v", binary, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("# NG_UNSIGNED\n"); err != nil {
+		t.Fatalf("unsign %s: %v", binary, err)
+	}
+}
+
+// TestScanVSCodeBundles_SignatureGate covers #2776 on the Go side.
+func TestScanVSCodeBundles_SignatureGate(t *testing.T) {
+	t.Run("unsigned recorded bundle is refused, signed sibling selected", func(t *testing.T) {
+		isolateCascade(t)
+		home := os.Getenv("HOME")
+		signed := installBundle(t, home, bundleDirPrefix+"0.2.0-darwin-arm64", true)
+		unsignBundle(t, installBundle(t, home, bundleDirPrefix+"0.2.1-darwin-arm64", true))
+		writeExtensionsIndex(t, home, bundleDirPrefix+"0.2.1-darwin-arm64")
+
+		scan := ScanVSCodeBundles(home)
+		if scan.SelectedPath != signed || scan.RecordedUsed {
+			t.Fatalf("selected %q (recordedUsed=%v), want the signed sibling %q", scan.SelectedPath, scan.RecordedUsed, signed)
+		}
+		if scan.Divergence != DivergenceSignatureRejected || !slices.Equal(scan.Rejected, []string{"0.2.1-darwin-arm64"}) {
+			t.Errorf("divergence=%q rejected=%v", scan.Divergence, scan.Rejected)
+		}
+		if got := ResolveBinary(); got.Path != signed || got.Step != StepVSCodeExtension {
+			t.Errorf("ResolveBinary = %q via %q, want %q", got.Path, got.Step, signed)
+		}
+	})
+
+	t.Run("only bundle unsigned yields no step-4 selection", func(t *testing.T) {
+		isolateCascade(t)
+		home := os.Getenv("HOME")
+		unsignBundle(t, installBundle(t, home, bundleDirPrefix+"0.2.1-darwin-arm64", true))
+		writeExtensionsIndex(t, home, bundleDirPrefix+"0.2.1-darwin-arm64")
+
+		scan := ScanVSCodeBundles(home)
+		if scan.SelectedPath != "" {
+			t.Fatalf("an unsigned bundle was selected: %q", scan.SelectedPath)
+		}
+		if scan.Divergence != DivergenceSignatureRejected || !scan.Bundles[0].SignatureRejected {
+			t.Errorf("rejection not reported: divergence=%q bundles=%+v", scan.Divergence, scan.Bundles)
+		}
+		goBin := filepath.Join(home, "go", "bin", "nightgauge")
+		writeFakeBinary(t, goBin)
+		if got := ResolveBinary(); got.Step != StepGoBin {
+			t.Errorf("cascade should continue to step 5, got %q via %q", got.Path, got.Step)
+		}
+	})
+
+	t.Run("signed recorded bundle selected silently", func(t *testing.T) {
+		isolateCascade(t)
+		home := os.Getenv("HOME")
+		recorded := installBundle(t, home, bundleDirPrefix+"0.2.1-darwin-arm64", true)
+		writeExtensionsIndex(t, home, bundleDirPrefix+"0.2.1-darwin-arm64")
+
+		scan := ScanVSCodeBundles(home)
+		if scan.SelectedPath != recorded || scan.Divergence != DivergenceNone || len(scan.Rejected) != 0 {
+			t.Errorf("got %+v", scan)
+		}
+	})
+
+	t.Run("non-darwin leaves selection unchanged", func(t *testing.T) {
+		isolateCascade(t)
+		bundleSignatureGOOS = "linux"
+		home := os.Getenv("HOME")
+		recorded := installBundle(t, home, bundleDirPrefix+"0.2.1-linux-x64", true)
+		unsignBundle(t, recorded)
+		writeExtensionsIndex(t, home, bundleDirPrefix+"0.2.1-linux-x64")
+
+		scan := ScanVSCodeBundles(home)
+		if scan.SelectedPath != recorded || len(scan.Rejected) != 0 {
+			t.Errorf("non-darwin must not verify: %+v", scan)
+		}
+	})
+}
+
+// TestGuardShParity_SignatureGate runs signed/unsigned layouts through both
+// implementations and pins the requirement string guard.sh carries.
+func TestGuardShParity_SignatureGate(t *testing.T) {
+	if bashBinPath == "" || gitBinPath == "" {
+		t.Skip("bash or git not available")
+	}
+	guardPath := guardShPath(t)
+	raw, err := os.ReadFile(guardPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "_ng_bundle_requirement='"+bundleCodeRequirement+"'") {
+		t.Fatalf("guard.sh must carry bundleCodeRequirement verbatim")
+	}
+
+	cases := map[string]func(t *testing.T, home string){
+		"recorded unsigned, sibling signed": func(t *testing.T, home string) {
+			installBundle(t, home, bundleDirPrefix+"0.2.0-darwin-arm64", true)
+			unsignBundle(t, installBundle(t, home, bundleDirPrefix+"0.2.1-darwin-arm64", true))
+			writeExtensionsIndex(t, home, bundleDirPrefix+"0.2.1-darwin-arm64")
+		},
+		"no record, first glob unsigned": func(t *testing.T, home string) {
+			unsignBundle(t, installBundle(t, home, bundleDirPrefix+"0.2.0-darwin-arm64", true))
+			installBundle(t, home, bundleDirPrefix+"0.2.1-darwin-arm64", true)
+		},
+		"all unsigned": func(t *testing.T, home string) {
+			unsignBundle(t, installBundle(t, home, bundleDirPrefix+"0.2.0-darwin-arm64", true))
+			unsignBundle(t, installBundle(t, home, bundleDirPrefix+"0.2.1-darwin-arm64", true))
+		},
+		"all signed, recorded": func(t *testing.T, home string) {
+			installBundle(t, home, bundleDirPrefix+"0.2.0-darwin-arm64", true)
+			installBundle(t, home, bundleDirPrefix+"0.2.1-darwin-arm64", true)
+			writeExtensionsIndex(t, home, bundleDirPrefix+"0.2.1-darwin-arm64")
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			isolateCascade(t)
+			setup(t, os.Getenv("HOME"))
+			goPath := ResolveBinary().Path
+			if shPath := guardShResolve(t, guardPath); shPath != goPath {
+				t.Errorf("parity break: Go=%q guard.sh=%q", goPath, shPath)
+			}
+		})
+	}
 }
 
 func TestResolveBinary_EnvOverride(t *testing.T) {
@@ -1007,7 +1163,7 @@ func guardShResolve(t *testing.T, guardPath string) string {
 	if err != nil {
 		t.Fatalf("failed to get cwd: %v", err)
 	}
-	shPath := filepath.Dir(gitBinPath) + string(os.PathListSeparator) + os.Getenv("PATH")
+	shPath := os.Getenv("PATH") + string(os.PathListSeparator) + filepath.Dir(gitBinPath)
 	cmd := exec.Command(bashBinPath, "-c", `source "$1"; echo "$NIGHTGAUGE_BINARY"`, "guard.sh", guardPath)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(),
@@ -1302,6 +1458,7 @@ func TestReadRecordedBundleDir_LargeIndex(t *testing.T) {
 // selection against the large index with a decoy bundle sorting FIRST in glob
 // order, so the assertion can only pass by honoring the record.
 func TestScanVSCodeBundles_LargeIndexSelectsRecorded(t *testing.T) {
+	isolateCascade(t)
 	home := t.TempDir()
 	writeExtensionsIndexRaw(t, home, string(loadLargeExtensionsIndex(t)))
 	installBundle(t, home, bundleDirPrefix+"0.1.0-darwin-arm64", true)

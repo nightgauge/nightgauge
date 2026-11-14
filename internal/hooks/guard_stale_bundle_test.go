@@ -203,7 +203,7 @@ func runWrapper(t *testing.T, repoRoot, wrapper, home, stdin string, extraEnv ma
 
 	env := map[string]string{
 		"HOME":                filepath.Clean(home),
-		"PATH":                lookupGitDir(t) + ":/bin:/usr/bin",
+		"PATH":                signatureStubDir(t) + ":" + lookupGitDir(t) + ":/bin:/usr/bin",
 		"LC_ALL":              "C",
 		"NIGHTGAUGE_BIN":      "",
 		"NIGHTGAUGE_HOOK_LOG": logFile,
@@ -595,4 +595,107 @@ func TestGuardShellDivergenceStdoutContract(t *testing.T) {
 			})
 		}
 	}
+}
+
+// signatureStubDir writes stub `uname` (Darwin) and `codesign` scripts so
+// guard.sh's code-signature gate (#2776) runs its darwin branch identically
+// on every host. The stub codesign accepts a file unless it contains the
+// NG_UNSIGNED marker, so ordinary bundle stubs count as signed.
+func signatureStubDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	stubs := map[string]string{
+		"uname":    "#!/bin/sh\necho Darwin\n",
+		"codesign": "#!/bin/sh\nfor last in \"$@\"; do :; done\n! grep -q NG_UNSIGNED \"$last\"\n",
+	}
+	for name, body := range stubs {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			t.Fatalf("write %s stub: %v", name, err)
+		}
+	}
+	return dir
+}
+
+// unsign appends the NG_UNSIGNED marker so the stub codesign rejects binary.
+func unsign(t *testing.T, binary string) {
+	t.Helper()
+	f, err := os.OpenFile(binary, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open %s: %v", binary, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("# NG_UNSIGNED\n"); err != nil {
+		t.Fatalf("unsign %s: %v", binary, err)
+	}
+}
+
+// TestGuardShellUnsignedBundleNeverRuns covers #2776: a recorded, executable
+// bundle whose code signature does not verify is never executed. A signed
+// sibling runs instead; with no signed bundle, step 4 resolves nothing. The
+// rejection reaches the side-channel log on both outcomes, never stdout.
+func TestGuardShellUnsignedBundleNeverRuns(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("guard.sh is bash-only")
+	}
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		t.Fatalf("findRepoRoot: %v", err)
+	}
+	const stdin = `{"tool_name":"Write","tool_input":{"file_path":"x.go"}}`
+
+	t.Run("signed sibling runs instead", func(t *testing.T) {
+		home := t.TempDir()
+		bundleStub(t, home, "0.2.0-darwin-arm64", preToolUsePayload, true)
+		unsign(t, bundleStub(t, home, "0.2.1-darwin-arm64", preToolUsePayload, true))
+		recordInstall(t, home, "0.2.1-darwin-arm64")
+
+		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, stdin, nil)
+
+		if strings.Contains(run.marker, "0.2.1-darwin-arm64") {
+			t.Fatalf("the unsigned recorded bundle was executed: %q", run.marker)
+		}
+		if !strings.Contains(run.marker, "0.2.0-darwin-arm64 hook") {
+			t.Errorf("the signed sibling should run the hook, marker=%q", run.marker)
+		}
+		want := "[stale-binary] VSCode extension bundle 0.2.1-darwin-arm64 was not run: its code signature did not verify"
+		if !strings.Contains(run.log, want) || !strings.Contains(run.log, "step 4 resolved bundle 0.2.0-darwin-arm64") {
+			t.Errorf("side-channel log must report the rejection, got %q", run.log)
+		}
+		if strings.Contains(run.stdout, "stale-binary") || strings.TrimSpace(run.stderr) != "" {
+			t.Errorf("rejection must not reach stdout/stderr: stdout=%q stderr=%q", run.stdout, run.stderr)
+		}
+	})
+
+	t.Run("only bundle unsigned resolves nothing", func(t *testing.T) {
+		home := t.TempDir()
+		unsign(t, bundleStub(t, home, "0.2.1-darwin-arm64", preToolUsePayload, true))
+		recordInstall(t, home, "0.2.1-darwin-arm64")
+
+		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, stdin, nil)
+
+		if strings.TrimSpace(run.marker) != "" {
+			t.Fatalf("no bundle may run, marker=%q", run.marker)
+		}
+		if !strings.Contains(run.log, "0.2.1-darwin-arm64 was not run") || !strings.Contains(run.log, "step 4 resolved no bundle") {
+			t.Errorf("rejection must be logged even when nothing resolves, got %q", run.log)
+		}
+		if strings.Contains(run.stdout, "stale-binary") {
+			t.Errorf("rejection leaked to stdout: %q", run.stdout)
+		}
+	})
+
+	t.Run("signed recorded bundle runs silently", func(t *testing.T) {
+		home := t.TempDir()
+		bundleStub(t, home, "0.2.1-darwin-arm64", preToolUsePayload, true)
+		recordInstall(t, home, "0.2.1-darwin-arm64")
+
+		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, stdin, nil)
+
+		if !strings.Contains(run.marker, "0.2.1-darwin-arm64 hook") {
+			t.Errorf("the signed recorded bundle should run, marker=%q", run.marker)
+		}
+		if strings.Contains(run.log, "[stale-binary]") {
+			t.Errorf("a verified bundle must stay silent, log=%q", run.log)
+		}
+	})
 }

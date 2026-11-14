@@ -194,14 +194,17 @@ func binaryFindings(p binaryProbe, checkout string) ([]Finding, string) {
 		"Run `nightgauge doctor` to verify")
 	install.Links = []string{"https://github.com/nightgauge/nightgauge/releases"}
 	if !p.found {
+		ev := map[string]string{
+			"searched": "NIGHTGAUGE_BIN, PATH, dev-gated repo bin/, dev-gated canonical-repo bin/, VSCode extension bundle, ~/go/bin",
+			"bundles":  strings.TrimPrefix(bundleInventory(p.resolved.Bundles), "; "),
+		}
+		if p.stale != "" {
+			ev["signature_rejected"] = p.stale
+		}
 		return []Finding{newFinding(check, code, SeverityBlocker,
 			"nightgauge binary not found where the hooks look",
 			"the hooks resolve no nightgauge binary from this directory, so every hook fails",
-			map[string]string{
-				"searched": "NIGHTGAUGE_BIN, PATH, dev-gated repo bin/, dev-gated canonical-repo bin/, VSCode extension bundle, ~/go/bin",
-				"bundles":  strings.TrimPrefix(bundleInventory(p.resolved.Bundles), "; "),
-			},
-			[]string{"missing"}, install)}, p.detail
+			ev, []string{"missing"}, install)}, p.detail
 	}
 	if p.stale == "" {
 		return nil, p.detail
@@ -690,6 +693,9 @@ func probeBinary() binaryProbe {
 		// installed, none runnable" is a different problem from "nothing
 		// installed" — so it is reported rather than discarded.
 		p.detail = "nightgauge not found via NIGHTGAUGE_BIN, PATH, repo bin/, canonical-repo bin/, VSCode extension bundle, or ~/go/bin" + bundleInventory(resolved.Bundles)
+		if resolved.Bundles.Divergence == DivergenceSignatureRejected {
+			p.stale = divergenceMessage(resolved)
+		}
 		return p
 	}
 	p.found = true
@@ -731,7 +737,8 @@ func probeBinary() binaryProbe {
 	}
 	p.detail = detail + bundleInventory(resolved.Bundles)
 
-	if resolved.Step == StepVSCodeExtension && resolved.Bundles.Divergence != DivergenceNone {
+	if scan := resolved.Bundles; scan.Divergence == DivergenceSignatureRejected ||
+		(resolved.Step == StepVSCodeExtension && scan.Divergence != DivergenceNone) {
 		// The detail is kept: the resolving step and the resolved binary's own
 		// version are the two facts that answer "is this actually an old
 		// build?" (#356 AC3 — report on EVERY outcome).
@@ -770,6 +777,20 @@ func bundleInventory(scan VSCodeBundleScan) string {
 // path — the same three facts guard.sh writes to its side-channel log.
 func divergenceMessage(resolved ResolvedBinary) string {
 	scan := resolved.Bundles
+	if scan.Divergence == DivergenceSignatureRejected {
+		outcome := "no bundle"
+		if scan.SelectedPath != "" {
+			outcome = "bundle " + scan.SelectedVersion
+		}
+		running := "nothing"
+		if resolved.Path != "" {
+			running = fmt.Sprintf("%s (via %s)", resolved.Path, resolved.Step)
+		}
+		return fmt.Sprintf(
+			"stale binary: VSCode extension bundle %s was not run: its code signature did not verify against the Nightgauge Developer ID requirement; step 4 resolved %s, running %s",
+			strings.Join(scan.Rejected, ", "), outcome, running,
+		)
+	}
 	if scan.Divergence == DivergenceRecordUnusable {
 		return fmt.Sprintf(
 			"stale binary: VSCode records extension bundle %s as installed, but its bundled binary is missing or not executable; hooks resolve bundle %s from this directory, running %s",
