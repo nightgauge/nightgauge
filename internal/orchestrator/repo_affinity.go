@@ -353,7 +353,7 @@ func (s *Scheduler) queueAffinity(ctx context.Context, eligible map[string]trust
 	items := make([]QueueItem, 0, len(s.queue))
 	for _, it := range s.queue {
 		held := it.Status == "paused" && it.PausedReason != nil && it.PausedReason.Kind == pausedRepoAffinity
-		if d, ok := eligible[repoIssueKey(it.Repo, it.IssueNumber)]; held || (it.Status != "paused" && it.Status != "processing" && ok && d.Eligible) {
+		if d, ok := eligible[repoIssueKey(it.Repo, it.IssueNumber)]; held || (it.Status != "paused" && it.Status != "processing" && it.Status != QueueStatusDropped && ok && d.Eligible) {
 			items = append(items, it)
 		}
 	}

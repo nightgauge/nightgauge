@@ -1266,7 +1266,17 @@ type QueueEntry struct {
 	// the run resumes at pr-merge when the worktree holding pr-{N}.json is
 	// gone. 0 (omitted) when there is none.
 	OpenPRNumber int `json:"openPrNumber,omitempty"`
+	// Status and DropReason mirror the item's (#3278), so `queue list` can
+	// show an item the queue will not run, and why.
+	Status     string `json:"status,omitempty"`
+	DropReason string `json:"dropReason,omitempty"`
 }
+
+// QueueStatusDropped marks an item the queue took off its run list without
+// running it (#3278). The item stays in the persisted queue, with DropReason,
+// so `queue list` shows it; dispatch skips it; `queue add` re-queues it and
+// `queue remove`/`queue clear` delete it.
+const QueueStatusDropped = "dropped"
 
 // QueueItem represents a queued issue with full metadata (authoritative).
 type QueueItem struct {
@@ -1274,7 +1284,7 @@ type QueueItem struct {
 	IssueNumber int    `json:"issueNumber"`
 	Title       string `json:"title"`
 	Priority    int    `json:"priority"`
-	// Status is one of pending|ready|processing|completed|failed|paused.
+	// Status is one of pending|ready|processing|completed|failed|paused|dropped.
 	// "paused" (Issue #3001) means the item was waiting behind a pipeline that
 	// hit a terminal failure; PausedReason carries the cause. Items only resume
 	// via explicit operator action — never auto-resume when failure_mode=halt.
@@ -1305,6 +1315,9 @@ type QueueItem struct {
 	// by Kind so future paused reasons (manual hold, license check) can be
 	// added without re-shaping callers.
 	PausedReason *QueuePausedReason `json:"pausedReason,omitempty"`
+	// DropReason is set when Status == QueueStatusDropped (#3278): why the
+	// queue did not run the item.
+	DropReason string `json:"dropReason,omitempty"`
 	// RemoteRunID is the run_id from the platform command payload for
 	// remote-triggered runs. Preferred over the locally-generated runstate
 	// UUID when set (#3557).
@@ -2762,9 +2775,18 @@ func (s *Scheduler) runEpicBackstopSweep(ctx context.Context) {
 // way to derive an exit status from it.
 func (s *Scheduler) RunQueue(ctx context.Context) (QueueRunSummary, error) {
 	s.mu.Lock()
-	queue := make([]QueueItem, len(s.queue))
-	copy(queue, s.queue)
-	s.queue = nil
+	// Dropped items are not run again; they stay listed until re-queued,
+	// removed or cleared (#3278).
+	var queue, kept []QueueItem
+	for _, item := range s.queue {
+		if item.Status == QueueStatusDropped {
+			kept = append(kept, item)
+			continue
+		}
+		queue = append(queue, item)
+	}
+	s.queue = kept
+	s.recalculatePositions()
 	s.persistQueue()
 	s.emitQueueChangedUnlocked()
 	s.mu.Unlock()
@@ -2780,6 +2802,11 @@ func (s *Scheduler) RunQueue(ctx context.Context) (QueueRunSummary, error) {
 			TerminalKind: terminalKind,
 			Detail:       detail,
 		})
+		// An item the queue took off its list without running it is kept as
+		// dropped, with the reason, instead of vanishing (#3278).
+		if kind == QueueOutcomeNotDispatched || kind == QueueOutcomeBlocked {
+			s.queueDrop(entry, detail)
+		}
 	}
 
 	for _, entry := range queue {
@@ -2889,6 +2916,7 @@ func (s *Scheduler) QueueAdd(entries ...QueueEntry) {
 	for _, e := range entries {
 		if existing := s.queueItemUnlocked(e.Repo, e.IssueNumber); existing != nil {
 			existing.Visibility = state.RaiseVisibility(existing.Visibility, e.Visibility)
+			requeueDroppedUnlocked(existing)
 			continue
 		}
 		item := QueueItem{
@@ -2932,6 +2960,7 @@ func (s *Scheduler) QueueAddItem(items ...QueueItem) {
 				existing.RemoteRunID = items[i].RemoteRunID
 				existing.RemoteRunAttached = true
 			}
+			requeueDroppedUnlocked(existing)
 			continue
 		}
 		if items[i].RemoteRunID == "" {
@@ -2959,17 +2988,6 @@ func (s *Scheduler) queueItemUnlocked(repo string, issueNumber int) *QueueItem {
 		}
 	}
 	return nil
-}
-
-// queueContainsUnlocked returns true if the queue already contains the exact
-// repository+issue identity. Issue numbers are only unique within a repository.
-func (s *Scheduler) queueContainsUnlocked(repo string, issueNumber int) bool {
-	for _, existing := range s.queue {
-		if existing.Repo == repo && existing.IssueNumber == issueNumber {
-			return true
-		}
-	}
-	return false
 }
 
 // QueuePendingItems returns a snapshot of the queue's items with status
@@ -3060,8 +3078,22 @@ func (s *Scheduler) QueueAddPinnedItem(item QueueItem) (added bool) {
 func (s *Scheduler) QueueAddIfAbsent(item QueueItem) (added bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.queueContainsUnlocked(item.Repo, item.IssueNumber) {
-		return false
+	if existing := s.queueItemUnlocked(item.Repo, item.IssueNumber); existing != nil {
+		// A dropped item is not queued work: adding the issue again re-queues
+		// it (#3278).
+		if existing.Status != QueueStatusDropped {
+			return false
+		}
+		item.Status = "pending"
+		item.DropReason = ""
+		if item.AddedAt.IsZero() {
+			item.AddedAt = time.Now().UTC()
+		}
+		item.Position = existing.Position
+		*existing = item
+		s.persistQueue()
+		s.emitQueueChangedUnlocked()
+		return true
 	}
 	if item.Status == "" {
 		item.Status = "pending"
@@ -3096,6 +3128,8 @@ func (s *Scheduler) QueueList() []QueueEntry {
 			Repo:        item.Repo,
 			IssueNumber: item.IssueNumber,
 			Priority:    item.Priority,
+			Status:      item.Status,
+			DropReason:  item.DropReason,
 		}
 	}
 	return result
@@ -3165,7 +3199,7 @@ func (s *Scheduler) QueueHas(repo string, issueNumber int) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, item := range s.queue {
-		if queueItemMatches(item, repo, issueNumber) {
+		if item.Status != QueueStatusDropped && queueItemMatches(item, repo, issueNumber) {
 			return true
 		}
 	}
@@ -3303,6 +3337,42 @@ func (s *Scheduler) QueueClear() {
 	s.dequeuedBy = nil
 	s.persistQueue()
 	s.emitQueueChangedUnlocked()
+}
+
+// queueDrop marks an item the queue will not run as dropped, with the reason,
+// and logs a line naming it (#3278). The item stays in the queue so `queue
+// list` shows it; an item no longer in the queue is put back as dropped.
+func (s *Scheduler) queueDrop(item QueueItem, reason string) {
+	if reason == "" {
+		reason = "not dispatched"
+	}
+	log.Printf("queue: dropped %s#%d: %s", item.Repo, item.IssueNumber, reason)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing := s.queueItemUnlocked(item.Repo, item.IssueNumber); existing != nil {
+		existing.Status = QueueStatusDropped
+		existing.DropReason = reason
+		existing.PausedReason = nil
+	} else {
+		item.Status = QueueStatusDropped
+		item.DropReason = reason
+		item.PausedReason = nil
+		s.queue = append(s.queue, item)
+	}
+	s.recalculatePositions()
+	s.persistQueue()
+	s.emitQueueChangedUnlocked()
+}
+
+// requeueDroppedUnlocked returns a dropped item to pending: queueing an issue
+// again is the operator saying "try it now". Caller must hold s.mu.
+func requeueDroppedUnlocked(item *QueueItem) {
+	if item.Status != QueueStatusDropped {
+		return
+	}
+	item.Status = "pending"
+	item.DropReason = ""
+	item.AddedAt = time.Now().UTC()
 }
 
 // QueueHandBack names a dispatch a closing window had dequeued but not begun
@@ -3520,7 +3590,7 @@ func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, 
 		// in-flight state is visible to queueStatusLocked() and cloud sync.
 		// Skip them here so a later DequeueIndependent call doesn't
 		// re-dispatch a run that is already executing.
-		if item.Status == "processing" {
+		if item.Status == "processing" || item.Status == QueueStatusDropped {
 			continue
 		}
 

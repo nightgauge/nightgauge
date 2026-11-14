@@ -94,3 +94,60 @@ func TestRunQueue_BoardFetchFailureIsNotReportedAsNotFound(t *testing.T) {
 		t.Errorf("Detail = %q, want a \"board fetch failed: …\" record", got.Detail)
 	}
 }
+
+// #3278: an item RunQueue does not run is kept as dropped, with the reason
+// `queue list` shows, instead of vanishing. It is not run again, does not
+// count as queued, and `queue add` re-queues it.
+func TestRunQueue_NotDispatchedItemIsKeptAsDropped(t *testing.T) {
+	srv := emptyBoardServer(t)
+	defer srv.Close()
+	client := gh.NewClientWithURL("test-token", srv.URL)
+	s := &Scheduler{
+		trustGate:   allWritersGate(),
+		client:      client,
+		boardSvc:    gh.NewBoardService(client, "o", 1),
+		owner:       "o",
+		repoRunning: map[string]int{},
+		queue:       []QueueItem{{Repo: "o/r", IssueNumber: 42, Status: "pending", Position: 1}},
+	}
+	if _, err := s.RunQueue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	list := s.QueueList()
+	if len(list) != 1 || list[0].Status != QueueStatusDropped || list[0].DropReason != "not found on project board" {
+		t.Fatalf("queue after run = %+v, want #42 dropped: not found on project board", list)
+	}
+	if s.QueueHas("o/r", 42) || len(s.QueuePendingItems()) != 0 {
+		t.Error("a dropped item still counts as queued work")
+	}
+
+	again, err := s.RunQueue(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Outcomes) != 0 || len(s.QueueList()) != 1 {
+		t.Fatalf("second run outcomes=%v queue=%v: a dropped item must be neither run nor lost", again.Outcomes, s.QueueList())
+	}
+
+	s.QueueAdd(QueueEntry{Repo: "o/r", IssueNumber: 42})
+	if l := s.QueueList(); len(l) != 1 || l[0].Status != "pending" || l[0].DropReason != "" {
+		t.Fatalf("re-added item = %+v, want pending with no drop reason", l)
+	}
+
+	s.QueueClear()
+	if len(s.QueueList()) != 0 {
+		t.Fatal("queue clear left items")
+	}
+}
+
+// A dropped item is never dequeued for dispatch.
+func TestDequeueIndependent_SkipsDropped(t *testing.T) {
+	s := &Scheduler{
+		trustGate:   allWritersGate(),
+		repoRunning: map[string]int{},
+		queue:       []QueueItem{{Repo: "o/r", IssueNumber: 7, Status: QueueStatusDropped, DropReason: "has open blockers", Position: 1}},
+	}
+	if got := s.DequeueIndependent(context.Background(), 3, nil); len(got) != 0 {
+		t.Fatalf("dequeued %+v, want nothing", got)
+	}
+}

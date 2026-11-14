@@ -1459,7 +1459,13 @@ nightgauge issue list [--epic <number>] [--search "<keywords>"] [--limit N] \
 # exist on the repository, so an issue is never left half-labelled. The same
 # holds for `issue create-sub`, `forge issue create`, and
 # `forge label add`/`remove`.
-nightgauge issue create --title "..." --body "..." --labels "type:feature"
+# The issue is added to the repository's board with --status (default Backlog,
+# the intake column); --project N picks the board, --project 0 leaves it off
+# every board. --refined applies pipeline:refined for a body that already has
+# acceptance criteria. Every reason the scheduler would not dispatch the issue
+# is printed to stderr with the command that clears it (#3278); --json adds
+# project, status, board_error and dispatch_skip_reasons[{code,detail,remedy}].
+nightgauge issue create --title "..." --body "..." --labels "type:feature" [--status ready] [--refined] [--project N]
 
 # Close issue
 # Note: pr-merge SKILL.md verifies close completion via `gh issue view` query
@@ -3293,8 +3299,13 @@ nightgauge pr ruleset-precheck <pr-number> \
 nightgauge run [--auto] [--project N]
 
 # Queue management
-# Auto-detects type:epic — expands sub-issues instead of queuing the epic itself
+# Auto-detects type:epic — expands sub-issues instead of queuing the epic itself.
+# Refuses, with the reason and remedy, an issue the queue could not run: its
+# repository has no checkout in this workspace, it is not on the queue's board,
+# or it carries a human-only label. Exit 1 when any issue was refused (#3278).
 nightgauge queue add <issue-number>
+# An item `queue run` did not run stays listed as `#N (repo) — dropped: <reason>`
+# until it is re-added, removed or cleared (#3278).
 nightgauge queue list
 nightgauge queue clear
 
@@ -5047,7 +5058,15 @@ nightgauge followup materialize <issue-number> [flags]
 
 Per record: an issue whose body already carries the
 `<!-- discovered-work: id=… issue=#N -->` marker is `already-exists`; an open
-issue with the same normalized title gets a provenance comment (`deduped`);
+issue with the same normalized title gets a provenance comment (`deduped`); an
+open issue in the same subsystem gets the record appended as a new
+`## Part <letter>` section with its own criterion, the marker and the
+`Discovered in #N` back-link (`folded`, detail `appended as Part X of #M`, not
+counted by the cap, #3278). The subsystem match is an open issue whose body
+names one of the record's candidate files, or that shares a `component:*` label
+with the parent; a file match outranks a label match, the parent is used only
+when nothing else matches, the lowest number breaks ties, and epics, human-only
+issues and issues In progress, In review or Done are never folded into;
 otherwise the issue is created with `type:<t>`, Priority, Size, Status=Backlog
 and `Discovered in #N (run R, stage S)` (`filed`). Report mode, the kill switch
 or an untrusted issue author make every record `would-file` with no forge call.
@@ -5067,7 +5086,7 @@ when another record already tracks it (#3186):
   count; `e.g.`, `i.e.`, bare numbers and ordinals never qualify.
 
 A met, missing or unnamed criterion, another run, or no `pr-<N>.json` files the
-record as before. Filed, deduped, existing, reported, tracked and duplicate records
+record as before. Filed, folded, deduped, existing, reported, tracked and duplicate records
 are removed from the capture; refused and invalid ones stay.
 
 Exit `0` on success, including a silent no-op when the capture is absent or

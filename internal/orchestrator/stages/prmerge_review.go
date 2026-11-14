@@ -545,7 +545,7 @@ func (r *DeterministicRunner) fileReviewFindings(ctx context.Context, workdir st
 	var problems []string
 	for _, it := range res.Items {
 		switch it.Outcome {
-		case followup.OutcomeFiled, followup.OutcomeAlreadyExists, followup.OutcomeDeduped:
+		case followup.OutcomeFiled, followup.OutcomeFolded, followup.OutcomeAlreadyExists, followup.OutcomeDeduped:
 			if ledger.Filed == nil {
 				ledger.Filed = map[string]int{}
 			}

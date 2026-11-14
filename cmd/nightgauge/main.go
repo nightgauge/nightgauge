@@ -1586,74 +1586,6 @@ func resolveLabelNames(ctx context.Context, client *gh.Client, owner, repo strin
 	return labels, ids, nil
 }
 
-func issueCreateCmd() *cobra.Command {
-	var (
-		owner      string
-		repo       string
-		title      string
-		body       string
-		labels     []string
-		outputJSON bool
-	)
-
-	cmd := &cobra.Command{
-		Use:   "create",
-		Short: "Create a new issue",
-		Example: `  nightgauge issue create --title "Fix bug" --body "Description"
-  nightgauge issue create --title "Feature" --labels type:feature,priority:high`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if title == "" {
-				return fmt.Errorf("--title is required")
-			}
-
-			client, err := clientFromConfig()
-			if err != nil {
-				return err
-			}
-
-			ownerPart, repoPart := splitRepo(owner, repo)
-
-			// Resolve names to IDs first: an unknown label must fail before
-			// anything is created, not leave a half-labelled issue behind.
-			resolved, labelIDs, err := resolveLabelNames(cmd.Context(), client, ownerPart, repoPart, labels)
-			if err != nil {
-				return err
-			}
-
-			repoID, err := client.GetRepositoryID(cmd.Context(), ownerPart, repoPart)
-			if err != nil {
-				return err
-			}
-
-			svc := gh.NewIssueService(client)
-			issue, err := svc.CreateIssue(cmd.Context(), repoID, title, body, labelIDs)
-			if err != nil {
-				return err
-			}
-			// Report the canonical names the mutation applied, not the caller's
-			// input — the two differ whenever a name arrived with whitespace.
-			for _, l := range resolved {
-				issue.Labels = append(issue.Labels, l.Name)
-			}
-
-			if outputJSON {
-				return printJSON(issue)
-			}
-
-			fmt.Printf("Created #%d: %s\n", issue.Number, issue.Title)
-			return nil
-		},
-	}
-
-	ownerFlag(cmd, &owner, "GitHub organization")
-	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
-	cmd.Flags().StringVar(&title, "title", "", "Issue title (required)")
-	cmd.Flags().StringVar(&body, "body", "", "Issue body")
-	cmd.Flags().StringSliceVar(&labels, "labels", nil, "Label names to apply, comma-separated (e.g. type:bug,component:sdk). Unknown names fail before anything is created.")
-	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
-	return cmd
-}
-
 func issueCloseCmd() *cobra.Command {
 	var (
 		owner      string
@@ -5223,8 +5155,15 @@ func queueAddCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:     "add [issue numbers...]",
-		Short:   "Add issues to the execution queue",
+		Use:   "add [issue numbers...]",
+		Short: "Add issues to the execution queue",
+		Long: `Add issues to the execution queue. An epic is expanded into its sub-issues.
+
+An issue the queue could not run is refused here, with the reason and the
+command that clears it, instead of being dropped at run time: a repository
+this workspace has no checkout of, an issue not on the queue's board, or a
+human-only label (autonomous.exclude_labels). Exit status is 1 when any
+issue was refused.`,
 		Args:    cobra.MinimumNArgs(1),
 		Example: `  nightgauge queue add 1311 1319 1320`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -5249,6 +5188,15 @@ func queueAddCmd() *cobra.Command {
 			}
 			issueSvc := gh.NewIssueService(client)
 			ctx := context.Background()
+			var cfg *config.Config
+			if wd, wdErr := os.Getwd(); wdErr == nil {
+				if c, cfgErr := config.Load(wd); cfgErr == nil {
+					cfg = c
+				}
+			}
+			ready := newReadinessChecker(cfg, ghPlacementReader{client: client}, projectNumber)
+			ready.excludeLabels = sched.ExcludeLabels()
+			refused := 0
 
 			for _, arg := range args {
 				num, err := strconv.Atoi(arg)
@@ -5270,18 +5218,30 @@ func queueAddCmd() *cobra.Command {
 					}
 					queued := sched.QueueList()
 					fmt.Printf("Enqueued sub-issues of epic #%d (%d items in queue)\n", num, len(queued))
-				} else if label, excluded := orchestrator.ExcludedLabelMatch(issue.Labels, sched.ExcludeLabels()); excluded {
-					// Human-only issue (#317) — needs a person, not the pipeline.
-					// Refuse to queue it rather than burning tokens on a run that
-					// can only fail at pr-create with nothing to commit.
-					fmt.Printf("Skipping #%d — carries human-only label %q (autonomous.exclude_labels)\n", num, label)
 				} else {
+					// Refuse what the queue could not run (#3278), including a
+					// human-only issue (#317), rather than dropping it later.
+					reasons, err := queueAddRefusals(ctx, sched, ready, repoOwner, repoName, num)
+					if err != nil {
+						return fmt.Errorf("check #%d: %w", num, err)
+					}
+					if len(reasons) > 0 {
+						refused++
+						for _, r := range reasons {
+							fmt.Printf("Refused #%d (%s): %s\n", num, repo, formatSkipReason(r))
+						}
+						continue
+					}
 					sched.QueueAdd(orchestrator.QueueEntry{
 						Repo:        repo,
 						IssueNumber: num,
 					})
 					fmt.Printf("Queued #%d (%s)\n", num, repo)
 				}
+			}
+			if refused > 0 {
+				cmd.SilenceUsage = true
+				return fmt.Errorf("refused %d of %d issue(s)", refused, len(args))
 			}
 			return nil
 		},
@@ -5315,7 +5275,7 @@ func queueListCmd() *cobra.Command {
 			}
 
 			for i, e := range entries {
-				fmt.Printf("%d. #%d (%s)\n", i+1, e.IssueNumber, e.Repo)
+				fmt.Println(formatQueueListEntry(i+1, e))
 			}
 			return nil
 		},
@@ -5324,6 +5284,16 @@ func queueListCmd() *cobra.Command {
 	ownerFlag(cmd, &owner, "GitHub organization")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	return cmd
+}
+
+// formatQueueListEntry renders one `queue list` line; a dropped item names
+// why the queue did not run it (#3278).
+func formatQueueListEntry(pos int, e orchestrator.QueueEntry) string {
+	line := fmt.Sprintf("%d. #%d (%s)", pos, e.IssueNumber, e.Repo)
+	if e.Status == orchestrator.QueueStatusDropped {
+		line += " — dropped: " + e.DropReason
+	}
+	return line
 }
 
 func queueRunCmd() *cobra.Command {
@@ -5341,13 +5311,18 @@ func queueRunCmd() *cobra.Command {
 				return err
 			}
 
-			entries := sched.QueueList()
-			if len(entries) == 0 {
-				fmt.Println("Queue is empty. Use 'queue add' first.")
+			runnable := 0
+			for _, e := range sched.QueueList() {
+				if e.Status != orchestrator.QueueStatusDropped {
+					runnable++
+				}
+			}
+			if runnable == 0 {
+				fmt.Println("Nothing to run. Use 'queue add' first; 'queue list' shows dropped items and why.")
 				return nil
 			}
 
-			fmt.Printf("Processing %d queued issues...\n", len(entries))
+			fmt.Printf("Processing %d queued issues...\n", runnable)
 			summary, runErr := sched.RunQueue(cmd.Context())
 			return finishQueueRun(cmd, summary, runErr)
 		},

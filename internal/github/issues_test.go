@@ -1866,3 +1866,22 @@ func TestGetIssueState_UsesREST(t *testing.T) {
 		})
 	}
 }
+
+// #3278: a search hit carries its body, so FindByMarker can confirm the
+// follow-up marker it searched for instead of comparing against "".
+func TestIssueService_SearchIssues_ReturnsBody(t *testing.T) {
+	searchResp := `{"data":{"search":{"issueCount":1,"nodes":[
+		{"__typename":"Issue","id":"I_10","number":10,"title":"t","state":"OPEN",
+		 "body":"<!-- discovered-work: id=dw-1 issue=#4 -->\n\nx",
+		 "url":"https://github.com/o/r/issues/10","repository":{"nameWithOwner":"o/r"},
+		 "labels":{"nodes":[]}}]}}}`
+	client, cleanup := mockGraphQLServer(t, searchResp)
+	defer cleanup()
+	issues, err := NewIssueService(client).SearchIssues(context.Background(), "o", "r", `"dw-1"`, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0].Body, "id=dw-1 issue=#4") {
+		t.Fatalf("issues = %+v, want the body carried through", issues)
+	}
+}

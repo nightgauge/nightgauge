@@ -22,6 +22,10 @@ type fakeFiler struct {
 	created  []created
 	calls    int
 	next     int
+	// open is the open issues FindOpenInSubsystem picks from; components
+	// are the parent's component labels.
+	open       []SubsystemCandidate
+	components []string
 }
 
 func newFake() *fakeFiler {
@@ -66,6 +70,19 @@ func (f *fakeFiler) CreateIssue(_ context.Context, title, body, typ, pri, size s
 	f.titles[NormalizeTitle(title)] = f.next
 	f.created = append(f.created, created{title, body, typ, pri, size})
 	return f.next, "", nil
+}
+
+func (f *fakeFiler) FindOpenInSubsystem(_ context.Context, parent int, files []string) (int, string, error) {
+	f.calls++
+	n, url := PickSubsystemIssue(Subsystem{Parent: parent, Files: files, Components: f.components}, f.open)
+	return n, url, nil
+}
+
+func (f *fakeFiler) AppendPart(_ context.Context, n int, rec discoveredwork.Record) (string, error) {
+	f.calls++
+	body, label, _ := AppendPartToBody(f.bodies[n], rec)
+	f.bodies[n] = body
+	return label, nil
 }
 
 var fileGate = filing.Gate{Mode: filing.ModeFile, Cap: 10}

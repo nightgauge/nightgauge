@@ -47,11 +47,21 @@ type Filer interface {
 	// CreateIssue creates the issue with the type:<typ> label, adds it to the
 	// configured project and sets Priority, Size and Status=Backlog.
 	CreateIssue(ctx context.Context, title, body, typ, priority, size string) (int, string, error)
+	// FindOpenInSubsystem returns an open issue in the same subsystem as a
+	// follow-up of parent touching files, chosen by PickSubsystemIssue, or 0
+	// (#3278).
+	FindOpenInSubsystem(ctx context.Context, parent int, files []string) (int, string, error)
+	// AppendPart appends rec to issue number as a new part (AppendPartToBody)
+	// and returns the part's label.
+	AppendPart(ctx context.Context, number int, rec discoveredwork.Record) (string, error)
 }
 
 // Outcome values for one record.
 const (
-	OutcomeFiled         = "filed"
+	OutcomeFiled = "filed"
+	// OutcomeFolded is a follow-up appended as a new part to an open issue
+	// in the same subsystem instead of filed as its own issue (#3278).
+	OutcomeFolded        = "folded"
 	OutcomeAlreadyExists = "already-exists"
 	OutcomeDeduped       = "deduped"
 	OutcomeWouldFile     = "would-file"
@@ -268,7 +278,7 @@ func (r *Result) Consumed(id string) bool {
 	for _, it := range r.Items {
 		if it.ID == id {
 			switch it.Outcome {
-			case OutcomeFiled, OutcomeAlreadyExists, OutcomeDeduped, OutcomeWouldFile,
+			case OutcomeFiled, OutcomeFolded, OutcomeAlreadyExists, OutcomeDeduped, OutcomeWouldFile,
 				OutcomeTrackedByParent, OutcomeDuplicate:
 				return true
 			}
@@ -321,8 +331,9 @@ func CommentBody(rec discoveredwork.Record) string {
 // without allow_untrusted_authors, every valid record is would-file and the
 // Filer is never called. In file mode records already filed (marker) are
 // skipped, records matching an open issue's title become a provenance
-// comment, and at most gate.Cap issues are created: the rest are refused and
-// a *filing.CapError is returned with the result.
+// comment, records with an open issue in the same subsystem are appended to
+// it as a new part (folded), and at most gate.Cap issues are created: the rest
+// are refused and a *filing.CapError is returned with the result.
 //
 // Before any of that, in either mode, a review record is not filed when track
 // says this run's PR holds its criterion unmet (tracked-by-parent), or when it
@@ -410,6 +421,25 @@ func Materialize(ctx context.Context, capture *discoveredwork.Capture, gate fili
 			res.Items = append(res.Items, it)
 			continue
 		}
+		// Fold into an open issue in the same subsystem before filing a new
+		// one (#3278). Folding creates no issue, so the cap does not count it.
+		num, url, err = f.FindOpenInSubsystem(ctx, rec.IssueNumber, rec.CandidateTargetFiles)
+		if err != nil {
+			return res, fmt.Errorf("subsystem lookup for %s: %w", rec.ID, err)
+		}
+		if num != 0 {
+			part, err := f.AppendPart(ctx, num, rec)
+			if err != nil {
+				return res, fmt.Errorf("append %s to #%d: %w", rec.ID, num, err)
+			}
+			it.Outcome, it.IssueNumber, it.URL = OutcomeFolded, num, url
+			it.Detail = fmt.Sprintf("appended as Part %s of #%d", part, num)
+			if part == "" {
+				it.Detail = fmt.Sprintf("already a part of #%d", num)
+			}
+			res.Items = append(res.Items, it)
+			continue
+		}
 		res.Items = append(res.Items, it)
 		toCreate = append(toCreate, len(res.Items)-1)
 		recs[len(res.Items)-1] = rec
@@ -440,4 +470,164 @@ func Materialize(ctx context.Context, capture *discoveredwork.Capture, gate fili
 func IsCapRefusal(err error) bool {
 	var ce *filing.CapError
 	return errors.As(err, &ce)
+}
+
+// Subsystem folding (#3278). A small follow-up joins an open issue in the same
+// subsystem as a new part, and becomes an issue of its own only when nothing
+// matches.
+
+// SubsystemCandidate is one open issue PickSubsystemIssue weighs.
+type SubsystemCandidate struct {
+	Number      int
+	URL         string
+	Body        string
+	Labels      []string
+	BoardStatus string
+}
+
+// Subsystem identifies a follow-up's subsystem: the issue it was discovered
+// in, the files it names, and the parent's component:* labels.
+type Subsystem struct {
+	Parent     int
+	Files      []string
+	Components []string
+}
+
+// foldExcludedLabels mark an issue no follow-up may join: an epic is a
+// container, and a human-only issue is not pipeline work.
+var foldExcludedLabels = []string{"type:epic", "owner-action", "blocked"}
+
+// PickSubsystemIssue chooses the open issue a follow-up folds into, or 0.
+//
+// A candidate qualifies when its body names one of the follow-up's files or it
+// shares a component:* label with the parent. It is excluded when it is an
+// epic or human-only, or its board Status is In progress, In review or Done:
+// rewriting a body a running stage or an open PR was written against changes
+// work under its feet. A file match outranks a label match, the parent is
+// chosen only when no other issue qualifies, and the lowest number breaks
+// ties, so the choice is deterministic.
+func PickSubsystemIssue(s Subsystem, cands []SubsystemCandidate) (int, string) {
+	comps := map[string]bool{}
+	for _, c := range s.Components {
+		comps[strings.ToLower(c)] = true
+	}
+	const (
+		noMatch = iota
+		labelMatch
+		fileMatch
+	)
+	best, bestRank, bestURL, bestIsParent := 0, noMatch, "", false
+	better := func(n, rank int, isParent bool) bool {
+		switch {
+		case best == 0:
+			return true
+		case bestIsParent != isParent:
+			return bestIsParent
+		case rank != bestRank:
+			return rank > bestRank
+		default:
+			return n < best
+		}
+	}
+	for _, c := range cands {
+		if c.Number <= 0 || foldExcluded(c) {
+			continue
+		}
+		rank := noMatch
+		for _, f := range s.Files {
+			if f = strings.TrimSpace(f); f != "" && strings.Contains(c.Body, f) {
+				rank = fileMatch
+				break
+			}
+		}
+		if rank == noMatch {
+			for _, l := range c.Labels {
+				if comps[strings.ToLower(l)] {
+					rank = labelMatch
+					break
+				}
+			}
+		}
+		if rank == noMatch {
+			continue
+		}
+		isParent := c.Number == s.Parent
+		if better(c.Number, rank, isParent) {
+			best, bestRank, bestURL, bestIsParent = c.Number, rank, c.URL, isParent
+		}
+	}
+	return best, bestURL
+}
+
+func foldExcluded(c SubsystemCandidate) bool {
+	for _, l := range c.Labels {
+		for _, x := range foldExcludedLabels {
+			if strings.EqualFold(l, x) {
+				return true
+			}
+		}
+	}
+	switch strings.ToLower(strings.Join(strings.Fields(c.BoardStatus), " ")) {
+	case "in progress", "in review", "done":
+		return true
+	}
+	return false
+}
+
+// ComponentLabels returns the component:* labels in labels.
+func ComponentLabels(labels []string) []string {
+	var out []string
+	for _, l := range labels {
+		if strings.HasPrefix(strings.ToLower(l), "component:") {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+var partHeadingRe = regexp.MustCompile(`(?m)^##\s+Part\s+([A-Z])\b`)
+
+// nextPartLabel is the letter after the highest "## Part X" heading in body.
+// A body with no parts is part A, so the first appended part is B; past Z the
+// label is numeric.
+func nextPartLabel(body string) string {
+	max := 'A'
+	for _, m := range partHeadingRe.FindAllStringSubmatch(body, -1) {
+		if r := rune(m[1][0]); r > max {
+			max = r
+		}
+	}
+	if max >= 'Z' {
+		return strconv.Itoa(int(max-'A') + 2)
+	}
+	return string(max + 1)
+}
+
+// AppendPartToBody returns body with rec appended as a new part, the part's
+// label, and whether anything changed. A body already carrying rec's marker is
+// returned unchanged, so folding is idempotent.
+func AppendPartToBody(body string, rec discoveredwork.Record) (string, string, bool) {
+	marker := Marker(rec)
+	if strings.Contains(body, marker) {
+		return body, "", false
+	}
+	runID := ""
+	if rec.RunID != nil {
+		runID = *rec.RunID
+	}
+	label := nextPartLabel(body)
+	var b strings.Builder
+	b.WriteString(strings.TrimRight(body, "\n") + "\n\n")
+	fmt.Fprintf(&b, "## Part %s: follow-up discovered in #%d\n\n", label, rec.IssueNumber)
+	b.WriteString(marker + "\n\n")
+	b.WriteString(filing.ProvenanceLine(rec.IssueNumber, runID, rec.SourceStage) + "\n\n")
+	b.WriteString(filing.RenderUntrusted(rec.Summary, 0) + "\n\n")
+	b.WriteString("### Evidence\n\n" + filing.RenderUntrusted(strings.Join(rec.Evidence, "\n\n"), maxEvidenceRender) + "\n\n")
+	if len(rec.CandidateTargetFiles) > 0 {
+		b.WriteString("### Candidate files\n\n" +
+			filing.RenderUntrusted(strings.Join(rec.CandidateTargetFiles, "\n"), maxFilesRender) + "\n\n")
+	}
+	fmt.Fprintf(&b, "### Acceptance criteria (Part %s)\n\n", label)
+	fmt.Fprintf(&b, "- [ ] The follow-up summarized in Part %s is resolved, or recorded as not needed\n", label)
+	return b.String(), label, true
 }

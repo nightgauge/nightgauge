@@ -63,6 +63,7 @@ type GitHubFiler struct {
 	issueSvc *gh.IssueService
 	projSvc  *gh.ProjectService
 	trustF   *gh.TrustForge
+	project  int
 }
 
 func NewGitHubFiler(client *gh.Client, owner, repo string, projectNumber int, ownerType gh.OwnerType) *GitHubFiler {
@@ -73,6 +74,7 @@ func NewGitHubFiler(client *gh.Client, owner, repo string, projectNumber int, ow
 		issueSvc: gh.NewIssueService(client),
 		projSvc:  gh.NewProjectService(client, owner, projectNumber, ownerType),
 		trustF:   gh.NewTrustForge(client),
+		project:  projectNumber,
 	}
 }
 
@@ -170,4 +172,93 @@ func (g *GitHubFiler) CreateIssue(ctx context.Context, title, body, typ, priorit
 		}
 	}
 	return issue.Number, issue.URL, nil
+}
+
+// Bounds on the subsystem search: files and components searched, and results
+// read per search.
+const (
+	maxSubsystemFiles      = 5
+	maxSubsystemComponents = 3
+	subsystemSearchLimit   = 20
+)
+
+// FindOpenInSubsystem searches open issues naming one of files, and open
+// issues carrying one of the parent's component:* labels, then picks with
+// PickSubsystemIssue. A pick whose board Status rules it out is dropped and
+// the next is tried, so the board is read only for the issues actually picked.
+func (g *GitHubFiler) FindOpenInSubsystem(ctx context.Context, parent int, files []string) (int, string, error) {
+	sub := Subsystem{Parent: parent, Files: files}
+	if parent > 0 {
+		p, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, parent)
+		if err != nil {
+			return 0, "", fmt.Errorf("read parent #%d: %w", parent, err)
+		}
+		sub.Components = ComponentLabels(p.Labels)
+	}
+	var queries []string
+	for i, f := range files {
+		if i == maxSubsystemFiles {
+			break
+		}
+		if f = strings.TrimSpace(f); f != "" && !strings.ContainsAny(f, `"`) {
+			queries = append(queries, `"`+f+`" in:body`)
+		}
+	}
+	for i, c := range sub.Components {
+		if i == maxSubsystemComponents {
+			break
+		}
+		if !strings.ContainsAny(c, `"`) {
+			queries = append(queries, `label:"`+c+`"`)
+		}
+	}
+	seen := map[int]int{}
+	var cands []SubsystemCandidate
+	for _, q := range queries {
+		issues, err := g.issueSvc.SearchIssues(ctx, g.owner, g.repo, q, subsystemSearchLimit)
+		if err != nil {
+			return 0, "", err
+		}
+		for _, is := range issues {
+			if _, ok := seen[is.Number]; ok {
+				continue
+			}
+			seen[is.Number] = len(cands)
+			cands = append(cands, SubsystemCandidate{Number: is.Number, URL: is.URL, Body: is.Body, Labels: is.Labels})
+		}
+	}
+	for range cands {
+		n, url := PickSubsystemIssue(sub, cands)
+		if n == 0 {
+			return 0, "", nil
+		}
+		placement, err := gh.IssueBoardPlacement(ctx, g.client, g.owner, g.repo, n, g.project)
+		if err != nil {
+			return 0, "", err
+		}
+		c := &cands[seen[n]]
+		c.BoardStatus = placement.Status
+		if !foldExcluded(*c) {
+			return n, url, nil
+		}
+		c.Number = 0 // ruled out by its board Status
+	}
+	return 0, "", nil
+}
+
+// AppendPart appends rec to issue number as a new part. A body already
+// carrying rec's marker is left alone.
+func (g *GitHubFiler) AppendPart(ctx context.Context, number int, rec discoveredwork.Record) (string, error) {
+	is, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, number)
+	if err != nil {
+		return "", err
+	}
+	body, label, changed := AppendPartToBody(is.Body, rec)
+	if !changed {
+		return "", nil
+	}
+	if _, err := g.issueSvc.EditIssue(ctx, is.NodeID, body); err != nil {
+		return "", err
+	}
+	return label, nil
 }

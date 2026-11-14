@@ -765,9 +765,13 @@ type closePullRequestMutation struct {
 type searchIssueNode struct {
 	TypeName    string `graphql:"__typename"`
 	IssueFields struct {
-		ID         graphql.ID
-		Number     graphql.Int
-		Title      graphql.String
+		ID     graphql.ID
+		Number graphql.Int
+		Title  graphql.String
+		// Body lets a caller confirm a marker the search matched (the
+		// follow-up idempotency marker, #3278); without it FindByMarker
+		// compared against an empty string and never found a filed issue.
+		Body       graphql.String
 		State      graphql.String
 		URL        graphql.String
 		Repository struct {

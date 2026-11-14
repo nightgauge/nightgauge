@@ -159,7 +159,12 @@ func renderFollowupHuman(w io.Writer, res *followup.Result) {
 	fmt.Fprintf(w, "Follow-up materialize (%s) — issue #%d\n", mode, res.Issue)
 	for _, it := range res.Items {
 		switch it.Outcome {
-		case followup.OutcomeFiled, followup.OutcomeAlreadyExists, followup.OutcomeDeduped:
+		case followup.OutcomeFolded:
+			// Name the path taken: folded into an open issue, not filed (#3278).
+			fmt.Fprintf(w, "  %-14s %s  folded into #%d (%s) %s\n", it.Outcome, it.ID, it.IssueNumber, it.Detail, it.Title)
+		case followup.OutcomeFiled:
+			fmt.Fprintf(w, "  %-14s %s  filed #%d %s\n", it.Outcome, it.ID, it.IssueNumber, it.Title)
+		case followup.OutcomeAlreadyExists, followup.OutcomeDeduped:
 			fmt.Fprintf(w, "  %-14s %s  #%d %s\n", it.Outcome, it.ID, it.IssueNumber, it.Title)
 		case followup.OutcomeInvalid, followup.OutcomeTrackedByParent, followup.OutcomeDuplicate:
 			fmt.Fprintf(w, "  %-14s %s  %s (%s)\n", it.Outcome, it.ID, it.Title, it.Detail)

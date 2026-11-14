@@ -11,6 +11,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/trust"
 )
 
@@ -23,6 +24,13 @@ type eligibilityRow struct {
 	AuthorLevel string `json:"author_level,omitempty"`
 	Approver    string `json:"approver,omitempty"`
 	Reason      string `json:"reason,omitempty"`
+	// Board readiness (#3278): eligible also requires that the scheduler
+	// would not skip the issue.
+	Trusted     bool                      `json:"trusted"`
+	OnBoard     bool                      `json:"on_board"`
+	BoardStatus string                    `json:"board_status,omitempty"`
+	Refined     bool                      `json:"refined"`
+	SkipReasons []orchestrator.SkipReason `json:"skip_reasons,omitempty"`
 }
 
 type eligibilityReport struct {
@@ -39,8 +47,11 @@ type openIssueLister interface {
 }
 
 // buildEligibilityReport decides each issue with one gate, so the report
-// costs one permission call per distinct author (#2130, #842).
-func buildEligibilityReport(ctx context.Context, gate *trust.Gate, lister openIssueLister, owner, repo string, numbers []int, allOpen bool) (eligibilityReport, error) {
+// costs one permission call per distinct author (#2130, #842). An issue is
+// eligible only when the gate trusts it AND the scheduler would not skip it:
+// the trust gate alone said "eligible" for issues stranded off the board
+// (#3278).
+func buildEligibilityReport(ctx context.Context, gate *trust.Gate, lister openIssueLister, ready readinessChecker, owner, repo string, numbers []int, allOpen bool) (eligibilityReport, error) {
 	rep := eligibilityReport{Repo: owner + "/" + repo, Issues: []eligibilityRow{}}
 	var subjects []trust.Subject
 	if allOpen {
@@ -58,9 +69,22 @@ func buildEligibilityReport(ctx context.Context, gate *trust.Gate, lister openIs
 	}
 	for _, s := range subjects {
 		d := gate.Decide(ctx, s)
-		rep.Issues = append(rep.Issues, eligibilityRow{Number: s.Number, Author: d.Author, Eligible: d.Eligible,
-			Via: d.Via, AuthorLevel: string(d.AuthorLevel), Approver: d.Approver, Reason: d.Reason})
-		if d.Eligible {
+		row := eligibilityRow{Number: s.Number, Author: d.Author, Eligible: d.Eligible,
+			Via: d.Via, AuthorLevel: string(d.AuthorLevel), Approver: d.Approver, Reason: d.Reason}
+		res, err := ready.check(ctx, owner, repo, s.Number)
+		if err != nil {
+			return rep, err
+		}
+		row.Trusted = d.Eligible
+		row.OnBoard = res.Placement.OnBoard
+		row.BoardStatus = res.Placement.Status
+		row.Refined = hasLabelFold(res.Placement.Labels, gh.LabelRefined)
+		row.SkipReasons = res.Reasons
+		if len(res.Reasons) > 0 {
+			row.Eligible = false
+		}
+		rep.Issues = append(rep.Issues, row)
+		if row.Eligible {
 			rep.Eligible++
 		} else {
 			rep.Ineligible++
@@ -84,7 +108,12 @@ func autonomousEligibilityCmd() *cobra.Command {
 eligible when a user with write access (or higher) to the repository authored
 it, or applied ` + "`pipeline:approved`" + ` after its last edit, or a bot listed in
 autonomous.trusted_bots authored it. Exit status 0 means every issue reported
-is eligible; 1 means at least one is not.`,
+is eligible; 1 means at least one is not.
+
+It also checks what the scheduler checks before dispatch: board membership
+on the repository's board, a dispatchable Status, human-only labels, and the
+refined gate. An issue the scheduler would skip is reported NOT eligible with
+each skip reason and the command that clears it.`,
 		Example: `  nightgauge autonomous eligibility --all-open --json
   nightgauge autonomous eligibility 2130 2131 --repo nightgauge/nightgauge`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -116,7 +145,17 @@ is eligible; 1 means at least one is not.`,
 				fmt.Fprintf(os.Stderr, "note: label approval (%s) is unavailable for %s: no GitHub App installation is "+
 					"configured there, so only issues opened by users with write access are eligible\n", trust.ApprovedLabel, ownerPart)
 			}
-			rep, err := buildEligibilityReport(cmd.Context(), gate, forge, ownerPart, repoPart, numbers, allOpen)
+			project := 0
+			if cfg != nil {
+				wd, _ := os.Getwd()
+				n, err := resolveProjectNumber(cfg, false, cfg.ProjectNumber, ownerPart, repoPart, wd)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "note: no board resolved for %s/%s (%v); the scheduler dispatches only board items\n", ownerPart, repoPart, err)
+				}
+				project = n
+			}
+			ready := newReadinessChecker(cfg, ghPlacementReader{client: client}, project)
+			rep, err := buildEligibilityReport(cmd.Context(), gate, forge, ready, ownerPart, repoPart, numbers, allOpen)
 			if err != nil {
 				return err
 			}
@@ -126,10 +165,16 @@ is eligible; 1 means at least one is not.`,
 				}
 			} else {
 				for _, r := range rep.Issues {
-					if r.Eligible {
+					switch {
+					case r.Eligible:
 						fmt.Printf("#%d  eligible  (%s, @%s)\n", r.Number, r.Via, r.Author)
-					} else {
+					case !r.Trusted:
 						fmt.Printf("#%d  NOT eligible  %s\n", r.Number, r.Reason)
+					}
+					if !r.Eligible {
+						for _, sr := range r.SkipReasons {
+							fmt.Printf("#%d  NOT eligible  %s\n", r.Number, formatSkipReason(sr))
+						}
 					}
 				}
 				fmt.Printf("%s: %d issue(s), %d eligible, %d not\n", rep.Repo, rep.Total, rep.Eligible, rep.Ineligible)
