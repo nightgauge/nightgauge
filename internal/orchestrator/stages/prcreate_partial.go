@@ -101,3 +101,29 @@ func PartialRerunNoDiffDetail(issueNumber, pr int, branch, base string, open int
 	return fmt.Sprintf("[not-pipeline-actionable] feature-dev: partial-delivery re-run of #%d (after PR #%d) produced no diff between %s and %s, so feature-validate was skipped; %d remaining criteria stay open and #%d waits in Backlog for a human [#3160]",
 		issueNumber, pr, branch, base, open, issueNumber)
 }
+
+// NoDiffBeforePRCreateComment names the criteria still open on an issue whose
+// run finished feature-dev and feature-validate with a branch level with its
+// base (#3269). pr-create is not dispatched: there is nothing to open a PR for.
+func NoDiffBeforePRCreateComment(issueNumber int, branch, base string, open []string) string {
+	if base == "" {
+		base = defaultBaseBranch
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("This run of #%d finished feature-dev and feature-validate with no diff between `%s` and `%s`, so pr-create did not run and no pull request was opened (#3269). The run ended as a no-op, not a failure.\n\n",
+		issueNumber, CommentSafeACText(branch), CommentSafeACText(base)))
+	b.WriteString("Still open in the issue body:\n\n")
+	for _, c := range open {
+		b.WriteString("- " + CommentSafeACText(c) + "\n")
+	}
+	b.WriteString("\nThe issue waits in Backlog: tick the criteria that are met and close it, or rewrite what is left so a run can deliver it.\n")
+	return b.String()
+}
+
+// NoDiffBeforePRCreateDetail is the terminal text for that stop. The leading
+// marker classifies it not_pipeline_actionable: a non-failure with no
+// lifetime-cap increment, the same booking pr-create's no-diff park uses.
+func NoDiffBeforePRCreateDetail(issueNumber int, branch, base string, open int) string {
+	return fmt.Sprintf("[not-pipeline-actionable] feature-validate left branch %s level with %s, so pr-create was not dispatched; %d acceptance criteria stay open and #%d waits in Backlog for a human [#3269]",
+		branch, base, open, issueNumber)
+}

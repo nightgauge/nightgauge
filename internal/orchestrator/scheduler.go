@@ -6345,6 +6345,21 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			return
 		}
 
+		// No-diff boundary before pr-create (#3269): a run whose feature-dev
+		// and feature-validate left the branch level with its base, with
+		// criteria still open, has nothing to open a PR for. It ends here as a
+		// no-op booked not_pipeline_actionable (no lifetime-cap increment)
+		// rather than reaching pr-create.
+		if stage == state.StagePRCreate {
+			if detail, stopped := s.stopNoDiffBeforePRCreate(ctx, item, stageWorkspace(runtime, workspaceRoot)); stopped {
+				runtime.BeginStage(stage)
+				runtime.SetStageError(stage, detail)
+				s.emitStateChanged(item.Repo, item.Number, runtime)
+				terminalFailureKind = TerminalKindNotPipelineActionable
+				return
+			}
+		}
+
 		lifecycle.stage(stage, runtime.FeatureBranch())
 
 		// For merge stage, acquire the per-repo lock; for any other stage, drop a

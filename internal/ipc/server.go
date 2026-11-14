@@ -4167,8 +4167,13 @@ func (s *Server) registerMethods() {
 					gateRan = true
 					gateTerminalKind = gateResults[len(gateResults)-1].TerminalKind
 				}
-				kind := orchestrator.ResolveTerminalKind(gateRan, gateTerminalKind,
-					snap.StageHostSlept[string(snap.Stage)], errMsg)
+				// A typed start refusal outranks prose classification
+				// (#3269): the closed-issue guard's message carries no marker.
+				kind := terminalKindForStartRefusal(p.StartRefusal)
+				if kind == "" {
+					kind = orchestrator.ResolveTerminalKind(gateRan, gateTerminalKind,
+						snap.StageHostSlept[string(snap.Stage)], errMsg)
+				}
 				if kind == orchestrator.TerminalKindGatePluginMissing {
 					orchestrator.RaiseGatePluginMissing(s.attentionStore(), recordRepo, p.IssueNumber, runID, string(snap.Stage), errMsg)
 				}

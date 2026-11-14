@@ -579,3 +579,84 @@ func TestPartialRerunScopeBlocks_ReconciledAndEmpty(t *testing.T) {
 		t.Error("no PR rendered blocks")
 	}
 }
+
+// #3269 part E: an unscoped run whose feature-dev and feature-validate leave
+// the branch level with its base, with criteria still open in the issue body,
+// ends as a no-op before pr-create: not_pipeline_actionable (no lifetime-cap
+// increment), with one comment naming the open criteria.
+func TestNoDiffBeforePRCreate_EndsAsNoOp(t *testing.T) {
+	runner := &partialRerunRunner{}
+	s, _ := partialRerunScheduler(t, runner, false)
+	s.partialDeliveryRead = func(context.Context, string, int) (hooks.PartialDeliveryStatus, error) {
+		return hooks.PartialDeliveryStatus{Criteria: []string{}}, nil
+	}
+	s.issueSvc.(*mockIssueSvc).addIssue("nightgauge", "test", 3269, &types.Issue{
+		NodeID: "I_3269", Number: 3269, State: "OPEN",
+		Body: "## Acceptance criteria\n\n- [x] code change\n- [ ] **Supervisor:** run the failure drill\n",
+	})
+	commenter := &recordingCommenter{}
+	s.noDiffCommenter = commenter
+
+	_, terminalKind := s.runPipeline(context.Background(),
+		types.BoardItem{Number: 3269, Repo: "nightgauge/test", ID: "item-3269", NodeID: "I_3269"})
+
+	if !ranStage(runner, state.StageFeatureValidate) {
+		t.Fatal("feature-validate never ran; the fixture is wrong")
+	}
+	if ranStage(runner, state.StagePRCreate) {
+		t.Fatal("pr-create ran on a branch level with its base")
+	}
+	if terminalKind != TerminalKindNotPipelineActionable {
+		t.Fatalf("terminal kind = %q, want %q (a no-op, not a failure)", terminalKind, TerminalKindNotPipelineActionable)
+	}
+	if n := commenter.count(); n != 1 {
+		t.Fatalf("posted %d comment(s), want 1", n)
+	}
+	if body := commenter.bodies[0]; !strings.Contains(body, "run the failure drill") || strings.Contains(body, "code change") {
+		t.Errorf("comment does not name exactly the open criteria: %q", body)
+	}
+}
+
+// With every criterion ticked the boundary does not stop the run: pr-create's
+// own no-diff settlement closes the issue with its evidence (#2941).
+func TestNoDiffBeforePRCreate_AllTickedContinues(t *testing.T) {
+	runner := &partialRerunRunner{}
+	s, _ := partialRerunScheduler(t, runner, false)
+	s.partialDeliveryRead = func(context.Context, string, int) (hooks.PartialDeliveryStatus, error) {
+		return hooks.PartialDeliveryStatus{Criteria: []string{}}, nil
+	}
+	s.issueSvc.(*mockIssueSvc).addIssue("nightgauge", "test", 3270, &types.Issue{
+		NodeID: "I_3270", Number: 3270, State: "OPEN", Body: "- [x] done\n",
+	})
+	s.noDiffCommenter = &recordingCommenter{}
+	s.runPipeline(context.Background(), types.BoardItem{Number: 3270, Repo: "nightgauge/test", ID: "item-3270", NodeID: "I_3270"})
+	if !ranStage(runner, state.StagePRCreate) {
+		t.Fatal("the boundary stopped a run whose criteria are all ticked")
+	}
+}
+
+// The no-op booking: not_pipeline_actionable leaves the failure counter
+// unchanged.
+func TestNoDiffBeforePRCreate_BookingLeavesFailureCounter(t *testing.T) {
+	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
+		state: &AutonomousState{
+			Status:                "running",
+			Running:               []RunningItem{{Repo: "nightgauge/test", Number: 3269, Title: "no diff"}},
+			LifetimeIssueFailures: map[string]int{},
+		},
+		rescanCh:             make(chan struct{}, 1),
+		perIssueFailureCount: map[string]int{},
+		retryBackoff:         map[string]retryPlan{},
+	}
+	detail := pmstages.NoDiffBeforePRCreateDetail(3269, "feat/3269-x", "main", 1)
+	as.onPipelineComplete("nightgauge/test", 3269, false, false, ClassifyTerminalKind(detail), detail, false)
+	as.drainBackground()
+	if got := as.state.LifetimeIssueFailures["nightgauge/test#3269"]; got != 0 {
+		t.Errorf("LifetimeIssueFailures = %d, want 0", got)
+	}
+	if ClassifyTerminalKind(detail) != TerminalKindNotPipelineActionable {
+		t.Errorf("detail classifies as %q, want not_pipeline_actionable", ClassifyTerminalKind(detail))
+	}
+}

@@ -270,6 +270,39 @@ describe("ConcurrentPipelineManager — zero-token pipeline-start refusal (#1170
     }
   );
 
+  it.each([
+    ["issue-closed", "issue_closed"],
+    ["adapter-auth-failed", undefined],
+    [undefined, undefined],
+  ])(
+    "reports the typed %s refusal to onSlotFailed as terminal kind %s (#3269)",
+    async (refusal, kind) => {
+      const { manager, controllable, onSlotFailed } = buildManager([3269]);
+
+      await manager.fillSlots();
+      controllable.finishWith(3269, {
+        success: false,
+        completedStages: [],
+        skippedStages: [],
+        deferredStages: [],
+        failedStage: "pipeline-start",
+        ...(refusal ? { startRefusal: refusal } : {}),
+        // The guard's exact text: it carries no classifiable marker, so the
+        // kind can only come from the structured refusal.
+        error: new Error(
+          "Issue #3114 is already CLOSED. Pipeline halted — zero AI tokens consumed.\n\n" +
+            "Use forceRerun: true to override this guard for legitimate re-runs."
+        ),
+        totalDurationMs: 900,
+      });
+
+      await manager.settleForTest(3269);
+
+      expect(onSlotFailed).toHaveBeenCalledTimes(1);
+      expect(onSlotFailed.mock.calls[0][5]).toBe(kind);
+    }
+  );
+
   it("STILL attempts the guarded In review move and STILL comments when a run that genuinely started fails", async () => {
     const { manager, controllable, onSlotFailed } = buildManager([1171]);
 

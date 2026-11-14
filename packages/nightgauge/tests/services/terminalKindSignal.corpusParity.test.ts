@@ -235,7 +235,20 @@ describe("terminal-kind signal parity (extension)", () => {
       declarations,
       "the terminal kind forwarded to Go must be declared exactly once, as a const, straight " +
         "from the guarded classifier — a `let` is the first half of a reassignment"
-    ).toEqual(["const terminalFailureKind = classifyTerminalKindForSignal(errMsg)"]);
+    ).toEqual([
+      "const terminalFailureKind = terminalKind ?? classifyTerminalKindForSignal(errMsg)",
+    ]);
+    // #3269: the one permitted source besides the classifier is `terminalKind`,
+    // the onSlotFailed parameter ConcurrentPipelineManager fills ONLY from the
+    // typed run result (startRefusalTerminalKind). It is not a text matcher, and
+    // Go books the same kind from the same field on pipeline.notifyComplete.
+    const managerSrc = readFileSync(
+      path.resolve(__dirname, "../../src/services/ConcurrentPipelineManager.ts"),
+      "utf-8"
+    );
+    expect(managerSrc).toMatch(
+      /slotError,\s*slotCostUsd,\s*slot\.repo,\s*startRefusalTerminalKind\(result\.startRefusal\)/
+    );
 
     const assignments = src.match(/terminalFailureKind\s*(?:=[^=]|\+=|\?\?=|\|\|=|&&=)/g) ?? [];
     expect(

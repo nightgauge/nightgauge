@@ -207,3 +207,15 @@ func writePreDispatchExitRecord(root, repo string, issue int, runID, terminalKin
 		log.Printf("notifyComplete: #%d pre-dispatch exit record write failed (non-fatal): %v", issue, err)
 	}
 }
+
+// terminalKindForStartRefusal maps a run result's typed pipeline-start
+// refusal to the terminal kind it books (#3269). The closed-issue guard's
+// error text carries no classifiable marker, so without this the run fell
+// through to subagent_crash and fed the cascade breaker. Other refusals
+// return "" and keep the text classification.
+func terminalKindForStartRefusal(refusal string) string {
+	if refusal == "issue-closed" {
+		return orchestrator.TerminalKindIssueClosed
+	}
+	return ""
+}

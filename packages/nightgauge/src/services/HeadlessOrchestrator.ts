@@ -1906,6 +1906,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // handler persists it as terminal_failure_detail and writes the
         // pre-dispatch exit record from it. Success sends nothing.
         failureDetail: result.success ? undefined : result.error?.message || undefined,
+        // #3269: the typed start refusal, so Go books a closed-issue refusal
+        // issue_closed instead of classifying the guard's prose as a crash.
+        startRefusal: result.success ? undefined : result.startRefusal,
       });
     } catch {
       /* telemetry is best-effort; the run outcome is recorded regardless */
@@ -4873,6 +4876,34 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * Runs `nightgauge pr-stage no-diff-stop` (#3269). Returns the terminal
+   * detail when the run must end before pr-create, or null to continue. A
+   * failed or unparseable call returns null: pr-create runs as before.
+   */
+  private async noDiffStopBeforePrCreate(
+    binary: string,
+    workdir: string,
+    repo: string,
+    issueNumber: number
+  ): Promise<string | null> {
+    try {
+      const { stdout } = await execFileAsync(
+        binary,
+        ["pr-stage", "no-diff-stop", String(issueNumber), "--workdir", workdir, "--repo", repo],
+        { encoding: "utf-8", cwd: workdir, timeout: 90_000 }
+      );
+      const parsed = JSON.parse(stdout) as { stopped?: boolean; terminal_detail?: string };
+      return parsed.stopped === true && parsed.terminal_detail ? parsed.terminal_detail : null;
+    } catch (err) {
+      this.logger.warn("No-diff check before pr-create unavailable — continuing to pr-create", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  /**
    * Deterministic-FIRST execution for pr-create / pr-merge on the TS
    * (VSCode-dogfood) execution path (Issue #300).
    *
@@ -4965,6 +4996,25 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       });
       this.stageExecutionPaths.set(stage, { path: "llm", puntReason: "repo-unresolved" });
       return { kind: "llm" };
+    }
+
+    // No-diff boundary before pr-create (#3269), the twin of the Go scheduler's
+    // StopNoDiffBeforePRCreate: a branch feature-dev and feature-validate left
+    // level with its base, with criteria still open, has nothing to open a PR
+    // for. The verb comments the open criteria; the run ends as a no-op booked
+    // not_pipeline_actionable (no failure-counter increment) and pr-create
+    // never starts. Any error continues to pr-create, as before.
+    if (stage === "pr-create") {
+      const stop = await this.noDiffStopBeforePrCreate(binary, workdir, repo, issueNumber);
+      if (stop) {
+        this.logger.warn(
+          "Branch level with its base before pr-create — ending the run as a no-op",
+          {
+            issueNumber,
+          }
+        );
+        return { kind: "refused", error: new Error(stop), terminalKind: "not_pipeline_actionable" };
+      }
     }
 
     const verb = stage === "pr-create" ? "create" : "merge";
