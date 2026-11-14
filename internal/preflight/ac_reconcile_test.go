@@ -439,11 +439,11 @@ func TestParseACs_G1Fixture(t *testing.T) {
 // TestParseACs_ParityFixture shares its body with the SDK parser's parity
 // test: a fence, nested <details>, a 4-space sub-step and a duplicate.
 func TestParseACs_ParityFixture(t *testing.T) {
-	got := parseACs("## Acceptance Criteria\n1. first\n   ```sh\n   # comment\n   1. output\n   ```\n    1. sub-step\n<details>\n- [ ] outer\n<details>\n- [ ] inner\n</details>\n- [ ] after inner\n</details>\n2. second\n- [ ]  first\n## Verification\n- third that\n  wraps\n## Acceptance Criteria\n- [ ] box covers both cases:\n  - case a\n  - case b\n- [ ] last\n")
-	if len(got) != 5 || got[0].text != "first" || got[1].text != "second" || got[1].index != 1 ||
+	got := parseACs("## Acceptance Criteria\n1. first\n   ```sh\n   # comment\n   1. output\n   ```\n    1. sub-step\n<details>\n- [ ] outer\n<details>\n- [ ] inner\n</details>\n- [ ] after inner\n</details>\n2. second\n- [ ]  first\n## Verification\n- third that\n  wraps\n## Acceptance Criteria\n- [ ] box covers both cases:\n  - case a\n  - case b\n- [ ] last\n- [ ] wrapped box\n  continues here\n")
+	if len(got) != 6 || got[0].text != "first" || got[1].text != "second" || got[1].index != 1 ||
 		got[2].text != "third that wraps" || got[3].text != "box covers both cases: case a case b" ||
-		got[4].text != "last" {
-		t.Errorf("got %+v, want first, second, third that wraps, box covers both cases: case a case b, last", got)
+		got[4].text != "last" || got[5].text != "wrapped box continues here" {
+		t.Errorf("got %+v, want first, second, third that wraps, box covers both cases: case a case b, last, wrapped box continues here", got)
 	}
 }
 
@@ -499,5 +499,25 @@ func TestFileExistsRule_ExactMissingPathUnsatisfied(t *testing.T) {
 	writeTreeFile(t, dir, "other/x.sh", "a\n")
 	if cls, _, _ := fileExistsRule().evaluate(dir, map[string]string{"path": "dir/x.sh"}); cls != ACUnsatisfied {
 		t.Errorf("got %s, want unsatisfied", cls)
+	}
+}
+
+// #3297: a wrapped checkbox's prose continuation joins the criterion, so the
+// criteria pr-create resolves (ACTexts) are whole; a blank line, an
+// unindented line or a list item ends it.
+func TestParseACs_WrappedCheckboxProse(t *testing.T) {
+	body := "## Acceptance Criteria\n- [ ] first line\n  second line\n  third line.\n- [ ] two\n\n  not joined\n- [ ] three\nnot indented\n"
+	got := ACTexts(body)
+	want := []string{"first line second line third line.", "two", "three"}
+	if len(got) != len(want) {
+		t.Fatalf("ACTexts = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ACTexts[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+	if ACFingerprint(body) == ACFingerprint("## Acceptance Criteria\n- [ ] first line\n- [ ] two\n- [ ] three\n") {
+		t.Error("fingerprint ignores the wrapped continuation")
 	}
 }

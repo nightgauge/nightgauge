@@ -270,6 +270,10 @@ func capACText(s string) string {
 // depth and across blank lines, is part of the checkbox criterion: its text,
 // marker removed, joins the criterion with one space (#2972). The column ends
 // at a heading, a fence, a new checkbox, or a non-blank line indented less.
+//
+// A non-blank, non-list line indented past the checkbox line's own indent and
+// directly under it (no blank line between) is a wrapped continuation: its
+// text joins the criterion with one space (#3297).
 func parseACs(body string) []acCriterion {
 	var out []acCriterion
 	seen := map[string]bool{}
@@ -279,10 +283,14 @@ func parseACs(body string) []acCriterion {
 	joinIdx := -1 // index in out of the item a wrapped line joins; -1 = none
 	boxCol := 0   // content column of the open checkbox criterion
 	boxIdx := -1  // index in out of the checkbox a sub-bullet joins; -1 = none
+	// proseIdx is the checkbox a wrapped prose line joins (#3297): set with
+	// boxIdx, ended by a blank line, list item, heading or fence. boxIndent is
+	// that checkbox line's own leading indent; a continuation is deeper.
+	proseIdx, boxIndent := -1, 0
 	for _, line := range stripDetailsBlocks(strings.Split(body, "\n")) {
 		line = strings.TrimRight(line, "\r")
 		if fence.step(line) {
-			joinIdx, boxIdx = -1, -1
+			joinIdx, boxIdx, proseIdx = -1, -1, -1
 			continue
 		}
 		if fence.n > 0 {
@@ -295,11 +303,22 @@ func parseACs(body string) []acCriterion {
 			} else if sectionLevel > 0 && level <= sectionLevel {
 				sectionLevel = 0
 			}
-			itemCol, joinIdx, boxIdx = 0, -1, -1
+			itemCol, joinIdx, boxIdx, proseIdx = 0, -1, -1, -1
 			continue
 		}
 		checkbox := checkboxRE.FindStringSubmatch(line)
 		lineIndent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if checkbox == nil && proseIdx >= 0 {
+			if strings.TrimSpace(line) == "" || lineIndent <= boxIndent || listMarkerRE.MatchString(line) {
+				proseIdx = -1
+			} else {
+				joined := capACText(out[proseIdx].text + " " + strings.TrimSpace(line))
+				delete(seen, NormalizeACText(out[proseIdx].text))
+				out[proseIdx].text = joined
+				seen[NormalizeACText(joined)] = true
+				continue
+			}
+		}
 		if checkbox == nil && boxIdx >= 0 && strings.TrimSpace(line) != "" {
 			if lineIndent < boxCol {
 				boxIdx = -1
@@ -316,7 +335,7 @@ func parseACs(body string) []acCriterion {
 		}
 		if checkbox != nil {
 			boxCol = len(listPrefixRE.FindString(line))
-			boxIdx = -1
+			boxIdx, proseIdx, boxIndent = -1, -1, lineIndent
 		}
 		var item []string
 		if sectionLevel > 0 && checkbox == nil {
@@ -378,7 +397,7 @@ func parseACs(body string) []acCriterion {
 			if checkbox != nil {
 				for i := range out {
 					if NormalizeACText(out[i].text) == key {
-						boxIdx = i
+						boxIdx, proseIdx = i, i
 						break
 					}
 				}
@@ -394,7 +413,7 @@ func parseACs(body string) []acCriterion {
 			joinIdx = len(out)
 		}
 		if checkbox != nil {
-			boxIdx = len(out)
+			boxIdx, proseIdx = len(out), len(out)
 		}
 		out = append(out, acCriterion{index: len(out), text: text, state: state})
 	}

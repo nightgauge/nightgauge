@@ -172,7 +172,9 @@ function stripDetailsBlocks(lines: string[]): string[] {
  * numbered list line, not a checkbox, indented at or past it — at any depth and
  * across blank lines — joins the checkbox criterion with one space, marker
  * removed (#2972). The column ends at a heading, a fence, a new checkbox, or a
- * non-blank line indented less.
+ * non-blank line indented less. A non-blank, non-list line indented past the
+ * checkbox line's own indent, directly under it (no blank line), is a wrapped
+ * continuation and joins the criterion with one space (#3297).
  *
  * State is informational — the reconciler verifies satisfaction against
  * `main`, not the box state. An item without a box is unchecked.
@@ -191,10 +193,16 @@ export function parseAcceptanceCriteria(body: string): AcceptanceCriterion[] {
   let joinIdx = -1; // index in out of the item a wrapped line joins; -1 = none
   let boxCol = 0; // content column of the open checkbox criterion
   let boxIdx = -1; // index in out of the checkbox a sub-bullet joins; -1 = none
+  // proseIdx is the checkbox a wrapped prose line joins (#3297): set with
+  // boxIdx, ended by a blank line, list item, heading or fence. boxIndent is
+  // that checkbox line's own leading indent; a continuation is deeper.
+  let proseIdx = -1;
+  let boxIndent = 0;
   for (const rawLine of stripDetailsBlocks(body.split(/\r?\n/))) {
     if (fence.step(rawLine)) {
       joinIdx = -1;
       boxIdx = -1;
+      proseIdx = -1;
       continue;
     }
     if (fence.open) continue;
@@ -209,11 +217,23 @@ export function parseAcceptanceCriteria(body: string): AcceptanceCriterion[] {
       itemCol = 0;
       joinIdx = -1;
       boxIdx = -1;
+      proseIdx = -1;
       continue;
     }
     const line = rawLine.trim();
     const checkbox = CHECKBOX_RE.exec(line);
     const lineIndent = rawLine.length - rawLine.replace(/^[ \t]+/, "").length;
+    if (!checkbox && proseIdx >= 0) {
+      if (line === "" || lineIndent <= boxIndent || LIST_MARKER_RE.test(rawLine)) {
+        proseIdx = -1;
+      } else {
+        const joined = capText(`${out[proseIdx].text} ${line}`);
+        seen.delete(normalize(out[proseIdx].text));
+        out[proseIdx].text = joined;
+        seen.add(normalize(joined));
+        continue;
+      }
+    }
     if (!checkbox && boxIdx >= 0 && line !== "") {
       if (lineIndent < boxCol) {
         boxIdx = -1;
@@ -231,6 +251,8 @@ export function parseAcceptanceCriteria(body: string): AcceptanceCriterion[] {
     if (checkbox) {
       boxCol = (LIST_PREFIX_RE.exec(rawLine)?.[0] ?? "").length;
       boxIdx = -1;
+      proseIdx = -1;
+      boxIndent = lineIndent;
     }
     let item: RegExpExecArray | null = null;
     if (sectionLevel > 0 && !checkbox) {
@@ -283,12 +305,18 @@ export function parseAcceptanceCriteria(body: string): AcceptanceCriterion[] {
     if (text.length === 0) continue;
     const key = normalize(text);
     if (seen.has(key)) {
-      if (checkbox) boxIdx = out.findIndex((c) => normalize(c.text) === key);
+      if (checkbox) {
+        boxIdx = out.findIndex((c) => normalize(c.text) === key);
+        proseIdx = boxIdx;
+      }
       continue;
     }
     seen.add(key);
     if (item) joinIdx = out.length;
-    if (checkbox) boxIdx = out.length;
+    if (checkbox) {
+      boxIdx = out.length;
+      proseIdx = out.length;
+    }
     out.push({
       index: out.length,
       text,

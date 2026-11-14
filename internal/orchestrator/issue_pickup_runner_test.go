@@ -227,3 +227,15 @@ func TestIssueTypeFromBranch(t *testing.T) {
 	}
 	_ = state.StageIssuePickup
 }
+
+// #3297: issue-{N}.json carries a wrapped criterion whole, not its first line.
+func TestBuildIssueContext_WrappedCriterion(t *testing.T) {
+	in := IssuePickupInput{Issue: &types.Issue{Number: 3297, Title: "t",
+		Body: "## AC\n- [ ] Wrapped criterion\n  second line.\n- [x] Done\n"}}
+	doc := buildIssueContext(in, "fix/3297-x", "main", 0, time.Unix(0, 0))
+	got := doc.Requirements.AcceptanceCriteria
+	want := []string{"- [ ] Wrapped criterion second line.", "- [x] Done"}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("acceptance_criteria = %q, want %q", got, want)
+	}
+}
