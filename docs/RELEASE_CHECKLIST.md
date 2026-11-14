@@ -610,7 +610,10 @@ finds every file in the draft clean on VirusTotal (#2946). Before a tag:
   API key. Without it the preflight fails before the build.
 - The free key's quota fits: about 130 requests per release (about 40 unique
   files, roughly 3 requests each) against 500 a day, so plan at most three
-  full scans of releases a day.
+  full scans of releases a day. `vt-scan.sh` reads the key's remaining daily
+  quota before its first lookup (#3213). When fewer requests remain than the
+  scan may need, it stops at once with a HARNESS ERROR naming both numbers,
+  having spent one request: re-run after the quota resets at 00:00 UTC.
 
 After the run, read `vt-scan-report.json` as in
 [GIT_WORKFLOW.md step 9a](GIT_WORKFLOW.md#cutting-a-release--step-by-step).
@@ -622,34 +625,47 @@ exercise every path offline.
 
 ### The release candidate scan
 
-An RC tag push runs the `rc-scan` job in `staging.yml` (#3064). It downloads the
-RC's `rc-artifacts-<tag>` and runs `scripts/release-scan-gate.sh local` over
-every `.vsix` and `.tar.gz`, which unpacks and collects them exactly as `scan`
-does for a draft and publishes nothing. A finding fails the RC, so a flagged
-build never reaches the soak; read `vt-scan-report-rc` from the run.
+An RC tag push builds the RC, runs ClamAV and the integrity checks, and does
+not touch VirusTotal. The VirusTotal scan runs once, for the RC chosen to become
+the release (#3213): after its soak, and before tagging `vX.Y.Z`, dispatch it on
+the RC's tag:
+
+```bash
+gh workflow run staging.yml --ref vX.Y.Z-rc.N
+```
+
+That run rebuilds the RC and its margin builds, and runs the `rc-scan` job
+(#3064). It runs `scripts/release-scan-gate.sh local` over every `.vsix` and
+`.tar.gz`, which unpacks and collects them exactly as `scan` does for a draft
+and publishes nothing, plus the margin binaries. A finding fails the run and
+the RC is not promoted; read `vt-scan-report-rc` from the run. A dispatch on a
+branch, or on anything but an RC tag, fails before it builds. Scanning every
+RC spent the free key's daily quota on RCs that were never promoted.
 
 - The job runs in the `production` environment and reads the same `VT_API_KEY`
   as the release scan; no other copy of the key is needed. The environment's
   `v*` tag policy admits RC tags. A missing key fails the RC closed rather than
   skipping the scan.
 - An RC scan and a release scan cost about 260 of the 500 daily requests
-  together, plus about 36 for the RC's margin builds. Main builds are not
-  scanned.
+  together, plus about 36 for the RC's margin builds. Dispatch the RC scan on a
+  day with that room; the quota check refuses a scan that does not fit before
+  it spends anything. Main builds are not scanned.
 
 ### The margin scan and the release gate
 
-The RC's `rc-scan` also scans its margin builds: the Linux amd64 binary and the
+The dispatched `rc-scan` also scans the RC's margin builds: the Linux amd64 binary and the
 signed universal darwin file at `X.Y.Z`, `X.Y.Z-rc.(N+1)` and `X.Y.(Z+1)-rc.1`
 (#3192). A finding in any of them fails the RC; fix the build, never the version
 number ([RELEASE_BINARIES.md](RELEASE_BINARIES.md#linux-amd64-margin-and-the-margin-scan-3192)).
 
 - Before tagging `vX.Y.Z`: an RC tag `vX.Y.Z-rc.N` sits on the same commit, and
-  its staging run's `rc-scan` succeeded within the last 90 days, so its
-  `rc-margin-scan-vX.Y.Z-rc.N` artifact still exists.
+  the latest staging run dispatched on that tag passed `rc-scan` within the
+  last 90 days, so its `rc-margin-scan-vX.Y.Z-rc.N` artifact still exists.
 - `release.yml` checks exactly that before it builds anything
-  (`scripts/release-rc-margin-check.sh`) and has no override. If the record has
-  expired, or the RC was cut on another commit, cut a new RC on the release
-  commit and let its `rc-scan` pass.
+  (`scripts/release-rc-margin-check.sh`) and has no override. It reads
+  dispatched runs only: a tag-push run never scans. If no dispatched run
+  exists, dispatch one. If the record has expired, or the RC was cut on another
+  commit, cut a new RC on the release commit and dispatch its scan.
 - When closing a release issue, quote the `rc-scan` summary line, margin
   archives included.
 

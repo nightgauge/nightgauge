@@ -141,8 +141,8 @@ scan needs no change.
   carries uncompressed DWARF and `1` when any lacks DWARF or compresses it. It exits `2`
   with a `HARNESS ERROR` line when it checked nothing: no path, an unreadable
   path, or an archive with no Go binary.
-- `staging.yml` runs it in the `dry-run` job, which the RC's `rc-scan` job
-  needs. `release.yml` runs it before the draft is scanned. Both run it right
+- `staging.yml` runs it in the `dry-run` job, which the dispatched RC scan's
+  `rc-scan` job needs. `release.yml` runs it before the draft is scanned. Both run it right
   after `scripts/verify-archive-binaries.sh`, and both fail on exit `1` or `2`.
   Tests in the same package prove the step's position and that it fails
   closed.
@@ -336,10 +336,13 @@ Makefile's `build-release-targets` and `darwin-universal` targets, so the flags
 are the RC's own, and writes six raw, executable `nightgauge-margin_<v>_<target>`
 binaries and a `margin-manifest.txt` (`<version> <file> <sha256>` per line).
 They are not archived: the scan gate scans an archive and then the binary
-inside it, so an archive cost each build two uploads (#3202). In `staging.yml`:
+inside it, so an archive cost each build two uploads (#3202). They are built
+and scanned only in the `staging.yml` run dispatched on the RC chosen to become
+the release (`gh workflow run staging.yml --ref vX.Y.Z-rc.N`, #3213); an RC tag
+push builds neither them nor the VirusTotal scan. In that run:
 
-- `dry-run` builds them on RC tag pushes, DWARF-checks them and uploads
-  `rc-margin-<tag>`. They never enter `rc-artifacts-*` or a GitHub Release.
+- `dry-run` builds them, DWARF-checks them and uploads `rc-margin-<tag>`. They
+  never enter `rc-artifacts-*` or a GitHub Release.
 - `rc-scan` fails unless it holds six binaries and the manifest, then scans them
   with the RC's own files in one `release-scan-gate.sh local` call. Any finding
   fails the RC. After a clean scan it uploads `rc-margin-scan-<tag>` (the
@@ -347,8 +350,8 @@ inside it, so an archive cost each build two uploads (#3202). In `staging.yml`:
 
 **The release gate.** `release.yml`'s first step after checkout runs
 `scripts/release-rc-margin-check.sh`. It passes only when an RC tag
-`vX.Y.Z-rc.N` points at the release tag's commit, that tag's staging run has a
-successful `rc-scan`, and its unexpired `rc-margin-scan-*` manifest names
+`vX.Y.Z-rc.N` points at the release tag's commit, the latest staging run
+dispatched on that tag has a successful `rc-scan`, and its unexpired `rc-margin-scan-*` manifest names
 `X.Y.Z`. Otherwise nothing is built. It has no override. An expired record
 (after 90 days) means a new RC on the commit.
 
@@ -466,7 +469,17 @@ The free VirusTotal key allows 4 requests a minute and 500 a day. One RC scan,
 margin builds included, is budgeted at 160 requests (`VT_MAX_REQUESTS: "160"`
 on `staging.yml`'s rc-scan step), so a second RC and a release fit in the same
 day. A scan that would pass the budget stops before sending the request, with a
-HARNESS ERROR, and the RC fails.
+HARNESS ERROR, and the RC fails. The scan runs once per release, dispatched on
+the chosen RC (#3213), not on every RC tag push.
+
+Before its first lookup, every `vt-scan.sh` run reads the key's remaining
+daily quota (one request, `GET /users/{key}/overall_quotas`). It estimates its
+own cost as if VirusTotal knew none of its files: one lookup, one upload (two
+over 32 MB) and one poll per unique file, plus the quota read, capped at
+`VT_MAX_REQUESTS`. When fewer requests remain today, the scan stops with a
+HARNESS ERROR naming both numbers, before it spends anything else. An answer
+it cannot read is logged and the scan continues; a 429 on it is a HARNESS
+ERROR. The report records `quota_remaining` and `quota_estimate`.
 
 - **The RC's own files: about 60.** rc.3 sent 108 requests for 31 unique files.
   63 of them re-analysed 21 unchanged, clean hooks and scripts whose last
@@ -497,10 +510,14 @@ HARNESS ERROR, and the RC fails.
   reanalysis. A newer analysis may mean the file object lags, so the file is
   read up to three more times; if its date still has not moved, the scan stops
   with exit 2 the same way (VirusTotal dates an analysis when it is created, so
-  a folded one can look newer).
+  a folded one can look newer). An analysis object that answers 404 (rc.11:
+  the upload was accepted, the analysis 404'd, and the file's report later
+  showed a newer date) is not fatal: the file alone is polled until its
+  report is newer and inside its window, then judged like any other, or the
+  scan times out with exit 2.
 
 Every `vt-scan.sh` run ends with a line counting its requests by class
-(lookups, uploads, reanalyses, polls), and the report carries the same counts
+(quota, lookups, uploads, reanalyses, polls), and the report carries the same counts
 as `requests_by_class`; each entry records the reuse window that applied
 (`reuse_window`) and the analysis date.
 

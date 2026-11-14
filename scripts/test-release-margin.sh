@@ -126,7 +126,10 @@ if [ "$1" = api ]; then
   case "$path" in
     repos/*/git/matching-refs/tags/*) f=refs.json ;;
     repos/*/git/tags/*) f="tag-${path##*/}.json" ;;
-    repos/*/actions/workflows/staging.yml/runs) f=runs.json ;;
+    # Runs are filed by the event the gate asks for (runs-<event>.json).
+    repos/*/actions/workflows/staging.yml/runs)
+      event="$(sed -n 's/.*[?&]event=\([^&]*\).*/\1/p' <<<"$2")"
+      f="runs-${event:-any}.json" ;;
     repos/*/actions/runs/*/jobs) id="${path%/jobs}"; f="jobs-${id##*/}.json" ;;
     repos/*/actions/runs/*/artifacts) id="${path%/artifacts}"; f="artifacts-${id##*/}.json" ;;
     *) echo "stub gh: unexpected api $2" >&2; exit 1 ;;
@@ -158,7 +161,7 @@ fixture() {
  {"ref":"refs/tags/v0.8.6-rc.40x","object":{"type":"commit","sha":"$SHA"}}]
 JSON
   echo "{\"object\":{\"type\":\"commit\",\"sha\":\"$SHA\"}}" >"$d/tag-aaaa.json"
-  cat >"$d/runs.json" <<JSON
+  cat >"$d/runs-workflow_dispatch.json" <<JSON
 {"workflow_runs":[{"id":41,"run_number":7,"head_branch":"v0.8.6-rc.4"},
  {"id":42,"run_number":8,"head_branch":"v0.8.6-rc.4"},
  {"id":43,"run_number":9,"head_branch":"main"}]}
@@ -192,8 +195,17 @@ FX_DIR="$(fixture noscan)"
 echo '{"jobs":[{"name":"Build all artifacts (no publish)","conclusion":"success"}]}' >"$FX_DIR/jobs-42.json"
 check "a run without rc-scan fails" "1" "$(gate "$FX_DIR")"
 
-FX_DIR="$(fixture norun)"; echo '{"workflow_runs":[]}' >"$FX_DIR/runs.json"
+FX_DIR="$(fixture norun)"; echo '{"workflow_runs":[]}' >"$FX_DIR/runs-workflow_dispatch.json"
 check "an RC with no staging run fails" "1" "$(gate "$FX_DIR")"
+
+# #3213: the scan runs only in a dispatched staging run. A tag-push run, even
+# one whose record looks clean, is not read; the gate names the dispatch.
+FX_DIR="$(fixture pushonly)"
+mv "$FX_DIR/runs-workflow_dispatch.json" "$FX_DIR/runs-push.json"
+echo '{"workflow_runs":[]}' >"$FX_DIR/runs-workflow_dispatch.json"
+check "an RC with only a tag-push run fails" "1" "$(gate "$FX_DIR")"
+grep -qF "dispatch it: gh workflow run staging.yml --ref v0.8.6-rc.4" "$TMP/gate.log"
+check "the missing-dispatch failure names the dispatch command" "0" "$?"
 
 FX_DIR="$(fixture expired)"
 echo '{"artifacts":[{"name":"rc-margin-scan-v0.8.6-rc.4","expired":true}]}' >"$FX_DIR/artifacts-42.json"

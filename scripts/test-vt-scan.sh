@@ -195,7 +195,8 @@ scan -- "$WORK/art/does-not-exist"
 expect "unreadable file -> exit 2" 2 "HARNESS ERROR: not a readable file"
 OUT="$(env VT_API_KEY="$KEY" VT_MIN_INTERVAL=0 bash "$SUT" --report "$REPORT" --api-base "http://127.0.0.1:1/api/v3" "$CLEAN" 2>&1)"
 RC=$?
-expect "unreachable API -> exit 2" 2 "HARNESS ERROR: GET /api/v3/files/"
+printf '%s\n' "$OUT" >>"$ALL_OUT"
+expect "unreachable API -> exit 2, naming the quota endpoint without the key" 2 "HARNESS ERROR: GET /api/v3/users/<key>/overall_quotas: curl exit"
 
 # 15. Deduplication: two paths with one digest are uploaded once, both reported.
 scan -- "$CLEAN" "$CLEAN2"
@@ -254,20 +255,20 @@ kinds="$(sed -nE 's#^GET /api/v3/(files|analyses)/.*#\1#p' "$STATE/requests.log"
   ok "poll waits double and cap: 1 2 4 4 4; then the analysis object alone, then the file" ||
   bad "poll waits: want '1 2 4 4 4 ' and lookup + file, analysis x3, file, got '$waits' and '$kinds'"
 
-# 19. Every report counts the requests the run sent: lookup, POST, one poll.
+# 19. Every report counts the requests the run sent: quota, lookup, POST, one poll.
 scan -- "$CLEAN"
-[ "$(jq -r '.requests' "$REPORT")" = "3" ] && ok "report records requests: 3" ||
-  bad "requests field: want 3, got $(jq -r '.requests' "$REPORT" 2>/dev/null)"
+[ "$(jq -r '.requests' "$REPORT")" = "4" ] && ok "report records requests: 4" ||
+  bad "requests field: want 4, got $(jq -r '.requests' "$REPORT" 2>/dev/null)"
 jq -e '.files[0].source == "uploaded" and .sources == {uploaded: 1} and .files[0].engines_total == 70
   and (.files[0].analysed_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T"))' "$REPORT" >/dev/null &&
   ok "an unknown file is uploaded; the report records source, engines and analysis time" ||
   bad "uploaded report: $(jq -c '{sources, f: .files[0] | {source, engines_total, analysed_at}}' "$REPORT" 2>/dev/null)"
 # 19-classes. Every run prints its requests by class, and the report's
 # requests_by_class sums to requests (#3202).
-expect "the run ends with its requests by class" 0 "vt-scan: 3 requests (lookups 1, uploads 1, reanalyses 0, polls 1)"
-jq -e '.requests_by_class == {lookup: 1, upload: 1, reanalysis: 0, poll: 1}
+expect "the run ends with its requests by class" 0 "vt-scan: 4 requests (quota 1, lookups 1, uploads 1, reanalyses 0, polls 1)"
+jq -e '.requests_by_class == {quota: 1, lookup: 1, upload: 1, reanalysis: 0, poll: 1}
   and ([.requests_by_class[]] | add) == .requests' "$REPORT" >/dev/null &&
-  ok "report requests_by_class: lookup 1, upload 1, poll 1, summing to requests" ||
+  ok "report requests_by_class: quota 1, lookup 1, upload 1, poll 1, summing to requests" ||
   bad "requests_by_class: $(jq -c '{requests, requests_by_class}' "$REPORT" 2>/dev/null)"
 
 # 19a-19h. Reuse (session 86): a file VirusTotal analysed within
@@ -276,21 +277,22 @@ jq -e '.requests_by_class == {lookup: 1, upload: 1, reanalysis: 0, poll: 1}
 CLEAN_SHA="$(shasum -a 256 "$CLEAN" | cut -d' ' -f1)"
 KEEP_VT=1 scan -- "$CLEAN"
 expect "a fresh analysis is reused -> exit 0" 0 "reused report, analysed"
-[ "$(jq -r '.requests' "$REPORT")" = "1" ] && ! grep -q '^POST' "$STATE/requests.log" &&
+[ "$(jq -r '.requests' "$REPORT")" = "2" ] && ! grep -q '^POST' "$STATE/requests.log" &&
   jq -e '.files[0].source == "reused" and .sources == {reused: 1}' "$REPORT" >/dev/null &&
-  ok "reuse: 1 request, nothing posted, source reused" ||
+  ok "reuse: 2 requests (quota, lookup), nothing posted, source reused" ||
   bad "reuse: requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(jq -c '.sources' "$REPORT" 2>/dev/null)"
 scan -- "$MAL"
 KEEP_VT=1 scan -- "$MAL"
 expect "a reused report with a detection -> exit 1" 1 "engine StubEngineA: malicious Stub.Forced.Detection"
-[ "$(jq -r '.requests' "$REPORT")" = "1" ] && ok "reuse never skips judging: the detection is found in 1 request" ||
+[ "$(jq -r '.requests_by_class.lookup' "$REPORT")" = "1" ] && [ "$(jq -r '.requests' "$REPORT")" = "2" ] &&
+  ok "reuse never skips judging: the detection is found in 1 lookup" ||
   bad "reused detection: requests $(jq -r '.requests' "$REPORT" 2>/dev/null)"
 scan -- "$CLEAN"
 KEEP_VT=1 scan VT_REUSE_MAX_AGE=0 -- "$CLEAN"
 expect "VT_REUSE_MAX_AGE=0 re-analyses a fresh file -> exit 0" 0 "reanalysed report"
 grep -q "^POST /api/v3/files/$CLEAN_SHA/analyse " "$STATE/requests.log" && [ ! -s "$STATE/uploads.log" ] &&
-  [ "$(jq -r '.requests' "$REPORT")" = "3" ] &&
-  ok "VT_REUSE_MAX_AGE=0: reanalysed, not re-uploaded, 3 requests" ||
+  [ "$(jq -r '.requests' "$REPORT")" = "4" ] &&
+  ok "VT_REUSE_MAX_AGE=0: reanalysed, not re-uploaded, 4 requests" ||
   bad "reuse off: requests $(tr '\n' ' ' <"$STATE/requests.log")"
 # seed_scan AGE FILE [env...] — FILE is known to VirusTotal, last analysed AGE
 # seconds ago, and is scanned against that.
@@ -317,10 +319,10 @@ grep -qx "$ELF_SHA" "$STATE/analyses.log" && [ ! -s "$STATE/uploads.log" ] &&
 TEXT_OLD="$(art old-hook.sh 'echo "unchanged hook"')"
 seed_scan 259200 "$TEXT_OLD"
 expect "a clean text file analysed 3 days ago is reused -> exit 0" 0 "reused report, analysed"
-[ "$(jq -r '.requests' "$REPORT")" = "1" ] && ! grep -q '^POST' "$STATE/requests.log" &&
+[ "$(jq -r '.requests' "$REPORT")" = "2" ] && ! grep -q '^POST' "$STATE/requests.log" &&
   jq -e '.files[0].source == "reused" and .files[0].reuse_window == {kind: "text", applied: "long", max_age: 1209600}
     and .reuse_max_age_text == 1209600 and (.files[0].analysed_at | test("^[0-9]{4}-"))' "$REPORT" >/dev/null &&
-  ok "long window: 1 request, nothing posted, reuse_window text/long and the analysis date recorded" ||
+  ok "long window: 1 lookup, nothing posted, reuse_window text/long and the analysis date recorded" ||
   bad "long window: requests $(tr '\n' ' ' <"$STATE/requests.log"), entry $(jq -c '.files[0] | {source, reuse_window, analysed_at}' "$REPORT" 2>/dev/null)"
 seed_scan 259200 "$ELF"
 expect "a binary analysed 3 days ago is re-analysed -> exit 0" 0 "reanalysed report"
@@ -378,15 +380,16 @@ rm -f "$STATE/fail-analyse"
 expect "HTTP 500 on reanalysis -> exit 2" 2 "HARNESS ERROR: POST /api/v3/files/$CLEAN_SHA/analyse: HTTP 500"
 
 # 19-instant. A reanalysis VirusTotal completes at once ends on the first file
-# poll: 3 requests (lookup, reanalysis, one poll), never a poll to the timeout.
+# poll: 4 requests (quota, lookup, reanalysis, one poll), never a poll to the
+# timeout.
 scan -- "$CLEAN"
 instant_start="$(date +%s)"
 KEEP_VT=1 scan VT_REUSE_MAX_AGE=0 VT_ANALYSIS_TIMEOUT=30 -- "$CLEAN"
 instant_secs=$(($(date +%s) - instant_start))
 expect "a reanalysis that completes at once -> exit 0" 0 "reanalysed report"
-[ "$(jq -r '.requests' "$REPORT")" = "3" ] && [ "$instant_secs" -lt 15 ] &&
+[ "$(jq -r '.requests' "$REPORT")" = "4" ] && [ "$instant_secs" -lt 15 ] &&
   jq -e '.files[0].source == "reanalysed" and .requests_by_class.poll == 1' "$REPORT" >/dev/null &&
-  ok "instant reanalysis: 3 requests in ${instant_secs}s, source reanalysed" ||
+  ok "instant reanalysis: 4 requests in ${instant_secs}s, source reanalysed" ||
   bad "instant reanalysis: ${instant_secs}s, requests $(tr '\n' ' ' <"$STATE/requests.log")"
 # 19-fold. 2026-11-11 (#3202): VirusTotal completed a reanalysis without moving
 # the file's last_analysis_date. The scan stops at once (exit 2, re-run) and
@@ -398,7 +401,7 @@ KEEP_VT=1 scan VT_REUSE_MAX_AGE=0 VT_ANALYSIS_TIMEOUT=30 -- "$CLEAN"
 fold_secs=$(($(date +%s) - fold_start))
 rm -f "$STATE/fold-analyse"
 expect "a completed analysis with no newer report -> exit 2 at once" 2 "that report is not accepted as a reanalysis"
-[ "$(jq -r '.requests' "$REPORT")" -le 5 ] && [ "$fold_secs" -lt 15 ] &&
+[ "$(jq -r '.requests' "$REPORT")" -le 6 ] && [ "$fold_secs" -lt 15 ] &&
   jq -e '[.files[] | select(.source == "reanalysed")] | length == 0' "$REPORT" >/dev/null &&
   ok "no newer report: stopped in ${fold_secs}s after $(jq -r '.requests' "$REPORT") requests, nothing judged reanalysed" ||
   bad "no newer report: ${fold_secs}s, report $(jq -c '{requests, files}' "$REPORT" 2>/dev/null)"
@@ -446,16 +449,16 @@ printf '2\n' >"$STATE/file-lag"
 KEEP_VT=1 scan VT_REUSE_MAX_AGE=0 VT_MIN_INTERVAL=1 VT_POLL_MAX_INTERVAL=1 VT_ANALYSIS_TIMEOUT=30 -- "$CLEAN"
 rm -f "$STATE/file-lag"
 expect "a lagging file object is polled until its date moves -> exit 0" 0 "polling analysis of"
-[ "$(jq -r '.requests' "$REPORT")" = "6" ] &&
+[ "$(jq -r '.requests' "$REPORT")" = "7" ] &&
   jq -e '.files[0].source == "reanalysed" and .requests_by_class.poll == 4' "$REPORT" >/dev/null &&
-  ok "lagging file object: 6 requests (lookup, reanalysis, file, analysis, file, file), the new report judged" ||
+  ok "lagging file object: 7 requests (quota, lookup, reanalysis, file, analysis, file, file), the new report judged" ||
   bad "lagging file object: report $(jq -c '{requests, requests_by_class, f: .files[0]}' "$REPORT" 2>/dev/null), requests $(tr '\n' ' ' <"$STATE/requests.log")"
 printf 'bogus\n' >"$STATE/analysis-status"
 printf '5\n' >"$STATE/pending-polls"
 scan -- "$CLEAN"
 rm -f "$STATE/analysis-status" "$STATE/pending-polls"
 expect "an analysis in an unknown status -> exit 2" 2 "answered status 'bogus'"
-expect "a harness error still prints the requests by class" 2 "vt-scan: 4 requests (lookups 1, uploads 1, reanalyses 0, polls 2)"
+expect "a harness error still prints the requests by class" 2 "vt-scan: 5 requests (quota 1, lookups 1, uploads 1, reanalyses 0, polls 2)"
 
 # 19-replay. rc.3 (run 43029170580) through the stub (#3202): its 31 files,
 # their kinds, recorded sources, ages and polls. Under yesterday's 24-hour
@@ -510,8 +513,8 @@ before="$(jq -r '.requests' "$REPORT")"
 # poll in the replay, so each takes one more file poll than rc.3's file-only
 # loop to read the report.
 jq -e --argjson l "$rec_lookups" --argjson u "$rec_upload" --argjson r "$rec_reanalysis" --argjson p "$rec_polls" --argjson s "$rec_slow" \
-  '.requests_by_class == {lookup: $l, upload: $u, reanalysis: $r, poll: ($p + $s)}' "$REPORT" >/dev/null &&
-  ok "rc.3 replay before: $before requests, rc.3's recorded $rec_total plus $rec_slow file reads after a completed analysis" ||
+  '.requests_by_class == {quota: 1, lookup: $l, upload: $u, reanalysis: $r, poll: ($p + $s)}' "$REPORT" >/dev/null &&
+  ok "rc.3 replay before: $before requests, rc.3's recorded $rec_total plus $rec_slow file reads after a completed analysis and the quota read" ||
   bad "rc.3 replay before: $(jq -c '{requests, requests_by_class}' "$REPORT" 2>/dev/null)"
 replay
 expect "rc.3 replay under the defaults -> exit 0" 0 "every file clean"
@@ -522,13 +525,83 @@ after="$(jq -r '.requests' "$REPORT")"
 echo "  rc.3 replay: recorded $rec_total requests, replayed before $before, after $after"
 rm -f "$STATE"/pending-*
 
+# 19-quota. The daily quota (#3213): one read before the first lookup; a scan
+# that does not fit stops before it spends anything else; an unreadable answer
+# is logged and the scan goes on.
+scan -- "$CLEAN" "$MAL"
+first="$(sed -n 1p "$STATE/requests.log")"
+[ "$first" = "GET /api/v3/users/<key>/overall_quotas key=ok" ] &&
+  [ "$(grep -c '/overall_quotas' "$STATE/requests.log")" = 1 ] &&
+  jq -e '.quota_remaining == 500 and .quota_estimate == 7 and .requests_by_class.quota == 1' "$REPORT" >/dev/null &&
+  grep -qF "daily quota: 500 requests left today, this scan may need 7" <<<"$OUT" &&
+  ok "quota fits: read once, first, with the key in the path; report records 500 left, estimate 7" ||
+  bad "quota fits: first request '$first', report $(jq -c '{quota_remaining, quota_estimate, requests_by_class}' "$REPORT" 2>/dev/null)"
+printf '6\n' >"$STATE/quota-remaining"
+scan -- "$CLEAN" "$MAL"
+rm -f "$STATE/quota-remaining"
+expect "quota does not fit -> exit 2 naming both numbers" 2 "HARNESS ERROR: daily quota too small: VirusTotal reports 6 requests left today, this scan may need 7"
+[ "$(wc -l <"$STATE/requests.log" | tr -d ' ')" = "1" ] && ! grep -q '^GET /api/v3/files/' "$STATE/requests.log" &&
+  jq -e '.status == "error" and .quota_remaining == 6 and .quota_estimate == 7' "$REPORT" >/dev/null &&
+  ok "quota does not fit: only the quota read was sent, no lookup" ||
+  bad "quota does not fit: requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(jq -c '{status, quota_remaining, quota_estimate}' "$REPORT" 2>/dev/null)"
+printf '7\n' >"$STATE/quota-remaining"
+scan -- "$CLEAN" "$MAL"
+rm -f "$STATE/quota-remaining"
+expect "quota exactly fits -> the scan runs (exit 1 on the finding)" 1 "engine StubEngineA: malicious"
+scan VT_MAX_REQUESTS=5 -- "$CLEAN" "$MAL"
+jq -e '.quota_estimate == 5' "$REPORT" >/dev/null &&
+  ok "the estimate is capped at VT_MAX_REQUESTS" ||
+  bad "estimate cap: $(jq -c '.quota_estimate' "$REPORT" 2>/dev/null)"
+for unreadable in fail-quota garble-quota quota-shapeless; do
+  touch "${STATE:?}/${unreadable:?}"
+  scan -- "$CLEAN"
+  rm -f "${STATE:?}/${unreadable:?}"
+  expect "quota unreadable ($unreadable) -> logged, scan clean" 0 "vt-scan: quota unreadable (GET /api/v3/users/<key>/overall_quotas"
+  jq -e '.status == "clean" and .quota_remaining == null and .requests_by_class.quota == 1' "$REPORT" >/dev/null &&
+    ok "quota unreadable ($unreadable): report clean, quota_remaining null" ||
+    bad "quota unreadable ($unreadable): $(jq -c '{status, quota_remaining, requests_by_class}' "$REPORT" 2>/dev/null)"
+done
+if grep -qF "$KEY" "$STATE/requests.log" "$REPORT"; then
+  bad "the key appears in the request log or report"
+else
+  ok "the key in the quota URL never reaches the request log or report"
+fi
+
+# 19-gone. rc.11 (#3213): an upload accepted, its analysis object 404s, and the
+# file's report later shows a newer date. The 404 is not fatal: the file alone
+# is polled, and its own report decides.
+GONE="$(art gone.js 'console.log("rc.11 replay")')"
+printf '2\n' >"$STATE/pending-polls"
+touch "$STATE/analysis-404"
+scan VT_MIN_INTERVAL=1 VT_POLL_MAX_INTERVAL=1 VT_ANALYSIS_TIMEOUT=30 -- "$GONE"
+expect "rc.11 replay: analysis 404, newer file report -> exit 0" 0 "every file clean"
+grep -qF "analysis object of $GONE is gone (404); polling the file report" <<<"$OUT" &&
+  [ "$(grep -c '^GET /api/v3/analyses/' "$STATE/requests.log")" = 1 ] &&
+  [ "$(sed -nE 's#^GET /api/v3/(files|analyses)/.*#\1#p' "$STATE/requests.log" | tr '\n' ' ')" = "files files analyses files " ] &&
+  jq -e '.status == "clean" and .files[0].source == "uploaded"' "$REPORT" >/dev/null &&
+  ok "rc.11 replay: one 404 on the analysis object, then the file alone until its report is newer" ||
+  bad "rc.11 replay: requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(jq -c '{status, files}' "$REPORT" 2>/dev/null)"
+GONE_MAL="$(art gone-mal.bin 'payload VT-STUB-MALICIOUS rc.11 replay')"
+scan VT_MIN_INTERVAL=1 VT_POLL_MAX_INTERVAL=1 VT_ANALYSIS_TIMEOUT=30 -- "$GONE_MAL"
+expect "rc.11 replay with a detection -> exit 1, never hidden" 1 "engine StubEngineA: malicious Stub.Forced.Detection"
+grep -qF "is gone (404)" <<<"$OUT" && [ "$(report_status)" = "findings" ] &&
+  ok "the 404 path judges the file's own report: the detection counts" ||
+  bad "rc.11 replay with a detection: report $(report_status)"
+touch "$STATE/never-complete"
+scan VT_MIN_INTERVAL=1 VT_POLL_MAX_INTERVAL=1 VT_ANALYSIS_TIMEOUT=5 -- "$GONE"
+rm -f "$STATE/never-complete" "$STATE/analysis-404" "$STATE/pending-polls"
+expect "analysis 404 and no newer file report -> exit 2 on the timeout" 2 "HARNESS ERROR: analysis of $GONE"
+grep -qF "did not complete within 5s" <<<"$OUT" && [ "$(grep -c '^GET /api/v3/analyses/' "$STATE/requests.log")" = 1 ] &&
+  ok "after the 404 only the file is polled, until VT_ANALYSIS_TIMEOUT" ||
+  bad "404 timeout: requests $(tr '\n' ' ' <"$STATE/requests.log")"
+
 # 20. The request budget stops the run before it sends past VT_MAX_REQUESTS.
-scan VT_MAX_REQUESTS=1 -- "$CLEAN"
-expect "request budget reached -> exit 2" 2 "HARNESS ERROR: request budget spent: VT_MAX_REQUESTS=1"
-[ "$(wc -l <"$STATE/requests.log" | tr -d ' ')" = "1" ] && [ "$(report_status)" = "error" ] &&
-  [ "$(jq -r '.requests' "$REPORT")" = "1" ] &&
-  jq -e '.requests_by_class.lookup == 1' "$REPORT" >/dev/null &&
-  ok "budget: one request sent, report error with requests 1" ||
+scan VT_MAX_REQUESTS=2 -- "$CLEAN"
+expect "request budget reached -> exit 2" 2 "HARNESS ERROR: request budget spent: VT_MAX_REQUESTS=2"
+[ "$(wc -l <"$STATE/requests.log" | tr -d ' ')" = "2" ] && [ "$(report_status)" = "error" ] &&
+  [ "$(jq -r '.requests' "$REPORT")" = "2" ] &&
+  jq -e '.requests_by_class.quota == 1 and .requests_by_class.lookup == 1' "$REPORT" >/dev/null &&
+  ok "budget: two requests sent (quota, lookup), report error with requests 2" ||
   bad "budget: requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(cat "$REPORT" 2>/dev/null)"
 
 # 21. Invalid knobs are harness errors before any request.

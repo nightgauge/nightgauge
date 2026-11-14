@@ -5,9 +5,10 @@
 #
 # The Linux amd64 binary sits at the threshold of Microsoft's model, and its
 # verdict flips with the version string alone: a clean scan at one string is
-# not evidence that the build is clean. So every RC also builds the shipped
-# binaries at three neighbouring version strings, and rc-scan scans them with
-# the RC's own files. A finding at any of them fails the RC.
+# not evidence that the build is clean. So the staging run dispatched on the RC
+# chosen for release (#3213) also builds the shipped binaries at three
+# neighbouring version strings, and rc-scan scans them with the RC's own files.
+# A finding at any of them fails the RC.
 #
 #   release-margin-builds.sh X.Y.Z-rc.N OUT_DIR
 #   release-margin-builds.sh --print-versions X.Y.Z-rc.N

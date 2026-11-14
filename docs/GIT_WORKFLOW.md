@@ -1206,7 +1206,7 @@ Environments are configured in each repository's Settings → Environments:
 - **`production`** — the only environment. Its deployment-branch policy admits
   `v*` **tag** refs only, so `release.yml` (tag-triggered) and
   `marketplace-publish.yml` (called by `release.yml`, or dispatched on a tag to
-  re-publish after a failure) and `staging.yml`'s `rc-scan` job (rc tags) run
+  re-publish after a failure) and `staging.yml`'s `rc-scan` job (dispatched on an RC tag) run
   behind it and a dispatch from a branch is
   refused before a runner is assigned. It holds `VT_API_KEY`,
   `HOMEBREW_TAP_GITHUB_TOKEN`, `VSCE_PAT` and `OVSX_PAT`; a release without any
