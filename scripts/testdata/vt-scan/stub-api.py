@@ -4,7 +4,14 @@ Usage: python3 -I stub-api.py <fixture-dir> <state-dir>
 
 Binds 127.0.0.1 on a free port and writes it to <state-dir>/port. Every request
 is appended to <state-dir>/requests.log as "METHOD PATH key=<ok|bad|none>" so a
-suite can count uploads and prove the key was sent as a header.
+suite can count uploads and prove the key was sent as a header. The quota
+endpoint's path holds the key; it is logged as /api/v3/users/<key>/... when it
+is the expected key and /api/v3/users/<other>/... when not, so the key never
+reaches the log.
+
+GET /api/v3/users/{key}/overall_quotas answers the daily quota as VirusTotal
+does (data.api_requests_daily.user.used and .allowed, allowed 500). Without a
+quota-remaining file plenty remains.
 
 Like VirusTotal, the stub remembers every file it has analysed. GET
 /files/{sha256} answers 404 NotFoundError for a file it does not know, and the
@@ -39,7 +46,8 @@ Run-wide state and failures are selected by files in <state-dir>:
   few-engines-once     the next file object lists 3 engines; the flag is then
                        removed
   fail-<endpoint>      answer that endpoint with HTTP 500
-                       (endpoint: upload, upload_url, analyse, analysis, file)
+                       (endpoint: upload, upload_url, analyse, analysis, file,
+                       quota)
   garble-<endpoint>    answer that endpoint with a body that is not JSON
   never-complete       analyses never complete
   pending-polls        holds N: each analysis stays incomplete for the first N
@@ -62,6 +70,12 @@ Run-wide state and failures are selected by files in <state-dir>:
                        (still later than the file's previous date)
   analysis-status      GET /analyses/{id} answers this status string instead
   quota                answer every request with HTTP 429
+  quota-remaining      holds N: the quota endpoint reports N requests left
+                       today (used = 500 - N)
+  quota-shapeless      the quota endpoint answers JSON without used/allowed
+  analysis-404         GET /analyses/{id} answers 404 NotFoundError, as on
+                       rc.11; uploads and file polls behave as usual, and a
+                       404 analysis poll still stands for time passing
   wrong-sha            analyses and file objects name a different sha256
   upload-url           GET /files/upload_url serves this file's content
                        instead of the stub's own upload URL
@@ -269,9 +283,31 @@ class Handler(BaseHTTPRequestHandler):
     def record(self):
         key = self.headers.get("x-apikey")
         state = "none" if key is None else ("ok" if key == EXPECTED_KEY else "bad")
+        path = self.path
+        if path.startswith("/api/v3/users/"):
+            parts = path.split("/")
+            parts[4] = "<key>" if parts[4] == EXPECTED_KEY else "<other>"
+            path = "/".join(parts)
         with open(os.path.join(STATE, "requests.log"), "a", encoding="utf-8") as f:
-            f.write(f"{self.command} {self.path} key={state}\n")
+            f.write(f"{self.command} {path} key={state}\n")
         return state
+
+    def quota(self):
+        parts = self.path.split("/")
+        if len(parts) != 6 or parts[4] != EXPECTED_KEY or parts[5] != "overall_quotas":
+            return self.answer("quota", 404, {"error": {"code": "NotFoundError"}})
+        remaining = 500
+        if flag("quota-remaining"):
+            with open(os.path.join(STATE, "quota-remaining"), encoding="utf-8") as f:
+                remaining = int(f.read().strip() or "0")
+        user = {"used": 500 - remaining, "allowed": 500}
+        if flag("quota-shapeless"):
+            user = {"used": "many"}
+        return self.answer(
+            "quota",
+            200,
+            {"data": {"api_requests_daily": {"user": user, "group": {"used": 0, "allowed": 0}}}},
+        )
 
     def answer(self, endpoint, code, doc):
         if flag("quota"):
@@ -343,6 +379,8 @@ class Handler(BaseHTTPRequestHandler):
                 "auth", 401, {"error": {"code": "WrongCredentialsError"}}
             )
         port = self.server.server_address[1]
+        if self.path.startswith("/api/v3/users/"):
+            return self.quota()
         if self.path == "/api/v3/files/upload_url":
             url = f"http://127.0.0.1:{port}/upload-large"
             if flag("upload-url"):
@@ -359,6 +397,10 @@ class Handler(BaseHTTPRequestHandler):
             # A poll of either kind counts toward an analysis's completion:
             # it stands for time passing, as on VirusTotal.
             poll_file(sha)
+            if flag("analysis-404"):
+                return self.answer(
+                    "analysis", 404, {"error": {"code": "NotFoundError"}}
+                )
             return self.answer("analysis", 200, analysis_object(sha, CONTENTS[sha]))
         if self.path.startswith("/api/v3/files/"):
             sha = self.path.rsplit("/", 1)[-1]

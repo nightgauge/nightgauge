@@ -24,7 +24,9 @@
 #
 # REQUESTS PER FILE
 #
-# Every unique file (by sha256) is first looked up: GET /files/{sha256}.
+# Before anything else, one request reads the key's daily quota (THE DAILY
+# QUOTA, below). Every unique file (by sha256) is then looked up: GET
+# /files/{sha256}.
 #
 #   - VirusTotal analysed it within VT_REUSE_MAX_AGE (default 24 hours), and
 #     that analysis lists at least VT_MIN_ENGINES engines: its report is judged
@@ -69,10 +71,37 @@
 # is polled until its date moves or the timeout ends; the old report is never
 # judged. `queued` and `in-progress` keep polling; any other status is exit 2.
 #
-# Every run ends with one line counting its requests by class: lookups (the
-# first GET of each file), uploads (upload_url and POST /files), reanalyses
-# (POST .../analyse) and polls (every later GET). The report carries the same
-# counts as requests_by_class.
+# GET /analyses/{id} can answer 404 for an analysis VirusTotal accepted: on
+# rc.11 the upload was accepted, its analysis object 404'd, and the file's
+# report later showed a newer date. A 404 there is not fatal. From then on only
+# the file object is polled, under the same backoff, until its report is newer
+# than the lookup's and inside its window, and that report is judged by the
+# same rules as any other. Only VT_ANALYSIS_TIMEOUT ends that poll (exit 2).
+# Nothing is accepted on this path that the file's own report does not show.
+#
+# Every run ends with one line counting its requests by class: the quota read,
+# lookups (the first GET of each file), uploads (upload_url and POST /files),
+# reanalyses (POST .../analyse) and polls (every later GET). The report carries
+# the same counts as requests_by_class.
+#
+# THE DAILY QUOTA
+#
+# The first request reads the key's quota: GET /users/{key}/overall_quotas,
+# whose data.api_requests_daily.user holds `used` and `allowed`
+# (https://docs.virustotal.com/reference/user-overall-quotas). The key is part
+# of that URL, so the URL travels in the curl config on stdin like the key's
+# header, and every message names it as /users/<key>/overall_quotas.
+#
+# The scan's cost is estimated before any lookup, without knowing which files
+# VirusTotal already has: per unique file one lookup, one upload (two over 32
+# MB) and one poll, plus the quota read itself, capped at VT_MAX_REQUESTS
+# because the run never sends more. When fewer requests remain today than that
+# estimate, the scan stops with exit 2 naming both numbers, before it spends
+# anything else: on the free key's 500/day a second scan otherwise ran out
+# partway (#3213). An answer that cannot be read (an HTTP error other than 429,
+# a body that is not JSON, no numeric used/allowed) is logged and the scan
+# continues. A 429 on it is exit 2: the quota is spent. The report records
+# quota_remaining (null when unreadable) and quota_estimate.
 #
 # This script spaces its own requests to stay under 4/min, backs off between
 # polls of one analysis, and stops at VT_MAX_REQUESTS requests per run so one
@@ -177,10 +206,13 @@ REQ_LOOKUP=0
 REQ_UPLOAD=0
 REQ_REANALYSIS=0
 REQ_POLL=0
+REQ_QUOTA=0
 REQ_CLASS=""
+QUOTA_REMAINING="" # requests left today, as VirusTotal reported; empty when unread
+QUOTA_ESTIMATE=""  # requests this run may send, quota read included
 
 print_summary() {
-  echo "vt-scan: $REQUESTS requests (lookups $REQ_LOOKUP, uploads $REQ_UPLOAD, reanalyses $REQ_REANALYSIS, polls $REQ_POLL)"
+  echo "vt-scan: $REQUESTS requests (quota $REQ_QUOTA, lookups $REQ_LOOKUP, uploads $REQ_UPLOAD, reanalyses $REQ_REANALYSIS, polls $REQ_POLL)"
 }
 
 write_report() {
@@ -196,9 +228,12 @@ write_report() {
     --argjson reuse_text "$REUSE_MAX_AGE_TEXT" \
     --argjson lookup "$REQ_LOOKUP" --argjson upload "$REQ_UPLOAD" \
     --argjson reanalysis "$REQ_REANALYSIS" --argjson poll "$REQ_POLL" \
+    --argjson quota "$REQ_QUOTA" \
+    --argjson remaining "${QUOTA_REMAINING:-null}" --argjson estimate "${QUOTA_ESTIMATE:-null}" \
     '{tool: "vt-scan.sh", api: $api, scanned_at: $at, status: $status,
       error: (if $error == "" then null else $error end), requests: $requests,
-      requests_by_class: {lookup: $lookup, upload: $upload, reanalysis: $reanalysis, poll: $poll},
+      requests_by_class: {quota: $quota, lookup: $lookup, upload: $upload, reanalysis: $reanalysis, poll: $poll},
+      quota_remaining: $remaining, quota_estimate: $estimate,
       reuse_max_age: $reuse, reuse_max_age_text: $reuse_text,
       sources: ($files | group_by(.source) | map({key: .[0].source, value: length}) | from_entries),
       files: $files}' \
@@ -255,6 +290,9 @@ done
 [ "$POLL_MAX_INTERVAL" -ge "$MIN_INTERVAL" ] ||
   harness "VT_POLL_MAX_INTERVAL ($POLL_MAX_INTERVAL) is below VT_MIN_INTERVAL ($MIN_INTERVAL)"
 [[ "$API_BASE" =~ ^https?://[^/]+(/.*)?$ ]] || harness "API base is not an http(s) URL"
+# The quota URL is written into a curl config: a quote, backslash or space in
+# the base would change that config.
+case "$API_BASE" in *\"* | *\\* | *[[:space:]]*) harness "API base holds a quote, backslash or space" ;; esac
 API_BASE="${API_BASE%/}"
 API_ORIGIN="$(sed -E 's#^(https?://[^/]+).*#\1#' <<<"$API_BASE")"
 
@@ -279,12 +317,18 @@ BODY="$WORK/body.json"
 
 # vt_request METHOD URL [curl args...] — body lands in $BODY and the status in
 # HTTP_STATUS. Anything but HTTP 200 is a harness error, except a 404
-# NotFoundError while ALLOW_404=1 (a file VirusTotal does not know). The
-# message names the endpoint, never the key.
+# NotFoundError while ALLOW_404=1 (a file VirusTotal does not know), and any
+# answer but a 429 while SOFT_FAIL=1, which returns 1 with the reason in
+# SOFT_WHY (only the quota read sets it). URL_IN_CONFIG=1 sends the URL in the
+# curl config on stdin rather than on the command line, for a URL that holds
+# the key. The message names the endpoint, never the key.
 ALLOW_404=0
+SOFT_FAIL=0
+SOFT_WHY=""
+URL_IN_CONFIG=0
 HTTP_STATUS=""
 vt_request() {
-  local method="$1" url="$2" now wait code where
+  local method="$1" url="$2" now wait code where config
   shift 2
   case "$url" in
   "$API_ORIGIN"/*) where="${url#"$API_ORIGIN"}" ;;
@@ -292,9 +336,11 @@ vt_request() {
   *) where="$(sed -E 's#^(https?://[^/]+).*#\1#' <<<"$url")" ;;
   esac
   where="${where%%\?*}"
+  where="${where//"$VT_API_KEY"/<key>}"
   [ "$REQUESTS" -lt "$MAX_REQUESTS" ] ||
     harness "request budget spent: VT_MAX_REQUESTS=$MAX_REQUESTS reached before $method $where; re-run later or raise it"
   case "$REQ_CLASS" in
+  quota) REQ_QUOTA=$((REQ_QUOTA + 1)) ;;
   lookup) REQ_LOOKUP=$((REQ_LOOKUP + 1)) ;;
   upload) REQ_UPLOAD=$((REQ_UPLOAD + 1)) ;;
   reanalysis) REQ_REANALYSIS=$((REQ_REANALYSIS + 1)) ;;
@@ -309,12 +355,20 @@ vt_request() {
   REQUESTS=$((REQUESTS + 1))
   LAST_REQUEST="$(date +%s)"
   : >"$BODY"
-  code="$(printf 'header = "x-apikey: %s"\n' "$VT_API_KEY" |
+  config="$(printf 'header = "x-apikey: %s"' "$VT_API_KEY")"
+  if [ "$URL_IN_CONFIG" = 1 ]; then
+    config="$config"$'\n'"$(printf 'url = "%s"' "$url")"
+  else
+    set -- "$@" "$url"
+  fi
+  code="$(printf '%s\n' "$config" |
     curl -K - -sS -X "$method" --max-time "$HTTP_TIMEOUT" \
-      -o "$BODY" -w '%{http_code}' "$@" "$url" 2>"$WORK/curl.err")"
+      -o "$BODY" -w '%{http_code}' "$@" 2>"$WORK/curl.err")"
   local rc=$?
   if [ "$rc" -ne 0 ]; then
-    harness "$method $where: curl exit $rc ($(head -c 200 "$WORK/curl.err" | tr '\n' ' '))"
+    local err
+    err="$(head -c 200 "$WORK/curl.err" | tr '\n' ' ')"
+    harness "$method $where: curl exit $rc (${err//"$VT_API_KEY"/<key>})"
   fi
   if [ "$code" = "429" ]; then
     harness "$method $where: HTTP 429, the VirusTotal quota is spent (4/min, 500/day on the free key); re-run later"
@@ -328,9 +382,19 @@ vt_request() {
     local why
     why="$(jq -r '.error | "\(.code // "?"): \(.message // "")"' "$BODY" 2>/dev/null)"
     why="${why:0:200}"
+    if [ "$SOFT_FAIL" = 1 ]; then
+      SOFT_WHY="$method $where: HTTP ${code:-none} ${why:-}"
+      return 1
+    fi
     harness "$method $where: HTTP ${code:-none} ${why:-}"
   fi
-  jq -e . "$BODY" >/dev/null 2>&1 || harness "$method $where: the answer is not JSON"
+  if ! jq -e . "$BODY" >/dev/null 2>&1; then
+    if [ "$SOFT_FAIL" = 1 ]; then
+      SOFT_WHY="$method $where: the answer is not JSON"
+      return 1
+    fi
+    harness "$method $where: the answer is not JSON"
+  fi
 }
 
 # kind_of PATH — "binary" or "text", from the bytes first. A file is binary
@@ -367,6 +431,35 @@ for f in "${FILES[@]}"; do
 done
 UNIQUE="$(cut -f1 "$INDEX" | awk '!seen[$0]++')"
 echo "vt-scan: ${#FILES[@]} file(s), $(printf '%s\n' "$UNIQUE" | wc -l | tr -d ' ') unique by sha256"
+
+# --- 0. Will the scan fit in today's quota? -----------------------------------
+# The estimate assumes VirusTotal knows none of the files: one lookup, one
+# upload (two over 32 MB) and one poll each, plus this quota read, capped at
+# VT_MAX_REQUESTS because the run never sends more.
+QUOTA_ESTIMATE="$(awk -F'\t' -v big="$LARGE_FILE_BYTES" -v max="$MAX_REQUESTS" '
+  !seen[$1]++ { n += ($2 > big) ? 4 : 3 }
+  END { n += 1; print (n < max) ? n : max }' "$INDEX")"
+REQ_CLASS=quota
+SOFT_FAIL=1
+URL_IN_CONFIG=1
+quota_ok=1
+vt_request GET "$API_BASE/users/$VT_API_KEY/overall_quotas" || quota_ok=0
+SOFT_FAIL=0
+URL_IN_CONFIG=0
+if [ "$quota_ok" = 1 ]; then
+  QUOTA_REMAINING="$(jq -r '.data.api_requests_daily.user as $u
+    | if ($u.used | type) == "number" and ($u.allowed | type) == "number"
+      then [($u.allowed - $u.used | floor), 0] | max else empty end' "$BODY" 2>/dev/null)"
+  [ -n "$QUOTA_REMAINING" ] ||
+    SOFT_WHY="GET ${API_BASE#"$API_ORIGIN"}/users/<key>/overall_quotas: no numeric data.api_requests_daily.user.used and .allowed"
+fi
+if [ -z "$QUOTA_REMAINING" ]; then
+  echo "vt-scan: quota unreadable (${SOFT_WHY:0:200}); continuing"
+elif [ "$QUOTA_REMAINING" -lt "$QUOTA_ESTIMATE" ]; then
+  harness "daily quota too small: VirusTotal reports $QUOTA_REMAINING requests left today, this scan may need $QUOTA_ESTIMATE; re-run after the quota resets (00:00 UTC)"
+else
+  echo "vt-scan: daily quota: $QUOTA_REMAINING requests left today, this scan may need $QUOTA_ESTIMATE"
+fi
 
 # vt_file SHA CLASS — GET /files/{sha256}, counted as CLASS (lookup or poll);
 # a 404 NotFoundError is an answer (HTTP_STATUS=404), not an error.
@@ -603,6 +696,7 @@ while IFS=$'\t' read -r sha before source aid; do
   gap="$MIN_INTERVAL"
   next="file"
   analysis_newer=0
+  analysis_gone=0
   lag_polls=0
   while :; do
     # Exponential backoff: MIN, 2*MIN, 4*MIN ... capped at POLL_MAX_INTERVAL.
@@ -613,7 +707,9 @@ while IFS=$'\t' read -r sha before source aid; do
     else
       echo "  polling analysis object of $path after ${gap}s"
       REQ_CLASS=poll
+      ALLOW_404=1
       vt_request GET "$API_BASE/analyses/$(jq -rn --arg a "$aid" '$a | @uri')"
+      ALLOW_404=0
     fi
     gap=$((gap * 2))
     [ "$gap" -le "$POLL_MAX_INTERVAL" ] || gap="$POLL_MAX_INTERVAL"
@@ -629,7 +725,10 @@ while IFS=$'\t' read -r sha before source aid; do
           echo "  $path ($sha): its report dated $(utc "$pdate") is newer than the lookup's but outside its window; still polling"
         fi
       fi
-      if [ "$analysis_newer" = 1 ]; then
+      if [ "$analysis_gone" = 1 ]; then
+        # The analysis object is gone: only the file's own report can decide.
+        :
+      elif [ "$analysis_newer" = 1 ]; then
         # The analysis completed with a newer date, yet the file has not moved.
         # VirusTotal dates an analysis when it is created, so a folded one looks
         # newer too: read the file a bounded number of times, then stop.
@@ -639,6 +738,12 @@ while IFS=$'\t' read -r sha before source aid; do
       else
         next="analysis"
       fi
+    elif [ "$HTTP_STATUS" = "404" ]; then
+      # rc.11 (#3213): the upload was accepted and its analysis object 404'd,
+      # yet the file's report later showed a newer date. Poll the file alone.
+      echo "  analysis object of $path is gone (404); polling the file report"
+      analysis_gone=1
+      next="file"
     else
       status="$(jq -r 'if .data.type == "analysis" and (.data.attributes.status | type) == "string"
         then .data.attributes.status else empty end' "$BODY")"

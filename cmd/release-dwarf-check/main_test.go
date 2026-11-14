@@ -538,7 +538,7 @@ func TestStagingWorkflowChecksDWARFBeforeRCScan(t *testing.T) {
 	}
 }
 
-// --- Margin scan guard (#3192): every RC builds and scans the shipped binaries
+// --- Margin scan guard (#3192): the dispatched RC scan builds and scans the shipped binaries
 // at three neighbouring version strings, and a release needs a margin-clean RC. ---
 
 const (
@@ -548,7 +548,7 @@ const (
 	marginRecordName   = "Upload the margin scan record"
 	marginGateName     = "Require an RC on this commit with a clean margin scan"
 	rcScanStepName     = "Scan every archive and VSIX"
-	rcScanCondition    = "if: startsWith(github.ref, 'refs/tags/v') && inputs.version == ''"
+	rcScanCondition    = "if: github.event_name == 'workflow_dispatch'"
 )
 
 // assertNoSwallow fails when a step can pass while its command fails.

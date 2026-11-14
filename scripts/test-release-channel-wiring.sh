@@ -4,7 +4,9 @@
 # release workflows cannot run in PR CI, so this asserts their shape instead:
 # release.yml calls marketplace-publish.yml under the same condition as the
 # `channels` job, the preflight requires every publish credential, and both
-# workflows verify the registry tokens with the one shared script.
+# workflows verify the registry tokens with the one shared script. It also
+# asserts that staging.yml scans an RC with VirusTotal only when dispatched on
+# it, and that release.yml still requires that scan's record (#3213).
 #
 # Exit codes: 0 every assertion held; 1 an assertion failed; 2 HARNESS ERROR
 # (the check could not run, so it asserted nothing).
@@ -13,11 +15,12 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RELEASE="${RELEASE_WORKFLOW:-$ROOT/.github/workflows/release.yml}"
 PUBLISH="${PUBLISH_WORKFLOW:-$ROOT/.github/workflows/marketplace-publish.yml}"
+STAGING="${STAGING_WORKFLOW:-$ROOT/.github/workflows/staging.yml}"
 PASS=0
 FAIL=0
 
 command -v yq >/dev/null 2>&1 || { echo "HARNESS ERROR: yq (mikefarah) is not on PATH."; exit 2; }
-for f in "$RELEASE" "$PUBLISH"; do
+for f in "$RELEASE" "$PUBLISH" "$STAGING"; do
   [ -f "$f" ] || { echo "HARNESS ERROR: $f does not exist."; exit 2; }
   yq -e '.jobs' "$f" >/dev/null 2>&1 || { echo "HARNESS ERROR: yq cannot parse $f."; exit 2; }
 done
@@ -87,6 +90,30 @@ check "marketplace-publish verifies VSCE_PAT with the shared script" "true" \
   "$(q '.jobs.publish.steps[] | select(.name == "Verify VSCE_PAT against the publisher") | .run | contains("verify-registry-pat.sh marketplace")' "$PUBLISH")"
 check "marketplace-publish verifies OVSX_PAT with the shared script" "true" \
   "$(q '.jobs.publish.steps[] | select(.name == "Verify OVSX_PAT against the namespace") | .run | contains("verify-registry-pat.sh open-vsx")' "$PUBLISH")"
+
+# staging.yml (#3213): an RC tag push builds and runs ClamAV; the VirusTotal
+# scan and the margin builds run only in a run dispatched on the chosen RC tag.
+DISPATCH="github.event_name == 'workflow_dispatch'"
+check "staging is dispatchable" "true" "$(q '.on | has("workflow_dispatch")' "$STAGING")"
+check "staging still runs on an RC tag push" "true" \
+  "$(q '.on.push.tags | any_c(. == "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+")' "$STAGING")"
+check "rc-scan runs only when dispatched" "$DISPATCH" "$(q '.jobs.rc-scan.if' "$STAGING")"
+for step in "Build the margin scan binaries (docs/RELEASE_BINARIES.md)" "Upload margin scan inputs"; do
+  check "'$step' runs only when dispatched" "$DISPATCH" \
+    "$(q ".jobs.dry-run.steps[] | select(.name == \"$step\") | .if" "$STAGING")"
+done
+check "the ClamAV scan runs on every staging run" "null" \
+  "$(q '.jobs.dry-run.steps[] | select(.name == "Malware scan (ClamAV)") | .if' "$STAGING")"
+check "a dispatch is refused off an RC tag ref" "$DISPATCH" \
+  "$(q '.jobs.dry-run.steps[0].if' "$STAGING")"
+check "staging's concurrency group keeps a dispatch apart from the tag push" "true" \
+  "$(q '.concurrency.group | contains("github.event_name")' "$STAGING")"
+check "no staging condition still keys the scan on a tag push" "0" \
+  "$(grep -c "startsWith(github.ref, 'refs/tags/v')" "$STAGING")"
+check "release.yml still requires the RC's margin scan record" "true" \
+  "$(grep -q 'scripts/release-rc-margin-check.sh' "$RELEASE" && echo true || echo false)"
+check "the margin gate reads the dispatched staging run" "1" \
+  "$(grep -c 'staging.yml/runs?event=workflow_dispatch&' "$ROOT/scripts/release-rc-margin-check.sh")"
 
 # The shared script refuses an unknown registry and a missing token without
 # calling any registry.

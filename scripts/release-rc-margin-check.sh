@@ -6,7 +6,9 @@
 #   release-rc-margin-check.sh vX.Y.Z COMMIT_SHA OWNER/REPO
 #
 # release.yml runs this before it builds anything. It passes when at least one
-# RC tag vX.Y.Z-rc.N points at COMMIT_SHA and that tag's staging.yml run
+# RC tag vX.Y.Z-rc.N points at COMMIT_SHA and that tag's latest DISPATCHED
+# staging.yml run (gh workflow run staging.yml --ref vX.Y.Z-rc.N; an RC tag
+# push no longer scans, #3213)
 #
 #   - has a successful `VirusTotal scan of the RC` job (rc-scan), and
 #   - kept an unexpired `rc-margin-scan-vX.Y.Z-rc.N` artifact whose
@@ -80,14 +82,14 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
   exit 1
 fi
 
-RUNS="$(api "repos/$REPO/actions/workflows/staging.yml/runs?event=push&head_sha=$SHA&per_page=100")" ||
+RUNS="$(api "repos/$REPO/actions/workflows/staging.yml/runs?event=workflow_dispatch&head_sha=$SHA&per_page=100")" ||
   exit 2
 for RC in "${CANDIDATES[@]}"; do
   RUN_ID="$(printf '%s\n' "$RUNS" | jq -r --arg rc "$RC" \
     '[.workflow_runs[] | select(.head_branch == $rc)] | sort_by(.run_number) | last | .id // empty')" ||
     harness "cannot parse the staging runs"
   if [ -z "$RUN_ID" ]; then
-    echo "::error::$RC: no staging.yml run for this tag on $SHA."
+    echo "::error::$RC: no dispatched staging.yml scan run for this tag on $SHA; dispatch it: gh workflow run staging.yml --ref $RC (docs/RELEASE_CHECKLIST.md)."
     continue
   fi
   CONCLUSION="$(api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" |

@@ -12,18 +12,28 @@
 # release-path defect fails at the merge that caused it, not at the next RC
 # tag. That caller passes no secrets, so signing no-ops as on a fork.
 #
-# An RC tag push also runs the `rc-scan` job: a multi-engine VirusTotal scan of
-# the RC's archives and VSIXs, and every binary and bundle inside them (#3064).
-# A finding fails the RC, so a flagged build never reaches the soak. Main
-# builds are not scanned. The scan also covers the margin builds: the shipped
-# binaries at three neighbouring version strings (#3192). Its clean record,
-# rc-margin-scan-<tag>, is what release.yml requires before promoting the RC.
+# An RC tag push builds, runs the ClamAV scan and the integrity checks, and is
+# green without VirusTotal. The multi-engine VirusTotal scan (`rc-scan`, #3064)
+# runs only when this workflow is dispatched on an RC tag, once, for the RC
+# chosen to become the release (#3213):
+#
+#   gh workflow run staging.yml --ref vX.Y.Z-rc.N
+#
+# That run rebuilds the RC, builds the margin binaries (the shipped binaries at
+# three neighbouring version strings, #3192), and scans the RC's archives and
+# VSIXs, every binary and bundle inside them, and the margin binaries. A
+# finding fails it. Its clean record, rc-margin-scan-<tag>, is what release.yml
+# requires before promoting the RC. Scanning every RC spent the free key's
+# 500 requests/day on RCs that were never promoted. Main builds are never
+# scanned.
 name: Staging (RC dry-run)
 
 on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"
+  # The VirusTotal scan of the RC chosen for release: dispatch on its tag ref.
+  workflow_dispatch:
   workflow_call:
     inputs:
       version:
@@ -45,8 +55,10 @@ env:
 
 # Under workflow_call github.ref is the caller's (refs/heads/main), so this
 # group stays distinct from main-build.yml's and neither waits on the other.
+# The event is in the group, so dispatching the scan on an RC tag never
+# cancels that tag's push run, nor the reverse.
 concurrency:
-  group: staging-${{ github.ref }}
+  group: staging-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -64,12 +76,23 @@ jobs:
     # runner such as macos-14-xlarge, which is billed even on public repos.
     # Do not copy this pattern into a private repository without re-checking.
     runs-on: macos-latest
-    # 45, not 30: an RC tag also builds and signs the margin binaries
-    # at three more version strings (#3192).
+    # 45, not 30: a dispatched scan run also builds and signs the margin
+    # binaries at three more version strings (#3192).
     timeout-minutes: 45
     outputs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
+      # The scan runs on an RC tag only: its record is keyed to the tag, and
+      # VT_API_KEY's environment admits v* tag refs only (#3070).
+      - name: A dispatch must name an RC tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [[ ! "$REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+            echo "::error::staging.yml was dispatched on $REF; the VirusTotal scan runs on an RC tag only: gh workflow run staging.yml --ref vX.Y.Z-rc.N"
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -155,11 +178,12 @@ jobs:
       # binaries (Linux amd64 and the signed universal darwin file) at X.Y.Z,
       # X.Y.Z-rc.(N+1) and X.Y.(Z+1)-rc.1 with the RC's own Makefile targets;
       # rc-scan scans them with the RC's files and fails on any finding. They
-      # go in their own artifact and are never published. RC tag pushes only,
-      # the same condition as rc-scan: a main build is not scanned. The DWARF
-      # check proves the margin bytes are built like the RC's.
+      # go in their own artifact and are never published. Dispatched scan runs
+      # only, the same condition as rc-scan: an RC tag push and a main build
+      # (workflow_call, whose event is the caller's push) do not build them.
+      # The DWARF check proves the margin bytes are built like the RC's.
       - name: Build the margin scan binaries (docs/RELEASE_BINARIES.md)
-        if: startsWith(github.ref, 'refs/tags/v') && inputs.version == ''
+        if: github.event_name == 'workflow_dispatch'
         env:
           VERSION: ${{ steps.version.outputs.version }}
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
@@ -178,7 +202,7 @@ jobs:
       # Raw binaries, not archives: the gate scans an archive and then the
       # binary inside it, two uploads for one build (#3202).
       - name: Upload margin scan inputs
-        if: startsWith(github.ref, 'refs/tags/v') && inputs.version == ''
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rc-margin-${{ steps.version.outputs.tag }}
@@ -469,18 +493,19 @@ jobs:
   # GitHub Release, so it scans the uploaded rc-artifacts in `local` mode, which
   # never publishes anything. Its own job, on Linux: the free key's 4
   # requests/min makes a full scan take about half an hour, longer than the
-  # dry-run's timeout. RC tag pushes only; main builds (workflow_call) are not
-  # scanned, and a missing VT_API_KEY fails the RC rather than skipping the scan.
+  # dry-run's timeout. Dispatched runs only, on the RC chosen for release
+  # (#3213); an RC tag push and a main build (workflow_call) are not scanned,
+  # and a missing VT_API_KEY fails the dispatched run rather than skipping it.
   rc-scan:
     name: VirusTotal scan of the RC
     needs: dry-run
-    # An RC tag push only. Under workflow_call (main-build.yml) github.ref is
-    # the caller's branch, and github.event_name is also `push`, so the ref is
-    # the test, with the version input as a second guard.
-    if: startsWith(github.ref, 'refs/tags/v') && inputs.version == ''
+    # A dispatch only; dry-run has already refused one on anything but an RC
+    # tag. Under workflow_call (main-build.yml) github.event_name is the
+    # caller's `push`, so a main build never reaches this job.
+    if: github.event_name == 'workflow_dispatch'
     # VT_API_KEY lives only in the production environment (#3070). Its
     # deployment policy admits v* tag refs, so RC tags (v0.8.3-rc.1) qualify;
-    # the skipped workflow_call job never requests it from a branch ref.
+    # the dispatch guard keeps this job off any branch ref.
     environment: production
     runs-on: ubuntu-latest
     # 100: the RC's own files take about 60 requests and the six raw margin
