@@ -254,7 +254,8 @@ on core, #2225). The runner therefore:
    unmergeable, the runner re-reads its mergeability, polling while GitHub
    answers `UNKNOWN`. A `CONFLICTING` PR is refused with
    `merge-queue-failed: merge conflict with <base>: PR #N is CONFLICTING …`,
-   and conflict recovery rebases it onto the base: a real conflict captures
+   and conflict recovery merges the PR's base into it (no force-push): a real
+   conflict captures
    `conflict-context-{N}.json` and rewinds to `feature-dev` on the same
    branch; a stale one pushes and re-enqueues. Failed merge-group checks and
    closed PRs keep their reasons and are not routed to conflict recovery.
@@ -394,8 +395,9 @@ The skill at `skills/nightgauge-pr-merge/SKILL.md` runs unchanged when:
 The skill is responsible for content-heavy work that the deterministic path
 cannot author:
 
-- Resolving real merge conflicts. When the skill cannot land a rebase conflict
-  in-place (Step 6.1.5), it no longer triggers a blind fresh-branch restart that
+- Resolving real merge conflicts. Step 6.1.5 merges the base into the PR branch
+  and pushes with `nightgauge git push-branch`, never a rebase or force-push
+  (#2752). When the skill cannot land a merge conflict in-place, it no longer triggers a blind fresh-branch restart that
   discards the dev work. It captures `conflict-context-{N}.json` (conflicting
   files + both sides) and emits a `CONFLICT_RESOLUTION_NEEDED` feedback signal,
   **preserving the branch**; the `conflict-recovery-loop` recovery action then
@@ -407,7 +409,7 @@ cannot author:
 ### Fix hand-back (#2504)
 
 The skill fixes. It does not wait for CI and it does not merge after a fix.
-When it pushes a CI fix, a transient re-run, or a freshness rebase, it writes
+When it pushes a CI fix, a transient re-run, or a freshness merge, it writes
 `pr-merge-fix-{N}.json`
 (`{"result":"fix-pushed","pr_number":P,"head_sha":"<sha>","attempt":k}`) and
 exits 0. Both orchestrators consume it the same way: the Go scheduler
@@ -841,15 +843,15 @@ recovery.
 The recovery half closes the loop so the stale sibling is not abandoned. The
 `branch-out-of-date` recovery action (see
 [AUTO_TRIAGE.md](AUTO_TRIAGE.md#branch-out-of-date--wave-merge-train-4071))
-rebases B onto the just-merged `main`, **waits for CI to re-pass on the rebased
-head**, then re-runs this same deterministic runner. Because the runner routes
+merges B's base (the just-merged `main`, or its epic branch) into B and pushes
+without force, **waits for CI to re-pass on the updated head**, then re-runs this same deterministic runner. Because the runner routes
 through `Decide()`, B is only merged once it is genuinely `CLEAN` with green
 checks — recovery is claimed only on `PathMerged`. Net effect: both same-wave
-PRs land (the second rebased automatically) and **no PR is ever merged while
-`BEHIND` its base**. When the rebase hits a real conflict, the action captures
-the conflict context **before** `git rebase --abort` and defers to the
+PRs land (the second updated automatically) and **no PR is ever merged while
+`BEHIND` its base**. When the merge hits a real conflict, the action captures
+the conflict context **before** `git merge --abort` and defers to the
 `conflict-recovery-loop`, which re-dispatches feature-dev on the **same
-(preserved) branch** to resolve it (#4072) — the rebase path never resolves
+(preserved) branch** to resolve it (#4072) — the update path never resolves
 conflicts itself, and the branch is never discarded for a fresh-branch restart.
 
 ## Decisions (ADRs)

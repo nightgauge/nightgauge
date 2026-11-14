@@ -1332,6 +1332,8 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 // packages/nightgauge path or a deleted $HOOKS_DIR script from shipped text.
 // The pr-merge capture was re-pinned for #2742: the two added lines are the
 // freshness check noting push-branch's exit-4 credential refusal.
+// The pr-merge capture was re-pinned for #2752: the one changed line is the
+// error-table row saying Step 6.1.5 merges the base instead of rebasing.
 func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	root := realSkillsRoot(t)
 	// Render resolves _includes paths to their absolute filesystem form, which

@@ -16,6 +16,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Updating a stale PR no longer rewrites its history. The `branch-out-of-date` recovery and pr-merge conflict resolution merge the PR's base into its branch and push without force, instead of rebasing and force-pushing. The base is the PR's own base branch, so an epic-branch PR is updated from its epic branch, not `main` (#2752, #2843).
+
 - A failed VS Code host smoke window can now be diagnosed from the gate's own output. The load average is printed before each window launch. A failed window's VS Code logs are copied to `.ci-local-logs/<step>.vscode-logs/`. A launch that never reaches the test module is retried once, with the retry printed, and a failed test is never retried. The demo tab-step wait now fails on a silent webview instead of a fixed timer, and its per-step report is no longer cut off by the harness's 30 s case timeout. A passing run now removes its `nightgauge-host-*` scratch directory, and a failing run keeps it (#2747).
 - The queue no longer skips its halt, or shows a host-sleep warning, when a failure only echoes `[host-slept]` text. Only the scheduler's structured host-sleep verdict now counts as a host sleep, as in the Go layer (#3273).
 

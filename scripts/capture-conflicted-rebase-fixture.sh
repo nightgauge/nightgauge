@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# capture-conflicted-rebase-fixture.sh — build a REAL git repository whose next
-# `git rebase origin/main` genuinely fails, as the fixture for the #301
-# conflict-capture regression tests.
+# capture-conflicted-rebase-fixture.sh — build a REAL git repository whose
+# branch is BEHIND origin/main, so that updating it from the base (a merge, as
+# BranchOutOfDate does since #2752, or a rebase, as the capture tests drive by
+# hand) genuinely conflicts, as the fixture for the #301 conflict-capture
+# regression tests. The `behind` mode is the one non-conflicting shape.
 #
 # Issue #301 is an instance of the silent no-op class (#166): the recovery
 # action's conflict capture folded three different realities — "captured a
@@ -100,6 +102,13 @@
 #                            resolves the main one writes where nothing looks.
 #                            The path PRINTED for this mode is the linked
 #                            worktree, i.e. the stage workspace.
+#               behind       — origin/main advances WITHOUT touching anything
+#                            the feature branch changed, and the feature branch
+#                            is pushed to origin. Merging the base is clean and
+#                            the push that follows is a fast-forward. The clone
+#                            carries a repo-local committer identity, because a
+#                            merge commit needs one and the test process does
+#                            not inherit this script's pinned environment.
 #               mode-only    — an add/add conflict on an EMPTY placeholder file
 #                            (.gitkeep / __init__.py / py.typed shape) added on
 #                            both sides with DIFFERENT exec bits. git stages it
@@ -114,7 +123,7 @@
 # Prints the path of the working clone on stdout. That clone is left checked out
 # on the feature branch with origin/main already advanced, i.e. positioned
 # exactly where BranchOutOfDate.Execute picks up: the caller runs the real
-# `git fetch` + `git rebase` itself, so the failure under test is produced by
+# `git fetch` + `git merge` (or `git rebase`) itself, so the failure under test is produced by
 # git, not by the fixture.
 #
 # Layout:
@@ -130,13 +139,13 @@ set -euo pipefail
 dest="${1:-}"
 mode="${2:-conflict}"
 
-modes="conflict|dirty-index|detached|unicode-path|binary|operator-rebase|gitlink|symlink|mode-only|latin1-path|linked-worktree"
+modes="conflict|behind|dirty-index|detached|unicode-path|binary|operator-rebase|gitlink|symlink|mode-only|latin1-path|linked-worktree"
 if [ -z "$dest" ]; then
   echo "usage: $0 <dest-dir> [$modes]" >&2
   exit 2
 fi
 case "$mode" in
-  conflict | dirty-index | detached | unicode-path | binary | operator-rebase | gitlink | symlink | mode-only | latin1-path | linked-worktree) ;;
+  conflict | behind | dirty-index | detached | unicode-path | binary | operator-rebase | gitlink | symlink | mode-only | latin1-path | linked-worktree) ;;
   *)
     echo "unknown mode: $mode (want $modes)" >&2
     exit 2
@@ -261,9 +270,21 @@ git -C "$work" add -A
 stage_extra feature-side
 git -C "$work" commit --quiet -m "feat: rewrite shared line on the feature branch"
 
+if [ "$mode" = "behind" ]; then
+  # The PR branch already exists on origin: the update must fast-forward it.
+  git -C "$work" push --quiet -u origin "$BRANCH"
+  git -C "$work" config user.name "$GIT_COMMITTER_NAME"
+  git -C "$work" config user.email "$GIT_COMMITTER_EMAIL"
+fi
+
 # --- main advances, editing the SAME line differently --------------------
+# (behind mode: main advances in a file the feature branch never touched.)
 git -C "$work" checkout --quiet main
-printf 'line-1\nmain-side\nline-3\n' >"$work/f.txt"
+if [ "$mode" = "behind" ]; then
+  printf 'main-only change\n' >"$work/g.txt"
+else
+  printf 'line-1\nmain-side\nline-3\n' >"$work/f.txt"
+fi
 write_extra main-side
 git -C "$work" add -A
 stage_extra main-side
