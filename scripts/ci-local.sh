@@ -1097,6 +1097,9 @@ LOG_DIR="${CI_LOCAL_LOG_DIR:-$REPO_ROOT/.ci-local-logs}"
 if [ "$LIST_STEPS" -eq 0 ] && [ "$SLOT_PROBE" -eq 0 ] && [ "$RELEASE_PROBE" -eq 0 ]; then
   mkdir -p "$LOG_DIR"
   rm -f "$LOG_DIR"/*.log 2>/dev/null || true
+  # A failed host smoke window copies its VS Code logs beside its step log
+  # (#2747); a previous run's copy would read as this run's.
+  rm -rf "$LOG_DIR"/*.vscode-logs 2>/dev/null || true
 fi
 
 # `strip_ansi`, `failure_markers` and `classify_failure` live in a sourced lib
@@ -1275,7 +1278,10 @@ run_step() {
   started=$SECONDS
   # `tee` keeps the terminal output live; PIPESTATUS[0] preserves the command's
   # own exit code, which a bare pipeline would otherwise replace with tee's.
-  "$@" 2>&1 | tee "$log"
+  # CI_LOCAL_STEP_LOG tells a step where its log lives, so it can keep
+  # artefacts beside it: the host smoke tier copies a failed window's VS Code
+  # logs to `<step>.vscode-logs/` (#2747).
+  CI_LOCAL_STEP_LOG="$log" "$@" 2>&1 | tee "$log"
   code=${PIPESTATUS[0]}
   elapsed=$((SECONDS - started))
   # Per-step wall clock (#1217). Without it "the gate is slow" is unactionable:

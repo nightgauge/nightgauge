@@ -35,6 +35,8 @@ interface RegisteredCase {
   name: string;
   fn: TestFn;
   skipReason?: string;
+  /** Overrides the run's per-case timeout for this case only. */
+  timeoutMs?: number;
 }
 
 const registry: RegisteredCase[] = [];
@@ -53,12 +55,18 @@ export function suite(name: string, body: () => void): void {
   }
 }
 
-/** Declare a case. Must be called from inside a `suite()` body. */
-export function test(name: string, fn: TestFn): void {
+/**
+ * Declare a case. Must be called from inside a `suite()` body.
+ *
+ * `options.timeoutMs` replaces the run's per-case timeout for a case whose
+ * own waits are longer than it, so the case's diagnostic failure is reached
+ * before the harness's generic "timed out" replaces it (#2747).
+ */
+export function test(name: string, fn: TestFn, options: { timeoutMs?: number } = {}): void {
   if (currentSuite === undefined) {
     throw new Error(`test("${name}") declared outside a suite()`);
   }
-  registry.push({ suite: currentSuite, name, fn });
+  registry.push({ suite: currentSuite, name, fn, timeoutMs: options.timeoutMs });
 }
 
 /**
@@ -124,7 +132,11 @@ export async function runRegisteredCases(
     onCaseStart(entry.suite, entry.name);
     const startedAt = Date.now();
     try {
-      await withTimeout(entry.fn(), perCaseTimeoutMs, `${entry.suite} > ${entry.name}`);
+      await withTimeout(
+        entry.fn(),
+        entry.timeoutMs ?? perCaseTimeoutMs,
+        `${entry.suite} > ${entry.name}`
+      );
       const durationMs = Date.now() - startedAt;
       results.push({ suite: entry.suite, name: entry.name, status: "pass", durationMs });
       log(`    PASS ${entry.name} (${durationMs}ms)`);

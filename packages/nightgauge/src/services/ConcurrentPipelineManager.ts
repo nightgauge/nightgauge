@@ -166,6 +166,17 @@ function isTransientNetworkFailureText(errMsg: string): boolean {
   return kind === "api_connection_lost" || kind === "github_network_outage";
 }
 
+/**
+ * Resolve the terminal kind the halt policy keys on (#3273). Mirrors Go's
+ * `ResolveTerminalKind`: host_slept comes only from the scheduler's structured
+ * verdict (`stage_host_slept`). Text that merely echoes `[host-slept]` is
+ * classified with the marker stripped, so it takes the normal halt path.
+ */
+export function resolveHaltKind(errMsg: string, hostSleptVerdict: boolean): string | undefined {
+  if (hostSleptVerdict) return "host_slept";
+  return classifyTerminalKind(errMsg.split(HOST_SLEPT_MARKER).join(""));
+}
+
 import type { IssueQueueService } from "./IssueQueueService";
 import type { HeadlessOrchestrator } from "./HeadlessOrchestrator";
 import type { PipelineRunResult, RequestedPin } from "./HeadlessOrchestrator";
@@ -175,7 +186,7 @@ import { requeueOptionsFor, type ActiveSlot, type QueueItem } from "../types/que
 import { updateProjectItemStatus } from "../utils/projectFieldWriter";
 import { moveToInReviewIfPRBacked } from "../utils/inReviewGuard";
 import { BOARD_STATUS } from "../utils/projectFieldMapping";
-import { postFailureComment } from "../utils/failureComment";
+import { HOST_SLEPT_MARKER, postFailureComment } from "../utils/failureComment";
 import { epicBranchParent } from "../utils/epicBranchParent";
 import { formatEpicRef, isEpic, sameRepo, slotKey, type EpicRef } from "../utils/epicRef";
 import { getConcurrentPipelineConfig } from "../utils/nightgaugeConfig";
@@ -3151,7 +3162,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // tests/services/concurrentPipelineManager.haltPolicy.test.ts: exactly one
       // regex, and no string method on haltErrMsg other than slice().
       const haltErrMsg = pipelineResult?.error?.message ?? "";
-      const haltKind = classifyTerminalKind(haltErrMsg);
+      // #3273: host_slept only on the structured verdict. If getState() lags the
+      // final snapshot the verdict reads false and the run halts (fails safe).
+      const hostSleptVerdict =
+        (await slot.stateService.getState())?.stage_host_slept?.[
+          pipelineResult?.failedStage ?? ""
+        ] === true;
+      const haltKind = resolveHaltKind(haltErrMsg, hostSleptVerdict);
       const isEnvironmentalFailure =
         (haltKind !== undefined && HALT_SKIP_ENVIRONMENTAL.has(haltKind)) ||
         /\b(?:session|usage)\s+limit\b/i.test(haltErrMsg);
@@ -3304,6 +3321,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       }
 
       // Host sleep (#3136): a wall-clock limit expired while the machine slept.
+      // Keyed on the scheduler's structured verdict, never echoed text (#3273).
       // The Go layer books it host_slept — backoff, board back to Ready, no
       // lifetime attempt — and declines the repository halt for it, so halting
       // here would override that decision over a sleeping laptop.

@@ -22,10 +22,13 @@
  * below fail.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { classifyTerminalKind, signalTerminalKind } from "@nightgauge/sdk";
+import { resolveHaltKind } from "../../src/services/ConcurrentPipelineManager";
+
+vi.mock("vscode", () => ({ window: {}, workspace: {}, EventEmitter: class {} }));
 
 const CPM_PATH = path.resolve(__dirname, "../../src/services/ConcurrentPipelineManager.ts");
 const source = readFileSync(CPM_PATH, "utf-8");
@@ -211,7 +214,8 @@ describe("queue-halt policy (ConcurrentPipelineManager)", () => {
     }
     expect(source).toContain("HALT_SKIP_ENVIRONMENTAL");
     expect(source).toContain("HALT_SKIP_TRANSIENT_STALL");
-    expect(source).toContain("const haltKind = classifyTerminalKind(haltErrMsg);");
+    expect(source).toContain("const haltKind = resolveHaltKind(haltErrMsg, hostSleptVerdict);");
+    expect(source).not.toContain("classifyTerminalKind(haltErrMsg)");
   });
 
   it("exempts the parked kinds from the halt, as not_pipeline_actionable is (#1753, #101)", () => {
@@ -311,3 +315,22 @@ function methodBody(src: string, decl: string): string {
   }
   throw new Error(`${decl} body is unbalanced`);
 }
+
+describe("host_slept keys on the structured verdict, not echoed text (#3273)", () => {
+  const defect = "[host-slept] echoed by a stage, but: TypeError: x is not a function";
+
+  it("does not classify echoed [host-slept] text as host_slept without the verdict", () => {
+    const kind = resolveHaltKind(defect, false);
+    expect(kind).not.toBe("host_slept");
+    expect(resolveHaltKind("[host-slept]", false)).toBeUndefined();
+  });
+
+  it("returns host_slept when the scheduler booked the verdict", () => {
+    expect(resolveHaltKind("anything", true)).toBe("host_slept");
+  });
+
+  it("reads the verdict for the failed stage from slot state", () => {
+    expect(source).toContain("stage_host_slept?.[");
+    expect(source).toContain('if (haltKind === "host_slept")');
+  });
+});

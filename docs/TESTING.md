@@ -225,7 +225,7 @@ it was called during, a redacted sample of its params and the result type the
 typed client declares. `npm run -w packages/nightgauge demo` opens a demo
 session of its own (#2110); `scripts/demo-session.ts` documents its options.
 
-Three implementation notes that are load-bearing rather than incidental:
+Implementation notes that are load-bearing rather than incidental:
 
 1. **No Mocha.** `@vscode/test-cli` would bring it, and with it a high-severity
    `serialize-javascript` advisory that `scripts/npm-audit-check.js` fails the
@@ -251,6 +251,30 @@ Three implementation notes that are load-bearing rather than incidental:
    unrelated-looking failure. The per-panel timing is what will let a future
    change justify Dashboard's render budget from measured CI distributions
    instead of the single anecdotal data point that motivated this.
+
+5. **A failed window can be diagnosed from the gate's own artefacts (#2747).**
+   The launcher prints the load average and core count before each window
+   launch. When a window fails, it copies that window's VS Code logs
+   (`user-data-*/logs`, which include the extension host's) to
+   `.ci-local-logs/<step>.vscode-logs/<window>-attempt-<n>/`, beside the
+   step's log, because `run_step` exports the log path as `CI_LOCAL_STEP_LOG`.
+   Outside the gate they go to `<scratch>/vscode-logs/`. Scratch
+   (`$TMPDIR/nightgauge-host-*`) is removed after a passing run and kept, with
+   its path printed, after a failing one.
+6. **Only a launch fault is retried, once, and the retry is printed.** A
+   window with no transcript never reached the in-host module, so no test
+   ran. It is relaunched once in fresh directories, with a
+   `launch fault on attempt 1/2` line naming the error and the load. A window
+   whose transcript exists is a failed test and is never retried. A second
+   fault ends with the "never wrote its transcript" error, so a launch that
+   never ran stays distinct from a red test.
+7. **The demo tab-step wait follows webview liveness.** Each `activateTab`
+   step fails at once if VS Code refused the post. Otherwise it fails after
+   30 s with no sign of life from the webview (the post's delivery, or any
+   message from it), under a 90 s ceiling. The failure report names each
+   step's post, delivery and reply times, and the last webview message. The
+   case sets its own harness timeout (`test(name, fn, { timeoutMs })`), so the
+   harness's 30 s default does not cut the report off.
 
 Findings the tier recorded on its first run — real defects, deliberately not
 fixed in the PR that found them — live in

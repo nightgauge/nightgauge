@@ -75,6 +75,7 @@ vi.mock("../../src/utils/nightgaugeConfig", () => ({
 
 vi.mock("../../src/utils/failureComment", () => ({
   postFailureComment: vi.fn().mockResolvedValue(undefined),
+  HOST_SLEPT_MARKER: "[host-slept]",
 }));
 
 const mockAutonomousPause = vi.fn().mockResolvedValue(undefined);

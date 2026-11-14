@@ -480,75 +480,113 @@ suite("demo mode", () => {
     }
   });
 
-  test("the active dashboard tab follows each UI step", async () => {
-    const panel = await waitFor(dashboard, 5_000, "the Dashboard panel");
-    const activated = () =>
-      panel.posted
-        .filter(
-          (m): m is { type: string; tab: string } =>
-            (m as { type?: unknown }).type === "activateTab"
-        )
-        .map((m) => m.tab);
-    await waitFor(
-      () => (activated().length >= UI_TABS.length ? true : undefined),
-      20_000,
-      "four activateTab messages"
-    ).catch(() => undefined);
-    assert.deepEqual(activated(), UI_TABS);
-    // The webview's own answer: it activated each tab the way a click does.
-    // Each step waits for a selectTab naming its tab that arrived at or after
-    // that step's own activateTab post, so a timeout names the step and says
-    // whether the post was delivered, late, or never answered (#3025).
-    const isType = (m: unknown, type: string): m is { type: string; tab: string } =>
-      (m as { type?: unknown }).type === type;
-    const postIndexes = panel.posted
-      .map((m, i) => (isType(m, "activateTab") ? i : -1))
-      .filter((i) => i >= 0);
-    const origin = panel.postedAt[postIndexes[0]] ?? Date.now();
-    const offset = (at: number) => `+${at - origin}ms`;
-    const replyAfter = (tab: string, since: number) =>
-      panel.received.findIndex(
-        (m, i) => isType(m, "selectTab") && m.tab === tab && panel.receivedAt[i] >= since
-      );
-    const report = (gaveUpAt: number) => {
-      const steps = UI_TABS.map((tab, step) => {
+  test(
+    "the active dashboard tab follows each UI step",
+    async () => {
+      const panel = await waitFor(dashboard, 5_000, "the Dashboard panel");
+      const activated = () =>
+        panel.posted
+          .filter(
+            (m): m is { type: string; tab: string } =>
+              (m as { type?: unknown }).type === "activateTab"
+          )
+          .map((m) => m.tab);
+      await waitFor(
+        () => (activated().length >= UI_TABS.length ? true : undefined),
+        20_000,
+        "four activateTab messages"
+      ).catch(() => undefined);
+      assert.deepEqual(activated(), UI_TABS);
+      // The webview's own answer: it activated each tab the way a click does.
+      // Each step waits for a selectTab naming its tab that arrived at or after
+      // that step's own activateTab post, so a timeout names the step and says
+      // whether the post was delivered, late, or never answered (#3025).
+      const isType = (m: unknown, type: string): m is { type: string; tab: string } =>
+        (m as { type?: unknown }).type === type;
+      const postIndexes = panel.posted
+        .map((m, i) => (isType(m, "activateTab") ? i : -1))
+        .filter((i) => i >= 0);
+      const origin = panel.postedAt[postIndexes[0]] ?? Date.now();
+      const offset = (at: number) => `+${at - origin}ms`;
+      const replyAfter = (tab: string, since: number) =>
+        panel.received.findIndex(
+          (m, i) => isType(m, "selectTab") && m.tab === tab && panel.receivedAt[i] >= since
+        );
+      // The latest evidence, at or after `since`, that the webview is live: the
+      // step's own post being delivered, or any message the webview sent.
+      const lastSignOfLife = (p: number, since: number) => {
+        let latest = since;
+        if (panel.delivered[p] === true) latest = Math.max(latest, panel.deliveredAt[p] ?? since);
+        for (const at of panel.receivedAt) if (at >= since) latest = Math.max(latest, at);
+        return latest;
+      };
+      const report = (gaveUpAt: number) => {
+        const steps = UI_TABS.map((tab, step) => {
+          const p = postIndexes[step];
+          const postedAt = panel.postedAt[p];
+          const r = replyAfter(tab, postedAt);
+          const reply = r >= 0 ? offset(panel.receivedAt[r]) : "none";
+          const deliveredAt = panel.deliveredAt[p];
+          return `  ${step + 1}. ${tab}: posted ${offset(postedAt)}, delivered ${String(
+            panel.delivered[p]
+          )}${deliveredAt === undefined ? "" : ` at ${offset(deliveredAt)}`}, reply ${reply}`;
+        });
+        const sequence = panel.received
+          .map((m, i) => (isType(m, "selectTab") ? `${m.tab}@${offset(panel.receivedAt[i])}` : ""))
+          .filter(Boolean);
+        const lastMessage = panel.receivedAt.at(-1);
+        return [
+          ...steps,
+          `  selectTab received: ${sequence.join(", ") || "none"}`,
+          `  last webview message at ${lastMessage === undefined ? "never" : offset(lastMessage)}`,
+          `  gave up at ${offset(gaveUpAt)}`,
+        ].join("\n");
+      };
+      // The wait follows the webview's liveness, not a fixed bound (#2747
+      // ADR-002). A post VS Code refused (`delivered === false`) fails at once:
+      // the webview was not there to receive it. Otherwise the step may run
+      // until REPLY_QUIET_MS pass with no sign of life (its post delivered, or
+      // any message from the webview), so a busy webview that is still talking
+      // gets more time and a silent one fails. STEP_REPLY_CEILING_MS is the hang
+      // guard: a live webview answers in well under a second (#2950 ADR-002).
+      const REPLY_QUIET_MS = 30_000;
+      const STEP_REPLY_CEILING_MS = 90_000;
+      for (const [step, tab] of UI_TABS.entries()) {
         const p = postIndexes[step];
         const postedAt = panel.postedAt[p];
-        const r = replyAfter(tab, postedAt);
-        const reply = r >= 0 ? offset(panel.receivedAt[r]) : "none";
-        return `  ${step + 1}. ${tab}: posted ${offset(postedAt)}, delivered ${String(
-          panel.delivered[p]
-        )}, reply ${reply}`;
-      });
-      const sequence = panel.received
-        .map((m, i) => (isType(m, "selectTab") ? `${m.tab}@${offset(panel.receivedAt[i])}` : ""))
-        .filter(Boolean);
-      return [
-        ...steps,
-        `  selectTab received: ${sequence.join(", ") || "none"}`,
-        `  gave up at ${offset(gaveUpAt)}`,
-      ].join("\n");
-    };
-    // A hang guard, not a latency ceiling (#2950 ADR-002): a live webview
-    // answers in well under a second; this bound only stops a lost reply
-    // from hanging the suite.
-    const STEP_REPLY_BUDGET_MS = 30_000;
-    for (const [step, tab] of UI_TABS.entries()) {
-      const postedAt = panel.postedAt[postIndexes[step]];
-      try {
-        await waitFor(
-          () => (replyAfter(tab, postedAt) >= 0 ? true : undefined),
-          Math.max(0, postedAt + STEP_REPLY_BUDGET_MS - Date.now()),
+        // Resolves to true on a reply, or to the reason the step gave up.
+        const verdict = await waitFor<true | string>(
+          () => {
+            if (replyAfter(tab, postedAt) >= 0) return true;
+            const now = Date.now();
+            if (panel.delivered[p] === false) {
+              return "VS Code refused its activateTab post (delivered false)";
+            }
+            if (now - lastSignOfLife(p, postedAt) >= REPLY_QUIET_MS) {
+              return `the webview was silent for ${REPLY_QUIET_MS}ms`;
+            }
+            if (now - postedAt >= STEP_REPLY_CEILING_MS) {
+              return `the webview was live but sent no reply within ${STEP_REPLY_CEILING_MS}ms`;
+            }
+            return undefined;
+          },
+          // The probe decides; this outer bound only backs up the ceiling.
+          STEP_REPLY_CEILING_MS + 1_000,
           `step ${step + 1} (${tab}) selectTab reply`
-        );
-      } catch {
-        assert.fail(
-          `step ${step + 1} (${tab}): no selectTab reply within ${STEP_REPLY_BUDGET_MS}ms of its ` +
-            `activateTab post\n${report(Date.now())}`
-        );
+        ).catch(() => `no reply within ${STEP_REPLY_CEILING_MS}ms`);
+        if (verdict !== true) {
+          const why = verdict;
+          assert.fail(
+            `step ${step + 1} (${tab}): no selectTab reply: ${why}\n${report(Date.now())}`
+          );
+        }
       }
-    }
-  });
+    },
+    // The harness's 30 s default would cut the wait off before a step's own
+    // verdict and report could print (#2747): 5 s for the panel, 20 s for the
+    // posts, then up to STEP_REPLY_CEILING_MS from the first post.
+    { timeoutMs: 150_000 }
+  );
 
   test("the scenario played to its end without outbound HTTP", async () => {
     await waitFor(
