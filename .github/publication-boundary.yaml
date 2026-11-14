@@ -340,7 +340,17 @@ deny:
       contains no COGS, customer data, account identifiers, session ids,
       private repository issue numbers, or unreleased roadmap material. The
       spike-materialize stage requires the artifact at this path to file its
-      follow-up issues.
+      follow-up issues. Spike #3197 (OpenCode 2.x port plan) is excepted
+      ahead of authoring, because the planning gate checks a plan against
+      this file on main and the allowlist must land alone (#1970); the
+      decision is recorded on #3197 after the #1650 precedent. The exception
+      is conditional: the document may contain only OpenCode 2.x's published
+      run contract, version detection and the adapter changes to public code
+      under internal/** and packages/**, with public issue numbers in this
+      repository, and no hosts, IPs, account identifiers, credentials,
+      prices, COGS, customer data or unreleased roadmap material. The
+      supervisor reviews the file against these criteria before its pull
+      request merges, and removes this exception if it fails them.
   - path: "docs/epics/**"
     class: PRIVATE
     except:
