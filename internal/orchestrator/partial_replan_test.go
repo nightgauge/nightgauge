@@ -76,13 +76,16 @@ func TestPartialReplan_RunIsScopedToTheRemainder(t *testing.T) {
 		if !strings.Contains(ext, partialRerunPromptHeading) || !strings.Contains(ext, partialRerunCriterion) {
 			t.Errorf("extension block for %s lacks the scope heading or criterion", stage)
 		}
-		// The extension neither splices partial_delivery into the planning
-		// context nor stops a no-diff feature-dev: its block must not say so.
-		for _, goOnly := range []string{"under `partial_delivery`", "without feature-validate"} {
-			if strings.Contains(ext, goOnly) {
-				t.Errorf("extension block for %s promises Go-only behaviour %q", stage, goOnly)
-			}
+		// The extension does not stop a no-diff feature-dev before
+		// feature-validate: its block must not say so.
+		if strings.Contains(ext, "without feature-validate") {
+			t.Errorf("extension block for %s promises the Go-only no-diff stop", stage)
 		}
+	}
+	// Both paths splice partial_delivery into the planning context (#3163),
+	// so both planning blocks say so.
+	if !strings.Contains(blocks[string(state.StageFeaturePlanning)], "under `partial_delivery`") {
+		t.Errorf("extension planning block does not name the spliced partial_delivery record")
 	}
 	if goDev := partialRerunPromptBlock(state.StageFeatureDev, snap.PartialRerunScope()); !strings.Contains(goDev, "without feature-validate") {
 		t.Errorf("Go feature-dev block lost its no-diff stop sentence")

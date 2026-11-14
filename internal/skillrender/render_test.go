@@ -1334,6 +1334,8 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 // freshness check noting push-branch's exit-4 credential refusal.
 // The pr-merge capture was re-pinned for #2752: the one changed line is the
 // error-table row saying Step 6.1.5 merges the base instead of rebasing.
+// The three feature-dev captures were re-pinned for #3163: the six added lines
+// are the rule that an operator-revised plan binds feature-dev.
 func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	root := realSkillsRoot(t)
 	// Render resolves _includes paths to their absolute filesystem form, which

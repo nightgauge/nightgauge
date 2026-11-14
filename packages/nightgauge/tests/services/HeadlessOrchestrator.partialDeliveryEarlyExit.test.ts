@@ -4,13 +4,18 @@
  * closed when the remainder cannot be read.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { execFileSync } from "child_process";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
 import type { Logger } from "../../src/utils/logger";
 
 const binaryCalls: string[][] = [];
 let binaryImpl: (args: string[]) => string;
+let resolvedBinary: string | undefined = "/bin/nightgauge";
 
 vi.mock("child_process", async () => {
   const actual = await vi.importActual<typeof import("child_process")>("child_process");
@@ -28,7 +33,7 @@ vi.mock("child_process", async () => {
 });
 
 vi.mock("../../src/services/BinaryResolver", () => ({
-  BinaryResolver: { fromVSCode: () => ({ resolve: async () => "/bin/nightgauge" }) },
+  BinaryResolver: { fromVSCode: () => ({ resolve: async () => resolvedBinary }) },
 }));
 
 type Internals = {
@@ -37,6 +42,8 @@ type Internals = {
   raiseRunScopedAttention: (r: unknown) => Promise<void>;
   resolvePostMergeNwo: (n: number) => Promise<{ owner: string; repo: string }>;
   blockedTerminalState: { blocker: string; prNumber?: number } | null;
+  partialRerunIssues: Set<number>;
+  getWorkingDirectory: () => string;
 };
 
 function makeOrchestrator() {
@@ -132,6 +139,8 @@ describe("partialRerunPromptTrailer (#3095)", () => {
       blocks["feature-planning"]
     );
     expect(await o.partialRerunPromptTrailer(3160, "feature-dev")).toBe(blocks["feature-dev"]);
+    // #3163: before planning, Go also writes the partial-delivery-{N}.json
+    // record ContextAssembler splices; the feature-dev read only renders.
     expect(binaryCalls[0]).toEqual([
       "issue",
       "partial-delivery",
@@ -139,7 +148,18 @@ describe("partialRerunPromptTrailer (#3095)", () => {
       "--repo",
       "nightgauge/nightgauge",
       "--json",
+      "--write-context",
     ]);
+    expect(binaryCalls[1]).toEqual([
+      "issue",
+      "partial-delivery",
+      "3160",
+      "--repo",
+      "nightgauge/nightgauge",
+      "--json",
+    ]);
+    // The scoped feature-dev marks the run a partial re-run (#3163).
+    expect(o.partialRerunIssues.has(3160)).toBe(true);
   });
 
   it("reads nothing for other stages", async () => {
@@ -157,5 +177,89 @@ describe("partialRerunPromptTrailer (#3095)", () => {
       throw new Error("exit 2");
     };
     expect(await o.partialRerunPromptTrailer(3160, "feature-planning")).toBe("");
+  });
+});
+
+// #3163: a stale partial-delivery-{N}.json from an earlier run must never reach
+// planning, even when the trailer returns before Go can rewrite it.
+describe("partialRerunPromptTrailer stale partial-delivery record (#3163)", () => {
+  let repo: string;
+  let record: string;
+
+  beforeEach(() => {
+    binaryCalls.length = 0;
+    resolvedBinary = "/bin/nightgauge";
+    repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ng-3163-")));
+    execFileSync("git", ["init", "-q", repo]);
+    const pipelineDir = path.join(repo, ".git", "nightgauge", "pipeline");
+    fs.mkdirSync(pipelineDir, { recursive: true });
+    record = path.join(pipelineDir, "partial-delivery-3160.json");
+    fs.writeFileSync(record, JSON.stringify({ pending: true, criteria: ["stale"] }));
+  });
+
+  afterEach(() => {
+    resolvedBinary = "/bin/nightgauge";
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  function inRepo() {
+    const made = makeOrchestrator();
+    made.o.getWorkingDirectory = () => repo;
+    return made;
+  }
+
+  it("removes it when no binary resolves", async () => {
+    resolvedBinary = undefined;
+    const { o } = inRepo();
+    expect(await o.partialRerunPromptTrailer(3160, "feature-planning")).toBe("");
+    expect(fs.existsSync(record)).toBe(false);
+    expect(binaryCalls).toHaveLength(0);
+  });
+
+  it("removes it when the repository is unresolved", async () => {
+    const { o } = inRepo();
+    o.resolvePostMergeNwo = async () => ({ owner: "", repo: "" });
+    expect(await o.partialRerunPromptTrailer(3160, "feature-planning")).toBe("");
+    expect(fs.existsSync(record)).toBe(false);
+    expect(binaryCalls).toHaveLength(0);
+  });
+
+  it("removes it when the binary read fails", async () => {
+    binaryImpl = () => {
+      throw new Error("exit 2");
+    };
+    const { o } = inRepo();
+    expect(await o.partialRerunPromptTrailer(3160, "feature-planning")).toBe("");
+    expect(fs.existsSync(record)).toBe(false);
+  });
+
+  it("removes it before Go runs, so Go's rewrite is what survives", async () => {
+    binaryImpl = () => {
+      // The record is already gone when Go is asked to rewrite it.
+      expect(fs.existsSync(record)).toBe(false);
+      fs.writeFileSync(record, JSON.stringify({ pending: true, criteria: ["fresh"] }));
+      return JSON.stringify({ pending: true, prompt_blocks: { "feature-planning": "b" } });
+    };
+    const { o } = inRepo();
+    expect(await o.partialRerunPromptTrailer(3160, "feature-planning")).toBe("b");
+    expect(JSON.parse(fs.readFileSync(record, "utf-8")).criteria).toEqual(["fresh"]);
+  });
+
+  it("keeps it on feature-dev, which reads the planning that spliced it", async () => {
+    resolvedBinary = undefined;
+    const { o } = inRepo();
+    expect(await o.partialRerunPromptTrailer(3160, "feature-dev")).toBe("");
+    expect(fs.existsSync(record)).toBe(true);
+  });
+
+  it("logs and still runs when the record cannot be located", async () => {
+    resolvedBinary = undefined;
+    const { o, logger } = inRepo();
+    o.getWorkingDirectory = () => "relative/not-a-root";
+    expect(await o.partialRerunPromptTrailer(3160, "feature-planning")).toBe("");
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Stale partial-delivery record could not be removed",
+      expect.objectContaining({ issueNumber: 3160 })
+    );
   });
 });

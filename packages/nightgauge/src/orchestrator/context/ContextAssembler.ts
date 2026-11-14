@@ -392,6 +392,78 @@ export class ContextAssembler {
   }
 
   /**
+   * Copy `partial-delivery-{N}.json` into `planning.partial_delivery` verbatim
+   * (#3163): the twin of the Go scheduler's `splicePartialDelivery`.
+   *
+   * Go is the file's only writer (`nightgauge issue partial-delivery
+   * --write-context`, run before feature-planning), so this never re-derives
+   * the remainder. Absent file: the planning context is left untouched — no
+   * `null` — exactly as on the Go path. Invalid JSON is logged and ignored.
+   * `internal/orchestrator/testdata/partial-delivery-splice.golden.json` pins
+   * both splices to one output.
+   */
+  private splicePartialDelivery(issueNumber: number, parsed: unknown, contextPath: string): void {
+    if (!parsed || typeof parsed !== "object") return;
+    const remainderPath = this.getContextPath("partial-delivery", issueNumber);
+    if (!fs.existsSync(remainderPath)) return;
+    let remainder: unknown;
+    try {
+      remainder = JSON.parse(fs.readFileSync(remainderPath, "utf-8"));
+    } catch (err) {
+      this.logger.warn(
+        "partial-delivery context is not valid JSON — leaving planning context alone",
+        {
+          issueNumber,
+          error: err instanceof Error ? err.message : String(err),
+        }
+      );
+      return;
+    }
+    const target = parsed as Record<string, unknown>;
+    target.partial_delivery = remainder;
+    this.persistSplicedContext(contextPath, target, issueNumber);
+  }
+
+  /**
+   * Copy every OPERATOR_STEER signal in `feedback-{N}.json` into
+   * `planning.operator_steer` as `{text, evidence}` (#3163), so the Action
+   * Center steer reaches feature-dev's context, not only feature-planning's.
+   * The twin of the Go scheduler's `spliceOperatorSteer`. No steer: untouched.
+   */
+  private spliceOperatorSteer(issueNumber: number, parsed: unknown, contextPath: string): void {
+    if (!parsed || typeof parsed !== "object") return;
+    const feedbackPath = this.getContextPath("feedback", issueNumber);
+    if (!fs.existsSync(feedbackPath)) return;
+    let signals: unknown;
+    try {
+      signals = (JSON.parse(fs.readFileSync(feedbackPath, "utf-8")) as { signals?: unknown })
+        .signals;
+    } catch (err) {
+      this.logger.warn("feedback context is not valid JSON — no operator steer is spliced", {
+        issueNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    if (!Array.isArray(signals)) return;
+    const steers: Array<{ text: string; evidence: string[] }> = [];
+    for (const raw of signals) {
+      if (!raw || typeof raw !== "object") continue;
+      const sig = raw as Record<string, unknown>;
+      if (sig.signal_type !== "OPERATOR_STEER") continue;
+      if (typeof sig.rationale !== "string" || sig.rationale.trim() === "") continue;
+      const evidence = Array.isArray(sig.evidence)
+        ? sig.evidence.filter((e): e is string => typeof e === "string")
+        : [];
+      steers.push({ text: sig.rationale, evidence });
+    }
+    if (steers.length === 0) return;
+    const target = parsed as Record<string, unknown>;
+    target.operator_steer = steers;
+    this.persistSplicedContext(contextPath, target, issueNumber);
+  }
+
+  /**
    * Write the spliced object back so the bytes on disk and the object validated
    * in memory agree — `feature-dev` reads the FILE, not this object.
    */
@@ -625,6 +697,10 @@ export class ContextAssembler {
         // silence the warning without fixing what the next stage reads.
         if (stage === "feature-planning") {
           this.spliceACReconcile(issueNumber, parsed, contextPath);
+          // #3163: the same partial_delivery and operator_steer blocks the Go
+          // scheduler splices in validateStageOutput.
+          this.splicePartialDelivery(issueNumber, parsed, contextPath);
+          this.spliceOperatorSteer(issueNumber, parsed, contextPath);
         }
 
         const result = schema.safeParse(parsed);

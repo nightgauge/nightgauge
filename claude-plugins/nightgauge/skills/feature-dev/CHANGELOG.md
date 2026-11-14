@@ -10,6 +10,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- New gotcha and Step 0.7.2b: an operator-revised plan (`revision_reasons` with `operator-origin:`) binds feature-dev — implement its files or record a `PLAN_REVISION_NEEDED` signal naming the disputed step; the steer is read from `planning.operator_steer` (#3163).
 - New gotcha: on a partial-delivery re-run the plan's focus criteria outrank `partial_delivery.criteria`; implement them and never emit `NOT_PIPELINE_ACTIONABLE` while one is unmet (#3235).
 - Phase 7 records `pr_summary`, one imperative line stating the change, in `dev-{N}.json` for the PR title (#2846).
 - Phase 5 no longer runs its reviewers in the authoring agent. Without a fan-out it reviews nothing, and feature-validate runs the independent review (#2839).

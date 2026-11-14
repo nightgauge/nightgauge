@@ -243,6 +243,28 @@ This attempt will address each failure:
 **Critical**: The agent must not simply acknowledge the failures — it must
 articulate a concrete alternative approach for each one before writing any code.
 
+### Step 0.7.2b: Operator Steer (when planning carries one)
+
+An Action Center steer reaches this stage through `planning-{N}.json`
+`operator_steer` (`[{text, evidence}]`), spliced by the orchestrator, and
+through an `## Operator-Revised Plan` prompt block (#3163). It is context, not a
+retry: `IS_RETRY` is unchanged.
+
+```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+PLANNING_CTX="$(nightgauge layout path pipeline planning-${ISSUE_NUMBER}.json)"
+jq -r '.operator_steer[]?.text' "$PLANNING_CTX" 2>/dev/null
+OPERATOR_REVISED=$(jq -r '[.revision_reasons[]? | select(contains("operator-origin:"))] | length > 0' \
+  "$PLANNING_CTX" 2>/dev/null || echo false)
+```
+
+When `OPERATOR_REVISED=true` the plan binds this stage: implement its
+`files_to_modify` and `files_to_create`, or record a `PLAN_REVISION_NEEDED`
+signal in `dev-{N}.json` whose evidence names the plan step you dispute. A
+zero-change exit on your own reading of the remaining criteria is re-dispatched
+once by the scheduler, then booked as a no-op.
+
 ### Step 0.7.3: Force Re-read of PLAN.md
 
 Whether or not this is a retry, the plan must always be read fresh from disk.

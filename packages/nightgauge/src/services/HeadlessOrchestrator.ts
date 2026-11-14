@@ -1361,6 +1361,13 @@ export function decideProgressGatedEscalation(
   return { escalate: delta > 0, current, delta };
 }
 
+/** `nightgauge issue partial-noop --json` (#3163). */
+export interface PartialNoOpDecision {
+  action: "not_scoped" | "relap" | "dispute" | "book";
+  detail?: string;
+  steer?: string;
+}
+
 export class HeadlessOrchestrator implements vscode.Disposable {
   private isRunning = false;
   private currentStage: PipelineStage | null = null;
@@ -1625,6 +1632,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * present as complete. Reset at every runPipeline() entry.
    */
   private blockedTerminalState: BlockedTerminalState | null = null;
+
+  /**
+   * Issues whose run is scoped to a partial-delivery remainder: their
+   * feature-dev prompt carried a scope block (#3095). A zero-change
+   * feature-dev on one is decided by `nightgauge issue partial-noop` (#3163).
+   * The value is the remainder's PR and criteria count.
+   */
+  private readonly partialRerunIssues = new Map<number, { pr: number; criteria: number }>();
+  /** Issues whose run spent its one extra feature-dev lap (#3163). */
+  private readonly partialNoOpRelapped = new Set<number>();
+  /** The rule restated to the relapped feature-dev, consumed by its prompt (#3163). */
+  private readonly partialNoOpSteer = new Map<number, string>();
   /**
    * Ground-truth flag (#266): set true the instant the run's PR is confirmed
    * MERGED on the forge — either by the post-merge verification gate passing or
@@ -3833,7 +3852,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   private async runPostConditionGate(
     stage: PipelineStage,
     issueNumber: number
-  ): Promise<{ error: Error; terminalKind?: string } | null> {
+  ): Promise<{ error: Error; terminalKind?: string; noOp?: boolean } | null> {
     this.gatePassedStages.delete(stage);
     try {
       const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
@@ -3961,6 +3980,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             `premature turn end: stage exited 0 with no state change (gate no-op): ${gateResult.reason}`
           ),
           terminalKind: gateResult.terminal_kind || undefined,
+          noOp: true,
         };
       }
       return {
@@ -9048,25 +9068,59 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * the Go scheduler appends, re-read at stage start from the newest trusted
    * partial-delivery comment. A failed read leaves the stage unscoped, as on
    * the Go path; it never fails the stage.
+   *
+   * On feature-planning the extension first removes any partial-delivery-{N}.json
+   * left by an earlier run, before every early return (#3163). Go
+   * `--write-context` rewrites it only when a remainder is pending, so a run
+   * that cannot reach Go (no binary, unresolved repository, failed read)
+   * splices no stale remainder into the planning context.
    */
   private async partialRerunPromptTrailer(
     issueNumber: number,
     stage: PipelineStage
   ): Promise<string> {
     if (stage !== "feature-planning" && stage !== "feature-dev") return "";
+    // Cleared before the read, so an empty block or a failed read leaves the
+    // run unscoped.
+    this.partialRerunIssues.delete(issueNumber);
+    if (stage === "feature-planning") this.removePartialDeliveryRecord(issueNumber);
     try {
       const binary = await BinaryResolver.fromVSCode().resolve();
       if (!binary) return "";
       const { owner, repo } = await this.resolvePostMergeNwo(issueNumber);
       if (!owner || !repo) return "";
-      const { stdout } = await execFileAsync(
-        binary,
-        ["issue", "partial-delivery", String(issueNumber), "--repo", `${owner}/${repo}`, "--json"],
-        { cwd: this.getWorkingDirectory(), encoding: "utf-8", timeout: 60_000 }
-      );
-      const parsed = JSON.parse(String(stdout)) as { prompt_blocks?: Record<string, unknown> };
+      // #3163: before feature-planning, Go also writes (or removes) the
+      // partial-delivery-{N}.json record ContextAssembler splices into the
+      // planning context as `partial_delivery`, as the Go scheduler does.
+      const args = [
+        "issue",
+        "partial-delivery",
+        String(issueNumber),
+        "--repo",
+        `${owner}/${repo}`,
+        "--json",
+      ];
+      if (stage === "feature-planning") args.push("--write-context");
+      const { stdout } = await execFileAsync(binary, args, {
+        cwd: this.getWorkingDirectory(),
+        encoding: "utf-8",
+        timeout: 60_000,
+      });
+      const parsed = JSON.parse(String(stdout)) as {
+        prompt_blocks?: Record<string, unknown>;
+        partial_delivery?: { pr?: number; criteria?: unknown[] };
+      };
       const block = parsed.prompt_blocks?.[stage];
-      return typeof block === "string" ? block : "";
+      if (typeof block !== "string") return "";
+      if (stage === "feature-dev" && block !== "") {
+        this.partialRerunIssues.set(issueNumber, {
+          pr: Number(parsed.partial_delivery?.pr ?? 0),
+          criteria: Array.isArray(parsed.partial_delivery?.criteria)
+            ? parsed.partial_delivery.criteria.length
+            : 0,
+        });
+      }
+      return block;
     } catch (err) {
       this.logger.warn("Partial-delivery remainder unreadable — the stage is not scoped to it", {
         issueNumber,
@@ -9075,6 +9129,145 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       });
       return "";
     }
+  }
+
+  /**
+   * Remove the partial-delivery-{N}.json record ContextAssembler splices into
+   * the planning context (#3163). Go is its only writer; this only deletes, as
+   * Go's `RemovePartialDeliveryContext` does before it writes. The path is
+   * git-derived, so no binary is needed. A failed removal is logged and the
+   * stage still runs.
+   */
+  private removePartialDeliveryRecord(issueNumber: number): void {
+    try {
+      fs.rmSync(
+        path.join(
+          pipelineStateDir(this.getWorkingDirectory()),
+          `partial-delivery-${issueNumber}.json`
+        ),
+        { force: true }
+      );
+    } catch (err) {
+      this.logger.warn("Stale partial-delivery record could not be removed", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * The operator-revised plan block for feature-dev, or "" (#3163).
+   *
+   * Rendered by the binary (`issue operator-revision`) from planning-{N}.json,
+   * the same text the Go scheduler appends: the Action Center steer and, when
+   * the plan carries an `operator-origin:` revision, the rule that the plan
+   * binds feature-dev. A failed read leaves the prompt unchanged.
+   */
+  private async operatorRevisionPromptTrailer(
+    issueNumber: number,
+    stage: PipelineStage
+  ): Promise<string> {
+    if (stage !== "feature-dev") return "";
+    try {
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) return "";
+      const { stdout } = await execFileAsync(
+        binary,
+        ["issue", "operator-revision", String(issueNumber)],
+        { cwd: this.getWorkingDirectory(), encoding: "utf-8", timeout: 30_000 }
+      );
+      return String(stdout);
+    } catch (err) {
+      this.logger.warn("Operator-revision block unavailable — feature-dev prompt unchanged", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return "";
+    }
+  }
+
+  /** The relap steer for this feature-dev lap, once (#3163). */
+  private takePartialNoOpSteer(issueNumber: number, stage: PipelineStage): string {
+    if (stage !== "feature-dev") return "";
+    const steer = this.partialNoOpSteer.get(issueNumber);
+    if (steer === undefined) return "";
+    this.partialNoOpSteer.delete(issueNumber);
+    return `\n\n${steer}\n`;
+  }
+
+  /**
+   * The binary's decision for a zero-change feature-dev on a partial-delivery
+   * re-run (#3163): `nightgauge issue partial-noop`, the same
+   * `decidePartialNoOp` the Go scheduler runs. Null when it cannot be read;
+   * the caller then books the no-op.
+   */
+  private async readPartialNoOpDecision(
+    issueNumber: number,
+    scope: { pr: number; criteria: number }
+  ): Promise<PartialNoOpDecision | null> {
+    try {
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) return null;
+      const args = [
+        "issue",
+        "partial-noop",
+        String(issueNumber),
+        "--pr",
+        String(scope.pr),
+        "--criteria",
+        String(scope.criteria),
+      ];
+      if (this.partialNoOpRelapped.has(issueNumber)) args.push("--relapped");
+      const { stdout } = await execFileAsync(binary, args, {
+        cwd: this.getWorkingDirectory(),
+        encoding: "utf-8",
+        timeout: 30_000,
+      });
+      const parsed = JSON.parse(String(stdout)) as PartialNoOpDecision;
+      return typeof parsed?.action === "string" ? parsed : null;
+    } catch (err) {
+      this.logger.warn("Partial no-op decision unavailable — booking the no-op", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * What a zero-change feature-dev on a partial-delivery re-run means (#3163),
+   * given the binary's decision (null when it could not be read):
+   * - `relap`: re-dispatch feature-dev once with `steer` appended;
+   * - `dispute` / `book`: end the run `not_pipeline_actionable` — no lifetime
+   *   cap increment, no cascade feed;
+   * - null: not a scoped feature-dev no-op, so the gate's verdict stands.
+   * Mirrors the Go scheduler's `decidePartialNoOp`.
+   */
+  static partialRerunNoOpBooking(
+    issueNumber: number,
+    stage: PipelineStage,
+    gateFail: { error: Error; noOp?: boolean },
+    partialRerun: boolean,
+    decision: PartialNoOpDecision | null = null
+  ):
+    | { action: "relap"; steer: string }
+    | { action: "book"; terminalKind: "not_pipeline_actionable"; error: Error }
+    | null {
+    if (stage !== "feature-dev" || !gateFail.noOp || !partialRerun) return null;
+    if (decision?.action === "not_scoped") return null;
+    if (decision?.action === "relap" && decision.steer) {
+      return { action: "relap", steer: decision.steer };
+    }
+    const detail =
+      (decision?.action === "dispute" || decision?.action === "book") && decision.detail
+        ? decision.detail
+        : `[not-pipeline-actionable] feature-dev: partial-delivery re-run of #${issueNumber} wrote no changes, ` +
+          `so the run ends as a no-op, not a failure; the remaining criteria stay open on the issue [#3163]`;
+    return {
+      action: "book",
+      terminalKind: "not_pipeline_actionable",
+      error: new Error(`${detail} — ${gateFail.error.message}`),
+    };
   }
 
   /**
@@ -11830,6 +12023,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     }
     this.auditCorrelationId = crypto.randomUUID();
     this.blockedTerminalState = null;
+    // #3163: a partial-rerun scope belongs to the run whose feature-dev prompt
+    // carried it; never inherit one from an earlier run of this issue.
+    this.partialRerunIssues.delete(issueNumber);
+    this.partialNoOpRelapped.delete(issueNumber);
+    this.partialNoOpSteer.delete(issueNumber);
     this.prMergedGroundTruth = false;
     this.mergeNoOp = false;
     this.postMergeHookAnswer = null;
@@ -14046,6 +14244,43 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                   signalType: gateDisposition.signal.signal_type,
                   reason: gateDisposition.reason,
                 }
+              );
+            }
+            // #3163: a zero-change feature-dev on a partial-delivery re-run
+            // is a no-op, never a failure — the same booking as the Go path.
+            const partialScope = this.partialRerunIssues.get(issueNumber);
+            const partialNoOp =
+              gateDisposition.kind === "blocked"
+                ? null
+                : HeadlessOrchestrator.partialRerunNoOpBooking(
+                    issueNumber,
+                    stage,
+                    gateFail,
+                    partialScope !== undefined,
+                    partialScope && stage === "feature-dev" && gateFail.noOp
+                      ? await this.readPartialNoOpDecision(issueNumber, partialScope)
+                      : null
+                  );
+            if (partialNoOp?.action === "relap") {
+              // An operator-revised plan that names files earns one more lap
+              // with the rule restated, as on the Go path. Lap 1's dev context
+              // would read as stale to lap 2's gate, so it is removed.
+              this.partialNoOpRelapped.add(issueNumber);
+              this.partialNoOpSteer.set(issueNumber, partialNoOp.steer);
+              fs.rmSync(this.getContextPath("dev", issueNumber), { force: true });
+              this.logger.warn(
+                "Partial-delivery re-run: feature-dev wrote no changes on an operator-revised plan — re-dispatching it once (#3163)",
+                { issueNumber, stage }
+              );
+              stageIndex--;
+              continue;
+            }
+            if (partialNoOp) {
+              gateKind = partialNoOp.terminalKind;
+              gateError = partialNoOp.error;
+              this.logger.warn(
+                "Partial-delivery re-run: feature-dev wrote no changes — booked a no-op, not a failure (#3163)",
+                { issueNumber, stage }
               );
             }
             // A `rewind` disposition is deliberately NOT honoured here. The
@@ -16442,7 +16677,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
     // #3095: a re-run over a pending partial-delivery remainder plans and
     // implements only the criteria it lists, as on the Go path.
-    const promptTrailer = await this.partialRerunPromptTrailer(issueNumber, stage);
+    const promptTrailer =
+      (await this.partialRerunPromptTrailer(issueNumber, stage)) +
+      (await this.operatorRevisionPromptTrailer(issueNumber, stage)) +
+      this.takePartialNoOpSteer(issueNumber, stage);
 
     return new Promise((resolveStage) => {
       /**

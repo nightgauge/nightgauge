@@ -1214,6 +1214,8 @@ func issueCmd() *cobra.Command {
 		issueExtractTargetsCmd(),
 		issueCheckOwnershipCmd(),
 		issuePartialDeliveryCmd(),
+		issueOperatorRevisionCmd(),
+		issuePartialNoOpCmd(),
 	)
 	return cmd
 }

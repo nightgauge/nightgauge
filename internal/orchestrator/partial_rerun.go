@@ -42,9 +42,12 @@ const partialDeliveryContextType = "partial-delivery"
 // partialDeliveryReadTimeout bounds the forge reads behind one remainder read.
 const partialDeliveryReadTimeout = 30 * time.Second
 
-// partialDeliveryFile is the on-disk shape of partial-delivery-{N}.json and of
-// planning-{N}.json's `partial_delivery` field.
-type partialDeliveryFile struct {
+// PartialDeliveryFile is the on-disk shape of partial-delivery-{N}.json and of
+// planning-{N}.json's `partial_delivery` field. Go is its only writer: the
+// scheduler at run start and `nightgauge issue partial-delivery
+// --write-context` for the extension's stage loop (#3163) both go through
+// WritePartialDeliveryContext, so the two paths splice the same block.
+type PartialDeliveryFile struct {
 	PR       int      `json:"pr"`
 	Criteria []string `json:"criteria"`
 	// Dropped lists criteria the comment named that the current issue body
@@ -97,6 +100,11 @@ func (s *Scheduler) repoClient(ctx context.Context, owner, name string) (*gh.Cli
 // partial-delivery-{N}.json into ws. A read error, an unlisted remainder or
 // none at all leaves the run unscoped, exactly as before #3160.
 func (s *Scheduler) scopePartialRerun(ctx context.Context, runtime *state.RuntimeState, item types.BoardItem, ws string) {
+	// An unscoped run must never splice a remainder an earlier run left on
+	// disk (#3163), so the file goes before anything is read.
+	if err := RemovePartialDeliveryContext(ws, item.Number); err != nil {
+		log.Printf("#%d: could not remove a stale partial-delivery context: %v", item.Number, err)
+	}
 	status, err := s.readPartialDelivery(ctx, item.Repo, item.Number)
 	if err != nil {
 		log.Printf("#%d: partial-delivery remainder unreadable (%v) — the run is not scoped to it", item.Number, err)
@@ -114,7 +122,7 @@ func (s *Scheduler) scopePartialRerun(ctx context.Context, runtime *state.Runtim
 			item.Number, status.PR)
 	}
 	runtime.SetPartialRerun(status.PR, scope)
-	if err := writePartialDeliveryContext(ws, item.Number, partialDeliveryFile{
+	if err := WritePartialDeliveryContext(ws, item.Number, PartialDeliveryFile{
 		PR: status.PR, Criteria: scope, Dropped: dropped, CommentAt: status.CommentAt,
 	}); err != nil {
 		log.Printf("#%d: could not write the partial-delivery context: %v", item.Number, err)
@@ -373,7 +381,9 @@ func reconcilePartialRemainder(listed, prCriteria []string, rec *preflight.ACRec
 	return scope, added, dropped
 }
 
-func writePartialDeliveryContext(ws string, issue int, f partialDeliveryFile) error {
+// WritePartialDeliveryContext writes f as partial-delivery-{N}.json in ws's
+// pipeline state directory.
+func WritePartialDeliveryContext(ws string, issue int, f PartialDeliveryFile) error {
 	path, err := stagecontext.ContextPath(ws, issue, partialDeliveryContextType)
 	if err != nil {
 		return err
@@ -386,6 +396,19 @@ func writePartialDeliveryContext(ws string, issue int, f partialDeliveryFile) er
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+// RemovePartialDeliveryContext deletes partial-delivery-{N}.json from ws. An
+// absent file is not an error.
+func RemovePartialDeliveryContext(ws string, issue int) error {
+	path, err := stagecontext.ContextPath(ws, issue, partialDeliveryContextType)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // splicePartialDelivery writes partial-delivery-{N}.json into planning-{N}.json
@@ -453,10 +476,9 @@ func partialRerunPromptBlock(stage state.PipelineStage, scope *state.PartialReru
 }
 
 // renderPartialRerunPromptBlock renders the block. Both paths reconcile the
-// list against the issue body (#3242). goPath adds the two
-// sentences only the Go scheduler keeps: it splices the record into the
-// planning context and stops a no-diff feature-dev before feature-validate.
-// The extension's stage loop does neither, so its block omits them (#3095).
+// list against the issue body (#3242) and splice the record into the planning
+// context (#3163). goPath adds the one sentence only the Go scheduler keeps:
+// it stops a no-diff feature-dev before feature-validate (#3095).
 func renderPartialRerunPromptBlock(stage state.PipelineStage, scope *state.PartialRerun, goPath bool) string {
 	if scope == nil || scope.PR <= 0 {
 		return ""
@@ -485,9 +507,7 @@ func renderPartialRerunPromptBlock(stage state.PipelineStage, scope *state.Parti
 	switch stage {
 	case state.StageFeaturePlanning:
 		b.WriteString("Plan only these criteria: use them as `focus_acs` and do not re-plan the rest of the issue.")
-		if goPath {
-			b.WriteString(" The planning context records them under `partial_delivery`.")
-		}
+		b.WriteString(" The planning context records them under `partial_delivery`.")
 		b.WriteString(" `focus_acs` is exactly these criteria: do not widen it with criteria the regenerated " +
 			"`ac-reconcile-{N}.json` reports unmet or undetectable. When that report's route differs, " +
 			"say so in the stage output.\n")
