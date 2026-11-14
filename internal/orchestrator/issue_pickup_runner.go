@@ -7,13 +7,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	stagecontext "github.com/nightgauge/nightgauge/internal/execution/context"
 	"github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/intelligence/acparse"
 	"github.com/nightgauge/nightgauge/internal/intelligence/complexity"
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -196,8 +196,6 @@ type pickupRecommendation struct {
 	ValidateModel     *string  `json:"validate_model"`
 }
 
-var acceptanceLine = regexp.MustCompile(`^\s*-\s*\[`)
-
 // parent is the parent epic the branch was based on: EpicBranchParent's
 // answer, 0 for a parent in another repository. parent_issue is read as a
 // number in this repository (feature-planning finds the epic's batch file in
@@ -208,17 +206,21 @@ func buildIssueContext(in IssuePickupInput, branch, base string, parent int, now
 	labels := append([]string{}, iss.Labels...)
 
 	// Same extraction as the skill's step 8.2: the body's first five lines as
-	// the summary, its checkbox lines as acceptance criteria.
+	// the summary, its checkbox items as acceptance criteria. acparse.List
+	// joins a wrapped item's continuation lines, so a criterion is never cut
+	// at its first line (#3297).
 	lines := strings.Split(iss.Body, "\n")
 	head := lines
 	if len(head) > 5 {
 		head = head[:5]
 	}
 	ac := []string{}
-	for _, l := range lines {
-		if acceptanceLine.MatchString(l) {
-			ac = append(ac, l)
+	for _, it := range acparse.List(iss.Body) {
+		box := "- [ ] "
+		if it.Checked {
+			box = "- [x] "
 		}
+		ac = append(ac, box+it.Text)
 	}
 
 	d := in.Routing

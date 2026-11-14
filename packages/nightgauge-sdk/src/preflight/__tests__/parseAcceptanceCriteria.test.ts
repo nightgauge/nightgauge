@@ -237,13 +237,14 @@ describe("parseAcceptanceCriteria", () => {
 
   it("matches Go's TestParseACs_ParityFixture", () => {
     const body =
-      "## Acceptance Criteria\n1. first\n   ```sh\n   # comment\n   1. output\n   ```\n    1. sub-step\n<details>\n- [ ] outer\n<details>\n- [ ] inner\n</details>\n- [ ] after inner\n</details>\n2. second\n- [ ]  first\n## Verification\n- third that\n  wraps\n## Acceptance Criteria\n- [ ] box covers both cases:\n  - case a\n  - case b\n- [ ] last\n";
+      "## Acceptance Criteria\n1. first\n   ```sh\n   # comment\n   1. output\n   ```\n    1. sub-step\n<details>\n- [ ] outer\n<details>\n- [ ] inner\n</details>\n- [ ] after inner\n</details>\n2. second\n- [ ]  first\n## Verification\n- third that\n  wraps\n## Acceptance Criteria\n- [ ] box covers both cases:\n  - case a\n  - case b\n- [ ] last\n- [ ] wrapped box\n  continues here\n";
     expect(parseAcceptanceCriteria(body).map((a) => [a.index, a.text])).toEqual([
       [0, "first"],
       [1, "second"],
       [2, "third that wraps"],
       [3, "box covers both cases: case a case b"],
       [4, "last"],
+      [5, "wrapped box continues here"],
     ]);
   });
 

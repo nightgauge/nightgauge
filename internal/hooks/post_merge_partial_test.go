@@ -459,3 +459,19 @@ func TestPostMergeAllTickedOpenIssueStaysInReview(t *testing.T) {
 		t.Errorf("comment misdescribes a fully ticked issue:\n%s", commenter.body)
 	}
 }
+
+// #3297: a genuinely unmet wrapped criterion is quoted whole in the remainder
+// comment and round-trips through ParsePartialDeliveryComment.
+func TestRemainderQuotesWrappedCriterionWhole(t *testing.T) {
+	body := "## Acceptance Criteria\n- [x] done\n- [ ] Unmet criterion that\n  wraps onto a second line.\n"
+	unmet, ok := issueUnmetCriteria(body)
+	want := "Unmet criterion that wraps onto a second line."
+	if !ok || len(unmet) != 1 || unmet[0] != want {
+		t.Fatalf("issueUnmetCriteria = %q, want [%q]", unmet, want)
+	}
+	comment := remainderComment(3294, unmet, false, false, false, false)
+	pr, criteria, ok := ParsePartialDeliveryComment(comment)
+	if !ok || pr != 3294 || len(criteria) != 1 || criteria[0] != want {
+		t.Errorf("round-trip = %d %q %v, want 3294 [%q]\n%s", pr, criteria, ok, want, comment)
+	}
+}

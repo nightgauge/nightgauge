@@ -148,3 +148,50 @@ func TestParseStability(t *testing.T) {
 		}
 	}
 }
+
+// #3297: a wrapped criterion's indented continuation lines join its Text.
+func TestList_WrappedItemJoined(t *testing.T) {
+	body := "## AC\n" +
+		"- [ ] First criterion\n" +
+		"  continues here\n" +
+		"  and here.\n" +
+		"- [x] Second\n" +
+		"  wraps\n" +
+		"\n" +
+		"  after blank is not joined\n" +
+		"- [ ] Third\n" +
+		"not indented is not joined\n" +
+		"- [ ] Fourth\n" +
+		"  ## heading ends it\n" +
+		"- [ ] Fifth\n" +
+		"  ```\n" +
+		"  code\n" +
+		"  ```\n" +
+		"- [ ] Sixth\n" +
+		"  - [ ] nested stays separate\n"
+	items := List(body)
+	want := []string{
+		"First criterion continues here and here.",
+		"Second wraps",
+		"Third",
+		"Fourth",
+		"Fifth",
+		"Sixth",
+		"nested stays separate",
+	}
+	if len(items) != len(want) {
+		t.Fatalf("got %d items %+v, want %d", len(items), items, len(want))
+	}
+	for i, w := range want {
+		if items[i].Text != w {
+			t.Errorf("item %d = %q, want %q", i+1, items[i].Text, w)
+		}
+	}
+	if r := Parse(body); r.Total != len(want) {
+		t.Errorf("Parse total = %d, want %d", r.Total, len(want))
+	}
+	out, res := Mark(body, []int{1})
+	if len(res.Changed) != 1 || out != strings.Replace(body, "- [ ] First", "- [x] First", 1) {
+		t.Errorf("Mark on wrapped item not byte-preserving: %q", out)
+	}
+}

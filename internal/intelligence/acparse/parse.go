@@ -57,6 +57,42 @@ var checkboxRe = regexp.MustCompile(`^[ \t]*[-*+][ \t]+\[([ xX])\][ \t]`)
 // the deterministic Markdown stack.
 var fenceRe = regexp.MustCompile("^[ \\t]*(`{3,}|~{3,})")
 
+// listItemRe matches any bullet or numbered list item; such a line starts a
+// new item and is never a continuation of the previous criterion.
+var listItemRe = regexp.MustCompile(`^[ \t]*([-*+]|\d+[.)])([ \t]|$)`)
+
+// leadingIndent returns the width of line's leading whitespace (tab = 4).
+func leadingIndent(line string) int {
+	n := 0
+	for _, c := range line {
+		switch c {
+		case ' ':
+			n++
+		case '\t':
+			n += 4
+		default:
+			return n
+		}
+	}
+	return n
+}
+
+// isContinuation reports whether line continues a wrapped checkbox item whose
+// own line is indented by itemIndent: non-blank, indented strictly further,
+// and not a list item, heading, fence or <details> boundary (#3297).
+func isContinuation(line string, itemIndent int) bool {
+	t := strings.TrimSpace(line)
+	if t == "" || leadingIndent(line) <= itemIndent {
+		return false
+	}
+	if listItemRe.MatchString(line) || fenceRe.MatchString(line) ||
+		strings.HasPrefix(t, "#") || strings.HasPrefix(strings.ToLower(t), "<details") ||
+		strings.HasPrefix(strings.ToLower(t), "</details") {
+		return false
+	}
+	return true
+}
+
 // Parse scans body line-by-line for top-level checkbox items and returns
 // the deterministic verdict. The function is pure: identical inputs always
 // produce identical outputs. CR-LF line endings are handled by bufio's
@@ -165,15 +201,21 @@ func splitLines(body string) []string {
 // fence-skipping and start-of-line anchoring as Parse. Sharing the scan is the
 // point: an index List reports and an index Mark writes must mean the same
 // criterion, and the only way to guarantee that is one traversal rule.
+//
+// A wrapped item's continuation lines (see isContinuation) join its Text with
+// one space; Line stays the checkbox line, so Mark is unaffected (#3297).
 func List(body string) []Item {
 	lines := splitLines(body)
 	var items []Item
 	inFence := false
 	idx := 0
+	open := false // the last item may still take continuation lines
+	openIndent := 0
 	for i, raw := range lines {
 		line := strings.TrimRight(raw, "\r\n")
 		if fenceRe.MatchString(line) {
 			inFence = !inFence
+			open = false
 			continue
 		}
 		if inFence {
@@ -181,8 +223,16 @@ func List(body string) []Item {
 		}
 		m := checkboxRe.FindStringSubmatchIndex(line)
 		if m == nil {
+			if open && isContinuation(line, openIndent) {
+				last := &items[len(items)-1]
+				last.Text = strings.TrimSpace(last.Text + " " + strings.TrimSpace(line))
+			} else {
+				open = false
+			}
 			continue
 		}
+		open = true
+		openIndent = leadingIndent(line)
 		state := line[m[2]:m[3]]
 		idx++
 		items = append(items, Item{

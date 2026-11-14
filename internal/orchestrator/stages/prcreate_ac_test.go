@@ -868,3 +868,37 @@ func TestAppendUnmetACs_EscapesCommentMarkers(t *testing.T) {
 		}
 	}
 }
+
+// issue1750Body is #1750's checklists (boxes unticked, prose trimmed): nine wrapped
+// checklist criteria that pr-create once read as their first lines only (#3297).
+const issue1750Body = "## Summary\n\nThe Go and TS stage mappers disagree on an OpenCode stage.\n\n## Acceptance Criteria\n\n- [ ] `pipelineRunV4Mapper.ts` sends `modelProvider` for an `opencode` stage,\n      matching the Go mapper's source (recorded provider, not derived).\n- [ ] An unstamped stage's cost uploads as `null`/omitted, never `0`.\n- [ ] A stamped `$0` (e.g. a genuinely local model) still uploads as `0`.\n\n## Verification\n\n- [ ] Existing/new mapper unit tests assert `modelProvider` and the\n      stamped-vs-unstamped cost distinction for an opencode stage.\n- [ ] Manual: an extension-launched run with an unstamped opencode stage\n      uploads the same cost/provider fields as the Go scheduler would for\n      an equivalent run.\n\n### Acceptance Criteria (Part B)\n\n- [ ] `ExecutionHistoryStageMetric` has `Endpoint *string` with JSON name\n      `endpoint`, omitted when empty, and the Go mapper fills it from the\n      stage's recorded model selection through the same id sanitising used\n      for `modelProvider`.\n- [ ] `pipelineRunV4Mapper.ts` sends the same `endpoint` value from the same\n      source for the same stage.\n- [ ] A stage with no named endpoint sends no `endpoint` field in either mapper.\n\n### Verification (Part B)\n\n- [ ] Go mapper test and TS mapper test each assert `endpoint` present for an\n      OpenCode stage with a named endpoint and absent without one.\n"
+
+// #3297: every wrapped #1750 criterion resolves whole, all met, and the PR
+// body says Closes.
+func TestPRCreate_Issue1750WrappedCriteriaClose(t *testing.T) {
+	criteria := preflight.ACTexts(issue1750Body)
+	if len(criteria) != 9 {
+		t.Fatalf("got %d criteria, want 9: %q", len(criteria), criteria)
+	}
+	var validate []ACVerdict
+	for i, c := range criteria {
+		validate = append(validate, ACVerdict{Index: i, Text: c, Status: "met"})
+	}
+	verdicts := ResolveACVerdicts(criteria, validate, nil, nil)
+	for _, v := range verdicts {
+		if v.Status != ACMet {
+			t.Errorf("criterion %d not met: %+v", v.Index, v)
+		}
+	}
+	if !strings.Contains(criteria[0], "matching the Go mapper's source") {
+		t.Errorf("criterion 1 cut at its first line: %q", criteria[0])
+	}
+	if !IssueClosedBy(verdicts) {
+		t.Fatal("IssueClosedBy = false, want true")
+	}
+	s := richSnap()
+	s.ACVerdicts = verdicts
+	if body := RenderBody(s); !strings.Contains(body, "Closes #42\n") {
+		t.Errorf("all-met #1750 body must say Closes:\n%s", body)
+	}
+}
