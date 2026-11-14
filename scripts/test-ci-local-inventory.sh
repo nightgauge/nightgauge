@@ -20,6 +20,9 @@
 #      this, arm 1 could be satisfied by a diff that never fails.
 #   3. A missing required file makes `--list-steps` fail, naming the path.
 #   4. A renamed Makefile target does the same, naming the target.
+#   5. `--list-steps --fast` (#2847) is a non-empty, ordered subset of the full
+#      inventory holding the static checks that failed first gates, and the
+#      subset check goes red on a fast label the full list lacks.
 #
 # Arms 3 and 4 run against a throwaway stub tree, never the real checkout: the
 # whole point is to delete files the gate needs, and doing that in place is a
@@ -99,6 +102,40 @@ if diff -q "$DOCTORED" "$ACTUAL" >/dev/null 2>&1; then
 else
   check "a step missing from the inventory is detected" 0
 fi
+
+# --- Arm 5: the fast subset is read from the gate's own calls (#2847) --------
+# ordered_subset <sub> <full>: every line of sub appears in full, in order.
+ordered_subset() {
+  awk 'NR == FNR { sub_[++n] = $0; next } i < n && $0 == sub_[i + 1] { i++ }
+       END { exit (i == n ? 0 : 1) }' "$1" "$2"
+}
+FAST="$TMP/fast.txt"
+if bash "$CI_LOCAL" --list-steps --fast > "$FAST" 2>"$TMP/fast.err"; then
+  check "\`--list-steps --fast\` exits 0" 0
+else
+  check "\`--list-steps --fast\` exits 0" 1
+  sed 's/^/    /' "$TMP/fast.err"
+fi
+FAST_COUNT="$(wc -l < "$FAST" | tr -d ' ')"
+check "the fast subset is non-empty (${FAST_COUNT} steps)" \
+  "$([ "$FAST_COUNT" -gt 0 ] && echo 0 || echo 1)"
+check "the fast subset is smaller than the full inventory" \
+  "$([ "$FAST_COUNT" -lt "$STEP_COUNT" ] && echo 0 || echo 1)"
+check "the fast subset is an ordered subset of the full inventory" \
+  "$(ordered_subset "$FAST" "$ACTUAL" && echo 0 || echo 1)"
+for want in "gofmt -l ./internal ./cmd" "Go repository-policy tests" \
+  "publication boundary" "Pipefail early-exit gate"; do
+  check "the fast subset holds \"$want\"" \
+    "$(grep -qxF "$want" "$FAST" && echo 0 || echo 1)"
+done
+# The subset check can go red: a fast label the full list lacks is caught.
+{ cat "$FAST"; echo "a fast step the full gate never runs"; } > "$TMP/fast-doctored.txt"
+check "a fast label missing from the full inventory is detected" \
+  "$(ordered_subset "$TMP/fast-doctored.txt" "$ACTUAL" && echo 1 || echo 0)"
+# And so can the order: the same labels reversed are not an ordered subset.
+tail -r "$FAST" 2>/dev/null > "$TMP/fast-reversed.txt" || tac "$FAST" > "$TMP/fast-reversed.txt"
+check "a fast subset out of the gate's order is detected" \
+  "$(ordered_subset "$TMP/fast-reversed.txt" "$ACTUAL" && echo 1 || echo 0)"
 
 # --- A throwaway stub tree for arms 3 and 4 ---------------------------------
 # Everything ci-local.sh's preflight requires, as empty stubs. `--list-steps`

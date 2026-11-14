@@ -129,15 +129,35 @@ func gateStartName(argv, declared []string) string {
 		}
 	}
 	if len(run) > 0 && isGateScript(run[0]) {
+		if startsNoGate(run[1:]) {
+			return ""
+		}
 		return contractrollout.DefaultGateScript
 	}
 	if len(argv) >= 3 && isNightgaugeBinary(argv[0]) {
 		switch argv[1] + " " + argv[2] {
-		case "ci gate-run", "pre-push validate":
+		case "ci gate-run":
+			if startsNoGate(argv[3:]) {
+				return ""
+			}
+			return "nightgauge ci gate-run"
+		case "pre-push validate":
 			return "nightgauge " + argv[1] + " " + argv[2]
 		}
 	}
 	return ""
+}
+
+// startsNoGate reports whether the gate's arguments select a mode that is not
+// the full gate: `--fast` runs the seconds-long static subset (#2847) and
+// `--list-steps` runs nothing. Either finishes as a foreground call.
+func startsNoGate(args []string) bool {
+	for _, a := range args {
+		if a == "--fast" || a == "--list-steps" {
+			return true
+		}
+	}
+	return false
 }
 
 // skipShellOptions drops the shell's leading option words and reports whether

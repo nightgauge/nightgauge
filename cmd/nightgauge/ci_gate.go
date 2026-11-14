@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -175,9 +176,46 @@ func gateKindFor(g contractrollout.Gate) string {
 	return gateledger.KindLocalGate
 }
 
+// fastGateNote is printed when the repository's gate has no fast subset.
+const fastGateNote = "gate-run --fast: the declared gate has no fast subset; nothing ran"
+
+// runFastGate runs the default gate's fast static subset (#2847):
+// `bash scripts/ci-local.sh --fast`, the steps ci-local.sh itself marks --fast.
+// It is not a gate, so it takes no worktree guard and writes no ledger event,
+// and can never be reused as a pass. A declared gate has no fast subset: the
+// note goes to stderr and nothing runs.
+func runFastGate(ctx context.Context, root string, stdout, stderr io.Writer) (int, error) {
+	gate, err := contractrollout.ResolveGate(root)
+	if err != nil {
+		return 1, err
+	}
+	if gate.Missing() {
+		return 1, fmt.Errorf("%s has no local gate", root)
+	}
+	if gate.Declared {
+		fmt.Fprintln(stderr, fastGateNote)
+		return 0, nil
+	}
+	cmd := exec.CommandContext(ctx, "bash", contractrollout.DefaultGateScript, "--fast")
+	cmd.Dir = root
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() > 0 {
+			return exitErr.ExitCode(), nil
+		}
+		return 1, fmt.Errorf("gate-run --fast: %w", err)
+	}
+	return 0, nil
+}
+
 // ciGateRunCmd implements `nightgauge ci gate-run`.
 func ciGateRunCmd() *cobra.Command {
-	var workdir string
+	var (
+		workdir string
+		fast    bool
+	)
 	cmd := &cobra.Command{
 		Use:   "gate-run",
 		Short: "Run the repository's local gate, at most one per worktree (#2784, #3207)",
@@ -195,15 +233,25 @@ after a grace period and verified dead before the guard is released.
 
 Exit codes: the gate's own; 75 when another gate holds this worktree and could
 not be stopped, or a same-tree wait timed out (nothing ran); 76 when this gate
-was superseded by a newer tree (not a failure); 128+signo when interrupted.`,
+was superseded by a newer tree (not a failure); 128+signo when interrupted.
+
+--fast runs only the cheap static steps scripts/ci-local.sh marks --fast (#2847),
+before the full gate. It is not a gate: no worktree guard, no ledger event, and
+a pass is never reused. A declared gate has no fast subset, so --fast notes that
+and exits 0.`,
 		SilenceUsage: true,
-		Example:      `  nightgauge ci gate-run`,
+		Example: `  nightgauge ci gate-run
+  nightgauge ci gate-run --fast`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root, err := gateWorkdir(workdir)
 			if err != nil {
 				return err
 			}
-			code, err := runRepositoryGate(cmd.Context(), root, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			run := runRepositoryGate
+			if fast {
+				run = runFastGate
+			}
+			code, err := run(cmd.Context(), root, cmd.OutOrStdout(), cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -214,6 +262,7 @@ was superseded by a newer tree (not a failure); 128+signo when interrupted.`,
 		},
 	}
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory (default: cwd)")
+	cmd.Flags().BoolVar(&fast, "fast", false, "Run only the fast static subset, unguarded and unrecorded (#2847)")
 	return cmd
 }
 
@@ -300,7 +349,9 @@ func ciGateRecordCmd() *cobra.Command {
 		SilenceUsage: true,
 		Example: `  RUN=$(nightgauge ci gate-record --event start --kind parity --tree "$TREE" --full)
   nightgauge ci gate-record --event finish --run-id "$RUN" --kind parity --tree "$TREE" \
-    --verdict pass --full --seconds 120`,
+    --verdict pass --full --seconds 120
+  nightgauge ci gate-record --event finish --run-id "$RUN" --tree "$TREE" --verdict fail \
+    --full --seconds 900 --failed-step "Publication boundary"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := validGateKind(ev.Kind); err != nil {
 				return err
@@ -330,6 +381,10 @@ func ciGateRecordCmd() *cobra.Command {
 	f.StringVar(&ev.Verdict, "verdict", "", "pass, fail, infra or superseded (finish only)")
 	f.BoolVar(&ev.Full, "full", false, "Every step ran: no change scoping and no skipped step")
 	f.IntVar(&ev.Seconds, "seconds", 0, "Wall-clock seconds of the run (finish only)")
+	f.StringArrayVar(&ev.FailedSteps, "failed-step", nil,
+		"A step whose assertion failed, repeatable, in declared order (finish only)")
+	f.StringArrayVar(&ev.InfraSteps, "infra-step", nil,
+		"A step that could not run, repeatable, in declared order (finish only)")
 	f.StringVar(&workdir, "workdir", "", "Working directory (default: cwd)")
 	return cmd
 }
@@ -343,6 +398,9 @@ func completeGateEvent(ctx context.Context, root string, ev *gateledger.Event) e
 	}
 	switch ev.Event {
 	case gateledger.EventStart, gateledger.EventReused:
+		if len(ev.FailedSteps) > 0 || len(ev.InfraSteps) > 0 {
+			return fmt.Errorf("--failed-step and --infra-step are accepted only with --event finish")
+		}
 	case gateledger.EventFinish:
 		switch ev.Verdict {
 		case gateledger.VerdictPass, gateledger.VerdictFail, gateledger.VerdictInfra, gateledger.VerdictSuperseded:

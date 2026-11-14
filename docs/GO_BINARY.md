@@ -4614,11 +4614,26 @@ Phase 2.5 go through these verbs; nothing writes the file by path.
 ```bash
 nightgauge ci gate-status --kind local-gate --json
 nightgauge ci gate-run
+nightgauge ci gate-run --fast
 RUN=$(nightgauge ci gate-record --event start --kind parity --tree "$TREE" --full)
 nightgauge ci gate-record --event finish --run-id "$RUN" --kind parity --tree "$TREE" \
   --verdict pass --full --seconds 120
+nightgauge ci gate-record --event finish --run-id "$RUN" --tree "$TREE" --verdict fail \
+  --full --seconds 900 --failed-step "publication boundary"
 nightgauge ci gate-count --json
 ```
+
+`gate-record --event finish` takes repeatable `--failed-step` (an assertion
+failed) and `--infra-step` (the check could not run), stored on the ledger line
+as `failed_steps` and `infra_steps` in declared order (#2847). Other events
+refuse them. `ci-local.sh` passes them when the binary's help lists them, so an
+older binary still records the verdict.
+
+`gate-run --fast` runs the default gate's fast static subset, `bash
+scripts/ci-local.sh --fast`: the steps marked `--fast` on their own `run_step`
+or `run_group` call (`--list-steps --fast` lists them). It is not a gate: no
+worktree guard, no ledger event, never reused, and it exits with the script's
+code. A declared `local_gate` has no fast subset, so it says so and exits 0.
 
 `gate-status` prints `reusable`, `reason`, `tree`, `gate_command`,
 `gate_records_itself`, and `passed_stage`, `passed_at` and `passed_seconds` when

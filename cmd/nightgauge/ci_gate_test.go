@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/gateledger"
@@ -184,6 +185,8 @@ func TestCompleteGateEvent_Refuses(t *testing.T) {
 		"unknown event":      {Event: "nope"},
 		"finish, no verdict": {Event: gateledger.EventFinish, RunID: "r"},
 		"finish, no run id":  {Event: gateledger.EventFinish, Verdict: gateledger.VerdictPass},
+		"start, failed step": {Event: gateledger.EventStart, FailedSteps: []string{"gofmt"}},
+		"reused, infra step": {Event: gateledger.EventReused, InfraSteps: []string{"Go tests"}},
 	} {
 		if err := completeGateEvent(context.Background(), root, &ev); err == nil {
 			t.Errorf("%s: no error", name)
@@ -248,5 +251,87 @@ func TestCompleteGateEvent_AdoptsTheGateRunsRunID(t *testing.T) {
 	}
 	if ev.RunID != "from-gate-run" {
 		t.Fatalf("RunID = %q, want the gate-run's", ev.RunID)
+	}
+}
+
+// TestGateRecord_FailedStepsReachTheLedger drives the cobra command so the
+// --failed-step / --infra-step flag names are pinned, not just the struct (#2847).
+func TestGateRecord_FailedStepsReachTheLedger(t *testing.T) {
+	root := gateRepo(t)
+	cmd := ciGateRecordCmd()
+	cmd.SetOut(io.Discard)
+	cmd.SetArgs([]string{"--workdir", root, "--event", "finish", "--run-id", "r",
+		"--tree", fingerprint(t, root), "--verdict", "fail", "--full",
+		"--failed-step", "gofmt -l ./internal ./cmd", "--failed-step", "Publication boundary",
+		"--infra-step", "Go tests"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	path, err := gateledger.Path(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"failed_steps":["gofmt -l ./internal ./cmd","Publication boundary"]`,
+		`"infra_steps":["Go tests"]`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("ledger %s lacks %s", raw, want)
+		}
+	}
+}
+
+func TestGateRunFast_RunsTheDefaultGatesFastModeUnrecorded(t *testing.T) {
+	root := gateRepo(t)
+	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "printf '%s' \"$*\" > received\nexit 3\n"
+	if err := os.WriteFile(filepath.Join(root, "scripts", "ci-local.sh"), []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, err := runFastGate(context.Background(), root, io.Discard, io.Discard)
+	if err != nil || code != 3 {
+		t.Fatalf("code %d, err %v; want the script's exit 3", code, err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "received"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "--fast" {
+		t.Fatalf("ci-local.sh received %q, want --fast", got)
+	}
+	path, err := gateledger.Path(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("gate-run --fast wrote a ledger event; it is not a gate")
+	}
+}
+
+func TestGateRunFast_ADeclaredGateRunsNothing(t *testing.T) {
+	root := gateRepo(t)
+	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "scripts", "gate.sh"), []byte("touch ran\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	declareGate(t, root, "local_gate:\n  steps:\n    - [sh, scripts/gate.sh]\n")
+	var stderr strings.Builder
+	code, err := runFastGate(context.Background(), root, io.Discard, &stderr)
+	if err != nil || code != 0 {
+		t.Fatalf("code %d, err %v", code, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "ran")); err == nil {
+		t.Fatal("a declared gate ran under --fast")
+	}
+	if !strings.Contains(stderr.String(), fastGateNote) {
+		t.Fatalf("stderr %q lacks the note", stderr.String())
 	}
 }
