@@ -75,7 +75,33 @@ func userTurnRequest(content string) map[string]any {
 		"model":    "stub/stub-model",
 		"messages": []map[string]any{{"role": "user", "content": content}},
 		"stream":   false,
+		"tools":    offeredTools(opencode1Tools...),
 	}
+}
+
+// opencode1Tools and opencode2Tools are the tool names each OpenCode major
+// offers; the server picks a script's 2.x variant from them.
+var (
+	opencode1Tools = []string{"bash", "edit", "read", "task"}
+	opencode2Tools = []string{"shell", "edit", "read", "subagent"}
+)
+
+func offeredTools(names ...string) []map[string]any {
+	tools := make([]map[string]any, 0, len(names))
+	for _, n := range names {
+		tools = append(tools, map[string]any{
+			"type":     "function",
+			"function": map[string]any{"name": n, "parameters": map[string]any{"type": "object"}},
+		})
+	}
+	return tools
+}
+
+// opencode2TurnRequest is userTurnRequest as OpenCode 2.x sends it.
+func opencode2TurnRequest(content string) map[string]any {
+	req := userTurnRequest(content)
+	req["tools"] = offeredTools(opencode2Tools...)
+	return req
 }
 
 // secondTurnRequest simulates a client that received turn 1's tool call and
@@ -95,6 +121,7 @@ func secondTurnRequest() map[string]any {
 			{"role": "tool", "tool_call_id": "call-1", "content": "ok"},
 		},
 		"stream": false,
+		"tools":  offeredTools(opencode1Tools...),
 	}
 }
 
@@ -176,7 +203,7 @@ func TestToolsForeverScriptNeverStops(t *testing.T) {
 		for i := 0; i < assistants; i++ {
 			messages = append(messages, map[string]any{"role": "assistant", "content": "CRITICAL - MAXIMUM STEPS REACHED"})
 		}
-		resp, body := postChatCompletion(t, baseURL, map[string]any{"model": "stub/stub-model", "messages": messages, "stream": false})
+		resp, body := postChatCompletion(t, baseURL, map[string]any{"model": "stub/stub-model", "messages": messages, "stream": false, "tools": offeredTools(opencode1Tools...)})
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("%d assistant messages: status = %d, body = %s", assistants, resp.StatusCode, body)
 		}
@@ -713,6 +740,188 @@ func TestNewServerRejectsHalfASubagentScript(t *testing.T) {
 	} {
 		if err := validateScript("half", s); err == nil {
 			t.Errorf("%s: validateScript accepted a half subagent script", name)
+		}
+	}
+}
+
+// toolCallOf posts req and returns the single tool call the non-streamed
+// reply carries.
+func toolCallOf(t *testing.T, baseURL string, req map[string]any) wireToolCall {
+	t.Helper()
+	resp, body := postChatCompletion(t, baseURL, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
+	}
+	calls := decodeChatCompletion(t, body).Choices[0].Message.ToolCalls
+	if len(calls) != 1 {
+		t.Fatalf("tool_calls = %+v, want exactly one", calls)
+	}
+	return calls[0]
+}
+
+func argKeys(t *testing.T, call wireToolCall) map[string]any {
+	t.Helper()
+	var args map[string]any
+	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+		t.Fatalf("decode arguments %q: %v", call.Function.Arguments, err)
+	}
+	return args
+}
+
+// TestOpenCode2VariantIsChosenPerRequest (#3299): one server answers 1.x
+// tool shapes to a request offering 1.x tools and 2.x shapes to a request
+// offering 2.x tools.
+func TestOpenCode2VariantIsChosenPerRequest(t *testing.T) {
+	cases := []struct {
+		script        string
+		name1, name2  string
+		key1, key2    string
+		forbiddenInV2 string
+	}{
+		{"tool-edit-stop", "edit", "edit", "filePath", "path", "filePath"},
+		{"bash-then-stop", "bash", "shell", "command", "command", ""},
+		{"task-then-subagent-bash", "task", "subagent", "subagent_type", "agent", "subagent_type"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.script, func(t *testing.T) {
+			baseURL := startServer(t, Config{Script: tc.script})
+
+			v1 := toolCallOf(t, baseURL, userTurnRequest("go"))
+			if v1.Function.Name != tc.name1 {
+				t.Errorf("1.x tools: call = %q, want %q", v1.Function.Name, tc.name1)
+			}
+			if _, ok := argKeys(t, v1)[tc.key1]; !ok {
+				t.Errorf("1.x tools: arguments %s lack %q", v1.Function.Arguments, tc.key1)
+			}
+
+			v2 := toolCallOf(t, baseURL, opencode2TurnRequest("go"))
+			if v2.Function.Name != tc.name2 {
+				t.Errorf("2.x tools: call = %q, want %q", v2.Function.Name, tc.name2)
+			}
+			args := argKeys(t, v2)
+			if _, ok := args[tc.key2]; !ok {
+				t.Errorf("2.x tools: arguments %s lack %q", v2.Function.Arguments, tc.key2)
+			}
+			if tc.forbiddenInV2 != "" {
+				if _, ok := args[tc.forbiddenInV2]; ok {
+					t.Errorf("2.x tools: arguments %s still carry %q", v2.Function.Arguments, tc.forbiddenInV2)
+				}
+			}
+		})
+	}
+}
+
+// TestOpenCode2SubagentRequestAnswersShell: the 2.x subagent session the
+// `subagent` call starts is served from the variant's subagent turns.
+func TestOpenCode2SubagentRequestAnswersShell(t *testing.T) {
+	baseURL := startServer(t, Config{Script: "task-then-subagent-bash"})
+
+	primary := toolCallOf(t, baseURL, opencode2TurnRequest("please do the task"))
+	prompt, _ := argKeys(t, primary)["prompt"].(string)
+	if !strings.Contains(prompt, "NIGHTGAUGE-SUBAGENT-PROBE") {
+		t.Fatalf("subagent prompt %q lacks the marker", prompt)
+	}
+	sub := toolCallOf(t, baseURL, opencode2TurnRequest(prompt))
+	if sub.Function.Name != "shell" {
+		t.Fatalf("subagent call = %q, want shell", sub.Function.Name)
+	}
+	if _, ok := argKeys(t, sub)["command"]; !ok {
+		t.Errorf("subagent shell arguments %s lack command", sub.Function.Arguments)
+	}
+}
+
+// TestOpenCode2VariantsCoverTheSixScripts: each of the six scripts the
+// OpenCode adapter runs has a 2.x variant, every variant has a base script,
+// and no variant still speaks a 1.x-only tool name or argument key.
+func TestOpenCode2VariantsCoverTheSixScripts(t *testing.T) {
+	scripts, err := loadScripts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"tool-edit-stop", "bash-then-stop", "long-session",
+		"tools-forever", "compaction-probe", "task-then-subagent-bash",
+	} {
+		if _, ok := scripts[name+opencode2Suffix]; !ok {
+			t.Errorf("script %q has no %s variant", name, opencode2Suffix)
+		}
+	}
+	for name, script := range scripts {
+		base, ok := strings.CutSuffix(name, opencode2Suffix)
+		if !ok {
+			continue
+		}
+		if _, ok := scripts[base]; !ok {
+			t.Errorf("variant %q has no base script %q", name, base)
+		}
+		if err := validateScript(name, script); err != nil {
+			t.Error(err)
+		}
+		turns := append(append([]Turn{}, script.Turns...), script.SubagentTurns...)
+		for i, turn := range turns {
+			if turn.ToolCall == nil {
+				continue
+			}
+			switch turn.ToolCall.Name {
+			case "bash", "task":
+				t.Errorf("%s turn %d calls 1.x tool %q", name, i, turn.ToolCall.Name)
+			}
+			raw, _ := json.Marshal(turn.ToolCall.Arguments)
+			for _, key := range []string{`"filePath"`, `"subagent_type"`} {
+				if bytes.Contains(raw, []byte(key)) {
+					t.Errorf("%s turn %d arguments carry 1.x key %s", name, i, key)
+				}
+			}
+		}
+	}
+}
+
+// TestToolLessRequestGetsTitleReply (#3299): a request offering no tools is
+// OpenCode's title request. It gets fixed text, never a scripted turn, and
+// the next tool-bearing request still gets scripted turn 0.
+func TestToolLessRequestGetsTitleReply(t *testing.T) {
+	baseURL := startServer(t, Config{Script: "tool-edit-stop"})
+
+	for _, tools := range []struct {
+		label string
+		set   func(map[string]any)
+	}{
+		{"absent", func(r map[string]any) { delete(r, "tools") }},
+		{"null", func(r map[string]any) { r["tools"] = nil }},
+		{"empty", func(r map[string]any) { r["tools"] = []any{} }},
+	} {
+		req := userTurnRequest("generate a title")
+		tools.set(req)
+		resp, body := postChatCompletion(t, baseURL, req)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: status = %d, body = %s", tools.label, resp.StatusCode, body)
+		}
+		choice := decodeChatCompletion(t, body).Choices[0]
+		if len(choice.Message.ToolCalls) != 0 || choice.Message.Content == nil || *choice.Message.Content != titleReply {
+			t.Fatalf("%s: reply = %+v, want text %q", tools.label, choice.Message, titleReply)
+		}
+
+		req["stream"] = true
+		_, streamed := postChatCompletion(t, baseURL, req)
+		if !bytes.Contains(streamed, []byte(titleReply)) || bytes.Contains(streamed, []byte("tool_calls")) {
+			t.Fatalf("%s streamed: body = %s, want text %q and no tool call", tools.label, streamed, titleReply)
+		}
+	}
+
+	if call := toolCallOf(t, baseURL, userTurnRequest("edit calc.py")); call.Function.Name != "edit" {
+		t.Fatalf("after the title request: call = %q, want scripted turn 0 edit", call.Function.Name)
+	}
+}
+
+// TestToolLessRequestToFailureScriptsUnchanged: overflow and error scripts
+// answer every request identically, tool-less or not.
+func TestToolLessRequestToFailureScriptsUnchanged(t *testing.T) {
+	for script, want := range map[string]int{"overflow": http.StatusBadRequest, "error": http.StatusInternalServerError} {
+		baseURL := startServer(t, Config{Script: script})
+		req := userTurnRequest("generate a title")
+		delete(req, "tools")
+		if resp, body := postChatCompletion(t, baseURL, req); resp.StatusCode != want {
+			t.Errorf("%s: status = %d, want %d; body = %s", script, resp.StatusCode, want, body)
 		}
 	}
 }
