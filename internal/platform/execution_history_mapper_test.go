@@ -930,6 +930,44 @@ func TestBuildExecutionHistoryStages_ModelProviderIsTheRecordedOne(t *testing.T)
 	}
 }
 
+// TestBuildExecutionHistoryStages_EndpointIsTheRecordedOne: the endpoint
+// sent is the declared endpoint id the stage recorded. A stage that recorded
+// none sends no endpoint key at all, and a recorded id the platform's label
+// guard would reject is dropped rather than failing the upload.
+func TestBuildExecutionHistoryStages_EndpointIsTheRecordedOne(t *testing.T) {
+	for _, tc := range []struct {
+		recorded string
+		want     *string
+	}{
+		{"lm-studio-4090", ptrString("lm-studio-4090")},
+		{"", nil},
+		{"LM Studio", nil},
+	} {
+		rec := state.V2RunRecord{
+			Stages: map[string]state.V2StageDetail{"feature-dev": {Status: "complete",
+				ModelSelection: &state.V2ModelSelect{Model: "lm-studio/qwen/qwen3.8-27b",
+					ModelProvider: "lm-studio", Endpoint: tc.recorded}}},
+			Tokens: state.V2Tokens{PerStage: map[string]state.V2StageTokens{"feature-dev": {Adapter: "opencode"}}},
+		}
+		stages, _ := buildExecutionHistoryStages(rec)
+		got := stages[0].Endpoint
+		if (tc.want == nil) != (got == nil) || (tc.want != nil && *tc.want != *got) {
+			t.Errorf("recorded %q: endpoint = %v, want %v", tc.recorded, valueOf(got), valueOf(tc.want))
+		}
+		data, err := json.Marshal(stages[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatal(err)
+		}
+		if _, present := m["endpoint"]; present != (tc.want != nil) {
+			t.Errorf("recorded %q: endpoint key present = %v, want %v (%s)", tc.recorded, present, tc.want != nil, data)
+		}
+	}
+}
+
 // TestV2RunRecordToExecutionHistoryRunRecord_StampedZeroRunTotal: a run
 // whose every stage is a stamped zero, such as one that used only local
 // models, sends totalCostUsd 0, not null, which the platform stores as an
