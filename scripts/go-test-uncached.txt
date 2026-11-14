@@ -37,6 +37,7 @@ github.com/nightgauge/nightgauge/internal/hooks TestTestQualityMatchesShellScrip
 github.com/nightgauge/nightgauge/internal/hooks TestTreeFingerprintMatchesCILocal
 
 # bash runs scripts/capture-conflicted-rebase-fixture.sh.
+github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_BaseMerge_PreservesBranchHistory
 github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_BinaryConflict_NotCapturedAsSuccess
 github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_DetachedHead_BranchGenuinelyUnknown
 github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_GitlinkConflict_CapturedAsMetadata
@@ -44,7 +45,6 @@ github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_Gitl
 github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_ModeOnlyConflict_SurvivesItsOwnReader
 github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_MultiFileConflict_NonASCIIPathCaptured
 github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_PreexistingRebase_OperatorWorkSurvives
-github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_RebaseBranch_ResolvesHeadName
 github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_RebaseConflict_CapturesThenAborts
 github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_RebaseConflict_RecordsRealBranch
 github.com/nightgauge/nightgauge/internal/orchestrator/recovery TestRealGit_RebaseRefused_NoConflictState

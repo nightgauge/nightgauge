@@ -16,8 +16,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - **The Phase 5.5 freshness check merges the base instead of rebasing (#2699).**
-  It pushes with `nightgauge git push-branch`, never `--force-with-lease`. Phase
-  6 conflict resolution still rebases.
+  It pushes with `nightgauge git push-branch`, never `--force-with-lease`.
+- **Step 6.1.5 conflict resolution merges the base instead of rebasing (#2752).**
+  It merges `origin/<base>` into the PR branch, resolves conflicts as a merge,
+  and pushes with `nightgauge git push-branch`, never `--force-with-lease`.
 - **Phase 5.5's best-effort pushes keep the terminal marker out of the transcript
   (#2749).** A failed push still prints its cause, with the fork tokens filtered
   out, so a stage that carries on is not classified `branch_forked`.

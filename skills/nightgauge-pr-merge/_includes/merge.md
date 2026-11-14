@@ -132,10 +132,12 @@ files (e.g., two sub-issues of the same epic both touching the same source
 file).
 
 **Unresolvable conflicts re-dispatch feature-dev — they do NOT discard the
-branch.** When the rebase hits a non-trivial conflict that this skill cannot
-resolve in-place, we no longer signal a blind fresh-branch restart (which threw
-away all dev work). Instead we capture the conflict context (the conflicting
-files + BOTH sides of each conflict) **before** `git rebase --abort` wipes the
+branch.** The PR branch is updated by merging its base into it — never by a
+rebase, and never pushed with force: an existing PR branch keeps its history, so
+the push is a fast-forward (#2699, #2752). When that merge hits a non-trivial
+conflict that this skill cannot resolve in-place, we capture the conflict
+context (the conflicting files + BOTH sides of each conflict) **before**
+`git merge --abort` wipes the
 conflict state, write a `CONFLICT_RESOLUTION_NEEDED` feedback signal targeting
 `feature-dev`, and **keep the branch**. The recovery loop rewinds the pipeline
 to feature-dev, which checks out this same PR branch, resolves the conflict, and
@@ -143,15 +145,16 @@ flows forward through feature-validate → pr-create → pr-merge. See
 `docs/PR_MERGE_STAGE.md` and `docs/FEEDBACK_LOOPS.md`.
 
 The helper below performs both writes. It MUST be called while the conflict is
-still in the index (after a failed `git rebase` / `git rebase --continue`,
-before the abort), because the stage-1/2/3 index entries exist only while the
-conflict is staged and `git rebase --abort` drops them permanently.
+still in the index (after a failed `git merge` / `git commit`, before the
+abort), because the stage-1/2/3 index entries exist only while the conflict is
+staged and `git merge --abort` drops them permanently.
 
 **`ours` and `theirs` in this document are the CONSUMER's vocabulary, not
 git's.** `ours` is always the PR branch's own work and `theirs` always the base
-being landed onto. Git's stage names are relative to what is checked out, and a
-rebase checks out the upstream and replays your commits onto it — so under a
-rebase git calls the base "ours". The helper translates:
+being landed onto. Git's stage names are relative to what is checked out. Step
+6.1.5 merges the base into the checked-out PR branch, so git's names already
+match; a rebase (which this step no longer runs) would invert them. The helper
+handles both:
 
 | operation | ours (PR branch work) | theirs (base) | detected from                      |
 | --------- | --------------------- | ------------- | ---------------------------------- |
@@ -179,7 +182,7 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 # capture_conflict_and_signal: writes conflict-context-{ISSUE}.json (conflicting
 # files + ours/theirs blobs) and merges a CONFLICT_RESOLUTION_NEEDED signal into
 # feedback-{ISSUE}.json. Branch is preserved (NO conflict-restart-{N}.json,
-# NO branch deletion). Call BEFORE `git rebase --abort`. Requires bash.
+# NO branch deletion). Call BEFORE `git merge --abort`. Requires bash.
 capture_conflict_and_signal() {
   _CCS_REASON="$1"
   # Resolve THIS worktree's root and hand it to the binary as --workdir, which
@@ -430,7 +433,7 @@ capture_conflict_and_signal() {
   _CCS_NEW_SIGNAL=$(jq -n \
     --argjson ev "$_CCS_EVIDENCE" \
     --arg reason "$_CCS_REASON" \
-    '{signal_type:"CONFLICT_RESOLUTION_NEEDED", emitted_by_stage:"pr-merge", backtrack_target_stage:"feature-dev", rationale:("pr-merge rebase conflict — " + $reason), evidence:$ev, severity:"blocking"}')
+    '{signal_type:"CONFLICT_RESOLUTION_NEEDED", emitted_by_stage:"pr-merge", backtrack_target_stage:"feature-dev", rationale:("pr-merge base-update conflict — " + $reason), evidence:$ev, severity:"blocking"}')
   if [ -f "$_CCS_FB" ]; then
     jq --argjson sig "$_CCS_NEW_SIGNAL" \
       '.signals = ((.signals // []) + [$sig])' "$_CCS_FB" > "$_CCS_TMP/fb.json" 2>/dev/null \
@@ -469,23 +472,24 @@ if [ "$MERGEABLE" = "CONFLICTING" ]; then
   git fetch origin "$HEAD_REF"
   git reset --hard "origin/$HEAD_REF"
 
-  # Attempt rebase onto base branch
-  REBASE_CONFLICT=false
-  if ! git rebase "origin/$BASE_REF" 2>/dev/null; then
-    REBASE_CONFLICT=true
+  # Merge the base INTO the PR branch. Never rebase an existing PR branch: its
+  # tip would stop descending from origin's and the push is rejected (#2699).
+  MERGE_CONFLICT=false
+  if ! git merge --no-edit "origin/$BASE_REF" 2>/dev/null; then
+    MERGE_CONFLICT=true
   fi
 
-  if [ "$REBASE_CONFLICT" = "true" ]; then
+  if [ "$MERGE_CONFLICT" = "true" ]; then
     # AI-assisted conflict resolution.
     #
     # Same enumeration rule as the capture helper, for the same reason (#301):
     # `git diff --name-only --diff-filter=U` C-quotes any non-ASCII path, so a
     # conflict in `café.txt` arrives as the literal `"caf\303\251.txt"` and the
     # `git add` below fails on a path that does not exist — leaving that
-    # conflict unresolved while the loop reports having handled it, and
-    # `rebase --continue` then fails on it. `-z` gives raw path bytes; git
-    # sorts by path, so skipping a repeat of the previous path collapses that
-    # path's index stages to one entry.
+    # conflict unresolved while the loop reports having handled it, and the
+    # merge commit then fails on it. `-z` gives raw path bytes; git sorts by
+    # path, so skipping a repeat of the previous path collapses that path's
+    # index stages to one entry.
     #
     # Append with `+=`, never `CONFLICT_FILES[$N]=` from N=0: zsh arrays are
     # 1-indexed and abort the whole loop with "assignment to invalid subscript
@@ -503,13 +507,13 @@ if [ "$MERGEABLE" = "CONFLICTING" ]; then
     CONFLICT_COUNT=${#CONFLICT_FILES[@]}
 
     if [ "$CONFLICT_COUNT" -eq 0 ]; then
-      echo "ERROR: Rebase failed but no conflict markers found."
+      echo "ERROR: Merge of origin/$BASE_REF failed but no conflict markers found."
       # No conflicting files to hand to feature-dev — but the branch is still
       # preserved (no fresh-branch restart). Capture a context-less signal so
       # the recovery loop escalates with the specific reason rather than
       # silently dropping the PR. Capture BEFORE the abort.
-      capture_conflict_and_signal "rebase failed with no conflict markers"
-      git rebase --abort 2>/dev/null || true
+      capture_conflict_and_signal "merge failed with no conflict markers"
+      git merge --abort 2>/dev/null || true
       exit 1
     fi
 
@@ -519,11 +523,8 @@ if [ "$MERGEABLE" = "CONFLICTING" ]; then
 
     # For each conflicted file:
     # 1. Read the file with conflict markers
-    # 2. Understand BOTH sides. In the WORKTREE markers git uses its own naming,
-    #    which a rebase inverts: under `git rebase origin/$BASE_REF` the
-    #    `<<<<<<< HEAD` side is the BASE and the `>>>>>>> <sha>` side is this
-    #    PR's feature work. (The conflict-context document uses the consumer
-    #    naming instead — see the table above.)
+    # 2. Understand BOTH sides. Under the merge, the `<<<<<<< HEAD` side is this
+    #    PR's feature work and the `>>>>>>> origin/$BASE_REF` side is the base.
     # 3. Produce a logically correct merge that preserves BOTH changes
     # 4. Stage the resolved file
     #
@@ -537,31 +538,32 @@ if [ "$MERGEABLE" = "CONFLICTING" ]; then
 
     for FILE in "${CONFLICT_FILES[@]}"; do
       # Read the conflicted file, understand both sides, resolve logically
-      # If you cannot confidently resolve a file, abort:
-      #   git rebase --abort && exit 1
+      # If you cannot confidently resolve a file, capture and abort:
+      #   capture_conflict_and_signal "<reason>"; git merge --abort; exit 1
       echo "Resolving: $FILE"
       # ... resolve the file content ...
       git add "$FILE"
     done
 
-    # Continue the rebase after resolving all conflicts
-    if ! git rebase --continue; then
-      echo "ERROR: Rebase --continue failed after conflict resolution."
+    # Commit the merge after resolving all conflicts
+    if ! git commit --no-edit; then
+      echo "ERROR: Merge commit failed after conflict resolution."
       # Capture conflict context + emit CONFLICT_RESOLUTION_NEEDED BEFORE the
       # abort, then preserve the branch for feature-dev re-dispatch.
-      capture_conflict_and_signal "rebase --continue failed after partial resolution"
-      git rebase --abort 2>/dev/null || true
+      capture_conflict_and_signal "merge commit failed after partial resolution"
+      git merge --abort 2>/dev/null || true
       exit 1
     fi
   fi
 
-  # Push the rebased branch
-  if ! git push --force-with-lease origin "$HEAD_REF"; then
-    echo "ERROR: Failed to push rebased branch."
+  # Plain push: the merge only adds commits on top of origin's branch, so it
+  # fast-forwards. push-branch never forces and recovers a self-inflicted fork.
+  if ! nightgauge git push-branch; then
+    echo "ERROR: Failed to push the updated branch."
     exit 1
   fi
 
-  echo "Conflicts resolved and branch rebased. Waiting for CI..."
+  echo "Conflicts resolved and base merged into the branch. Waiting for CI..."
 
   # Re-run CI gate check (reuse Phase 5 CI wait logic)
   # The CI_GATE shared fragment handles waiting for checks
@@ -596,7 +598,7 @@ if [ "$MERGEABLE" = "CONFLICTING" ]; then
     fi
     FAILED_COUNT=$(printf '%s\n' "$CI_RESULT" | jq -r '.failed // 0')
     if [ "$FAILED_COUNT" -gt 0 ]; then
-      echo "ERROR: CI checks failed after conflict resolution rebase."
+      echo "ERROR: CI checks failed after conflict resolution merge."
       echo "The conflict resolution may have introduced errors."
       exit 1
     fi
@@ -606,7 +608,7 @@ if [ "$MERGEABLE" = "CONFLICTING" ]; then
   MERGEABLE=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.mergeable // "UNKNOWN"')
   if [ "$MERGEABLE" != "MERGEABLE" ]; then
     echo "ERROR: PR still not mergeable after conflict resolution (status: $MERGEABLE)."
-    # The rebase already landed and pushed, so there is no staged conflict to
+    # The merge already landed and pushed, so there is no staged conflict to
     # capture here — emit a context-less CONFLICT_RESOLUTION_NEEDED signal naming
     # the residual mergeable status so feature-dev re-inspects the (preserved)
     # branch. No fresh-branch restart, no branch deletion.
@@ -625,7 +627,7 @@ rewritten files on both sides), do NOT force an incorrect resolution: call
 `capture_conflict_and_signal` (which snapshots the conflicting files + both
 sides into `conflict-context-{ISSUE}.json` and emits a
 `CONFLICT_RESOLUTION_NEEDED` feedback signal targeting feature-dev) **before**
-`git rebase --abort`, then `exit 1`. The branch is preserved and the recovery
+`git merge --abort`, then `exit 1`. The branch is preserved and the recovery
 loop re-dispatches feature-dev to resolve the conflict with that context —
 nothing is discarded. The dev re-dispatch is bounded by
 `pipeline.recovery.conflict_recovery.max_dev_redispatch`; once exhausted — or
@@ -636,11 +638,11 @@ files/reason instead of looping.
 
 **A failed capture leaves the reason and nothing else.** This helper writes no
 `conflict-evidence-{N}/` dump (that is the Go `branch-out-of-date` writer's
-behaviour), and at both mid-rebase call sites above the `git rebase --abort` on
+behaviour), and at both mid-merge call sites above the `git merge --abort` on
 the next line runs regardless of what the helper returned — so a path that could
 not be recorded ends as `capture_failed: true` plus its `capture_error`, with
 the `:2:`/`:3:` stages gone. Anyone triaging one of those reproduces the
-conflict by re-running the rebase; there is no directory to go looking for.
+conflict by re-running the merge; there is no directory to go looking for.
 
 #### Step 6.2: Determine Merge Strategy
 

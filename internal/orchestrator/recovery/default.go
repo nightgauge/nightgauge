@@ -49,11 +49,11 @@ func Default(workspaceRoot string, prMergeRunner pmstages.PRMergeRunner, prCreat
 	branchOutOfDate := NewBranchOutOfDate(prMergeRunner).WithCIWait(ciWait)
 	if GetConflictRecoveryEnabled(workspaceRoot) {
 		// A merge-queue conflict has no conflict context. The loop first tries a
-		// changelog union (#2841), then rebases through branch-out-of-date to
+		// changelog union (#2841), then merges the base through branch-out-of-date to
 		// capture one (#2611).
 		actions = append(actions, NewConflictRecoveryLoop(GetConflictMaxDevRedispatch(workspaceRoot)).
 			WithChangelogUnion(NewChangelogUnionMerge(prMergeRunner).WithCIWait(ciWait)).
-			WithRebaseFallback(branchOutOfDate))
+			WithBaseMergeFallback(branchOutOfDate))
 	}
 
 	actions = append(actions,
