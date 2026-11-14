@@ -13,10 +13,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
+	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
 
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
@@ -71,6 +73,14 @@ func realGitFixture(t *testing.T, mode string) string {
 	if work == "" {
 		t.Fatalf("fixture script printed no workdir")
 	}
+	// Keep Execute offline: the base lookup reads main and any check rollup is
+	// green. A test that needs other answers stubs execGh again.
+	stubExecGh(t, func(_ context.Context, args ...string) ([]byte, error) {
+		if strings.Contains(strings.Join(args, " "), "baseRefName") {
+			return []byte(`{"baseRefName":"main"}`), nil
+		}
+		return []byte(`{"statusCheckRollup":[{"name":"build","conclusion":"SUCCESS"}]}`), nil
+	})
 	return work
 }
 
@@ -160,6 +170,28 @@ func hasConflictSignal(t *testing.T, ws string, issue int) bool {
 	return false
 }
 
+// mergeInProgress reports whether the workspace is sitting mid-merge.
+func mergeInProgress(t *testing.T, ws string) bool {
+	t.Helper()
+	out, err := gittest.Command(ws, "rev-parse", "--git-path", "MERGE_HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse --git-path: %v", err)
+	}
+	p := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(ws, p)
+	}
+	_, statErr := os.Stat(p)
+	return statErr == nil
+}
+
+// operationInProgress reports whether a merge or a rebase is left in the
+// workspace — what an abort is meant to clear.
+func operationInProgress(t *testing.T, ws string) bool {
+	t.Helper()
+	return mergeInProgress(t, ws) || rebaseInProgress(t, ws)
+}
+
 // rebaseInProgress reports whether the workspace is sitting mid-rebase.
 func rebaseInProgress(t *testing.T, ws string) bool {
 	t.Helper()
@@ -244,29 +276,25 @@ func TestRealGit_RebaseConflict_CapturesThenAborts(t *testing.T) {
 	}
 	// ours = the PR branch's work, theirs = the base. That is the contract every
 	// consumer is written against (ConflictFileSchema, feature-dev's Step 0.7.1b,
-	// merge.md), and under a REBASE it is the INVERSE of git's own stage names:
-	// git checks out the upstream and replays the feature commit onto it, so
-	// stage 2 (git's "ours") is origin/main and stage 3 (git's "theirs") is the
-	// feature branch. Passing git's naming through handed feature-dev the base
-	// under the field labelled "this PR's feature work" (#301 round-2 findings
-	// 3/5).
+	// merge.md). The action merges the base into the checked-out PR branch
+	// (#2752), so git's own stage 2 is the feature branch and stage 3 the base.
 	ours, _ := entry["ours"].(string)
 	theirs, _ := entry["theirs"].(string)
 	if !strings.Contains(ours, "feature-side") {
 		t.Errorf("ours must be the PR branch's work; got %q", ours)
 	}
 	if !strings.Contains(theirs, "main-side") {
-		t.Errorf("theirs must be the rebase base; got %q", theirs)
+		t.Errorf("theirs must be the merged base; got %q", theirs)
 	}
-	if doc["conflict_operation"] != "rebase" {
-		t.Errorf("conflict_operation = %v, want \"rebase\" — the mapping above is only correct for a rebase", doc["conflict_operation"])
+	if doc["conflict_operation"] != "merge" {
+		t.Errorf("conflict_operation = %v, want \"merge\" — the action merges the base, never rebases (#2752)", doc["conflict_operation"])
 	}
 
 	if !hasConflictSignal(t, ws, 301) {
 		t.Error("a captured conflict must emit CONFLICT_RESOLUTION_NEEDED so the scheduler rewinds")
 	}
-	if rebaseInProgress(t, ws) {
-		t.Error("a captured conflict must abort the rebase — the evidence is already on disk")
+	if operationInProgress(t, ws) {
+		t.Error("a captured conflict must abort the merge — the evidence is already on disk")
 	}
 }
 
@@ -335,7 +363,7 @@ func TestRealGit_DetachedHead_BranchGenuinelyUnknown(t *testing.T) {
 	if len(entries) == 0 {
 		t.Fatal("the raw index must be preserved before the abort — nothing was written")
 	}
-	if rebaseInProgress(t, ws) {
+	if operationInProgress(t, ws) {
 		t.Error("with the evidence preserved the abort is non-destructive and must run, leaving a usable worktree")
 	}
 	if !strings.Contains(strings.Join(res.Evidence, " "), "evidence_preserved=true") {
@@ -468,7 +496,7 @@ func TestRealGit_MultiFileConflict_NonASCIIPathCaptured(t *testing.T) {
 	if !hasConflictSignal(t, ws, 301) {
 		t.Error("a captured conflict must emit CONFLICT_RESOLUTION_NEEDED")
 	}
-	if rebaseInProgress(t, ws) {
+	if operationInProgress(t, ws) {
 		t.Error("a captured conflict must abort the rebase")
 	}
 }
@@ -490,13 +518,13 @@ func TestRealGit_BinaryConflict_NotCapturedAsSuccess(t *testing.T) {
 	const binPath = "bin.dat"
 
 	// The evidence dump is a RAW index dump and keys by git's own stage numbers,
-	// so the expectation here is stated in git's terms: under a rebase stage 2
-	// holds origin/main's bytes and stage 3 the feature branch's. (The CONTEXT
-	// document is the one that translates those into ours/theirs — see
-	// TestRealGit_RebaseConflict_CapturesThenAborts.) Both expected values come
-	// straight out of git.
-	wantStage2 := gitShow(t, ws, "origin/main", binPath)
-	wantStage3 := gitShow(t, ws, fixtureBranch, binPath)
+	// so the expectation here is stated in git's terms: under the base merge
+	// stage 2 holds the checked-out feature branch's bytes and stage 3
+	// origin/main's. (The CONTEXT document is the one that translates those into
+	// ours/theirs — see TestRealGit_RebaseConflict_CapturesThenAborts.) Both
+	// expected values come straight out of git.
+	wantStage2 := gitShow(t, ws, fixtureBranch, binPath)
+	wantStage3 := gitShow(t, ws, "origin/main", binPath)
 	if utf8.Valid(wantStage2) || utf8.Valid(wantStage3) {
 		t.Fatalf("fixture is not exercising the binary class: stage2 valid=%v stage3 valid=%v",
 			utf8.Valid(wantStage2), utf8.Valid(wantStage3))
@@ -530,7 +558,7 @@ func TestRealGit_BinaryConflict_NotCapturedAsSuccess(t *testing.T) {
 	if got := evidenceStage(t, ws, 301, binPath, 3); !bytes.Equal(got, wantStage3) {
 		t.Errorf("preserved stage-3 blob is not byte-identical: got %d bytes, want %d", len(got), len(wantStage3))
 	}
-	if rebaseInProgress(t, ws) {
+	if operationInProgress(t, ws) {
 		t.Error("the bytes are preserved verbatim on disk, so the abort is safe and must run")
 	}
 }
@@ -575,7 +603,7 @@ func TestRealGit_GitlinkConflict_CapturedAsMetadata(t *testing.T) {
 	if res.FollowUp != FollowUpStageCanResume {
 		t.Fatalf("FollowUp = %q, want %q — a submodule pointer conflict is capturable: %s", res.FollowUp, FollowUpStageCanResume, res.Reason)
 	}
-	if rebaseInProgress(t, ws) {
+	if operationInProgress(t, ws) {
 		t.Error("the capture succeeded, so the abort must run — a wedged mid-rebase worktree is never reclaimed")
 	}
 
@@ -724,7 +752,7 @@ func TestRealGit_ModeOnlyConflict_SurvivesItsOwnReader(t *testing.T) {
 		t.Fatalf("the reader rejected a faithful capture (index already aborted, nothing left to triage from): FollowUp = %q, reason = %s",
 			loop.FollowUp, loop.Reason)
 	}
-	if rebaseInProgress(t, ws) {
+	if operationInProgress(t, ws) {
 		t.Error("a captured conflict must abort the rebase")
 	}
 }
@@ -1233,21 +1261,52 @@ func TestSkillWriter_ConflictEnumerationIsShellPortable(t *testing.T) {
 	}
 }
 
-// TestRealGit_RebaseBranch_ResolvesHeadName covers rebaseBranch returning a REAL
-// branch. Every other test resolves the branch before the steps loop with HEAD
-// still attached, so the fallback only ever ran in the detached case where it
-// correctly returns "" — leaving its `rev-parse --git-path` + os.ReadFile
-// plumbing, the sole protection for a worktree that is ALREADY detached when
-// Execute starts, entirely unexercised (#301 round-2 advisory).
-func TestRealGit_RebaseBranch_ResolvesHeadName(t *testing.T) {
-	ws := realGitFixture(t, "conflict")
-	startRebase(t, ws)
-
-	if got := currentBranch(context.Background(), ws); got != unknownBranch {
-		t.Fatalf("precondition: git detaches HEAD during a rebase, so currentBranch must degrade to %q, got %q", unknownBranch, got)
+// TestRealGit_BaseMerge_PreservesBranchHistory is the #2752 regression on real
+// git: updating a BEHIND PR branch merges origin/main into it and pushes with a
+// plain push. Every commit the remote branch had before the update — and the
+// base — must be an ancestor of its new head, so no reviewed commit is
+// rewritten and the push is a fast-forward. A rebase + force-push fails this:
+// the old head is no longer an ancestor of the rewritten one.
+func TestRealGit_BaseMerge_PreservesBranchHistory(t *testing.T) {
+	ws := realGitFixture(t, "behind")
+	revParse := func(rev string) string {
+		t.Helper()
+		out, err := gittest.Command(ws, "rev-parse", rev).Output()
+		if err != nil {
+			t.Fatalf("rev-parse %s: %v", rev, err)
+		}
+		return strings.TrimSpace(string(out))
 	}
-	if got := rebaseBranch(context.Background(), ws); got != fixtureBranch {
-		t.Errorf("rebaseBranch = %q, want %q from rebase-merge/head-name", got, fixtureBranch)
+	before := revParse("origin/" + fixtureBranch)
+
+	runner := &fakePRMergeRunner{res: pmstages.PRMergeResult{Path: pmstages.PathMerged, PRNumber: 1}}
+	a := NewBranchOutOfDate(runner).withPolling(time.Millisecond, time.Millisecond)
+	res := a.Execute(context.Background(), prMergeConflictFailure(ws, 301))
+	if !res.Recovered {
+		t.Fatalf("expected Recovered=true on a clean base merge; got %q (%v)", res.Reason, res.Evidence)
+	}
+
+	if err := gittest.Command(ws, "fetch", "--quiet", "origin").Run(); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	after := revParse("origin/" + fixtureBranch)
+	if after == before {
+		t.Fatal("the remote PR branch did not move — nothing was pushed")
+	}
+	for _, anc := range []string{before, "origin/main"} {
+		if err := gittest.Command(ws, "merge-base", "--is-ancestor", anc, after).Run(); err != nil {
+			t.Errorf("%s is not an ancestor of the pushed head %s — history was rewritten", anc, after)
+		}
+	}
+	parents, err := gittest.Command(ws, "rev-list", "--parents", "-n", "1", after).Output()
+	if err != nil {
+		t.Fatalf("rev-list: %v", err)
+	}
+	if n := len(strings.Fields(string(parents))) - 1; n != 2 {
+		t.Errorf("pushed head has %d parent(s), want a two-parent merge commit", n)
+	}
+	if operationInProgress(t, ws) {
+		t.Error("a clean merge must leave no operation in progress")
 	}
 }
 

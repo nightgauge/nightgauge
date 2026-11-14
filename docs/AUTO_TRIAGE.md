@@ -15,7 +15,7 @@ require either an LLM-driven retry (expensive, slow) or human triage:
 - pr-merge skill exited 0 but the PR is still OPEN
 - pr-create skill exited 0 but `pr-{N}.json` was never written
 - a single CI check flaked and a `gh run rerun --failed` would clear it
-- the PR fell behind `origin/main` and a `--force-with-lease` rebase fixes it
+- the PR fell behind its base and merging the base into it (no force-push) fixes it
 - the issue was closed on GitHub but the project board didn't get the memo
 - pr-merge stalled, but the PR is clean+mergeable and a deterministic merge
   succeeds
@@ -80,7 +80,7 @@ failure, the more specific one MUST come first.
 | 3     | `skill-exited-without-merging`     | pr-merge gate KindNoOp ("PR is not MERGED"), PR exists, not stall-kill                                           | re-run `pmstages.PRMergeRunner`; on `PathMerged` → recovered                                                                                                                                                                                                                  |
 | 4     | `abandoned-commit-recoverable`     | any stage upstream of pr-create/pr-merge fails, no PR yet, workspace set, branch ahead-of-base with a clean tree | re-run `pmstages.PRCreateRunner`; on `CreatePathCreated` → recovered; on punt/error → `Recovered=false` + `BacktrackTargetStage=pr-create` so the scheduler resumes mid-pipeline instead of restarting from issue-pickup                                                      |
 | 5     | `skill-exited-without-creating-pr` | pr-create gate KindNoOp, no PR yet                                                                               | re-run `pmstages.PRCreateRunner`; on `CreatePathCreated` → recovered                                                                                                                                                                                                          |
-| 6     | `branch-out-of-date`               | pr-merge gate KindNoOp, evidence mentions `BEHIND` or `DIRTY` (`dirty-merge-state`)                              | `fetch`+`rebase origin/main`+`force-with-lease`, then **wait for CI on the rebased head** and **re-run `pmstages.PRMergeRunner`**; recovered ONLY on `PathMerged`. A rebase that hits a real conflict defers to `conflict-recovery-loop`                                      |
+| 6     | `branch-out-of-date`               | pr-merge gate KindNoOp, evidence mentions `BEHIND` or `DIRTY` (`dirty-merge-state`)                              | `fetch` + `merge` the PR's `baseRefName` + plain push, then **wait for CI on the updated head** and **re-run `pmstages.PRMergeRunner`**; recovered ONLY on `PathMerged`. A merge that hits a real conflict defers to `conflict-recovery-loop`                                 |
 | 7     | `ci-check-transiently-failed`      | pr-merge gate KindNoOp, evidence mentions failed-ci-checks, exactly one failing check                            | `gh run rerun <run-id> --failed`; poll until completed; SUCCESS → recovered                                                                                                                                                                                                   |
 | 8     | `stale-project-status`             | failure reason mentions `stale-project-status`; issue verified CLOSED on GitHub                                  | `nightgauge project move-status <N> done`                                                                                                                                                                                                                                     |
 | 9     | `pipeline-heal-base`               | pr-merge gate KindNoOp, evidence mentions `pipeline-failed-inherited`, baseline file has inherited-only failures | match `internal/heal/` pattern registry → create heal PR against base branch (possibly cross-repo)                                                                                                                                                                            |
@@ -93,11 +93,11 @@ the failure, the scheduler does not escalate the model, and the run ends in its
 non-fault kind.
 
 > **Ordering note (#4072):** `conflict-recovery-loop` is registered **before**
-> `branch-out-of-date`. A plain `BEHIND` is a fast-forward the rebase resolves
+> `branch-out-of-date`. A plain `BEHIND` is an update the base merge resolves
 > on its own; a genuine **content conflict** needs the LLM dev stage, so it must
 > be routed to the dev re-dispatch first (first-match-wins). `branch-out-of-date`
-> still owns the case where the BEHIND/DIRTY rebase only _discovers_ the conflict
-> at `git rebase` time — in that case it captures the conflict context and
+> still owns the case where the BEHIND/DIRTY update only _discovers_ the conflict
+> at `git merge` time — in that case it captures the conflict context and
 > defers to the same dev-rewind path rather than escalating.
 
 ### Pipeline-heal-base (#3683)
@@ -155,40 +155,45 @@ same-wave PRs touch shared files, the first merges and the second goes `BEHIND`
 mergeStateStatus, so the pr-merge gate surfaces a `KindNoOp` with `BEHIND` /
 `dirty-merge-state` evidence rather than merging the stale sibling.
 
-Recovery is **not** a bare rebase. After `git fetch origin main` →
-`git rebase origin/main` → `git push --force-with-lease`, the action:
+Recovery merges the base; it never rebases and never force-pushes (#2752). The
+base is the PR's `baseRefName` (`gh pr view --json baseRefName`, defaulting to
+`main`), so an epic-branch PR is updated from its epic branch. After
+`git fetch origin <base>` → `git merge --no-edit origin/<base>` →
+`git push origin HEAD:refs/heads/<branch>` (a fast-forward; every earlier PR
+commit stays an ancestor of the new head), the action:
 
-1. **Waits for CI on the rebased head** — the pre-rebase checks are stale, so it
+1. **Waits for CI on the updated head** — the earlier checks are stale, so it
    polls `gh pr view --json statusCheckRollup` with a tight, bounded budget
    (`DefaultRebaseCIPolls` × `DefaultRebaseCIPollInterval`, with a `ctx.Done()`
    guard). A failing check → triage; still-in-flight after the budget → declines
    without claiming recovery (no merge attempted).
 2. **Re-runs `pmstages.PRMergeRunner`** once CI is green. `Decide()` now finds
    the snapshot `CLEAN` and the runner issues + re-verifies the merge.
-3. Claims `Recovered=true` **only on `PathMerged`** — so the rebased PR actually
+3. Claims `Recovered=true` **only on `PathMerged`** — so the updated PR actually
    lands instead of being skipped while the scheduler advances. A runner punt
    (e.g. review still required) returns `FollowUp=issue requires human triage`.
 
-Real rebase **conflicts** defer to `conflict-recovery-loop` (#4072): the action
+Real merge **conflicts** defer to `conflict-recovery-loop` (#4072): the action
 captures the conflicting files + both sides into `conflict-context-{N}.json` and
 emits a `CONFLICT_RESOLUTION_NEEDED` feedback signal **before**
-`git rebase --abort` (the conflict blobs vanish after the abort), then returns
+`git merge --abort` (the conflict blobs vanish after the abort), then returns
 `FollowUp=stage can resume` so the scheduler rewinds to feature-dev. It never
 resolves the conflict itself.
 
-Before any of that, the action **refuses outright when a rebase is already in
-progress** in the worktree. Everything below assumes the rebase state it meets is
-state this invocation created, and `git rebase --abort` acts on that assumption —
-but a worktree parked in `git rebase -i` at an `edit` step is the operator's, and
-aborting it destroys their in-progress work with no record that anything was
-lost. The action cannot tell whose rebase it is, so it performs no fetch, no
-rebase and no abort: evidence carries `preexisting_rebase=true` and the follow-up
-is human triage.
+Before any of that, the action **refuses outright when a rebase or a merge is
+already in progress** in the worktree. Everything below assumes the merge state
+it meets is state this invocation created, and `git merge --abort` acts on that
+assumption — but a worktree parked in `git rebase -i` at an `edit` step, or
+holding an operator's conflicted merge, is the operator's, and aborting it
+destroys their in-progress work with no record that anything was lost. The
+action cannot tell whose operation it is, so it performs no fetch, no merge and
+no abort: evidence carries `preexisting_rebase=true` or `preexisting_merge=true`
+and the follow-up is human triage. A clean merge on a detached HEAD is not
+pushed either: there is no branch to push to, so it escalates.
 
 That hand-off is claimed **only when the capture actually succeeded** (#301). The
-branch is resolved _before_ the rebase runs — git detaches HEAD for a rebase's
-duration, so asking afterwards yields the `"unknown"` sentinel that feature-dev
-refuses to check out — with `rebase-merge/head-name` as the fallback. The capture
+branch is resolved _before_ the merge runs; feature-dev refuses to check out the
+`"unknown"` sentinel a detached HEAD yields. The capture
 then reports one of three outcomes, and each gets its own handling:
 
 - **captured** — every conflicting path is representable and the branch
@@ -199,14 +204,14 @@ then reports one of three outcomes, and each gets its own handling:
   `ours_commit`/`theirs_commit` with no object read at all. Two present blob
   sides that are both EMPTY are also representable when their modes differ: that
   is a mode-only conflict on an empty placeholder, and the differing modes are
-  the conflict. Writes the context file + signal, aborts the rebase (the
+  the conflict. Writes the context file + signal, aborts the merge (the
   context carries both sides of every path, so it IS the durable copy), returns
   `stage can resume`. The abort's exit status is checked here and only here: a
   failed abort downgrades to human triage rather than resuming a stage into a
-  live rebase.
-- **no-conflict-state** — the rebase failed but nothing is conflicted (dirty
+  live merge.
+- **no-conflict-state** — the merge failed but nothing is conflicted (dirty
   index, unborn base). Writes nothing, aborts, escalates to human triage with the
-  raw rebase error — git writes that diagnosis to stderr, so the evidence carries
+  raw merge error — git writes that diagnosis to stderr, so the evidence carries
   `(*exec.ExitError).Stderr` and not the contentless "exit status 1". Emitting a
   conflict signal here would spend the whole `max_dev_redispatch` budget
   re-running feature-dev against a context naming zero files.
@@ -214,7 +219,7 @@ then reports one of three outcomes, and each gets its own handling:
   or at least one conflicting path cannot be represented in a context (unreadable
   blob, binary/non-UTF-8 content, over the size cap). Writes no context and no
   signal. The raw index stages are first copied out verbatim to
-  `conflict-evidence-{N}/` in the pipeline state directory, and only then is the rebase
+  `conflict-evidence-{N}/` in the pipeline state directory, and only then is the merge
   aborted — evidence carries `evidence_preserved=true` and `evidence_dir=…`. The
   follow-up is always human triage, never a resumable stage, since a dev stage
   must not be dispatched against a conflict nobody could record.
@@ -231,20 +236,20 @@ NAME survives a JSON round trip too — but cannot report it the same way: it ha
 already emitted output by the time a blob read fails, so instead of writing
 nothing it writes the document with `capture_failed: true`, a document-level
 `capture_error`, and a per-path `capture_error` on each entry it could not
-record. It writes **no** `conflict-evidence-{N}/` dump, and the `git rebase
+record. It writes **no** `conflict-evidence-{N}/` dump, and the `git merge
 --abort` that follows it is unconditional — so on that path a failed capture
 leaves the reason on disk and nothing else. It writes that document into the
 worktree it is running in (`git rev-parse --show-toplevel`), which is where
 every reader looks. Readers escalate on either shape; see
 [FEEDBACK_LOOPS.md](FEEDBACK_LOOPS.md#write-invariant--the-files-existence-is-the-claim-301).
 
-**Why the failed case aborts rather than leaving the rebase live.** Leaving a
+**Why the failed case aborts rather than leaving the merge live.** Leaving a
 conflicted index in place does not preserve it in this system: `git status`
 reports the conflicted path as `UU`, which `reclaim.ClassifyStatus` calls
 blocking, so the scheduler's terminal defer treats it as uncommitted work and
 runs `RecoverUncommittedWork` — whose `git add -A` collapses the very `:2:`/`:3:`
 stages the skipped abort was protecting, commits conflict markers onto the
-rebase's detached HEAD, and relabels the run `worktree_uncommitted` ("recovered,
+branch, and relabels the run `worktree_uncommitted` ("recovered,
 not a failure"). Meanwhile the detached worktree is skipped by the sweep forever
 and is unusable (`git checkout` and `git stash` both refuse on an unmerged
 index). Copying the evidence out and then aborting keeps the bytes and leaves a
@@ -252,18 +257,18 @@ worktree every consumer can still handle. `RecoverUncommittedWork` additionally
 refuses an unmerged index outright, so the collapse cannot happen even if some
 other path leaves one behind.
 
-Only one case still leaves the rebase in progress: the capture failed AND the raw
+Only one case still leaves the merge in progress: the capture failed AND the raw
 index could not be copied out either — an unwritable tree, or git failing to read
 back a blob it had just listed. Aborting then would leave zero record, so the
 in-index stages are kept as the last copy, with `evidence_preserved=false` and
-`rebase_left_in_progress=true`.
+`merge_left_in_progress=true`.
 
 Nothing in the pipeline reclaims that worktree: `RecoverUncommittedWork` refuses
 an unmerged index, the reconcile sweep skips a detached HEAD, and worktree reuse
 hands the same tree to the next run untouched. That is why the escalation's
 Reason spells out the manual remedy (copy each side out with
 `git show :2:<path>` / `:3:<path>`, or read the commit ids from
-`git ls-files -u` for a submodule, then `git rebase --abort`). It is deliberately
+`git ls-files -u` for a submodule, then `git merge --abort`). It is deliberately
 a last resort and not an ordinary conflict class — a **submodule pointer conflict
 used to land here on every occurrence**, because the dump ran `cat-file blob` on
 a commit id; it now dumps such stages as metadata (`gitlink: true`, mode, sha)

@@ -104,13 +104,13 @@ func TestChangelogUnionMerge_Outcomes(t *testing.T) {
 	}
 }
 
-func TestConflictLoop_ChangelogUnionRunsBeforeRebaseFallback(t *testing.T) {
+func TestConflictLoop_ChangelogUnionRunsBeforeBaseMergeFallback(t *testing.T) {
 	stubGreenBranch(t)
 	calls := stubMerge(t, &gitpkg.BaseMergeResult{Outcome: gitpkg.BaseMergeChangelogResolved}, nil)
 	fallback := &recordingFallback{}
 	loop := NewConflictRecoveryLoop(2).
 		WithChangelogUnion(NewChangelogUnionMerge(&fakePRMergeRunner{res: pmstages.PRMergeResult{Path: pmstages.PathMerged}})).
-		WithRebaseFallback(fallback)
+		WithBaseMergeFallback(fallback)
 
 	res := loop.Execute(context.Background(), queueFailure(layouttest.Repo(t)))
 	if !res.Recovered || fallback.calls != 0 || len(*calls) != 1 || (*calls)[0] != "feat/x<-main" {
@@ -118,13 +118,13 @@ func TestConflictLoop_ChangelogUnionRunsBeforeRebaseFallback(t *testing.T) {
 	}
 }
 
-func TestConflictLoop_RealConflictContinuesToRebaseFallback(t *testing.T) {
+func TestConflictLoop_RealConflictContinuesToBaseMergeFallback(t *testing.T) {
 	stubGreenBranch(t)
 	stubMerge(t, &gitpkg.BaseMergeResult{Outcome: gitpkg.BaseMergeConflict, ConflictFiles: []string{"a.go"}}, nil)
 	fallback := &recordingFallback{}
 	loop := NewConflictRecoveryLoop(2).
 		WithChangelogUnion(NewChangelogUnionMerge(&fakePRMergeRunner{})).
-		WithRebaseFallback(fallback)
+		WithBaseMergeFallback(fallback)
 
 	res := loop.Execute(context.Background(), queueFailure(layouttest.Repo(t)))
 	if fallback.calls != 1 || !strings.Contains(strings.Join(res.Evidence, " "), "conflicting_file=a.go") {

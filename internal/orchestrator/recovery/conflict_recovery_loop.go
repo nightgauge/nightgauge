@@ -51,12 +51,12 @@ import (
 //     the loop at exactly max_dev_redispatch re-dispatches (#4072 review).
 type ConflictRecoveryLoop struct {
 	maxDevRedispatch int
-	// rebaseFallback produces the missing conflict context for a merge-queue
-	// conflict (#2611): the queue path never rebases locally, so no
-	// conflict-context-{N}.json exists. Rebasing captures it on a real
+	// baseMergeFallback produces the missing conflict context for a merge-queue
+	// conflict (#2611): the queue path never updates the branch locally, so no
+	// conflict-context-{N}.json exists. Merging the base captures it on a real
 	// conflict, or re-enqueues when the CONFLICTING read was stale.
-	rebaseFallback RecoveryAction
-	// changelogUnion runs ahead of rebaseFallback, so a conflict confined to
+	baseMergeFallback RecoveryAction
+	// changelogUnion runs ahead of baseMergeFallback, so a conflict confined to
 	// changelogs never reaches an LLM stage (#2841).
 	changelogUnion *ChangelogUnionMerge
 }
@@ -70,11 +70,11 @@ func NewConflictRecoveryLoop(maxDevRedispatch int) *ConflictRecoveryLoop {
 	return &ConflictRecoveryLoop{maxDevRedispatch: maxDevRedispatch}
 }
 
-// WithRebaseFallback sets the action Execute delegates to when a merge-queue
+// WithBaseMergeFallback sets the action Execute delegates to when a merge-queue
 // conflict arrives with no conflict context (#2611). Default() passes the
 // registry's BranchOutOfDate.
-func (a *ConflictRecoveryLoop) WithRebaseFallback(fallback RecoveryAction) *ConflictRecoveryLoop {
-	a.rebaseFallback = fallback
+func (a *ConflictRecoveryLoop) WithBaseMergeFallback(fallback RecoveryAction) *ConflictRecoveryLoop {
+	a.baseMergeFallback = fallback
 	return a
 }
 
@@ -285,11 +285,11 @@ func (a *ConflictRecoveryLoop) Execute(ctx context.Context, failure StageFailure
 		}
 		unionEvidence = evidence
 	}
-	if err != nil && os.IsNotExist(err) && a.rebaseFallback != nil && isQueueConflict(failure) {
-		// A merge-queue conflict never rebased locally, so there is no context
-		// yet: rebase to capture it (rewinds to feature-dev) or, when the
+	if err != nil && os.IsNotExist(err) && a.baseMergeFallback != nil && isQueueConflict(failure) {
+		// A merge-queue conflict never updated the branch locally, so there is no
+		// context yet: merge the base to capture it (rewinds to feature-dev) or, when the
 		// conflict was stale, re-enqueue (#2611).
-		res := a.rebaseFallback.Execute(ctx, failure)
+		res := a.baseMergeFallback.Execute(ctx, failure)
 		res.Evidence = append(append([]string{"queue_conflict=true"}, unionEvidence...), res.Evidence...)
 		return res
 	}
@@ -508,9 +508,7 @@ func (a *ConflictRecoveryLoop) Execute(ctx context.Context, failure StageFailure
 // unknownBranch when HEAD names no branch (detached, or mid-rebase — git
 // detaches HEAD for a rebase's duration and answers the literal "HEAD").
 //
-// This answers "what branch is checked out", which is NOT the same question as
-// "what branch is the rebase operating on" — see rebaseBranch. Callers that
-// need the latter mid-rebase must not use this one (#301).
+// Callers resolve the branch BEFORE starting a rebase or merge (#301).
 func currentBranch(ctx context.Context, workspace string) string {
 	out, err := execGit(ctx, workspace, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
@@ -521,46 +519,6 @@ func currentBranch(ctx context.Context, workspace string) string {
 		return unknownBranch
 	}
 	return b
-}
-
-// rebaseBranch returns the branch an in-progress rebase is replaying onto, or
-// "" when there is none to name.
-//
-// git detaches HEAD while rebasing, so currentBranch cannot answer this; git
-// instead records the original ref in rebase-merge/head-name (merge backend) or
-// rebase-apply/head-name (am backend). Resolved via `rev-parse --git-path` so
-// linked worktrees — which the pipeline uses for every issue — find their own
-// rebase state rather than the main checkout's.
-//
-// Only a refs/heads/ value is accepted. When the rebase was started from a
-// detached HEAD, git writes the literal string "detached HEAD" into that file;
-// there genuinely is no branch then, and "" is the honest answer.
-func rebaseBranch(ctx context.Context, workspace string) string {
-	for _, rel := range []string{"rebase-merge/head-name", "rebase-apply/head-name"} {
-		out, err := execGit(ctx, workspace, "rev-parse", "--git-path", rel)
-		if err != nil {
-			continue
-		}
-		path := strings.TrimSpace(string(out))
-		if path == "" {
-			continue
-		}
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(workspace, path)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		ref := strings.TrimSpace(string(data))
-		if !strings.HasPrefix(ref, "refs/heads/") {
-			continue
-		}
-		if b := strings.TrimPrefix(ref, "refs/heads/"); b != "" {
-			return b
-		}
-	}
-	return ""
 }
 
 // captureOutcome names WHICH of the three possible realities a conflict capture
@@ -933,7 +891,7 @@ func buildConflictFiles(ctx context.Context, workspace string, paths []unmergedP
 
 // preserveConflictEvidence copies the raw conflicted index out of git and into
 // `.git/nightgauge/pipeline/conflict-evidence-{N}/` so the conflict survives the
-// `git rebase --abort` that follows.
+// abort that follows.
 //
 // This exists because "leave the rebase in progress instead" does not work in
 // the running system (#301 review): the scheduler's own terminal defer sees the
@@ -1032,8 +990,8 @@ func preserveConflictEvidence(ctx context.Context, workspace string, issue, pr i
 		"conflict_operation": string(op),
 		"captured_at":        time.Now().UTC().Format(time.RFC3339),
 		"note": fmt.Sprintf(
-			"raw git index stages preserved before `git rebase --abort`. Stage 1 = merge base; under a %s stage %d is the PR branch's work and stage %d is the base. A stage with gitlink=true is a submodule pointer: its sha is a COMMIT in the submodule's own store, so no bytes are dumped for it.",
-			op, oursStage, theirsStage),
+			"raw git index stages preserved before the %s was aborted. Stage 1 = merge base; under a %s stage %d is the PR branch's work and stage %d is the base. A stage with gitlink=true is a submodule pointer: its sha is a COMMIT in the submodule's own store, so no bytes are dumped for it.",
+			op, op, oursStage, theirsStage),
 		"entries": entries,
 	}
 	data, merr := json.MarshalIndent(manifest, "", "  ")
@@ -1070,16 +1028,16 @@ func rebaseStateDir(ctx context.Context, workspace string) string {
 	return ""
 }
 
-// captureConflictContextFromIndex snapshots the in-progress rebase conflict
+// captureConflictContextFromIndex snapshots the in-progress merge or rebase conflict
 // (conflicting files + ours/theirs blobs) into conflict-context-{N}.json and
 // merges a CONFLICT_RESOLUTION_NEEDED feedback signal into feedback-{N}.json.
 //
 // It MUST be called while the conflict is still staged (after a failed
-// `git rebase`, BEFORE `git rebase --abort`) — the stage-1/2/3 entries exist
+// `git merge` or `git rebase`, BEFORE the abort) — the stage-1/2/3 entries exist
 // only while the conflict is in the index, and the abort drops them
 // permanently. This is the deterministic Go-side mirror of merge.md's
 // capture_conflict_and_signal:
-// branch-out-of-date calls it so a rebase conflict it cannot land defers to the
+// branch-out-of-date calls it so a base-merge conflict it cannot land defers to the
 // conflict-recovery rewind instead of escalating immediately (#4072).
 //
 // INVARIANT (#301): it writes conflict-context-{N}.json and emits
@@ -1100,7 +1058,7 @@ func rebaseStateDir(ctx context.Context, workspace string) string {
 // A captureFailed that HAS unmerged paths does write one thing, and it is not a
 // context: the raw index stages are dumped to conflict-evidence-{N}/ (see
 // preserveConflictEvidence). Nothing reads that as a capture — it is an
-// operator artifact — and it is what makes the caller's `git rebase --abort`
+// operator artifact — and it is what makes the caller's abort
 // non-destructive.
 //
 // All shell-outs go through execGit / execGitToFile so tests can stub them.
@@ -1172,7 +1130,7 @@ func captureConflictContextFromIndex(ctx context.Context, workspace string, issu
 	// intake refuses to check out the "unknown" sentinel, so a context carrying
 	// it would be re-dispatched against the wrong tree (or no checkout at all).
 	if branch == "" || branch == unknownBranch {
-		return failed(errors.New("could not resolve the branch under rebase"))
+		return failed(errors.New("could not resolve the branch in conflict"))
 	}
 
 	cf, uncapturable := buildConflictFiles(ctx, workspace, paths, op)
@@ -1260,7 +1218,7 @@ func (a *ConflictRecoveryLoop) ensureFeedbackSignal(feedbackPath string, issue i
 		SignalType:           conflictResolutionSignalType,
 		EmittedByStage:       "pr-merge",
 		BacktrackTargetStage: "feature-dev",
-		Rationale:            fmt.Sprintf("pr-merge rebase conflict on branch %s — re-dispatch feature-dev to resolve", cc.Branch),
+		Rationale:            fmt.Sprintf("pr-merge base-update conflict on branch %s — re-dispatch feature-dev to resolve", cc.Branch),
 		Evidence:             evidence,
 		Severity:             "blocking",
 	}

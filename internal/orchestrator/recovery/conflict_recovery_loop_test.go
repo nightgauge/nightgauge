@@ -516,7 +516,7 @@ func TestAction_ConflictRecoveryLoop_MatchesQueueConflict(t *testing.T) {
 
 func TestAction_ConflictRecoveryLoop_QueueConflictNoContext_Rebases(t *testing.T) {
 	fb := &fakeFallback{}
-	a := NewConflictRecoveryLoop(2).WithRebaseFallback(fb)
+	a := NewConflictRecoveryLoop(2).WithBaseMergeFallback(fb)
 	res := a.Execute(context.Background(), queueConflictFailure(layouttest.Repo(t)))
 	if fb.calls != 1 {
 		t.Fatalf("fallback calls = %d, want 1", fb.calls)
@@ -531,7 +531,7 @@ func TestAction_ConflictRecoveryLoop_QueueConflictNoContext_Rebases(t *testing.T
 
 func TestAction_ConflictRecoveryLoop_NonQueueNoContext_StillEscalates(t *testing.T) {
 	fb := &fakeFallback{}
-	a := NewConflictRecoveryLoop(2).WithRebaseFallback(fb)
+	a := NewConflictRecoveryLoop(2).WithBaseMergeFallback(fb)
 	res := a.Execute(context.Background(), StageFailure{
 		Stage: state.StagePRMerge, GateKind: gates.KindNoOp, Workspace: layouttest.Repo(t),
 		IssueNumber: 99, PRNumber: 7, Reason: "rebase conflict with no markers",
