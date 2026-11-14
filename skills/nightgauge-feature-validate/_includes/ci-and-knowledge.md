@@ -47,6 +47,8 @@ if [ "$SCOPED_CHECKS_ONLY" = "true" ]; then
   # Changed files: tracked edits since the merge base, plus untracked new files.
   CHANGED_FILES=$( { git diff --name-only "$(git merge-base HEAD "$BASE_REF")"; \
     git ls-files --others --exclude-standard; } | sort -u)
+  # The gate's fast static subset first (#2847): seconds, not a gate run.
+  nightgauge ci gate-run --fast || CI_PARITY_PASSED=false
   if [ -f go.mod ]; then
     # Build, vet, and the tests of the changed packages only: never ./...
     CHANGED_PKGS=$(printf '%s\n' "$CHANGED_FILES" | grep '\.go$' | xargs -n1 dirname 2>/dev/null \
@@ -75,6 +77,22 @@ names. Never run the full gate between review rounds.
 A scoped failure is fixed here, like any test failure, and the scoped checks run
 again. Then go to Step 2.7.3. Steps 2.5.0 to 2.5.3 do not run now: Step 2.7.4
 runs them, on the final tree.
+
+### Step 2.5.0f: Fast Static Checks Before Any Full Gate (#2847)
+
+Five of eight first full gates once failed on a cheap static check (pipefail,
+the publication boundary, a Go policy test), each costing a whole gate. So
+before every full gate this stage starts (Step 2.5.0 with the review off, and
+Step 2.7.4), run the gate's fast static subset:
+
+```bash
+nightgauge ci gate-run --fast || CI_PARITY_PASSED=false
+```
+
+It runs the steps `scripts/ci-local.sh` marks `--fast`, unguarded and
+unrecorded: it is not a gate and never counts as a pass. A declared gate has no
+fast subset, so it notes that and exits 0. Fix a fast failure like a scoped
+failure, then run the full gate. A fast pass is never a reason to skip it.
 
 ### Step 2.5.0: One Gate Per Tree (#2784)
 
@@ -716,8 +734,8 @@ gate-metric row, the duration, the severity counts and any discovered work.
 
 Run this once, after Step 2.7.3 returns `pass`, `reusable` or `disabled` on the
 final tree, and before the pre-push gate (Step 2.7.1). It is Steps 2.5.0 to 2.5.3
-as written, on the tree the review passed: `nightgauge ci gate-status`, then
-`nightgauge ci gate-run` in the background, then the auto-fix loop if the gate
+as written, on the tree the review passed: the fast subset (Step 2.5.0f), then
+`nightgauge ci gate-status`, then `nightgauge ci gate-run` in the background, then the auto-fix loop if the gate
 fails. Skip it when the review is off, because Phase 2.5 already ran the full
 gate. Skip it too when the review ended in `cap_reached` or a failed review,
 because commit and push are skipped and no gate result would be used. A gate

@@ -221,6 +221,13 @@ nightgauge exit-records gate-summary --since 2026-11-01 --json
 `review_phases`, since a stage that did its review takes longer for a reason
 unrelated to gates.
 
+`gate_first_verdict` and `gate_first_failed_steps` record the stage's first
+finished full gate and the steps whose assertion failed in it (#2847). From
+them `gate-summary` sets each run's `first_gate` (`stage`, `verdict`,
+`failed_steps`) from its earliest stage with a gate, totals
+`first_gate_totals` (`runs`, `passed`, `failed`, `other`, `pass_rate`), and
+ranks `failing_steps` (`step`, `first_gates`, `runs`) across runs.
+
 ### `success` is the Post-Gate Outcome (#125)
 
 `success` and the run record's `V2StageDetail.status` describe the same

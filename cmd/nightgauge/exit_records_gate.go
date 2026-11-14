@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/gateledger"
 	"github.com/spf13/cobra"
 )
 
@@ -30,17 +31,50 @@ func (t *gateTally) add(rec diagnostics.StageExitRecord) {
 	t.ElapsedMs += rec.ElapsedMs
 }
 
+// firstGate is a run's first finished full gate (#2847): the gate a fast
+// static failure costs a whole re-run of.
+type firstGate struct {
+	Stage       string   `json:"stage"`
+	Verdict     string   `json:"verdict"`
+	FailedSteps []string `json:"failed_steps,omitempty"`
+}
+
 // gateRunSummary is one pipeline run, or one issue's records with no run id.
 type gateRunSummary struct {
 	Issue  int                   `json:"issue"`
 	RunID  string                `json:"run_id,omitempty"`
 	Total  gateTally             `json:"total"`
 	Stages map[string]*gateTally `json:"stages"`
+	// FirstGate is nil when no stage of the run finished a full gate.
+	FirstGate *firstGate `json:"first_gate,omitempty"`
+}
+
+// firstGateTotals counts the runs' first gates. Other is any verdict that is
+// neither a pass nor an assertion failure (infra, superseded). PassRate is
+// Passed/Runs, 0 when no run had a first gate.
+type firstGateTotals struct {
+	Runs     int     `json:"runs"`
+	Passed   int     `json:"passed"`
+	Failed   int     `json:"failed"`
+	Other    int     `json:"other"`
+	PassRate float64 `json:"pass_rate"`
+}
+
+// failingStep is one step's failures across runs. FirstGates counts runs whose
+// first gate failed on the step; Runs counts runs where any stage's first gate
+// failed on it.
+type failingStep struct {
+	Step       string `json:"step"`
+	FirstGates int    `json:"first_gates"`
+	Runs       int    `json:"runs"`
 }
 
 // gateSummary is the JSON shape of `nightgauge exit-records gate-summary`.
 type gateSummary struct {
-	Runs []gateRunSummary `json:"runs"`
+	Runs            []gateRunSummary `json:"runs"`
+	FirstGateTotals firstGateTotals  `json:"first_gate_totals"`
+	// FailingSteps is sorted by FirstGates, then Runs, descending, then by name.
+	FailingSteps []failingStep `json:"failing_steps"`
 	// FeatureDevReview splits feature-dev by ReviewPhases, because a stage that
 	// did its review takes longer for a reason that has nothing to do with gates.
 	// The empty key is a record that could not say.
@@ -49,8 +83,10 @@ type gateSummary struct {
 
 // summarizeGates totals records per run and per stage.
 func summarizeGates(records []diagnostics.StageExitRecord) gateSummary {
-	sum := gateSummary{FeatureDevReview: map[string]*gateTally{}}
+	sum := gateSummary{FeatureDevReview: map[string]*gateTally{}, FailingSteps: []failingStep{}}
 	byRun := map[string]*gateRunSummary{}
+	// stepRuns holds, per step, the runs any stage's first gate failed it in.
+	stepRuns := map[string]map[string]bool{}
 	var keys []string
 	for _, rec := range records {
 		key := fmt.Sprintf("%012d/%s", rec.Issue, rec.RunID)
@@ -65,6 +101,20 @@ func summarizeGates(records []diagnostics.StageExitRecord) gateSummary {
 			run.Stages[rec.Stage] = &gateTally{}
 		}
 		run.Stages[rec.Stage].add(rec)
+		if rec.GateFirstVerdict != "" {
+			// Records are read in write order, so the first one with a gate is
+			// the run's first gate.
+			if run.FirstGate == nil {
+				run.FirstGate = &firstGate{Stage: rec.Stage, Verdict: rec.GateFirstVerdict,
+					FailedSteps: rec.GateFirstFailedSteps}
+			}
+			for _, step := range rec.GateFirstFailedSteps {
+				if stepRuns[step] == nil {
+					stepRuns[step] = map[string]bool{}
+				}
+				stepRuns[step][key] = true
+			}
+		}
 		if rec.Stage == "feature-dev" {
 			if sum.FeatureDevReview[rec.ReviewPhases] == nil {
 				sum.FeatureDevReview[rec.ReviewPhases] = &gateTally{}
@@ -73,9 +123,44 @@ func summarizeGates(records []diagnostics.StageExitRecord) gateSummary {
 		}
 	}
 	sort.Strings(keys)
+	firstFails := map[string]int{}
 	for _, key := range keys {
-		sum.Runs = append(sum.Runs, *byRun[key])
+		run := byRun[key]
+		sum.Runs = append(sum.Runs, *run)
+		if run.FirstGate == nil {
+			continue
+		}
+		t := &sum.FirstGateTotals
+		t.Runs++
+		switch run.FirstGate.Verdict {
+		case gateledger.VerdictPass:
+			t.Passed++
+		case gateledger.VerdictFail:
+			t.Failed++
+		default:
+			t.Other++
+		}
+		for _, step := range run.FirstGate.FailedSteps {
+			firstFails[step]++
+		}
 	}
+	if t := &sum.FirstGateTotals; t.Runs > 0 {
+		t.PassRate = float64(t.Passed) / float64(t.Runs)
+	}
+	for step, runs := range stepRuns {
+		sum.FailingSteps = append(sum.FailingSteps,
+			failingStep{Step: step, FirstGates: firstFails[step], Runs: len(runs)})
+	}
+	sort.Slice(sum.FailingSteps, func(i, j int) bool {
+		a, b := sum.FailingSteps[i], sum.FailingSteps[j]
+		if a.FirstGates != b.FirstGates {
+			return a.FirstGates > b.FirstGates
+		}
+		if a.Runs != b.Runs {
+			return a.Runs > b.Runs
+		}
+		return a.Step < b.Step
+	})
 	return sum
 }
 
@@ -129,6 +214,20 @@ func printGateSummary(sum gateSummary) {
 			line(name, *run.Stages[name])
 		}
 		line("total", run.Total)
+		if fg := run.FirstGate; fg != nil {
+			steps := ""
+			if len(fg.FailedSteps) > 0 {
+				steps = " (" + strings.Join(fg.FailedSteps, ", ") + ")"
+			}
+			fmt.Printf("  first gate: %s in %s%s\n", fg.Verdict, fg.Stage, steps)
+		}
+	}
+	if t := sum.FirstGateTotals; t.Runs > 0 {
+		fmt.Printf("first gates: %d of %d passed (%.0f%%), %d failed, %d other\n",
+			t.Passed, t.Runs, t.PassRate*100, t.Failed, t.Other)
+		for _, s := range sum.FailingSteps {
+			fmt.Printf("  %-40s first-gates=%d runs=%d\n", s.Step, s.FirstGates, s.Runs)
+		}
 	}
 	if len(sum.FeatureDevReview) > 0 {
 		fmt.Println("feature-dev by review phases")
@@ -154,7 +253,7 @@ func exitRecordsGateSummaryCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:          "gate-summary",
-		Short:        "Total full gates per run and per stage (#2784)",
+		Short:        "Total full gates per run and per stage, and first-gate failures (#2784, #2847)",
 		SilenceUsage: true,
 		Example: `  nightgauge exit-records gate-summary --issue 2784
   nightgauge exit-records gate-summary --since 2026-11-01 --json`,

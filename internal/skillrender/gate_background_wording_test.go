@@ -12,6 +12,10 @@ import (
 // assignment such as ("nightgauge ci gate-run") is not a start.
 var gateRun = regexp.MustCompile(`(^|[\s;&|])("\$BINARY"|\$BINARY|nightgauge|bash scripts/ci-local\.sh|\./scripts/ci-local\.sh)(\s+(ci gate-run|pre-push validate)\b|\s*$)`)
 
+// fastGateRun is `ci gate-run --fast` (#2847): the static subset, seconds long
+// and run in the foreground, so it is not a start of the full gate.
+var fastGateRun = regexp.MustCompile(`\bci gate-run\s+--fast\b`)
+
 // gateWording is what every step that runs the gate must say (#2953): a
 // foreground call is killed at twice its timeout.
 var gateWording = []string{"run_in_background: true", "`timeout`", "twice its timeout", "`gate_command` is never run directly"}
@@ -81,7 +85,7 @@ func TestGateSteps_NameBackgroundForm(t *testing.T) {
 				inCode = !inCode
 			case inCode:
 				code := strings.TrimSpace(line)
-				if heading != "" && !strings.HasPrefix(code, "#") && gateRun.MatchString(code) {
+				if heading != "" && !strings.HasPrefix(code, "#") && gateRun.MatchString(fastGateRun.ReplaceAllString(code, "")) {
 					assertGateWording(t, rel, heading, prose)
 					heading = "" // report a step once
 				}

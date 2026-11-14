@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/gateledger"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
@@ -348,5 +349,34 @@ func TestWriteStageExitRecord_KeepsTheGatesOwnReason(t *testing.T) {
 	}
 	if rec := readOnlyExitRecord(t, root); rec.GateReason != "issue context file missing" || rec.GateKind != "no_op" {
 		t.Errorf("gate fields = (%q, %q), want the gate's own verdict untouched", rec.GateKind, rec.GateReason)
+	}
+}
+
+// TestWriteStageExitRecord_CopiesTheFirstGate pins that the record carries the
+// stage's first full gate, not its last (#2847): a fail fixed by a pass is
+// still a failed first gate.
+func TestWriteStageExitRecord_CopiesTheFirstGate(t *testing.T) {
+	root := layouttest.Repo(t)
+	now := time.Now().UTC()
+	for i, ev := range []gateledger.Event{
+		{RunID: "a", Verdict: gateledger.VerdictFail, FailedSteps: []string{"Publication boundary"}},
+		{RunID: "b", Verdict: gateledger.VerdictPass},
+	} {
+		ev.Event, ev.Kind, ev.Full, ev.Issue, ev.Stage = gateledger.EventFinish, gateledger.KindLocalGate, true, 2847, "feature-validate"
+		ev.TS = now.Add(time.Duration(i-2) * time.Minute).Format(time.RFC3339Nano)
+		if err := gateledger.Append(root, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := WriteStageExitRecord(root, StageExitRecord{
+		Repo: "nightgauge/nightgauge", Issue: 2847, Stage: "feature-validate",
+		Timestamp: now.Format(time.RFC3339Nano), ElapsedMs: int64(10 * time.Minute / time.Millisecond),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := readOnlyExitRecord(t, root)
+	if rec.GateRuns != 2 || rec.GateFirstVerdict != gateledger.VerdictFail ||
+		len(rec.GateFirstFailedSteps) != 1 || rec.GateFirstFailedSteps[0] != "Publication boundary" {
+		t.Errorf("record = runs %d, first %q %v", rec.GateRuns, rec.GateFirstVerdict, rec.GateFirstFailedSteps)
 	}
 }

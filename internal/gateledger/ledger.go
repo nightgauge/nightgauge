@@ -86,6 +86,11 @@ type Event struct {
 	// Worktree is where a capped review's uncommitted work stays (#2865). The
 	// ledger is clone-shared, so a reader outside the worktree can name it.
 	Worktree string `json:"worktree,omitempty"`
+	// FailedSteps names, in declared order, the steps of a finished gate whose
+	// assertion failed (#2847). InfraSteps names the steps that could not run,
+	// which asserted nothing about the tree. Both are empty on a pass.
+	FailedSteps []string `json:"failed_steps,omitempty"`
+	InfraSteps  []string `json:"infra_steps,omitempty"`
 }
 
 // Path returns the ledger path for the clone holding root.
@@ -279,6 +284,11 @@ type Usage struct {
 	// Unfinished counts full gates that started in the window with no finish
 	// anywhere in the ledger: killed, so their duration is unknown.
 	Unfinished int
+	// FirstVerdict is the verdict of the stage's earliest finished full gate in
+	// the window, empty when none finished (#2847). FirstFailedSteps names that
+	// gate's assertion failures.
+	FirstVerdict     string
+	FirstFailedSteps []string
 }
 
 // UsageIn totals the full gates of an issue's stage whose events fall in
@@ -308,6 +318,10 @@ func UsageIn(root string, issue int, stage string, from, to time.Time) (Usage, e
 		switch e.ev.Event {
 		case EventFinish:
 			if e.ev.Full {
+				if u.Runs == 0 {
+					u.FirstVerdict = e.ev.Verdict
+					u.FirstFailedSteps = e.ev.FailedSteps
+				}
 				u.Runs++
 				u.Seconds += e.ev.Seconds
 			}
