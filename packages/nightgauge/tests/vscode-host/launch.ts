@@ -21,6 +21,10 @@
  *      loading it can still exit 0; without this check, that is a green tier
  *      that observed nothing.
  *   5. Run the demo drift guard over the daemon's request log (#2109).
+ *   6. Diagnose and clean up (#2747): print the load at each launch, retry a
+ *      launch fault once, copy a failed window's VS Code logs beside the
+ *      ci-local step log, and remove scratch after a pass (keep it after a
+ *      failure).
  *
  * Headless: on Linux, Electron needs an X server. CI wraps this whole
  * command in `xvfb-run --auto-servernum`, which is what
@@ -36,6 +40,16 @@ import { fileURLToPath } from "node:url";
 import { downloadAndUnzipVSCode, runTests } from "@vscode/test-electron";
 import { ACQUIRE_ATTEMPTS, acquireVSCode } from "../launcher/acquireVSCode";
 import { agentHomeEnv, scrubInheritedHostEnv, secretStoreArgs } from "../launcher/hostIsolation";
+import {
+  LAUNCH_ATTEMPTS,
+  classifyWindowOutcome,
+  copyWindowLogs,
+  diagnosticsDir,
+  loadAverageLine,
+  shouldRemoveScratch,
+  shouldRetryLaunch,
+  type WindowOutcome,
+} from "../launcher/windowDiagnostics";
 import {
   buildInventory,
   driftProblems,
@@ -103,6 +117,13 @@ function seedAgentInstall(dirs: { codex: string; grok: string; opencode: string;
   fs.writeFileSync(path.join(dirs.claude, "installed_plugins.json"), AGENT_SENTINEL);
 }
 
+/** The first line of a runTests rejection, for the one-line retry notice. */
+function firstLine(err: unknown): string {
+  if (err === undefined) return "VS Code exited without an error";
+  const text = err instanceof Error ? err.message : String(err);
+  return text.split("\n")[0] || "no message";
+}
+
 function requireFile(file: string, remedy: string): void {
   if (!fs.existsSync(file)) {
     console.error(`ERROR: missing ${path.relative(packageRoot, file)}\n  ${remedy}`);
@@ -138,6 +159,25 @@ async function main(): Promise<void> {
 
   console.log(`VSCode host smoke tier: workspace ${workspace}`);
 
+  // Where a failed window's VS Code logs go (#2747): beside the ci-local step
+  // log when the gate runs this, otherwise in scratch, which a failure keeps.
+  // A previous run's logs would read as this run's, so start empty.
+  const diagnostics = diagnosticsDir(process.env, scratch);
+  fs.rmSync(diagnostics, { recursive: true, force: true });
+
+  /**
+   * Exit, removing scratch after a pass and keeping it, with its path
+   * printed, after a failure (#2747): 78 runs had left ~10 MB each behind.
+   */
+  function finish(code: number): never {
+    if (shouldRemoveScratch(code)) {
+      fs.rmSync(scratch, { recursive: true, force: true });
+    } else {
+      console.error(`[host] kept scratch ${scratch}`);
+    }
+    process.exit(code);
+  }
+
   let vscodeExecutablePath: string;
   try {
     vscodeExecutablePath = await acquireVSCode({
@@ -152,24 +192,73 @@ async function main(): Promise<void> {
         "The smoke tier never ran."
     );
     console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
-    process.exit(1);
+    finish(1);
   }
 
   /**
    * Run the bundled suites in one VSCode window. `window` names the suites it
    * runs (see index.host.ts); each window gets its own user-data dir, so the
    * binary override and every piece of window state stay per-window.
+   *
+   * A launch fault (no transcript: VS Code never reached the in-host module,
+   * so no test ran) is retried once, in fresh directories, and the retry is
+   * printed with its error and the load. A failed test is never retried
+   * (#2747 ADR-001). `resetBeforeRetry` names files a faulted attempt may
+   * have left that the next attempt must not inherit.
    */
   async function runWindow(
     window: "main" | "demo",
     folder: string,
-    env: Record<string, string>
+    env: Record<string, string>,
+    resetBeforeRetry: string[] = []
   ): Promise<number> {
-    const userDataDir = path.join(scratch, `user-data-${window}`);
-    const transcript = path.join(scratch, `transcript-${window}.txt`);
+    for (let attempt = 1; ; attempt++) {
+      console.log(
+        `[host] ${window} window launch (attempt ${attempt}/${LAUNCH_ATTEMPTS}): ${loadAverageLine()}`
+      );
+      const { outcome, error, userDataDir } = await launchWindow(window, attempt, folder, env);
+      if (outcome === "passed") return 0;
+      const label = `${window}-attempt-${attempt}`;
+      const copied = copyWindowLogs(userDataDir, label, diagnostics);
+      console.error(
+        copied
+          ? `[host] ${window} window VS Code logs: ${copied}`
+          : `[host] ${window} window wrote no VS Code logs under ${userDataDir}`
+      );
+      if (shouldRetryLaunch(outcome, attempt)) {
+        console.error(
+          `[host] ${window} window: launch fault on attempt ${attempt}/${LAUNCH_ATTEMPTS} ` +
+            `(${firstLine(error)}); retrying. ${loadAverageLine()}`
+        );
+        for (const file of resetBeforeRetry) fs.rmSync(file, { force: true });
+        continue;
+      }
+      if (outcome === "launch-fault") {
+        // A launch that never reached the in-host module, kept distinct from a
+        // failed test: a window can die before loading it and still exit 0.
+        console.error(
+          `ERROR: the in-host test module never wrote its ${window}-window transcript ` +
+            `(${attempt} launch attempt${attempt === 1 ? "" : "s"}). VSCode exited without ` +
+            "running the smoke tier — treat this as a failure, not a pass."
+        );
+      }
+      return 1;
+    }
+  }
+
+  /** One launch of one window, in directories of its own. */
+  async function launchWindow(
+    window: "main" | "demo",
+    attempt: number,
+    folder: string,
+    env: Record<string, string>
+  ): Promise<{ outcome: WindowOutcome; error: unknown; userDataDir: string }> {
+    const id = `${window}-${attempt}`;
+    const userDataDir = path.join(scratch, `user-data-${id}`);
+    const transcript = path.join(scratch, `transcript-${id}.txt`);
     fs.mkdirSync(path.join(userDataDir, "User"), { recursive: true });
-    const fakeHome = path.join(scratch, `home-${window}`);
-    const agentHomes = path.join(scratch, `agent-homes-${window}`);
+    const fakeHome = path.join(scratch, `home-${id}`);
+    const agentHomes = path.join(scratch, `agent-homes-${id}`);
     seedAgentInstall({
       codex: path.join(fakeHome, ".codex", "skills"),
       grok: path.join(fakeHome, ".grok", "skills"),
@@ -193,7 +282,7 @@ async function main(): Promise<void> {
         2
       )
     );
-    let code = 0;
+    let error: unknown = undefined;
     try {
       await runTests({
         vscodeExecutablePath,
@@ -209,7 +298,7 @@ async function main(): Promise<void> {
           NIGHTGAUGE_CONFIG_HOME: path.join(scratch, "no-machine-tier"),
           // Keep the daemon's serve claim, rate-limit hints and machine id off
           // the developer's real machine-state root (ADR-024 § 8).
-          NIGHTGAUGE_STATE_HOME: path.join(scratch, `state-${window}`),
+          NIGHTGAUGE_STATE_HOME: path.join(scratch, `state-${id}`),
           NIGHTGAUGE_SKIP_AUTH_PREFLIGHT: "1",
           // Keep activation's skill re-sync off the developer's agent homes
           // (#2935). HOME is fake as well, so a resolver that ignores its
@@ -244,35 +333,32 @@ async function main(): Promise<void> {
         ],
       });
     } catch (err) {
-      // runTests rejects for two very different reasons and they need
-      // different treatment.
-      //
-      // If VSCode STARTED and a test failed, the in-host reporter has already
-      // printed the detail and a stack trace from here would bury it.
-      //
-      // If VSCode never started — the window died on launch, Electron could
-      // not reach a display, the bundle threw before the reporter loaded —
-      // there is no in-host reporter and this rejection carries the ONLY
-      // description of what went wrong. Swallowing it leaves "the in-host
-      // test module never wrote its transcript" as the sole output, which
-      // says a failure happened and nothing about why. That cost a red `main`
-      // and a blind investigation.
-      //
-      // The transcript is the discriminator: absent means we never got that far.
-      if (!fs.existsSync(transcript)) {
-        console.error(`ERROR: VSCode (${window} window) failed to launch. Underlying error:`);
-        console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
-      }
-      code = 1;
+      error = err;
     }
-    if (!fs.existsSync(transcript)) {
-      console.error(
-        `ERROR: the in-host test module never wrote its ${window}-window transcript. VSCode ` +
-          "exited without running the smoke tier — treat this as a failure, not a pass."
-      );
-      code = 1;
+    const outcome = classifyWindowOutcome({
+      transcriptExists: fs.existsSync(transcript),
+      runTestsError: error,
+    });
+    // runTests rejects for two very different reasons and they need
+    // different treatment.
+    //
+    // If VSCode STARTED and a test failed, the in-host reporter has already
+    // printed the detail and a stack trace from here would bury it.
+    //
+    // If VSCode never started — the window died on launch, Electron could
+    // not reach a display, the bundle threw before the reporter loaded —
+    // there is no in-host reporter and this rejection carries the ONLY
+    // description of what went wrong. Swallowing it leaves "the in-host
+    // test module never wrote its transcript" as the sole output, which
+    // says a failure happened and nothing about why. That cost a red `main`
+    // and a blind investigation.
+    //
+    // The transcript is the discriminator: absent means we never got that far.
+    if (outcome === "launch-fault" && error !== undefined) {
+      console.error(`ERROR: VSCode (${window} window) failed to launch. Underlying error:`);
+      console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
     }
-    return code;
+    return { outcome, error, userDataDir };
   }
 
   // The main window: activation on an empty workspace, then every surface
@@ -291,12 +377,22 @@ async function main(): Promise<void> {
   // the start file, which only the demo-mode suite creates.
   const demoWorkspace = path.join(scratch, "demo-workspace");
   fs.mkdirSync(demoWorkspace, { recursive: true });
-  const demoCode = await runWindow("demo", demoWorkspace, {
-    NIGHTGAUGE_DEMO_SCENARIO: REFERENCE_SCENARIO,
-    NIGHTGAUGE_DEMO_SPEED: DEMO_SPEED,
-    NIGHTGAUGE_DEMO_START_FILE: path.join(scratch, "demo-start"),
-    NIGHTGAUGE_DEMO_EVENT_LOG: path.join(scratch, "demo-events.jsonl"),
-  });
+  // A retried demo launch must not inherit a start file or event log from the
+  // faulted attempt. The shared IPC log is left alone: the main window's
+  // entries in it stay valid.
+  const demoStart = path.join(scratch, "demo-start");
+  const demoEvents = path.join(scratch, "demo-events.jsonl");
+  const demoCode = await runWindow(
+    "demo",
+    demoWorkspace,
+    {
+      NIGHTGAUGE_DEMO_SCENARIO: REFERENCE_SCENARIO,
+      NIGHTGAUGE_DEMO_SPEED: DEMO_SPEED,
+      NIGHTGAUGE_DEMO_START_FILE: demoStart,
+      NIGHTGAUGE_DEMO_EVENT_LOG: demoEvents,
+    },
+    [demoStart, demoEvents]
+  );
 
   let exitCode = mainCode || demoCode;
 
@@ -344,7 +440,7 @@ async function main(): Promise<void> {
     }
   }
 
-  process.exit(exitCode);
+  finish(exitCode);
 }
 
 void main();

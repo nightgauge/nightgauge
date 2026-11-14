@@ -45,6 +45,12 @@ export interface CapturedPanel {
    */
   delivered: (boolean | undefined)[];
   /**
+   * `Date.now()` when each post's thenable resolved, by index: the moment
+   * VS Code handed the message to the webview, the first evidence after a
+   * post that the webview is live (#2747).
+   */
+  deliveredAt: (number | undefined)[];
+  /**
    * Every message the real webview sent the extension, in order. Calls a
    * case makes through `messageListeners` are not recorded here, so this is
    * the webview's own side of the protocol (a tab it actually activated).
@@ -186,6 +192,7 @@ function wrapCreateWebviewPanel(original: CreateWebviewPanel): CreateWebviewPane
       posted: [],
       postedAt: [],
       delivered: [],
+      deliveredAt: [],
       received: [],
       receivedAt: [],
     };
@@ -213,10 +220,12 @@ function wrapCreateWebviewPanel(original: CreateWebviewPanel): CreateWebviewPane
       const index = record.posted.push(message) - 1;
       record.postedAt.push(Date.now());
       record.delivered.push(undefined);
+      record.deliveredAt.push(undefined);
       const result = post(message);
       result.then(
         (ok) => {
           record.delivered[index] = ok;
+          record.deliveredAt[index] = Date.now();
         },
         () => undefined
       );
