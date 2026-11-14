@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- On macOS the hooks no longer run a VS Code extension bundle binary whose code signature does not verify against the Nightgauge Developer ID requirement. They fall back to a verified sibling bundle or to `~/go/bin`. The refusal is logged as a `[stale-binary]` line and reported by `nightgauge doctor`. Unsigned dev-install bundles are refused too (#2776).
 - The VirusTotal scan now runs only for the release candidate chosen to become the release. An RC tag push builds the RC and runs ClamAV, and stays green without VirusTotal. Dispatch the scan once on the chosen RC, with `gh workflow run staging.yml --ref vX.Y.Z-rc.N`. That run builds the margin binaries and scans everything, and `release.yml` still refuses a release whose RC has no clean record from it. `vt-scan.sh` now reads the key's remaining daily quota before its first lookup. It stops, naming both numbers, when the scan may not fit, and logs and continues when the quota answer cannot be read. A 404 on an analysis object no longer fails the scan: it polls the file's own report until it is newer, or until `VT_ANALYSIS_TIMEOUT` (#3213).
 - Updating a stale PR no longer rewrites its history. The `branch-out-of-date` recovery and pr-merge conflict resolution merge the PR's base into its branch and push without force, instead of rebasing and force-pushing. The base is the PR's own base branch, so an epic-branch PR is updated from its epic branch, not `main` (#2752, #2843).
 

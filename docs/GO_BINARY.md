@@ -5293,6 +5293,22 @@ extension id, but profiles and pinned installs are plausible producers and
 nothing here depends on the premise: that case degrades to the pre-#356
 selection **plus** a `[stale-binary]` line, rather than to silence.
 
+**Code signature (#2776).** A bundle is selected only when its binary is
+executable **and** its code signature verifies. On macOS that means
+`codesign --verify --strict -R='<req>'` against one pinned requirement: Apple
+anchor, Developer ID intermediate, Developer ID Application leaf, team
+`RZJPN7Y7BG`. A bare `--verify` is not enough, because an ad-hoc re-signed
+tampered binary passes it. Candidates are verified lazily, in selection order:
+the recorded bundle, then glob order. A bundle that fails is never run. With
+no verified bundle, step 4 resolves nothing and the cascade continues to
+`~/go/bin`. The refusal is reported on every outcome: `guard.sh` writes a
+`[stale-binary] VSCode extension bundle <ver> was not run: its code signature
+did not verify …` line with the usual routing and dedupe, and `doctor` reports
+`signature_rejected`. Linux bundles carry no platform signature, so on other
+platforms selection is unchanged. Dev-install bundles (`0.1.<epoch>`) are not
+Developer ID signed and are refused on macOS; resolve them through PATH or the
+shim instead.
+
 **Reading the record — one bounded fork, measured.** Both sides run the same
 extraction: find the ONE `"relativeLocation"` whose value is a plain
 `nightgauge.nightgauge-…` directory name (POSIX whitespace, including a

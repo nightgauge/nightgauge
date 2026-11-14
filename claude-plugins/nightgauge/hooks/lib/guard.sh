@@ -321,6 +321,24 @@ _ng_recorded_version=""
 _ng_selected_version=""
 _ng_bundle_count=0
 _ng_divergence=""
+_ng_rejected=""
+# Code-signature gate for step 4 (#2776). On Darwin a bundle binary runs only
+# when codesign verifies it against this pinned requirement (Apple anchor,
+# Developer ID intermediate and leaf, Nightgauge team). A bare --verify is not
+# enough: an ad-hoc re-signed tampered binary passes it. The string equals
+# bundleCodeRequirement in internal/doctor/binary_resolve.go (parity test).
+# Other platforms carry no platform signature, so selection is unchanged.
+_ng_bundle_requirement='anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "RZJPN7Y7BG"'
+_ng_bundle_verified() {
+  [ "$(uname -s 2>/dev/null)" = "Darwin" ] || return 0
+  codesign --verify --strict "-R=$_ng_bundle_requirement" "$1" >/dev/null 2>&1
+}
+# Verifies $1 (path) for version $2; records a refusal and returns 1.
+_ng_bundle_accept() {
+  _ng_bundle_verified "$1" && return 0
+  _ng_rejected="${_ng_rejected:+$_ng_rejected, }$2"
+  return 1
+}
 if [ -z "$NIGHTGAUGE_BINARY" ]; then
   _ng_recorded_path=""
   _ng_first_runnable=""
@@ -335,11 +353,6 @@ if [ -z "$NIGHTGAUGE_BINARY" ]; then
     _ng_bundle_version="${_ng_bundle_base#nightgauge.nightgauge-}"
     [ -n "$_ng_bundle_version" ] || continue
     _ng_bundle_count=$((_ng_bundle_count + 1))
-
-    if [ -z "$_ng_first_runnable" ] && [ -x "$candidate" ]; then
-      _ng_first_runnable="$candidate"
-      _ng_first_runnable_version="$_ng_bundle_version"
-    fi
   done
 
   # The record is only consulted when the glob actually matched a bundle:
@@ -361,6 +374,30 @@ if [ -z "$NIGHTGAUGE_BINARY" ]; then
     fi
   fi
 
+  # Lazy verification in selection order: the recorded bundle first, then the
+  # first executable glob match that verifies, skipping the recorded one.
+  if [ -n "$_ng_recorded_path" ] && \
+    ! _ng_bundle_accept "$_ng_recorded_path" "$_ng_recorded_version"; then
+    _ng_skip_path="$_ng_recorded_path"
+    _ng_recorded_path=""
+  fi
+  if [ -z "$_ng_recorded_path" ] && [ "$_ng_bundle_count" -gt 0 ]; then
+    for candidate in "$HOME"/.vscode/extensions/nightgauge.nightgauge-[0-9]*/dist/bin/nightgauge; do
+      [ -f "$candidate" ] && [ -x "$candidate" ] || continue
+      [ "$candidate" = "${_ng_skip_path:-}" ] && continue
+      _ng_bundle_dir="${candidate%/dist/bin/nightgauge}"
+      _ng_bundle_base="${_ng_bundle_dir##*/}"
+      _ng_bundle_version="${_ng_bundle_base#nightgauge.nightgauge-}"
+      [ -n "$_ng_bundle_version" ] || continue
+      if _ng_bundle_accept "$candidate" "$_ng_bundle_version"; then
+        _ng_first_runnable="$candidate"
+        _ng_first_runnable_version="$_ng_bundle_version"
+        break
+      fi
+    done
+  fi
+  unset _ng_skip_path
+
   if [ -n "$_ng_recorded_path" ]; then
     NIGHTGAUGE_BINARY="$_ng_recorded_path"
     _ng_selected_version="$_ng_recorded_version"
@@ -376,6 +413,27 @@ if [ -z "$NIGHTGAUGE_BINARY" ]; then
   unset _ng_bundle_dir _ng_bundle_base _ng_bundle_version candidate
   unset _ng_recorded_path _ng_first_runnable _ng_first_runnable_version
 fi
+
+# Signature rejection (#2776): reported right after step 4 — before step 5 and
+# the missing-binary exit, so it is never lost — whether or not a bundle was
+# finally selected. Routed and deduped like the other [stale-binary] lines;
+# never stdout. It supersedes the record/unrecorded divergence below.
+if [ -n "$_ng_rejected" ]; then
+  if [ -n "$NIGHTGAUGE_BINARY" ]; then
+    _ng_rejected_outcome="bundle $_ng_selected_version, running $NIGHTGAUGE_BINARY"
+  else
+    _ng_rejected_outcome="no bundle"
+  fi
+  _ng_rejected_message="[stale-binary] VSCode extension bundle $_ng_rejected was not run: its code signature did not verify against the Nightgauge Developer ID requirement; step 4 resolved $_ng_rejected_outcome"
+  if [ "$NIGHTGAUGE_HOOK_SILENT" = "false" ]; then
+    echo "$_ng_rejected_message" >&2
+  elif ! _ng_message_already_last "$_ng_rejected_message"; then
+    _log_to_side_channel "$_ng_rejected_message"
+  fi
+  _ng_divergence=""
+  unset _ng_rejected_outcome _ng_rejected_message
+fi
+unset _ng_rejected _ng_bundle_requirement
 
 # 5. `go install` default location.
 if [ -z "$NIGHTGAUGE_BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ]; then
