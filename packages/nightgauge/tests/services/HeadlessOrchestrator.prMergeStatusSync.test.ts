@@ -27,7 +27,7 @@ const ISSUE = 2706;
 const readState = vi.mocked(getIssueState);
 const writeStatus = vi.mocked(updateProjectItemStatus);
 
-function makeSync({ merged = true, withheld = false } = {}) {
+function makeSync({ merged = true, answer = "release" as "release" | "withhold" | null } = {}) {
   const orchestrator = Object.create(HeadlessOrchestrator.prototype) as Record<string, unknown>;
   orchestrator.logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() };
   orchestrator.contextLoader = {};
@@ -35,7 +35,7 @@ function makeSync({ merged = true, withheld = false } = {}) {
   orchestrator.repoOverride = undefined;
   orchestrator.raiseBoardStatusWriteFailed = vi.fn();
   orchestrator.prMergedGroundTruth = merged;
-  orchestrator.postMergeReadyWithheld = withheld;
+  orchestrator.postMergeHookAnswer = answer;
   return {
     orchestrator,
     sync: (stage: string) =>
@@ -100,10 +100,19 @@ describe("pr-merge stage sync", () => {
   it("parks an open issue in Backlog when the hook withheld Ready", async () => {
     board = "In review";
     readState.mockResolvedValue("OPEN");
-    const { orchestrator, sync } = makeSync({ withheld: true });
+    const { orchestrator, sync } = makeSync({ answer: "withhold" });
     await sync("pr-merge");
     expect(board).toBe("Backlog");
     expect(orchestrator.raiseBoardStatusWriteFailed).not.toHaveBeenCalled();
+  });
+
+  it("parks an open issue in Backlog and alerts when the hook gave no answer", async () => {
+    board = "In review";
+    readState.mockResolvedValue("OPEN");
+    const { orchestrator, sync } = makeSync({ answer: null });
+    await sync("pr-merge");
+    expect(board).toBe("Backlog");
+    expect(orchestrator.raiseBoardStatusWriteFailed).toHaveBeenCalledWith(ISSUE, "pr-merge");
   });
 
   it("still ends Done for a closed issue when the merge flag is unset", async () => {

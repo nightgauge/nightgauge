@@ -1642,11 +1642,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   private mergeNoOp = false;
   /**
-   * The post-merge hook answered `readyWithheld`: the issue must not go back
-   * to Ready. The pr-merge stage sync parks an open issue in Backlog instead
-   * (#2745, #2878 ADR-002). Reset at every runPipeline() entry and hook call.
+   * The post-merge hook's answer for this run: `release` lets an open issue go
+   * back to Ready, `withhold` parks it in Backlog (#2878 ADR-002), and null
+   * means no answer, which parks it and raises an alert. Only the hook's own
+   * answer releases Ready (#2745). Reset at every runPipeline() entry and hook
+   * call.
    */
-  private postMergeReadyWithheld = false;
+  private postMergeHookAnswer: "release" | "withhold" | null = null;
   /**
    * The last verifyPostMergeState call saw the gate pass. Its skip paths also
    * return null, so a null result alone does not confirm the merge (#2745).
@@ -2425,9 +2427,19 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           await this.raiseBoardStatusWriteFailed(issueNumber, stage);
           return;
         }
-        // A withheld Ready parks the open issue in Backlog, as the Go
-        // scheduler's withheldCompletionStatus does; In review would strand it.
-        statusValue = this.postMergeReadyWithheld ? BOARD_STATUS.backlog : BOARD_STATUS.ready;
+        // Only the hook's own answer releases Ready. A withheld Ready parks the
+        // open issue in Backlog, as the Go scheduler's withheldCompletionStatus
+        // does; In review would strand it. With no answer (the hook was
+        // skipped, timed out or failed, or this path never ran it) the issue
+        // parks too, and the alert says why (#2745, #2706).
+        if (this.postMergeHookAnswer === null) {
+          this.logger.warn("Not writing Ready after pr-merge: the post-merge hook gave no answer", {
+            issueNumber,
+          });
+          await this.raiseBoardStatusWriteFailed(issueNumber, stage);
+        }
+        statusValue =
+          this.postMergeHookAnswer === "release" ? BOARD_STATUS.ready : BOARD_STATUS.backlog;
       }
     }
 
@@ -4097,9 +4109,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // path out of here may leave the flag set without it.
     const alreadyMerged = this.mergeNoOp;
     this.mergeNoOp = false;
-    // Fail closed: until the hook answers, Ready stays withheld, so a hook
-    // that is skipped, times out or crashes parks the issue (#2745, #2878).
-    this.postMergeReadyWithheld = true;
+    // Fail closed: until the hook answers there is no answer, so a hook that
+    // is skipped, times out or crashes parks the issue (#2745, #2878).
+    this.postMergeHookAnswer = null;
     try {
       const resolver = BinaryResolver.fromVSCode();
       const binary = await resolver.resolve();
@@ -6280,7 +6292,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
   /**
    * Record the post-merge hook's answer. An unparseable answer is no answer,
-   * so Ready stays withheld (#2745). The hook withholds Ready on every
+   * so Ready is not released (#2745). The hook withholds Ready on every
    * already-merged run; a no-op that closed the issue finished it, so only
    * one left open parks (#2878).
    */
@@ -6292,12 +6304,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       answer = null;
     }
     if (answer === null || typeof answer !== "object") {
-      this.postMergeReadyWithheld = true;
+      this.postMergeHookAnswer = null;
       this.mergeNoOp = false;
       return;
     }
     const hookWithheld = (answer as { readyWithheld?: unknown }).readyWithheld === true;
-    this.postMergeReadyWithheld = alreadyMerged || hookWithheld;
+    this.postMergeHookAnswer = alreadyMerged || hookWithheld ? "withhold" : "release";
     this.mergeNoOp = alreadyMerged && hookWithheld;
   }
 
@@ -11770,7 +11782,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.blockedTerminalState = null;
     this.prMergedGroundTruth = false;
     this.mergeNoOp = false;
-    this.postMergeReadyWithheld = false;
+    this.postMergeHookAnswer = null;
     this.postMergeVerifyConfirmed = false;
     this.resumedAtPrMerge = false;
     this.estimatorSnapshot = null;

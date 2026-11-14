@@ -723,7 +723,7 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
   describe("the post-merge hook's early returns (#2878)", () => {
     type Hookable = {
       mergeNoOp: boolean;
-      postMergeReadyWithheld: boolean;
+      postMergeHookAnswer: string | null;
       invokePostMergeHook(n: number): Promise<void>;
       resolvePostMergeNwo(n: number): Promise<{ owner: string; repo: string }>;
     };
@@ -737,7 +737,7 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
         }
       ) as unknown as Hookable;
       orchestrator.mergeNoOp = true;
-      orchestrator.postMergeReadyWithheld = true;
+      orchestrator.postMergeHookAnswer = "withhold";
       return orchestrator;
     }
 
@@ -746,8 +746,8 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
       binaryPath.value = null;
       await orchestrator.invokePostMergeHook(300);
       expect(orchestrator.mergeNoOp).toBe(false);
-      // An already-merged run withholds Ready even with no hook answer (#2745).
-      expect(orchestrator.postMergeReadyWithheld).toBe(true);
+      // No hook answer releases nothing (#2745).
+      expect(orchestrator.postMergeHookAnswer).toBeNull();
     });
 
     it("does not park when the owner cannot be resolved", async () => {
@@ -765,31 +765,31 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
     it("withholds Ready when the hook is skipped on a run that was not already merged", async () => {
       const orchestrator = orchestratorWithNoOp();
       orchestrator.mergeNoOp = false;
-      orchestrator.postMergeReadyWithheld = false;
+      orchestrator.postMergeHookAnswer = "release";
       binaryPath.value = null;
       await orchestrator.invokePostMergeHook(300);
-      expect(orchestrator.postMergeReadyWithheld).toBe(true);
+      expect(orchestrator.postMergeHookAnswer).toBeNull();
       expect(orchestrator.mergeNoOp).toBe(false);
     });
 
     it("withholds Ready, without parking, when the hook withholds it on a fresh merge", () => {
       const orchestrator = orchestratorWithNoOp() as unknown as Answerable;
       orchestrator.applyPostMergeHookAnswer('{"readyWithheld":true}', false);
-      expect(orchestrator.postMergeReadyWithheld).toBe(true);
+      expect(orchestrator.postMergeHookAnswer).toBe("withhold");
       expect(orchestrator.mergeNoOp).toBe(false);
     });
 
     it("releases Ready when the hook answers without withholding it", () => {
       const orchestrator = orchestratorWithNoOp() as unknown as Answerable;
       orchestrator.applyPostMergeHookAnswer('{"readyWithheld":false}', false);
-      expect(orchestrator.postMergeReadyWithheld).toBe(false);
+      expect(orchestrator.postMergeHookAnswer).toBe("release");
       expect(orchestrator.mergeNoOp).toBe(false);
     });
 
     it("withholds Ready when the hook's answer is unparseable", () => {
       const orchestrator = orchestratorWithNoOp() as unknown as Answerable;
       orchestrator.applyPostMergeHookAnswer("not json", false);
-      expect(orchestrator.postMergeReadyWithheld).toBe(true);
+      expect(orchestrator.postMergeHookAnswer).toBeNull();
       expect(orchestrator.mergeNoOp).toBe(false);
     });
 
