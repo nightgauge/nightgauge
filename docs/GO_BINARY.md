@@ -1477,8 +1477,23 @@ nightgauge issue close <number> [--owner ORG] [--repo REPO]
 # <!-- nightgauge:partial-delivery pr=N --> comment and its listed criteria,
 # unless a PR that closes the issue merged after it. Exit 0 on a read
 # (pending or not), 2 when the read failed. The verify-and-close early exit
-# refuses to close while `pending` is true or the read fails.
-nightgauge issue partial-delivery <number> [--owner ORG] [--repo REPO] [--json]
+# refuses to close while `pending` is true or the read fails. --write-context
+# also writes the reconciled remainder to partial-delivery-{N}.json (removed when
+# nothing is pending or the read fails), the record both paths splice into the
+# planning context as `partial_delivery`; --json carries it too (#3163).
+nightgauge issue partial-delivery <number> [--owner ORG] [--repo REPO] [--json] [--write-context]
+
+# Print the feature-dev prompt block for an operator-revised plan (#3163),
+# rendered from this clone's planning-{N}.json (`operator_steer`, and the binding
+# rule when `revision_reasons` has an `operator-origin:` entry). Local only;
+# prints nothing when the plan carries neither.
+nightgauge issue operator-revision <number>
+
+# Decide what a zero-change feature-dev means on a partial-delivery re-run
+# (#3163), as JSON: "relap" (re-dispatch once with `steer`), "dispute" (end as
+# the named PLAN_REVISION_NEEDED dispute), "book" (end not_pipeline_actionable)
+# or "not_scoped". Reads planning-{N}.json and dev-{N}.json; local only.
+nightgauge issue partial-noop <number> --pr <N> [--criteria <count>] [--relapped]
 
 # Edit issue body (full replacement or append)
 nightgauge issue edit <number> --body "new full body" [--owner ORG] [--repo REPO] [--json]

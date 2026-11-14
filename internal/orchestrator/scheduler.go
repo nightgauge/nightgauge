@@ -4628,6 +4628,7 @@ func validateStageOutput(stage state.PipelineStage, workspaceRoot string, issueN
 	if stage == state.StageFeaturePlanning {
 		spliceACReconcile(workspaceRoot, issueNumber, outputFile)
 		splicePartialDelivery(workspaceRoot, issueNumber, outputFile)
+		spliceOperatorSteer(workspaceRoot, issueNumber, outputFile)
 	}
 	return nil
 }
@@ -6359,6 +6360,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// closed cannot re-run a stage forever.
 	blockerRechecked := false
 
+	// One extra feature-dev lap per run when a partial re-run's feature-dev
+	// ignores an operator-revised plan (#3163); relapNote restates the rule
+	// in that lap's prompt.
+	operatorRelapped := false
+	relapNote := ""
+
 	// Endpoint-aware OpenCode dispatch (#1679): the slot a stage holds on a
 	// declared endpoint, the endpoints it has lost, and how often it has
 	// failed over. Reset whenever the loop moves to another stage.
@@ -7034,6 +7041,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// Partial-delivery re-run scope (#3160). "" for an unscoped run, so its
 		// prompt stays byte-identical.
 		prompt += partialRerunPromptBlock(stage, runtime.PartialRerunScope())
+
+		// Operator-revised plan (#3163): the steer and the rule that the
+		// revised plan binds. "" when planning carries neither.
+		if stage == state.StageFeatureDev {
+			prompt += OperatorRevisionPromptBlock(ws, item.Number)
+			if relapNote != "" {
+				prompt += "\n\n## Operator-Revised Plan Ignored\n\n" + relapNote + "\n"
+			}
+		}
 
 		// Determine output context file path (worktree-rooted). contextFile
 		// (input) was already resolved above alongside effectiveContextType.
@@ -7861,6 +7877,38 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 		}
 
+		// A zero-change feature-dev on a partial re-run (#3163). The relap and
+		// the named-dispute ending are decided first: the usual zero-change
+		// case is a branch still level with its base, and the level-branch stop
+		// below would otherwise end the run before either could apply.
+		var partialNoOp partialNoOpDecision
+		if stage == state.StageFeatureDev && gateRan && gateRes.Kind == gates.KindNoOp {
+			sws := stageWorkspace(runtime, workspaceRoot)
+			planningPath, _ := stagecontext.ContextPath(sws, item.Number, "planning")
+			partialNoOp = decidePartialNoOp(item.Number, runtime.PartialRerunScope(), readOperatorRevision(planningPath),
+				planRevisionDispute(sws, item.Number), operatorRelapped)
+			switch partialNoOp.Action {
+			case partialNoOpRelap:
+				operatorRelapped = true
+				relapNote = partialNoOp.Steer
+				// Lap 1's dev-{N}.json would read as stale to the gate on lap 2,
+				// booking a second no-write a failure (dev_context_stale) instead
+				// of the no-op it is. Remove it so lap 2 starts with none.
+				if devPath, perr := stagecontext.ContextPath(sws, item.Number, "dev"); perr == nil {
+					if rerr := os.Remove(devPath); rerr != nil && !os.IsNotExist(rerr) {
+						log.Printf("#%d: partial re-run: could not remove lap 1 dev context: %v", item.Number, rerr)
+					}
+				}
+				log.Printf("#%d: partial re-run: feature-dev wrote no changes on an operator-revised plan — re-dispatching it once [#3163]", item.Number)
+				continue
+			case partialNoOpDispute:
+				log.Printf("#%d: %s", item.Number, partialNoOp.Detail)
+				runtime.SetStageError(stage, partialNoOp.Detail)
+				terminalFailureKind = TerminalKindNotPipelineActionable
+				return
+			}
+		}
+
 		// A partial-delivery re-run whose feature-dev left the branch level with
 		// its base ends here, before feature-validate (#3160). Both a clean exit
 		// and a gate no-op verdict (zero files recorded, or files claimed but
@@ -7874,6 +7922,18 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				terminalFailureKind = TerminalKindNotPipelineActionable
 				return
 			}
+		}
+
+		// Any other zero-change partial re-run on a branch NOT level with its
+		// base is still not a failure (#3163): its verdict may be right
+		// (platform#1750) or wrong (#1051), and neither says anything about the
+		// factory. It ends not_pipeline_actionable — no cascade strike, no
+		// lifetime-cap increment.
+		if partialNoOp.Action == partialNoOpBook {
+			log.Printf("#%d: %s", item.Number, partialNoOp.Detail)
+			runtime.SetStageError(stage, partialNoOp.Detail)
+			terminalFailureKind = TerminalKindNotPipelineActionable
+			return
 		}
 
 		// #3835 WS1: reconcile false-alarm failures on terminal stages. A

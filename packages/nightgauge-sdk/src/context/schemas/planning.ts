@@ -312,18 +312,36 @@ export const PlanningContextSchema = z
      */
     knowledge_read: z.array(z.string()).nullish(),
     /**
-     * Partial-delivery re-run scope (Issue #3160). Spliced by the scheduler
-     * from `partial-delivery-{N}.json` when an earlier `Refs` PR delivered
-     * the rest of the issue: `criteria` are the remaining acceptance
-     * criteria and are this run's whole scope. Absent on every other run.
+     * Partial-delivery re-run scope (Issue #3160). Spliced from
+     * `partial-delivery-{N}.json` when an earlier `Refs` PR delivered the rest
+     * of the issue: `criteria` are the remaining acceptance criteria and are
+     * this run's whole scope; `dropped` lists criteria the issue body no
+     * longer contains (#3235). Go writes the file on both dispatch paths and
+     * both splice it verbatim (#3163). Absent on every other run.
      */
     partial_delivery: z
       .object({
         pr: z.number().int().positive(),
         criteria: z.array(z.string()),
+        dropped: z.array(z.string()).optional(),
         comment_at: z.string().datetime().optional(),
       })
       .passthrough()
+      .nullish(),
+    /**
+     * Operator steer from the Action Center (Issue #3163), spliced from the
+     * OPERATOR_STEER signals in `feedback-{N}.json` so feature-dev reads the
+     * steer, not only feature-planning. Absent when no operator steered.
+     */
+    operator_steer: z
+      .array(
+        z
+          .object({
+            text: z.string(),
+            evidence: z.array(z.string()),
+          })
+          .passthrough()
+      )
       .nullish(),
     created_at: z.string().datetime(),
   })

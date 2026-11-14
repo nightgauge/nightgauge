@@ -87,9 +87,10 @@ func partialDeliveryWorkspace(ctx context.Context) string {
 // failed, so callers fail closed.
 func issuePartialDeliveryCmd() *cobra.Command {
 	var (
-		owner      string
-		repo       string
-		outputJSON bool
+		owner        string
+		repo         string
+		outputJSON   bool
+		writeContext bool
 	)
 	cmd := &cobra.Command{
 		Use:   "partial-delivery [number]",
@@ -97,6 +98,11 @@ func issuePartialDeliveryCmd() *cobra.Command {
 		Long: `Find the newest trusted <!-- nightgauge:partial-delivery pr=N --> comment on
 the issue and report the criteria it left unmet. The remainder is pending unless
 a PR that closes the issue merged after that comment.
+
+With --write-context, also write the reconciled remainder to
+partial-delivery-{N}.json in this clone's pipeline state directory, the record
+the extension splices into planning-{N}.json as partial_delivery (#3163), and
+remove that file when nothing is pending or the read fails.
 
 Exit 0 when the read succeeded (pending or not), 2 when it failed.`,
 		Args:    cobra.ExactArgs(1),
@@ -107,7 +113,7 @@ Exit 0 when the read succeeded (pending or not), 2 when it failed.`,
 				return fmt.Errorf("invalid issue number: %s", args[0])
 			}
 			ownerPart, repoPart := splitRepo(owner, repo)
-			code := runIssuePartialDelivery(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), ownerPart, repoPart, number, outputJSON)
+			code := runIssuePartialDelivery(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), ownerPart, repoPart, number, outputJSON, writeContext)
 			if code != 0 {
 				os.Exit(code)
 			}
@@ -117,14 +123,26 @@ Exit 0 when the read succeeded (pending or not), 2 when it failed.`,
 	ownerFlag(cmd, &owner, "GitHub organization")
 	cmd.Flags().StringVar(&repo, "repo", "", "Repository (name or owner/name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
+	cmd.Flags().BoolVar(&writeContext, "write-context", false,
+		"Write (or remove) partial-delivery-{N}.json in the pipeline state directory")
 	return cmd
 }
 
 // runIssuePartialDelivery returns the process exit code.
-func runIssuePartialDelivery(ctx context.Context, stdout, stderr io.Writer, owner, repo string, number int, outputJSON bool) int {
+func runIssuePartialDelivery(ctx context.Context, stdout, stderr io.Writer, owner, repo string, number int, outputJSON, writeContext bool) int {
 	if owner == "" || repo == "" {
 		fmt.Fprintln(stderr, "issue partial-delivery: owner and repo are required")
 		return 2
+	}
+	ws := partialDeliveryWorkspace(ctx)
+	if writeContext {
+		// A stale remainder from an earlier run must never be spliced into
+		// this one, so the file goes before the read (#3163), as on the Go
+		// path's scopePartialRerun.
+		if err := orchestrator.RemovePartialDeliveryContext(ws, number); err != nil {
+			fmt.Fprintf(stderr, "issue partial-delivery: %v\n", err)
+			return 2
+		}
 	}
 	reader, reads, err := partialDeliveryDepsFactory(owner, repo, number)
 	if err != nil {
@@ -136,6 +154,21 @@ func runIssuePartialDelivery(ctx context.Context, stdout, stderr io.Writer, owne
 		fmt.Fprintf(stderr, "issue partial-delivery: %v\n", err)
 		return 2
 	}
+	var record *orchestrator.PartialDeliveryFile
+	var scope, dropped []string
+	if status.Pending && !status.Unlisted && len(status.Criteria) > 0 {
+		scope, dropped = orchestrator.ReconcilePartialScope(ctx, reads, ws, number, status.Criteria, status.PR)
+		record = &orchestrator.PartialDeliveryFile{PR: status.PR, Criteria: scope, Dropped: dropped, CommentAt: status.CommentAt}
+		if record.Criteria == nil {
+			record.Criteria = []string{}
+		}
+		if writeContext {
+			if err := orchestrator.WritePartialDeliveryContext(ws, number, *record); err != nil {
+				fmt.Fprintf(stderr, "issue partial-delivery: %v\n", err)
+				return 2
+			}
+		}
+	}
 	if outputJSON {
 		// prompt_blocks: the extension's stage loop appends these to the
 		// feature-planning and feature-dev prompts, so a run it starts on an
@@ -143,16 +176,17 @@ func runIssuePartialDelivery(ctx context.Context, stdout, stderr io.Writer, owne
 		// from the same reconciled brief (#3242). criteria stays the comment's
 		// list; scope is the brief and dropped what left the body. The
 		// reconcile logs to stderr, so stdout stays JSON.
+		// partial_delivery is the record --write-context writes, the block
+		// both paths splice into planning-{N}.json (#3163).
 		out := struct {
 			hooks.PartialDeliveryStatus
-			Scope        []string          `json:"scope,omitempty"`
-			Dropped      []string          `json:"dropped,omitempty"`
-			PromptBlocks map[string]string `json:"prompt_blocks,omitempty"`
-		}{PartialDeliveryStatus: status}
-		if status.Pending && !status.Unlisted && len(status.Criteria) > 0 {
-			out.Scope, out.Dropped = orchestrator.ReconcilePartialScope(ctx, reads, partialDeliveryWorkspace(ctx),
-				number, status.Criteria, status.PR)
-			out.PromptBlocks = orchestrator.PartialRerunScopeBlocks(status.PR, out.Scope)
+			Scope           []string                          `json:"scope,omitempty"`
+			Dropped         []string                          `json:"dropped,omitempty"`
+			PartialDelivery *orchestrator.PartialDeliveryFile `json:"partial_delivery,omitempty"`
+			PromptBlocks    map[string]string                 `json:"prompt_blocks,omitempty"`
+		}{PartialDeliveryStatus: status, Scope: scope, Dropped: dropped, PartialDelivery: record}
+		if record != nil {
+			out.PromptBlocks = orchestrator.PartialRerunScopeBlocks(status.PR, scope)
 		}
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {

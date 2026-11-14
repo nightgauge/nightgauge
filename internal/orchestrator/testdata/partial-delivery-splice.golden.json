@@ -1,0 +1,64 @@
+{
+  "issue_number": 1051,
+  "remainder": {
+    "pr": 1050,
+    "criteria": [
+      "An integration test `internal/x/x_integration_test.go` exists",
+      "The dashboard renders the queued count"
+    ],
+    "dropped": ["A criterion the body no longer contains"],
+    "comment_at": "2026-11-13T09:04:00Z"
+  },
+  "feedback": {
+    "schema_version": "1.0",
+    "issue_number": 1051,
+    "signals": [
+      {
+        "signal_type": "OPERATOR_STEER",
+        "emitted_by_stage": "feature-planning",
+        "severity": "warning",
+        "rationale": "Add the integration test the PR skipped.",
+        "evidence": ["operator-origin: action-center"]
+      },
+      {
+        "signal_type": "PLAN_REVISION_NEEDED",
+        "emitted_by_stage": "feature-validate",
+        "backtrack_target_stage": "feature-planning",
+        "severity": "blocking",
+        "rationale": "not an operator steer",
+        "evidence": ["ignored by the splice"]
+      }
+    ]
+  },
+  "planning_in": {
+    "schema_version": "1.9",
+    "issue_number": 1051,
+    "approach": "standard",
+    "revision_reasons": ["operator-origin: action-center: add the integration test"],
+    "files_to_create": ["internal/x/x_integration_test.go"],
+    "files_to_modify": []
+  },
+  "planning_out": {
+    "schema_version": "1.9",
+    "issue_number": 1051,
+    "approach": "standard",
+    "revision_reasons": ["operator-origin: action-center: add the integration test"],
+    "files_to_create": ["internal/x/x_integration_test.go"],
+    "files_to_modify": [],
+    "partial_delivery": {
+      "pr": 1050,
+      "criteria": [
+        "An integration test `internal/x/x_integration_test.go` exists",
+        "The dashboard renders the queued count"
+      ],
+      "dropped": ["A criterion the body no longer contains"],
+      "comment_at": "2026-11-13T09:04:00Z"
+    },
+    "operator_steer": [
+      {
+        "text": "Add the integration test the PR skipped.",
+        "evidence": ["operator-origin: action-center"]
+      }
+    ]
+  }
+}

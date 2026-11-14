@@ -187,6 +187,12 @@ schema documentation.
   `planning-{N}.json` `partial_delivery.criteria` and the plan's focus criteria
   disagree, implement the plan's focus criteria and say so in the stage output.
   Never emit `NOT_PIPELINE_ACTIONABLE` while the plan names an unmet criterion.
+- **An operator-revised plan binds this stage (#3163).** When `planning-{N}.json`
+  `revision_reasons` has an `operator-origin:` entry, implement the plan's
+  `files_to_modify` and `files_to_create`, or record a `PLAN_REVISION_NEEDED`
+  signal whose evidence names the plan step you dispute. Never end with zero
+  changes on your own reading of the remaining criteria: the operator revision
+  outranks the partial-delivery list. The steer is in `operator_steer`.
 - **Never run bare `vitest`.** Use the repository's documented test command in
   single-run mode (`vitest run`, scoped to the touched workspace) — bare
   `vitest` mis-resolves the workspace and can hang in watch mode.

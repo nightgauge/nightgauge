@@ -216,6 +216,18 @@ describe("RepositoryContextLoader", () => {
       expect(filePath).toBe(path.join(repoLayout().pipeline, "planning-42.json"));
     });
 
+    it("should return correct path for partial-delivery context file (#3163)", async () => {
+      const repo = new Repository("frontend", repoPath);
+      const manager = createMockWorkspaceManager(repo);
+
+      const loader = RepositoryContextLoader.getInstance();
+      await loader.initialize(manager);
+
+      expect(loader.getContextFile("partial-delivery", 42)).toBe(
+        path.join(repoLayout().pipeline, "partial-delivery-42.json")
+      );
+    });
+
     // A case here asserted the path returned for the "state" context type.
     // #471 removed that type: no live caller ever passed it (the
     // stage→ContextFileType maps name only per-issue types), and nothing in

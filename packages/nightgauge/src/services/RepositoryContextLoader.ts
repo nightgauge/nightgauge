@@ -29,7 +29,8 @@ export type ContextFileType =
   | "feedback"
   | "batch-state"
   | "running"
-  | "ac-reconcile";
+  | "ac-reconcile"
+  | "partial-delivery";
 
 /**
  * Configuration precedence for merged config loading
@@ -257,6 +258,8 @@ export class RepositoryContextLoader implements vscode.Disposable {
         return path.join(contextDir, `running-${issueNumber}.json`);
       case "ac-reconcile":
         return path.join(contextDir, `ac-reconcile-${issueNumber}.json`);
+      case "partial-delivery":
+        return path.join(contextDir, `partial-delivery-${issueNumber}.json`);
       default:
         throw new Error(`Unknown context file type: ${type}`);
     }

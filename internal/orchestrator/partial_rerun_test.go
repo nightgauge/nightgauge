@@ -461,7 +461,7 @@ func TestScopePartialRerun_DropsRemovedCriterion(t *testing.T) {
 		t.Fatalf("log does not name the dropped criterion: %s", logs.String())
 	}
 	path, _ := stagecontext.ContextPath(ws, 3235, partialDeliveryContextType)
-	var f partialDeliveryFile
+	var f PartialDeliveryFile
 	data, err := os.ReadFile(path)
 	if err != nil || json.Unmarshal(data, &f) != nil {
 		t.Fatalf("read partial-delivery context: %v", err)

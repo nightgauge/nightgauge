@@ -6,11 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	stagecontext "github.com/nightgauge/nightgauge/internal/execution/context"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
@@ -42,7 +47,7 @@ func TestIssuePartialDeliveryJSONPending(t *testing.T) {
 		hooks.RemainingCriteriaHeading + "\n\n- criterion one\n"
 	withPartialReader(t, stubPartialReader{comments: []trust.Comment{{Body: body, CreatedAt: time.Now()}}})
 	var out, errOut bytes.Buffer
-	if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 3084, true); code != 0 {
+	if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 3084, true, false); code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut.String())
 	}
 	var got hooks.PartialDeliveryStatus
@@ -57,7 +62,7 @@ func TestIssuePartialDeliveryJSONPending(t *testing.T) {
 func TestIssuePartialDeliveryNoMarker(t *testing.T) {
 	withPartialReader(t, stubPartialReader{})
 	var out, errOut bytes.Buffer
-	if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 1, true); code != 0 {
+	if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 1, true, false); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
 	var got hooks.PartialDeliveryStatus
@@ -69,7 +74,7 @@ func TestIssuePartialDeliveryNoMarker(t *testing.T) {
 func TestIssuePartialDeliveryReadFailureExits2(t *testing.T) {
 	withPartialReader(t, stubPartialReader{err: errors.New("rate limited")})
 	var out, errOut bytes.Buffer
-	if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 1, true); code != 2 {
+	if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 1, true, false); code != 2 {
 		t.Fatalf("exit %d, want 2", code)
 	}
 	if out.Len() != 0 {
@@ -84,7 +89,7 @@ func TestIssuePartialDeliveryJSONPromptBlocks(t *testing.T) {
 		hooks.RemainingCriteriaHeading + "\n\n- criterion one\n"
 	withPartialReader(t, stubPartialReader{comments: []trust.Comment{{Body: body, CreatedAt: time.Now()}}})
 	var out, errOut bytes.Buffer
-	if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 3084, true); code != 0 {
+	if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 3084, true, false); code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut.String())
 	}
 	var got struct {
@@ -106,7 +111,7 @@ func TestIssuePartialDeliveryJSONPromptBlocks(t *testing.T) {
 
 	withPartialReader(t, stubPartialReader{})
 	out.Reset()
-	if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 1, true); code != 0 {
+	if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 1, true, false); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
 	if strings.Contains(out.String(), "prompt_blocks") {
@@ -189,7 +194,7 @@ func TestIssuePartialDeliveryJSONReconcilesLikeScheduler(t *testing.T) {
 			prevLog := log.Writer()
 			log.SetOutput(&logs)
 			t.Cleanup(func() { log.SetOutput(prevLog) })
-			if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 3242, true); code != 0 {
+			if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 3242, true, false); code != 0 {
 				t.Fatalf("exit %d: %s", code, errOut.String())
 			}
 			var got partialCmdJSON
@@ -230,5 +235,117 @@ func TestIssuePartialDeliveryJSONReconcilesLikeScheduler(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// partialDeliveryClone runs the test from a fresh git clone, so the record
+// lands in that clone's pipeline state directory, never this checkout's.
+func partialDeliveryClone(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	gittest.InitRepo(t, dir, "-q")
+	t.Chdir(dir)
+	return partialDeliveryWorkspace(context.Background())
+}
+
+// #3163 AC 0: --write-context writes the remainder the extension splices, the
+// --json output carries the same record, and a later read with nothing pending
+// removes the file so a stale remainder is never spliced.
+func TestIssuePartialDeliveryWriteContext(t *testing.T) {
+	ws := partialDeliveryClone(t)
+	path, err := stagecontext.ContextPath(ws, 3084, "partial-delivery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := "<!-- nightgauge:partial-delivery pr=3085 -->\nPR #3085 merged part.\n\n" +
+		hooks.RemainingCriteriaHeading + "\n\n- criterion one\n"
+	withPartialReader(t, stubPartialReader{comments: []trust.Comment{{Body: body, CreatedAt: time.Now()}}})
+	var out, errOut bytes.Buffer
+	if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 3084, true, true); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("partial-delivery context not written: %v", err)
+	}
+	var file orchestrator.PartialDeliveryFile
+	if err := json.Unmarshal(written, &file); err != nil || file.PR != 3085 ||
+		len(file.Criteria) != 1 || file.Criteria[0] != "criterion one" {
+		t.Fatalf("written record = %s (%v)", written, err)
+	}
+	var got struct {
+		PartialDelivery json.RawMessage `json:"partial_delivery"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	var a, b any
+	_ = json.Unmarshal(got.PartialDelivery, &a)
+	_ = json.Unmarshal(written, &b)
+	if !reflect.DeepEqual(a, b) {
+		t.Fatalf("--json partial_delivery %s differs from the written record %s", got.PartialDelivery, written)
+	}
+
+	withPartialReader(t, stubPartialReader{})
+	out.Reset()
+	if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 3084, true, true); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("stale partial-delivery context survived a read with nothing pending: %v", err)
+	}
+	if strings.Contains(out.String(), "partial_delivery") {
+		t.Fatalf("nothing pending, yet partial_delivery present: %s", out.String())
+	}
+
+	// A failed read removes it too: the run is unscoped.
+	if err := orchestrator.WritePartialDeliveryContext(ws, 3084, file); err != nil {
+		t.Fatal(err)
+	}
+	withPartialReader(t, stubPartialReader{err: errors.New("rate limited")})
+	if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 3084, true, true); code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("partial-delivery context survived a failed read: %v", err)
+	}
+}
+
+// Without --write-context nothing is written.
+func TestIssuePartialDeliveryNoWriteWithoutFlag(t *testing.T) {
+	ws := partialDeliveryClone(t)
+	body := "<!-- nightgauge:partial-delivery pr=3085 -->\nPR #3085 merged part.\n\n" +
+		hooks.RemainingCriteriaHeading + "\n\n- criterion one\n"
+	withPartialReader(t, stubPartialReader{comments: []trust.Comment{{Body: body, CreatedAt: time.Now()}}})
+	var out, errOut bytes.Buffer
+	if code := runIssuePartialDelivery(context.Background(), &out, &errOut, "o", "r", 3084, true, false); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	path, _ := stagecontext.ContextPath(ws, 3084, "partial-delivery")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("record written without --write-context: %v", err)
+	}
+}
+
+// #3163 AC 3: the extension's feature-dev trailer comes from the planning
+// context through this verb; nothing is printed when it carries no steer.
+func TestIssueOperatorRevision(t *testing.T) {
+	ws := partialDeliveryClone(t)
+	var out bytes.Buffer
+	if err := runIssueOperatorRevision(context.Background(), &out, 1051); err != nil || out.Len() != 0 {
+		t.Fatalf("no planning context: out=%q err=%v", out.String(), err)
+	}
+	path, _ := stagecontext.ContextPath(ws, 1051, "planning")
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	plan := `{"revision_reasons":["operator-origin: action-center: x"],"files_to_modify":["a.go"],` +
+		`"operator_steer":[{"text":"Do the small fix.","evidence":[]}]}`
+	if err := os.WriteFile(path, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runIssueOperatorRevision(context.Background(), &out, 1051); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "> Do the small fix.") || !strings.Contains(out.String(), "`a.go`") {
+		t.Fatalf("block = %q", out.String())
 	}
 }
