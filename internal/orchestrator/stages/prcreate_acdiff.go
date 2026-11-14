@@ -3,6 +3,8 @@ package stages
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,8 +16,10 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/ci"
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
+	"gopkg.in/yaml.v3"
 )
 
 // Deterministic diff verification of acceptance criteria (#2665). Many
@@ -100,8 +104,13 @@ type ACDiff struct {
 	// Uncommitted holds the paths that differ from HEAD or are untracked:
 	// work the commit owner has not committed yet.
 	Uncommitted map[string]bool
+	// Repos maps a workspace repository slug (`owner/repo`) to its checkout,
+	// so a criterion comparing a file with another repository's file at a
+	// revision can be decided locally (#3042). Empty means none is known.
+	Repos map[string]string
 
 	content map[string]acContent
+	yaml    map[string]*yaml.Node
 }
 
 // acContent is one file's working-tree lines; ok=false means the file could
@@ -223,7 +232,41 @@ func CollectACDiff(ctx context.Context, workdir, base string) (*ACDiff, error) {
 		d.Files[p] = f
 		d.Uncommitted[p] = true
 	}
+	// The workspace is the main checkout's, not this worktree's siblings.
+	if common, err := git("rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil {
+		if root := filepath.Dir(strings.TrimSpace(common)); root != "" {
+			d.Repos = config.WorkspaceRepoPaths(root)
+		}
+	}
 	return d, nil
+}
+
+// blob reads path at rev in the repository checked out at repo, bounded by
+// acDiffTimeout and acReadMaxBytes; ok=false when it cannot be read.
+func acBlob(repo, rev, path string) ([]byte, bool) {
+	if repo == "" || rev == "" || path == "" || strings.HasPrefix(rev, "-") {
+		return nil, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), acDiffTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", repo, "cat-file", "blob", rev+":"+path)
+	out, err := cmd.Output()
+	if err != nil || len(out) > acReadMaxBytes {
+		return nil, false
+	}
+	return out, true
+}
+
+// headContent is path's content on the branch: the working tree when the
+// path is uncommitted, else its blob at HEAD.
+func (d *ACDiff) headContent(path string) ([]byte, bool) {
+	if d.Workdir == "" {
+		return nil, false
+	}
+	if d.Uncommitted[path] {
+		return acReadBounded(filepath.Join(d.Workdir, path))
+	}
+	return acBlob(d.Workdir, "HEAD", path)
 }
 
 var acHunkRE = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
@@ -338,6 +381,14 @@ type acClause struct {
 	// Bounds are code-span values the prose names as a bound ("a version
 	// above `1.26.0`"): a comparison, not text the diff must add (#2941).
 	Bounds []acBound
+	// Globs are path globs (`claude-plugins/nightgauge/**`), decided against
+	// the diffed paths (#3042).
+	Globs []string
+	// Digests are 64-hex sha256 spans, decided by hashing the named file.
+	Digests []string
+	// Revisions are 7–40 hex spans naming a commit, decided by comparing the
+	// named file with the named repository's file at that revision.
+	Revisions []string
 }
 
 // acBound is one "<op> value" comparison a criterion states.
@@ -537,8 +588,24 @@ func splitACClauses(text string) []string {
 	return out
 }
 
+// acRevisionCtx reports whether the revision wording sits directly before
+// the hex span ("at `abc1234`", "commit `abc1234`", "@`abc1234`").
+func acRevisionCtx(raw, h string) bool {
+	for rest := raw; ; {
+		i := strings.Index(rest, "`"+h+"`")
+		if i < 0 {
+			return false
+		}
+		if acRevisionCtxRE.MatchString(rest[:i]) {
+			return true
+		}
+		rest = rest[i+len(h)+2:]
+	}
+}
+
 func parseACClause(raw string) acClause {
 	c := acClause{Raw: raw, Prose: acStripCodeSpans(raw)}
+	var hexes []string
 	seen := map[string]bool{}
 	add := func(dst *[]string, s string) {
 		if !seen[s] {
@@ -556,6 +623,13 @@ func parseACClause(raw string) acClause {
 				Level: len(hm[1]), Text: strings.TrimSpace(hm[2]),
 				Existing: acExistingRE.MatchString(raw[:m[0]]),
 			})
+		case acIsGlobSpan(tok):
+			add(&c.Globs, tok)
+		case acDigestRE.MatchString(tok):
+			add(&c.Digests, strings.ToLower(tok))
+		case acRevisionRE.MatchString(tok) && strings.ContainsAny(tok, "0123456789") &&
+			strings.ContainsAny(strings.ToLower(tok), "abcdef"):
+			hexes = append(hexes, tok)
 		case acIsPath(tok):
 			add(&c.Paths, tok)
 		case acIsPathRef(tok):
@@ -567,6 +641,15 @@ func parseACClause(raw string) acClause {
 				}
 			}
 			add(&c.Tokens, tok)
+		}
+	}
+	// A hex span names a revision only when the prose says so; otherwise it
+	// is text like any other.
+	for _, h := range hexes {
+		if acRevisionCtx(raw, h) {
+			add(&c.Revisions, h)
+		} else {
+			add(&c.Tokens, h)
 		}
 	}
 	for _, m := range acProsePathRE.FindAllStringSubmatch(c.Prose, -1) {
@@ -694,6 +777,16 @@ func verifyACClause(c acClause, inherited []string, d *ACDiff, tests ACTestState
 		return acUnchanged(c, d)
 	case acChangelogRE.MatchString(c.Prose) && len(c.Paths) == 0 && len(c.Headings) > 0:
 		return acChangelog(c, d)
+	case len(c.Revisions) > 0:
+		// A comparison clause: its other spans (`cmp`) describe the check,
+		// never text the diff must add (#3042).
+		return acRevision(c, d)
+	case len(c.Digests) > 0:
+		return acDigest(c, d)
+	case acAmbiguousBare(c, d):
+		// A bare name several diffed files share names none of them, so
+		// neither they nor inherited files may decide the clause (#3042).
+		return acResult{}
 	}
 	if pattern, ok := acRunPattern(c); ok {
 		return acRunTest(pattern, d, tests)
@@ -702,6 +795,19 @@ func verifyACClause(c acClause, inherited []string, d *ACDiff, tests ACTestState
 		return acTest(name, re, d, tests)
 	}
 	named := acDiffedPaths(c, d)
+	var globRes acResult
+	if len(c.Globs) > 0 {
+		var matched []string
+		globRes, matched = acGlobs(c, d)
+		if globRes.ok && globRes.status == ACUnmet {
+			return globRes
+		}
+		for _, p := range matched {
+			if !acContains(named, p) {
+				named = append(named, p)
+			}
+		}
+	}
 	fromInherited := len(named) == 0 && len(inherited) > 0
 	var r acResult
 	switch {
@@ -715,7 +821,294 @@ func verifyACClause(c acClause, inherited []string, d *ACDiff, tests ACTestState
 	if fromInherited && r.status == ACUnmet {
 		return acResult{}
 	}
+	if globRes.ok {
+		switch {
+		case r.ok && r.status == ACUnmet:
+			return r
+		case r.ok:
+			return acAnswer(ACMet, globRes.evidence+"; "+r.evidence, append(globRes.paths, r.paths...)...)
+		case len(c.Tokens) == 0 && len(c.Headings) == 0 && len(c.Bounds) == 0:
+			return globRes
+		}
+	}
 	return r
+}
+
+func acContains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// acBareMatches returns the diffed paths whose base name is p.
+func acBareMatches(p string, d *ACDiff) []string {
+	var hits []string
+	for _, q := range d.sortedPaths() {
+		if filepath.Base(q) == p {
+			hits = append(hits, q)
+		}
+	}
+	return hits
+}
+
+// acAmbiguousBare reports whether the clause names a bare file name that is
+// not itself diffed and is the base name of several diffed paths.
+func acAmbiguousBare(c acClause, d *ACDiff) bool {
+	for _, p := range c.Paths {
+		if _, ok := d.Files[p]; ok || strings.Contains(p, "/") {
+			continue
+		}
+		if len(acBareMatches(p, d)) > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	acGlobSpanRE    = regexp.MustCompile(`/\*\*|\*\*/|\*\.[A-Za-z0-9]+|/\*(?:$|[/.A-Za-z0-9])`)
+	acGlobCharsRE   = regexp.MustCompile(`^[A-Za-z0-9_.\-/*?]+$`)
+	acDigestRE      = regexp.MustCompile(`^(?i:[0-9a-f]{64})$`)
+	acRevisionRE    = regexp.MustCompile(`^(?i:[0-9a-f]{7,40})$`)
+	acRevisionCtxRE = regexp.MustCompile(`(?i)(?:\b(?:at|revision|commit|sha)\s+(?:commit\s+|revision\s+)?|@)$`)
+	// acConditionalRE marks a glob that states when something happens ("when
+	// `a/**` changes"), not a path the change must touch.
+	acConditionalRE = regexp.MustCompile(`(?i)\b(?:when|whenever|if|unless)\b`)
+	acCoreRE        = regexp.MustCompile(`(?i)\bthe core\b|\bcore's\b|\bcore repo(?:sitory)?\b`)
+	acSlugRE        = regexp.MustCompile(`\b([A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+)\b`)
+	acRangeRE       = regexp.MustCompile(`(?i)\blines?\b[^.]*\bfrom\b[^.]*\b(?:through|to|until)\b`)
+	acEllipsisRE    = regexp.MustCompile(`\.\.\.|…`)
+	// acSpreadRE is a JavaScript spread or rest (`...props`): literal text.
+	acSpreadRE = regexp.MustCompile(`(?:\.\.\.|…)[A-Za-z_$]`)
+	// acGlobChangeRE ties a glob to a change the diff must make.
+	acGlobChangeRE = regexp.MustCompile(`(?i)\b(?:chang|updat|touch|add|modif|edit|creat|delet|remov|writ)\w*`)
+)
+
+// acIsGlobSpan reports whether a span is a path glob: path characters only,
+// with a `**`, `*.ext` or `dir/*` component (#3042).
+func acIsGlobSpan(tok string) bool {
+	return acGlobCharsRE.MatchString(tok) && acGlobSpanRE.MatchString(tok)
+}
+
+// acGlobRegexp converts a path glob to an anchored regexp: `**/` matches
+// any directory prefix, `**` anything, `*` and `?` anything but `/`.
+func acGlobRegexp(g string) *regexp.Regexp {
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(g); {
+		switch {
+		case strings.HasPrefix(g[i:], "**/"):
+			b.WriteString("(?:.*/)?")
+			i += 3
+		case strings.HasPrefix(g[i:], "**"):
+			b.WriteString(".*")
+			i += 2
+		case g[i] == '*':
+			b.WriteString("[^/]*")
+			i++
+		case g[i] == '?':
+			b.WriteString("[^/]")
+			i++
+		default:
+			b.WriteString(regexp.QuoteMeta(g[i : i+1]))
+			i++
+		}
+	}
+	b.WriteString("$")
+	return regexp.MustCompile(b.String())
+}
+
+// acGlobMatches returns the diffed paths a glob matches.
+func acGlobMatches(g string, d *ACDiff) []string {
+	re := acGlobRegexp(g)
+	var out []string
+	for _, p := range d.sortedPaths() {
+		if re.MatchString(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// acGlobs decides a clause's globs against the diffed paths: met when every
+// glob matches a diffed path or is itself an added line (a `.gitignore` or
+// `files:` entry), unmet when one does neither. A glob in a conditional
+// ("when `a/**` changes") states a trigger, not a path the change touches,
+// and leaves the clause undecided. matched are the paths the globs match.
+func acGlobs(c acClause, d *ACDiff) (r acResult, matched []string) {
+	if acConditionalRE.MatchString(c.Prose) {
+		return acResult{}, nil
+	}
+	var ev []string
+	for _, g := range c.Globs {
+		hits := acGlobMatches(g, d)
+		if len(hits) > 0 {
+			matched = append(matched, hits...)
+			ev = append(ev, fmt.Sprintf("changes %s (matches `%s`)", acList(hits, 3), g))
+			continue
+		}
+		if loc, ok := acAddedToken(g, d.sortedPaths(), d); ok {
+			ev = append(ev, fmt.Sprintf("adds `%s` at `%s`", g, loc))
+			p, _, _ := strings.Cut(loc, ":")
+			matched = append(matched, p)
+			continue
+		}
+		if !acGlobChangeRE.MatchString(c.Prose) {
+			// A glob the prose only describes ("the linter skips `x/**`")
+			// names no path the change must touch: undecided, not unmet.
+			return acResult{}, nil
+		}
+		return acAnswer(ACUnmet, fmt.Sprintf("no diffed path matches `%s`", g)), nil
+	}
+	return acAnswer(ACMet, "the diff "+strings.Join(ev, ", "), matched...), matched
+}
+
+// acNamedFiles returns the files a clause names: diffed paths, plus named
+// paths with a directory that exist on the branch.
+func acNamedFiles(c acClause, d *ACDiff) []string {
+	out := acDiffedPaths(c, d)
+	for _, p := range c.Paths {
+		if acContains(out, p) || !strings.Contains(p, "/") {
+			continue
+		}
+		if _, ok := d.headContent(p); ok {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// acDigest decides a sha256 span by hashing the clause's one named file on
+// the branch. No named file, several, or an unreadable one: undecided.
+func acDigest(c acClause, d *ACDiff) acResult {
+	files := acNamedFiles(c, d)
+	if len(files) != 1 {
+		return acResult{}
+	}
+	p := files[0]
+	data, ok := d.headContent(p)
+	if !ok {
+		return acResult{}
+	}
+	sum := sha256.Sum256(data)
+	got := hex.EncodeToString(sum[:])
+	for _, want := range c.Digests {
+		if got != want {
+			return acAnswer(ACUnmet, fmt.Sprintf("`%s` at HEAD has sha256 `%s`, not `%s`", p, got, want), p)
+		}
+	}
+	return acAnswer(ACMet, fmt.Sprintf("`%s` at HEAD has sha256 `%s`", p, got), p)
+}
+
+// acRevisionRepo resolves the repository a comparison clause names: the
+// core, an `owner/repo` slug or a bare repository name among d.Repos. No
+// repository named means this one. ok=false when the named repository has
+// no known checkout.
+func acRevisionRepo(c acClause, d *ACDiff) (path, label string, ok bool) {
+	if acCoreRE.MatchString(c.Prose) {
+		p, found := d.Repos["nightgauge/nightgauge"]
+		return p, "nightgauge/nightgauge", found
+	}
+	for _, m := range acSlugRE.FindAllStringSubmatch(c.Prose, -1) {
+		if p, found := d.Repos[m[1]]; found {
+			return p, m[1], true
+		}
+	}
+	slugs := make([]string, 0, len(d.Repos))
+	for s := range d.Repos {
+		slugs = append(slugs, s)
+	}
+	sort.Strings(slugs)
+	// A bare name matches only as a whole repository name: `nightgauge` is
+	// not named by `nightgauge-internal`. The longest name wins; a tie names
+	// no repository and leaves the clause undecided.
+	best, bestLen, tie := "", 0, false
+	for _, s := range slugs {
+		_, name, _ := strings.Cut(s, "/")
+		if name == "" || !regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_.\-/])`+
+			regexp.QuoteMeta(name)+`(?:$|[^A-Za-z0-9_\-/]|\.(?:$|\s))`).MatchString(c.Prose) {
+			continue
+		}
+		switch {
+		case len(name) > bestLen:
+			best, bestLen, tie = s, len(name), false
+		case len(name) == bestLen:
+			tie = true
+		}
+	}
+	if tie {
+		return "", "", false
+	}
+	if best != "" {
+		return d.Repos[best], best, true
+	}
+	return d.Workdir, "this repository", d.Workdir != ""
+}
+
+// acLineRange returns the lines of data from the first line matching from
+// through the next line matching to; ok=false when either is absent.
+func acLineRange(data []byte, from, to string) (string, bool) {
+	lines := strings.Split(string(data), "\n")
+	mFrom, mTo := acSpanMatcher(from), acSpanMatcher(to)
+	for i, l := range lines {
+		if !mFrom(l) {
+			continue
+		}
+		for j := i; j < len(lines); j++ {
+			if mTo(lines[j]) {
+				return strings.Join(lines[i:j+1], "\n"), true
+			}
+		}
+		return "", false
+	}
+	return "", false
+}
+
+// acRevision decides a clause comparing a named file with a repository's
+// file at a revision: byte-identical is met, different is unmet. "the lines
+// from `A` through `B`" narrows the comparison to that range. A checkout,
+// revision or file that cannot be read leaves the clause undecided.
+func acRevision(c acClause, d *ACDiff) acResult {
+	if len(c.Paths) == 0 {
+		return acResult{}
+	}
+	mine, other := c.Paths[0], c.Paths[0]
+	if len(c.Paths) > 1 {
+		other = c.Paths[1]
+	}
+	if hits := acBareMatches(mine, d); !strings.Contains(mine, "/") && len(hits) == 1 {
+		mine = hits[0]
+	}
+	repo, label, ok := acRevisionRepo(c, d)
+	if !ok {
+		return acResult{}
+	}
+	rev := c.Revisions[0]
+	a, okA := d.headContent(mine)
+	b, okB := acBlob(repo, rev, other)
+	if !okA || !okB {
+		return acResult{}
+	}
+	what := fmt.Sprintf("`%s`", mine)
+	if acRangeRE.MatchString(c.Prose) {
+		if len(c.Tokens) < 2 {
+			return acResult{}
+		}
+		ra, okA := acLineRange(a, c.Tokens[0], c.Tokens[1])
+		rb, okB := acLineRange(b, c.Tokens[0], c.Tokens[1])
+		if !okA || !okB {
+			return acResult{}
+		}
+		a, b = []byte(ra), []byte(rb)
+		what = fmt.Sprintf("the lines of `%s` from `%s` through `%s`", mine, c.Tokens[0], c.Tokens[1])
+	}
+	if !bytes.Equal(a, b) {
+		return acAnswer(ACUnmet, fmt.Sprintf("%s differ from %s's `%s` at `%s`", what, label, other, rev), mine)
+	}
+	return acAnswer(ACMet, fmt.Sprintf("%s match %s's `%s` at `%s` byte for byte", what, label, other, rev), mine)
 }
 
 // acDiffedPaths returns the clause's paths that are in the diff. A bare file
@@ -731,13 +1124,7 @@ func acDiffedPaths(c acClause, d *ACDiff) []string {
 		if strings.Contains(p, "/") {
 			continue
 		}
-		var hits []string
-		for _, q := range d.sortedPaths() {
-			if filepath.Base(q) == p {
-				hits = append(hits, q)
-			}
-		}
-		if len(hits) == 1 {
+		if hits := acBareMatches(p, d); len(hits) == 1 {
 			out = append(out, hits[0])
 		}
 	}
@@ -773,6 +1160,16 @@ func acScope(c acClause, d *ACDiff) acResult {
 // a heading not qualified by "existing" must also gain no lines. A file that
 // must be read and cannot be leaves the clause not diff-checkable.
 func acUnchanged(c acClause, d *ACDiff) acResult {
+	var globEv []string
+	for _, g := range c.Globs {
+		if hits := acGlobMatches(g, d); len(hits) > 0 {
+			return acAnswer(ACUnmet, fmt.Sprintf("the diff changes %s (matches `%s`)", acList(hits, 3), g), hits...)
+		}
+		globEv = append(globEv, fmt.Sprintf("no diffed path matches `%s`", g))
+	}
+	if len(globEv) > 0 && len(c.Paths) == 0 && len(c.Headings) == 0 {
+		return acAnswer(ACMet, strings.Join(globEv, "; "))
+	}
 	if len(c.Paths) > 0 {
 		var ev, paths []string
 		for _, p := range c.Paths {
@@ -1459,12 +1856,21 @@ func acWrappedIdent(tok string) string {
 // `{sessionJwt}` matches `[{ sessionJwt: [] }]` but not `sessionJwtX`
 // (#3154). Any other span matches as a literal substring.
 func acSpanMatcher(tok string) func(line string) bool {
+	if c := acCallSpanRE.FindStringSubmatch(tok); c != nil {
+		return regexp.MustCompile(`(?:^|[^A-Za-z0-9_$])` + regexp.QuoteMeta(c[1]) +
+			`\s*(?:<[^>]*>)?\s*\(`).MatchString
+	}
+	// `...` or `…` stands for any text, never for itself (#3042).
+	if acEllipsisRE.MatchString(tok) && !acSpreadRE.MatchString(tok) &&
+		strings.TrimSpace(acEllipsisRE.ReplaceAllString(tok, "")) != "" {
+		parts := acEllipsisRE.Split(tok, -1)
+		for i, p := range parts {
+			parts[i] = regexp.QuoteMeta(p)
+		}
+		return regexp.MustCompile(strings.Join(parts, ".+?")).MatchString
+	}
 	m := acKeyValueRE.FindStringSubmatch(tok)
 	if m == nil {
-		if c := acCallSpanRE.FindStringSubmatch(tok); c != nil {
-			return regexp.MustCompile(`(?:^|[^A-Za-z0-9_$])` + regexp.QuoteMeta(c[1]) +
-				`\s*(?:<[^>]*>)?\s*\(`).MatchString
-		}
 		if id := acWrappedIdent(tok); id != "" {
 			return regexp.MustCompile(`(?:^|[^A-Za-z0-9_$])` + regexp.QuoteMeta(id) +
 				`(?:[^A-Za-z0-9_$]|$)`).MatchString
@@ -1498,6 +1904,9 @@ var acExpressionSpanRE = regexp.MustCompile(`[\w)\]"'.]\s*(?:===|!==|==|!=|<=|>=
 // that no literal line need contain, so it can neither meet nor contradict a
 // clause (#3030, #3049).
 func acIsPatternSpan(tok string) bool {
+	if acIsGlobSpan(tok) {
+		return false // a path glob is decided against the diffed paths (#3042)
+	}
 	return acPatternSpanRE.MatchString(tok) || acExpressionSpanRE.MatchString(tok)
 }
 
@@ -1535,7 +1944,7 @@ func acUnchangedAboutTarget(raw string) bool {
 			if acExpressionSpanRE.MatchString(tok) {
 				break
 			}
-			if acIsPath(tok) || acHeadingTokRE.MatchString(tok) {
+			if acIsPath(tok) || acIsGlobSpan(tok) || acHeadingTokRE.MatchString(tok) {
 				return true
 			}
 		}
@@ -1559,13 +1968,98 @@ func acLiteralSpans(tokens []string) (literal []string, patterns bool) {
 func acAddedToken(tok string, scope []string, d *ACDiff) (string, bool) {
 	match := acSpanMatcher(tok)
 	for _, p := range scope {
-		for _, l := range d.Files[p].Added {
+		f := d.Files[p]
+		if f == nil {
+			continue
+		}
+		for _, l := range f.Added {
 			if match(l.Text) {
 				return fmt.Sprintf("%s:%d", p, l.N), true
 			}
 		}
+		lines, _ := d.yamlKeyPath(tok, p)
+		for _, n := range lines {
+			for _, l := range f.Added {
+				if l.N == n {
+					return fmt.Sprintf("%s:%d", p, n), true
+				}
+			}
+		}
 	}
 	return "", false
+}
+
+// acYAMLKeyRE parses a YAML key-path span `a: b`: `:` only, so `a=b` stays
+// a plain key-value span.
+var acYAMLKeyRE = regexp.MustCompile(`^["']?([A-Za-z_][A-Za-z0-9_.\-]*)["']?\s*:\s*["']?([^\s"':=]+)["']?$`)
+
+// yamlKeyPath matches a `a: b` span against the YAML file p as a nested key
+// path (#3042): mapping key a, at any depth, whose value is the scalar b, a
+// mapping holding key b, or a sequence holding item b. It returns the 1-based
+// lines of each b node; ok=false when tok is no key path, p is not YAML, or
+// p does not parse (the line matcher then stands alone).
+func (d *ACDiff) yamlKeyPath(tok, p string) ([]int, bool) {
+	m := acYAMLKeyRE.FindStringSubmatch(tok)
+	if m == nil || !(strings.HasSuffix(p, ".yml") || strings.HasSuffix(p, ".yaml")) {
+		return nil, false
+	}
+	if d.yaml == nil {
+		d.yaml = map[string]*yaml.Node{}
+	}
+	root, seen := d.yaml[p]
+	if !seen {
+		if lines, ok := d.lines(p); ok {
+			var n yaml.Node
+			if yaml.Unmarshal([]byte(strings.Join(lines, "\n")), &n) == nil {
+				root = &n
+			}
+		}
+		d.yaml[p] = root
+	}
+	if root == nil {
+		return nil, false
+	}
+	var out []int
+	var walk func(n *yaml.Node)
+	walk = func(n *yaml.Node) {
+		if n.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				k, v := n.Content[i], n.Content[i+1]
+				if strings.EqualFold(k.Value, m[1]) {
+					out = append(out, acYAMLChild(v, m[2])...)
+				}
+			}
+		}
+		for _, c := range n.Content {
+			walk(c)
+		}
+	}
+	walk(root)
+	return out, true
+}
+
+// acYAMLChild returns the lines where v holds b: as its scalar value, as a
+// mapping key, or as a sequence item.
+func acYAMLChild(v *yaml.Node, b string) []int {
+	switch v.Kind {
+	case yaml.ScalarNode:
+		if v.Value == b {
+			return []int{v.Line}
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(v.Content); i += 2 {
+			if v.Content[i].Value == b {
+				return []int{v.Content[i].Line}
+			}
+		}
+	case yaml.SequenceNode:
+		for _, it := range v.Content {
+			if it.Kind == yaml.ScalarNode && it.Value == b {
+				return []int{it.Line}
+			}
+		}
+	}
+	return nil
 }
 
 // acPresentToken looks for tok in the post-change content of the scope
@@ -1583,6 +2077,9 @@ func acPresentToken(tok string, scope []string, d *ACDiff) (loc string, found, u
 			if match(l) {
 				return fmt.Sprintf("%s:%d", p, i+1), true, unread
 			}
+		}
+		if ys, _ := d.yamlKeyPath(tok, p); len(ys) > 0 {
+			return fmt.Sprintf("%s:%d", p, ys[0]), true, unread
 		}
 	}
 	return "", false, unread
