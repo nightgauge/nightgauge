@@ -126,6 +126,12 @@ type ExecutionHistoryStageMetric struct {
 	// optional and nullable, so it is omitted when unset and a stage of any
 	// other adapter is sent unchanged.
 	ModelProvider *string `json:"modelProvider,omitempty"`
+	// Endpoint is the declared endpoint id that served the stage, for a
+	// multi-provider adapter (ADR-022 § 2): "lm-studio-4090". It is set for
+	// an opencode stage that names one. Like ModelProvider the platform's
+	// strict stage schema accepts it as optional and nullable, so it is
+	// omitted when unset.
+	Endpoint *string `json:"endpoint,omitempty"`
 	// ExecutionPath, ModelEffort, and ModelReasoning mirror V2StageDetail's
 	// fields of the same name (internal/state/history.go) verbatim — no
 	// fallback to Model/Provider when absent. Like Provider they are

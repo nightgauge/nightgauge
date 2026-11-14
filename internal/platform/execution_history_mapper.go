@@ -206,9 +206,12 @@ func buildExecutionHistoryStages(record state.V2RunRecord) ([]ExecutionHistorySt
 		// modelProvider is the only field that tells a local stage from a
 		// hosted one. It is sent as recorded, never derived from the model
 		// string: the served model can differ from the one dispatched.
-		var modelProvider string
+		// endpoint is the declared endpoint the stage recorded beside it,
+		// sent under the same rule.
+		var modelProvider, endpoint string
 		if detail.ModelSelection != nil {
 			modelProvider = detail.ModelSelection.ModelProvider
+			endpoint = detail.ModelSelection.Endpoint
 		}
 
 		// provider is the executing adapter recorded on the stage (V5 —
@@ -272,6 +275,7 @@ func buildExecutionHistoryStages(record state.V2RunRecord) ([]ExecutionHistorySt
 			Model:         nonEmptyTruncatedPtr(model, executionHistoryFieldMax),
 			Provider:      nonEmptyTruncatedPtr(provider, executionHistoryFieldMax),
 			ModelProvider: telemetryLabel(modelProvider),
+			Endpoint:      telemetryLabel(endpoint),
 			DurationMs:    durationMs,
 			InputTokens:   inputTokens,
 			OutputTokens:  outputTokens,

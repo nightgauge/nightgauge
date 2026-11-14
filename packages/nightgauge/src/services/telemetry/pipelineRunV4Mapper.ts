@@ -66,6 +66,18 @@ export interface V4StageMetric {
   costUsd: number | null;
   success: boolean;
   /**
+   * The provider that served the stage's model, for a multi-provider adapter
+   * (ADR-022 § 2), and the declared endpoint id that served it. Sourced from
+   * `model_selection.model_provider` / `model_selection.endpoint` as
+   * recorded, never derived from the model string, and mirroring the Go
+   * mapper's `ModelProvider`/`Endpoint` (internal/platform/
+   * execution_history_mapper.go). The platform's strict stage schema
+   * declares both optional and nullable: absent or label-invalid values omit
+   * the key, so a stage of any other adapter is sent unchanged.
+   */
+  modelProvider?: string;
+  endpoint?: string;
+  /**
    * executionPath/modelEffort/modelReasoning mirror V2StageDetail's fields of
    * the same name (internal/state/history.go) verbatim — read directly from
    * `detail`, with NO fallback to `model_selection`/`tokens.adapter` (unlike
@@ -209,12 +221,82 @@ function toRoutingPath(v: unknown): string[] | null {
   return parts.length > 0 ? parts : null;
 }
 
-function mapStages(stagesRaw: unknown, perStageTokensRaw: unknown): V4StageMetric[] {
+/**
+ * The platform's guard for a stage's modelProvider and endpoint labels, the
+ * grammar of an OpenCode provider key — identical to the Go mapper's
+ * `telemetryLabelPattern` / `telemetryLabelMax`.
+ */
+const TELEMETRY_LABEL_PATTERN = /^[a-z0-9][a-z0-9-]*$/u;
+const TELEMETRY_LABEL_MAX = 64;
+
+/**
+ * Returns the label when the platform's guard accepts it, else undefined. The
+ * stage schema is strict, so a label it rejects would drop the whole run's
+ * upload. Mirrors the Go mapper's `telemetryLabel`.
+ */
+function telemetryLabel(v: unknown): string | undefined {
+  return typeof v === "string" && v.length <= TELEMETRY_LABEL_MAX && TELEMETRY_LABEL_PATTERN.test(v)
+    ? v
+    : undefined;
+}
+
+/** cost_source values that mark a priced figure (Go state.CostSource*). */
+const STAMPED_COST_SOURCES: readonly string[] = ["computed", "native", "deterministic"];
+
+/**
+ * Whether a stage's cost is a priced figure: priced from a rate card,
+ * reported by the CLI, or the exact zero of a stage that dispatched no model,
+ * and not unstamped. A record that names no source is not one: absence means
+ * source-unknown, never priced. Mirrors the Go mapper's `stampedStageCost`.
+ */
+function stampedStageCost(tokens: Record<string, unknown>): boolean {
+  if (tokens["cost_unstamped"] === true) return false;
+  return (
+    typeof tokens["cost_source"] === "string" &&
+    STAMPED_COST_SOURCES.includes(tokens["cost_source"])
+  );
+}
+
+/**
+ * Whether every stage cost of a run is a priced figure, so a zero run total
+ * is a real zero rather than an unknown. Mirrors the Go mapper's
+ * `runCostStamped`.
+ */
+function runCostStamped(runTokens: Record<string, unknown>): boolean {
+  if (runTokens["cost_unstamped"] === true) return false;
+  const perStage = asRecord(runTokens["per_stage"]);
+  if (!perStage) return false;
+  const entries = Object.values(perStage);
+  return entries.length > 0 && entries.every((t) => stampedStageCost(asRecord(t) ?? {}));
+}
+
+/**
+ * The run's totalCostUsd, by the Go mapper's switch: the run-level estimate
+ * when non-zero; else the sum of the stage costs when positive; else 0 when
+ * every stage is a stamped zero (a run that used only local models); else
+ * null — an unknown cost is never sent as 0 (ADR-022 § 3, #1630).
+ */
+function runTotalCostUsd(
+  runTokens: Record<string, unknown>,
+  summedStageCostUsd: number
+): number | null {
+  const estimate = asFiniteNumber(runTokens["estimated_cost_usd"]);
+  if (estimate != null && estimate !== 0) return estimate;
+  if (summedStageCostUsd > 0) return summedStageCostUsd;
+  if (runCostStamped(runTokens)) return 0;
+  return null;
+}
+
+function mapStages(
+  stagesRaw: unknown,
+  perStageTokensRaw: unknown
+): { stages: V4StageMetric[]; summedCostUsd: number } {
   const stages = asRecord(stagesRaw);
-  if (!stages) return [];
+  if (!stages) return { stages: [], summedCostUsd: 0 };
   const perStage = asRecord(perStageTokensRaw) ?? {};
 
   const out: V4StageMetric[] = [];
+  let summedCostUsd = 0;
   for (const [stageName, detailRaw] of Object.entries(stages)) {
     if (out.length >= V4_STAGES_MAX) break;
     const detail = asRecord(detailRaw) ?? {};
@@ -230,24 +312,26 @@ function mapStages(stagesRaw: unknown, perStageTokensRaw: unknown): V4StageMetri
     const inputTokens = asNonNegInt(tokens["input"]);
     const outputTokens = asNonNegInt(tokens["output"]);
 
-    // tokens["cost_unstamped"] (Go state.V2StageTokens.CostUnstamped, #585,
-    // #588) is deliberately NOT read here. The platform's `.strict()` V4 Zod
-    // schema (ExecutionHistoryRunRecordV4Schema) has no field for it and
-    // rejects the WHOLE record on any unknown key, so forwarding it would
-    // reintroduce the exact "0 runs" failure mode this file's header
-    // documents. V4StageMetric intentionally has no `costUnstamped` property
-    // — the signal stays local (V2StageTokens.cost_unstamped /
-    // V2Tokens.cost_unstamped) for `nightgauge cost by-class` and other local
-    // consumers until a coordinated platform schema change adds it.
-    //
-    // Same rule for model_selection's dispatch-envelope fields — adapter,
-    // served_model, effort, thinking, mode (#580): `modelSelection` above
-    // reads only `["model"]`, exactly as before this issue (with the
-    // pre-existing `tokens["adapter"]` fallback when model_selection itself
-    // is absent). V4StageMetric has no properties for the new fields, so they
-    // cannot leak into the strict V4 schema. The new fields stay local-only
-    // for `nightgauge cost by-class` and other local consumers until a
-    // coordinated platform schema change adds them.
+    // A stamped zero, such as a local model's, is sent as 0: null tells the
+    // platform the cost is unknown (#1630, ADR-022 § 3). tokens
+    // ["cost_unstamped"] and ["cost_source"] are READ for that decision but
+    // never forwarded: the platform's `.strict()` V4 Zod schema has no field
+    // for them and rejects the WHOLE record on any unknown key, which would
+    // reintroduce the "0 runs" failure mode this file's header documents.
+    const rawCost = asFiniteNumber(tokens["cost_usd"]);
+    let costUsd: number | null = null;
+    if ((rawCost != null && rawCost !== 0) || stampedStageCost(tokens)) {
+      costUsd = rawCost ?? 0;
+      summedCostUsd += costUsd;
+    }
+
+    // model_selection's model_provider and endpoint are sent as recorded,
+    // label-guarded (mirrors the Go mapper). Its dispatch-envelope fields —
+    // adapter, served_model, effort, thinking, mode (#580) — are not:
+    // V4StageMetric has no properties for them, so they cannot leak into the
+    // strict V4 schema until a coordinated platform schema change adds them.
+    const modelProvider = telemetryLabel(modelSelection?.["model_provider"]);
+    const endpoint = telemetryLabel(modelSelection?.["endpoint"]);
     out.push({
       stageId: stageName.slice(0, 100),
       stageName: stageName.slice(0, 100),
@@ -257,7 +341,7 @@ function mapStages(stagesRaw: unknown, perStageTokensRaw: unknown): V4StageMetri
       inputTokens,
       outputTokens,
       totalTokens: inputTokens + outputTokens,
-      costUsd: asFiniteNumber(tokens["cost_usd"]),
+      costUsd,
       // 'failed'/'error' are the only non-success terminal states the producer
       // writes; 'complete' and 'skipped' both count as success.
       success: status !== "failed" && status !== "error",
@@ -265,9 +349,11 @@ function mapStages(stagesRaw: unknown, perStageTokensRaw: unknown): V4StageMetri
       executionPath: asNonEmptyString(detail["execution_path"]),
       modelEffort: asNonEmptyString(detail["model_effort"]),
       modelReasoning: asNonEmptyString(detail["model_reasoning"]),
+      ...(modelProvider !== undefined ? { modelProvider } : {}),
+      ...(endpoint !== undefined ? { endpoint } : {}),
     });
   }
-  return out;
+  return { stages: out, summedCostUsd };
 }
 
 // ─── Mapper ──────────────────────────────────────────────────────────────────
@@ -309,6 +395,7 @@ export function mapHistoryRecordToV4(raw: unknown): MapResult {
 
   const tokens = asRecord(r["tokens"]) ?? {};
   const routing = asRecord(r["routing"]) ?? {};
+  const { stages, summedCostUsd } = mapStages(r["stages"], tokens["per_stage"]);
   const terminalFailureKind =
     typeof r["terminal_failure_kind"] === "string"
       ? (r["terminal_failure_kind"] as string).slice(0, 100)
@@ -333,8 +420,8 @@ export function mapHistoryRecordToV4(raw: unknown): MapResult {
       complexityScore: asComplexity(routing["complexity_score"]),
       retries: 0,
       durationMs: asFiniteNumber(r["total_duration_ms"]),
-      totalCostUsd: asFiniteNumber(tokens["estimated_cost_usd"]),
-      stages: mapStages(r["stages"], tokens["per_stage"]),
+      totalCostUsd: runTotalCostUsd(tokens, summedCostUsd),
+      stages,
       agents: [],
       routingPath: toRoutingPath(routing["path"]),
     },

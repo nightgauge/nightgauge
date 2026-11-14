@@ -157,3 +157,154 @@ describe("mapHistoryRecordToV4 visibility (#2400)", () => {
     }
   });
 });
+
+/** A run whose stages and per-stage tokens are given; tokens extras merge into the run tokens. */
+function costRecord(
+  perStage: Record<string, Record<string, unknown>>,
+  runTokens: Record<string, unknown> = {},
+  stageDetails: Record<string, Record<string, unknown>> = {}
+): Record<string, unknown> {
+  const stages: Record<string, unknown> = {};
+  for (const name of Object.keys(perStage)) {
+    stages[name] = { status: "complete", ...(stageDetails[name] ?? {}) };
+  }
+  return { ...baseRecord(stages), tokens: { per_stage: perStage, ...runTokens } };
+}
+
+function mapped(raw: Record<string, unknown>) {
+  const result = mapHistoryRecordToV4(raw);
+  if (!result.ok) throw new Error(`mapping failed: ${result.reason}`);
+  return result.record;
+}
+
+describe("mapStages modelProvider and endpoint (#1750, mirrors the Go mapper)", () => {
+  const opencode = { adapter: "opencode", cost_source: "computed", cost_usd: 0 };
+
+  it("sends the recorded model_provider and endpoint for an opencode stage", () => {
+    const stage = mapped(
+      costRecord(
+        { "feature-dev": opencode },
+        {},
+        {
+          "feature-dev": {
+            model_selection: {
+              model: "lm-studio/qwen/qwen3.8-27b",
+              model_provider: "lm-studio",
+              endpoint: "lm-studio-4090",
+            },
+          },
+        }
+      )
+    ).stages[0];
+    expect(stage.modelProvider).toBe("lm-studio");
+    expect(stage.endpoint).toBe("lm-studio-4090");
+  });
+
+  it("omits both keys when the stage recorded neither", () => {
+    const stage = mapped(
+      costRecord(
+        { "feature-dev": opencode },
+        {},
+        {
+          "feature-dev": { model_selection: { model: "claude-sonnet-5" } },
+        }
+      )
+    ).stages[0];
+    expect("modelProvider" in stage).toBe(false);
+    expect("endpoint" in stage).toBe(false);
+    expect(JSON.stringify(stage)).not.toMatch(/modelProvider|endpoint/u);
+  });
+
+  it("drops a label the platform's guard would reject instead of failing the upload", () => {
+    const stage = mapped(
+      costRecord(
+        { "feature-dev": opencode },
+        {},
+        {
+          "feature-dev": {
+            model_selection: { model: "x", model_provider: "LM Studio", endpoint: "a".repeat(65) },
+          },
+        }
+      )
+    ).stages[0];
+    expect("modelProvider" in stage).toBe(false);
+    expect("endpoint" in stage).toBe(false);
+  });
+});
+
+describe("mapStages costUsd: unknown is null, a stamped zero is 0 (#1750, #1630)", () => {
+  it.each([
+    ["unstamped zero", { cost_usd: 0, cost_source: "unknown", cost_unstamped: true }, null],
+    [
+      "unstamped despite a priced source",
+      { cost_usd: 0, cost_source: "computed", cost_unstamped: true },
+      null,
+    ],
+    ["zero with no cost_source", { cost_usd: 0 }, null],
+    ["no cost_usd at all", {}, null],
+    ["stamped local zero", { cost_usd: 0, cost_source: "computed" }, 0],
+    ["deterministic zero", { cost_usd: 0, cost_source: "deterministic" }, 0],
+    ["priced nonzero", { cost_usd: 0.25, cost_source: "native" }, 0.25],
+    ["nonzero with no cost_source", { cost_usd: 0.1 }, 0.1],
+  ])("%s → %s", (_name, tokens, want) => {
+    const stage = mapped(costRecord({ "feature-dev": { adapter: "opencode", ...tokens } }))
+      .stages[0];
+    expect(stage.costUsd).toBe(want);
+  });
+});
+
+describe("mapHistoryRecordToV4 totalCostUsd mirrors the Go switch (#1750)", () => {
+  const local = { adapter: "opencode", cost_usd: 0, cost_source: "computed" };
+  const bookend = { adapter: "claude", cost_usd: 0, cost_source: "deterministic" };
+  const unstamped = {
+    adapter: "opencode",
+    cost_usd: 0,
+    cost_source: "unknown",
+    cost_unstamped: true,
+  };
+
+  it("uses a non-zero run estimate", () => {
+    expect(
+      mapped(costRecord({ "feature-dev": local }, { estimated_cost_usd: 0.42 })).totalCostUsd
+    ).toBe(0.42);
+  });
+
+  it("backfills from the stage sum when the estimate is zero", () => {
+    const rec = costRecord(
+      {
+        "feature-dev": { adapter: "claude", cost_usd: 0.3, cost_source: "native" },
+        "feature-validate": { adapter: "claude", cost_usd: 0.2, cost_source: "native" },
+      },
+      { estimated_cost_usd: 0 }
+    );
+    expect(mapped(rec).totalCostUsd).toBeCloseTo(0.5);
+  });
+
+  it("sends 0 when every stage is a stamped zero", () => {
+    const rec = costRecord(
+      { "issue-pickup": bookend, "feature-dev": local },
+      { estimated_cost_usd: 0 }
+    );
+    expect(mapped(rec).totalCostUsd).toBe(0);
+  });
+
+  it("sends null when any stage is unstamped", () => {
+    const rec = costRecord(
+      { "feature-dev": local, "feature-validate": unstamped },
+      { estimated_cost_usd: 0, cost_unstamped: true }
+    );
+    expect(mapped(rec).totalCostUsd).toBeNull();
+  });
+
+  it("sends null when no stage names a cost source", () => {
+    const rec = costRecord(
+      { "feature-dev": { adapter: "codex", cost_usd: 0 } },
+      { estimated_cost_usd: 0 }
+    );
+    expect(mapped(rec).totalCostUsd).toBeNull();
+  });
+
+  it("sends null when the run has no stage tokens", () => {
+    expect(mapped(costRecord({})).totalCostUsd).toBeNull();
+  });
+});
