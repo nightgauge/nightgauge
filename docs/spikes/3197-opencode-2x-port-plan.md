@@ -448,8 +448,7 @@ recommendations:
       - `internal/adaptercompat/manifests/opencode.json`: set `min_version` and
         `max_tested` to 2.2.7. In `required_flags`, drop `--dir` and add
         `--standalone`. Replace the `install.npm` remediation with the 2.x install
-        channel. The project is pre-customer, so 1.x support is removed, not kept
-        beside 2.x.
+        channel. 1.x support is removed, not kept beside 2.x.
       - `internal/execution/adapters/opencode_preflight.go`: keep the floor check on
         the binary version. The `opencode vX.Y.Z` parse is already in place (#3172).
         Replace the npm remediation text.
