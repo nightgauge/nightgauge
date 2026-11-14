@@ -43,6 +43,12 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install
         run: npm ci
+      # #3268: a root override capped @anthropic-ai/sdk at 0.x while the SDK
+      # declared ^1.x, so manifest-only Dependabot bumps merged green.
+      - name: Declared-versus-locked gate self-test
+        run: bash scripts/test-check-lock-satisfies-declared.sh
+      - name: Lock satisfies every declared range
+        run: node scripts/check-lock-satisfies-declared.mjs
       - name: Prettier (format check)
         run: npm run format:check
       - name: ESLint
