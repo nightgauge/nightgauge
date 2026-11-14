@@ -24,6 +24,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- After pr-merge, the extension moves an open issue back to Ready only when the merge is confirmed and the post-merge hook did not withhold Ready. When the hook withholds Ready, the issue goes to Backlog instead of back into the queue, and an unconfirmed merge raises a board-status alert instead of leaving the issue in In review silently. (#2745)
+
 - A failure whose text merely quoted an earlier `[host-slept]` message is no longer booked as
   host sleep. The extension no longer signals `host_slept`, and the scheduler accepts it only
   with its own recorded host-sleep verdict from the run being completed, so such failures now

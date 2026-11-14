@@ -1641,6 +1641,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * scheduler to park the issue if it stays open. Reset at every runPipeline() entry.
    */
   private mergeNoOp = false;
+  /**
+   * The post-merge hook answered `readyWithheld`: the issue must not go back
+   * to Ready. The pr-merge stage sync parks an open issue in Backlog instead
+   * (#2745, #2878 ADR-002). Reset at every runPipeline() entry and hook call.
+   */
+  private postMergeReadyWithheld = false;
   /** This run skipped forward to pr-merge. Reset at every runPipeline() entry. */
   private resumedAtPrMerge = false;
   /**
@@ -2388,6 +2394,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // hook skips it when it cannot resolve a board, and In review would then
     // strand the issue. An unreadable state writes nothing, since a guess could
     // be wrong either way, but it must not pass silently. @see #2706
+    // Ready is written only when this run confirmed the merge and the hook did
+    // not withhold Ready; a withheld Ready parks the issue in Backlog. @see #2745
     if (stage === "pr-merge") {
       const issueState = await getIssueState(
         issueNumber,
@@ -2403,7 +2411,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         return;
       }
       if (issueState !== "CLOSED") {
-        statusValue = BOARD_STATUS.ready;
+        if (!this.prMergedGroundTruth) {
+          // Paths that skip merge verification land here; In review would
+          // strand the issue, so surface it rather than pass silently (#2706).
+          this.logger.warn("Not writing Ready after pr-merge: the merge is not confirmed", {
+            issueNumber,
+          });
+          await this.raiseBoardStatusWriteFailed(issueNumber, stage);
+          return;
+        }
+        // A withheld Ready parks the open issue in Backlog, as the Go
+        // scheduler's withheldCompletionStatus does; In review would strand it.
+        statusValue = this.postMergeReadyWithheld ? BOARD_STATUS.backlog : BOARD_STATUS.ready;
       }
     }
 
@@ -4071,6 +4090,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // path out of here may leave the flag set without it.
     const alreadyMerged = this.mergeNoOp;
     this.mergeNoOp = false;
+    // The hook withholds Ready on every already-merged run, so the withhold
+    // holds even when the hook gives no answer (#2745, #2878).
+    this.postMergeReadyWithheld = alreadyMerged;
     try {
       const resolver = BinaryResolver.fromVSCode();
       const binary = await resolver.resolve();
@@ -4134,7 +4156,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         result: stdout.trim(),
       });
       // A no-op that closed the issue finished it; only one left open parks.
-      this.mergeNoOp = alreadyMerged && this.hookWithheldReady(stdout);
+      const hookWithheld = this.hookWithheldReady(stdout);
+      this.postMergeReadyWithheld = alreadyMerged || hookWithheld;
+      this.mergeNoOp = alreadyMerged && hookWithheld;
     } catch (err) {
       this.logger.warn("Post-merge hook failed (non-blocking)", {
         issueNumber,
@@ -11728,6 +11752,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.blockedTerminalState = null;
     this.prMergedGroundTruth = false;
     this.mergeNoOp = false;
+    this.postMergeReadyWithheld = false;
     this.resumedAtPrMerge = false;
     this.estimatorSnapshot = null;
 

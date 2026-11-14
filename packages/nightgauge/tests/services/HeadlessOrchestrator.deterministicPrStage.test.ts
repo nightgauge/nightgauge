@@ -723,6 +723,7 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
   describe("the post-merge hook's early returns (#2878)", () => {
     type Hookable = {
       mergeNoOp: boolean;
+      postMergeReadyWithheld: boolean;
       invokePostMergeHook(n: number): Promise<void>;
       resolvePostMergeNwo(n: number): Promise<{ owner: string; repo: string }>;
     };
@@ -736,6 +737,7 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
         }
       ) as unknown as Hookable;
       orchestrator.mergeNoOp = true;
+      orchestrator.postMergeReadyWithheld = true;
       return orchestrator;
     }
 
@@ -744,6 +746,8 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
       binaryPath.value = null;
       await orchestrator.invokePostMergeHook(300);
       expect(orchestrator.mergeNoOp).toBe(false);
+      // An already-merged run withholds Ready even with no hook answer (#2745).
+      expect(orchestrator.postMergeReadyWithheld).toBe(true);
     });
 
     it("does not park when the owner cannot be resolved", async () => {

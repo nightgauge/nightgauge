@@ -27,13 +27,15 @@ const ISSUE = 2706;
 const readState = vi.mocked(getIssueState);
 const writeStatus = vi.mocked(updateProjectItemStatus);
 
-function makeSync() {
+function makeSync({ merged = true, withheld = false } = {}) {
   const orchestrator = Object.create(HeadlessOrchestrator.prototype) as Record<string, unknown>;
   orchestrator.logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() };
   orchestrator.contextLoader = {};
   orchestrator.mainRepoRoot = "/tmp/nightgauge-2706";
   orchestrator.repoOverride = undefined;
   orchestrator.raiseBoardStatusWriteFailed = vi.fn();
+  orchestrator.prMergedGroundTruth = merged;
+  orchestrator.postMergeReadyWithheld = withheld;
   return {
     orchestrator,
     sync: (stage: string) =>
@@ -82,5 +84,31 @@ describe("pr-merge stage sync", () => {
     await sync("pr-merge");
     expect(writeStatus).not.toHaveBeenCalled();
     expect(orchestrator.raiseBoardStatusWriteFailed).toHaveBeenCalledWith(ISSUE, "pr-merge");
+  });
+
+  // #2745: Ready needs a confirmed merge and no hook withhold.
+  it("writes no Ready for an open issue when the merge is not confirmed", async () => {
+    board = "In review";
+    readState.mockResolvedValue("OPEN");
+    const { orchestrator, sync } = makeSync({ merged: false });
+    await sync("pr-merge");
+    expect(board).toBe("In review");
+    expect(writeStatus).not.toHaveBeenCalled();
+    expect(orchestrator.raiseBoardStatusWriteFailed).toHaveBeenCalledWith(ISSUE, "pr-merge");
+  });
+
+  it("parks an open issue in Backlog when the hook withheld Ready", async () => {
+    board = "In review";
+    readState.mockResolvedValue("OPEN");
+    const { orchestrator, sync } = makeSync({ withheld: true });
+    await sync("pr-merge");
+    expect(board).toBe("Backlog");
+    expect(orchestrator.raiseBoardStatusWriteFailed).not.toHaveBeenCalled();
+  });
+
+  it("still ends Done for a closed issue when the merge flag is unset", async () => {
+    readState.mockResolvedValue("CLOSED");
+    await makeSync({ merged: false }).sync("pr-merge");
+    expect(board).toBe("Done");
   });
 });

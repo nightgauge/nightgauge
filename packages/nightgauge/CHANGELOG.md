@@ -11,6 +11,8 @@ and this project adheres to
 
 ### Fixed
 
+- After pr-merge, the extension moves an open issue back to Ready only when the merge is confirmed and the post-merge hook did not withhold Ready. When the hook withholds Ready, the issue goes to Backlog instead of back into the queue, and an unconfirmed merge raises a board-status alert instead of leaving the issue in In review silently. (#2745)
+
 - A partial-delivery re-run started from the extension is now scoped to the
   remainder reconciled against the current issue body, like a Go-started run
   (#3242).
