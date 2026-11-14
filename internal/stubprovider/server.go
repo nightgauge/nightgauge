@@ -8,6 +8,15 @@
 // messages already present in the request body to find the next scripted
 // turn. It keeps no session state and uses no randomness, so byte-identical
 // requests produce byte-identical replies.
+//
+// A script may carry an OpenCode 2.x variant, stored as "<name>@opencode2",
+// that speaks 2.x tool names and argument shapes (shell, subagent, path). The
+// variant is chosen per request, statelessly, when the request offers a
+// `shell` or `subagent` tool; otherwise the 1.x script answers.
+//
+// For a "turns" script, a request that offers no tools (absent, null or empty
+// "tools") is OpenCode's title-generation request. It is answered with the
+// fixed titleReply outside the script, so it never consumes a scripted turn.
 package stubprovider
 
 import (
@@ -42,6 +51,13 @@ const (
 	DefaultMaxRequests = 50
 	DefaultIdleTimeout = 60 * time.Second
 )
+
+// titleReply answers a tool-less (title-generation) request for a "turns"
+// script.
+const titleReply = "stub-provider session"
+
+// opencode2Suffix names the OpenCode 2.x variant of a script.
+const opencode2Suffix = "@opencode2"
 
 const (
 	scriptKindTurns    = "turns"
@@ -115,6 +131,8 @@ type Config struct {
 type Server struct {
 	cfg    Config
 	script Script
+	// variant is the script's OpenCode 2.x form, or nil when it has none.
+	variant *Script
 
 	httpSrv      *http.Server
 	requestCount atomic.Int32
@@ -147,6 +165,14 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
+	var variant *Script
+	if v, ok := scripts[cfg.Script+opencode2Suffix]; ok {
+		if err := validateScript(cfg.Script+opencode2Suffix, v); err != nil {
+			return nil, err
+		}
+		variant = &v
+	}
+
 	if cfg.MaxRequests <= 0 {
 		cfg.MaxRequests = DefaultMaxRequests
 	}
@@ -160,6 +186,7 @@ func NewServer(cfg Config) (*Server, error) {
 	return &Server{
 		cfg:        cfg,
 		script:     script,
+		variant:    variant,
 		maxReached: make(chan struct{}, 1),
 	}, nil
 }
@@ -260,15 +287,17 @@ func (s *Server) touch() {
 	s.lastActivity.Store(time.Now().UnixNano())
 }
 
+func (s *Server) sleepDelay() {
+	if d := s.delay(); d > 0 {
+		time.Sleep(d)
+	}
+}
+
 func (s *Server) delay() time.Duration {
 	if s.cfg.DelayOverride != nil {
 		return *s.cfg.DelayOverride
 	}
 	return time.Duration(s.script.FirstTokenDelayMS) * time.Millisecond
-}
-
-func (s *Server) turnAt(i int) Turn {
-	return turnFrom(s.script.Turns, i)
 }
 
 func turnFrom(turns []Turn, i int) Turn {
@@ -287,12 +316,12 @@ func turnFrom(turns []Turn, i int) Turn {
 // isSubagentRequest reports whether the script names a subagent marker and
 // one of the request's user messages carries it. The match is on the raw
 // content bytes, so a string content and an array of text parts both count.
-func (s *Server) isSubagentRequest(messages []chatMessage) bool {
-	if s.script.SubagentMarker == "" {
+func isSubagentRequest(script Script, messages []chatMessage) bool {
+	if script.SubagentMarker == "" {
 		return false
 	}
 	for _, m := range messages {
-		if m.Role == "user" && strings.Contains(string(m.Content), s.script.SubagentMarker) {
+		if m.Role == "user" && strings.Contains(string(m.Content), script.SubagentMarker) {
 			return true
 		}
 	}
@@ -328,6 +357,27 @@ type chatRequest struct {
 	Messages      []chatMessage      `json:"messages"`
 	Stream        bool               `json:"stream"`
 	StreamOptions *streamOptionsWire `json:"stream_options,omitempty"`
+	Tools         []wireTool         `json:"tools,omitempty"`
+}
+
+// wireTool is one offered tool; only its function name is read.
+type wireTool struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
+}
+
+// offersOpenCode2Tools reports whether the offered tools carry an OpenCode
+// 2.x-only name (`shell` or `subagent`).
+func offersOpenCode2Tools(tools []wireTool) bool {
+	for _, t := range tools {
+		switch t.Function.Name {
+		case "shell", "subagent":
+			return true
+		}
+	}
+	return false
 }
 
 type chatCompletionMessage struct {
@@ -452,26 +502,39 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	script := s.script
+	variantName := "opencode1"
+	if s.variant != nil && offersOpenCode2Tools(req.Tools) {
+		script = *s.variant
+		variantName = "opencode2"
+	}
 	turnIndex := countAssistantMessages(req.Messages)
-	subagent := s.isSubagentRequest(req.Messages)
+	subagent := isSubagentRequest(script, req.Messages)
+	title := script.Kind == scriptKindTurns && len(req.Tools) == 0
 
 	// Only sizes and the derived turn index are ever logged — never the
 	// request body itself.
-	s.cfg.Log.Printf("stub-provider: served script=%q turn=%d subagent=%v bytes=%d stream=%v total=%d",
-		s.cfg.Script, turnIndex, subagent, len(body), req.Stream, count)
+	s.cfg.Log.Printf("stub-provider: served script=%q variant=%s turn=%d subagent=%v title=%v bytes=%d stream=%v total=%d",
+		s.cfg.Script, variantName, turnIndex, subagent, title, len(body), req.Stream, count)
 
-	switch s.script.Kind {
+	switch script.Kind {
 	case scriptKindTurns:
-		if d := s.delay(); d > 0 {
-			time.Sleep(d)
-		}
-		turn := s.turnAt(turnIndex)
+		var turn Turn
 		idKey := s.cfg.Script
-		if subagent {
+		switch {
+		case title:
+			// Answered outside the script, with no first-token delay.
+			turn = Turn{Content: titleReply}
+			idKey += "-title"
+		case subagent:
+			s.sleepDelay()
 			// Its own id namespace, so the subagent's turn 0 tool call never
 			// shares an id with the primary session's turn 0 call.
-			turn = turnFrom(s.script.SubagentTurns, turnIndex)
+			turn = turnFrom(script.SubagentTurns, turnIndex)
 			idKey += "-subagent"
+		default:
+			s.sleepDelay()
+			turn = turnFrom(script.Turns, turnIndex)
 		}
 		if req.Stream {
 			s.writeStream(w, idKey, turnIndex, turn, req)
@@ -486,7 +549,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		// Unreachable in practice: NewServer validates Kind against the
 		// known set before a Server is ever constructed. Kept as a
 		// defensive fail-closed branch rather than silently serving turns.
-		http.Error(w, fmt.Sprintf("stub-provider: unknown script kind %q", s.script.Kind), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("stub-provider: unknown script kind %q", script.Kind), http.StatusInternalServerError)
 	}
 
 	if int(count) >= s.cfg.MaxRequests {

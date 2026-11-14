@@ -14,6 +14,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- The stub provider now serves OpenCode 2.x variants (`<name>@opencode2`) of `tool-edit-stop`, `bash-then-stop`, `long-session`, `tools-forever`, `compaction-probe` and `task-then-subagent-bash`, using `shell`, `subagent {agent}` and `path` arguments. It picks the variant per request when the request offers a `shell` or `subagent` tool, so the 1.x scripts are unchanged. A `turns` script now answers a request with no tools (OpenCode's title request) with fixed text instead of a scripted turn (#3299).
+
 ### Fixed
 
 - A checklist criterion that wraps onto indented continuation lines is now read whole, not cut at its first line. `ac-mark --list`, the post-merge remainder comment, `issue-{N}.json` acceptance criteria, `ac-reconcile` and its SDK twin all join the continuation with a space; a blank line, list item, heading or fence ends the criterion. A PR that meets every wrapped criterion now says `Closes`, where #1750's PR said `Refs` with every criterion listed as remaining (#3297).
