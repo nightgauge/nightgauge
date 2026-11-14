@@ -723,6 +723,7 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
   describe("the post-merge hook's early returns (#2878)", () => {
     type Hookable = {
       mergeNoOp: boolean;
+      postMergeHookAnswer: string | null;
       invokePostMergeHook(n: number): Promise<void>;
       resolvePostMergeNwo(n: number): Promise<{ owner: string; repo: string }>;
     };
@@ -736,6 +737,7 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
         }
       ) as unknown as Hookable;
       orchestrator.mergeNoOp = true;
+      orchestrator.postMergeHookAnswer = "withhold";
       return orchestrator;
     }
 
@@ -744,6 +746,8 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
       binaryPath.value = null;
       await orchestrator.invokePostMergeHook(300);
       expect(orchestrator.mergeNoOp).toBe(false);
+      // No hook answer releases nothing (#2745).
+      expect(orchestrator.postMergeHookAnswer).toBeNull();
     });
 
     it("does not park when the owner cannot be resolved", async () => {
@@ -751,6 +755,54 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
       vi.spyOn(orchestrator, "resolvePostMergeNwo").mockResolvedValue({ owner: "", repo: "" });
       await orchestrator.invokePostMergeHook(300);
       expect(orchestrator.mergeNoOp).toBe(false);
+    });
+
+    // #2745: Ready is written only on the hook's own answer.
+    type Answerable = Hookable & {
+      applyPostMergeHookAnswer(stdout: string, alreadyMerged: boolean): void;
+    };
+
+    it("withholds Ready when the hook is skipped on a run that was not already merged", async () => {
+      const orchestrator = orchestratorWithNoOp();
+      orchestrator.mergeNoOp = false;
+      orchestrator.postMergeHookAnswer = "release";
+      binaryPath.value = null;
+      await orchestrator.invokePostMergeHook(300);
+      expect(orchestrator.postMergeHookAnswer).toBeNull();
+      expect(orchestrator.mergeNoOp).toBe(false);
+    });
+
+    it("withholds Ready, without parking, when the hook withholds it on a fresh merge", () => {
+      const orchestrator = orchestratorWithNoOp() as unknown as Answerable;
+      orchestrator.applyPostMergeHookAnswer('{"readyWithheld":true}', false);
+      expect(orchestrator.postMergeHookAnswer).toBe("withhold");
+      expect(orchestrator.mergeNoOp).toBe(false);
+    });
+
+    it("releases Ready when the hook answers without withholding it", () => {
+      const orchestrator = orchestratorWithNoOp() as unknown as Answerable;
+      orchestrator.applyPostMergeHookAnswer('{"readyWithheld":false}', false);
+      expect(orchestrator.postMergeHookAnswer).toBe("release");
+      expect(orchestrator.mergeNoOp).toBe(false);
+    });
+
+    it("withholds Ready when the hook's answer is unparseable", () => {
+      const orchestrator = orchestratorWithNoOp() as unknown as Answerable;
+      orchestrator.applyPostMergeHookAnswer("not json", false);
+      expect(orchestrator.postMergeHookAnswer).toBeNull();
+      expect(orchestrator.mergeNoOp).toBe(false);
+    });
+
+    it("does not confirm the merge when post-merge verification is skipped", async () => {
+      const orchestrator = orchestratorWithNoOp() as unknown as {
+        postMergeVerifyConfirmed: boolean;
+        verifyPostMergeState(n: number): Promise<Error | null>;
+      };
+      orchestrator.postMergeVerifyConfirmed = true;
+      // The unresolved binary is one of the paths that skips the gate.
+      binaryPath.value = null;
+      await expect(orchestrator.verifyPostMergeState(300)).resolves.toBeNull();
+      expect(orchestrator.postMergeVerifyConfirmed).toBe(false);
     });
   });
 

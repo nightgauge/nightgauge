@@ -1641,6 +1641,19 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * scheduler to park the issue if it stays open. Reset at every runPipeline() entry.
    */
   private mergeNoOp = false;
+  /**
+   * The post-merge hook's answer for this run: `release` lets an open issue go
+   * back to Ready, `withhold` parks it in Backlog (#2878 ADR-002), and null
+   * means no answer, which parks it and raises an alert. Only the hook's own
+   * answer releases Ready (#2745). Reset at every runPipeline() entry and hook
+   * call.
+   */
+  private postMergeHookAnswer: "release" | "withhold" | null = null;
+  /**
+   * The last verifyPostMergeState call saw the gate pass. Its skip paths also
+   * return null, so a null result alone does not confirm the merge (#2745).
+   */
+  private postMergeVerifyConfirmed = false;
   /** This run skipped forward to pr-merge. Reset at every runPipeline() entry. */
   private resumedAtPrMerge = false;
   /**
@@ -2388,6 +2401,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // hook skips it when it cannot resolve a board, and In review would then
     // strand the issue. An unreadable state writes nothing, since a guess could
     // be wrong either way, but it must not pass silently. @see #2706
+    // Ready is written only when this run confirmed the merge and the hook did
+    // not withhold Ready; a withheld Ready parks the issue in Backlog. @see #2745
     if (stage === "pr-merge") {
       const issueState = await getIssueState(
         issueNumber,
@@ -2403,7 +2418,28 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         return;
       }
       if (issueState !== "CLOSED") {
-        statusValue = BOARD_STATUS.ready;
+        if (!this.prMergedGroundTruth) {
+          // Paths that skip merge verification land here; In review would
+          // strand the issue, so surface it rather than pass silently (#2706).
+          this.logger.warn("Not writing Ready after pr-merge: the merge is not confirmed", {
+            issueNumber,
+          });
+          await this.raiseBoardStatusWriteFailed(issueNumber, stage);
+          return;
+        }
+        // Only the hook's own answer releases Ready. A withheld Ready parks the
+        // open issue in Backlog, as the Go scheduler's withheldCompletionStatus
+        // does; In review would strand it. With no answer (the hook was
+        // skipped, timed out or failed, or this path never ran it) the issue
+        // parks too, and the alert says why (#2745, #2706).
+        if (this.postMergeHookAnswer === null) {
+          this.logger.warn("Not writing Ready after pr-merge: the post-merge hook gave no answer", {
+            issueNumber,
+          });
+          await this.raiseBoardStatusWriteFailed(issueNumber, stage);
+        }
+        statusValue =
+          this.postMergeHookAnswer === "release" ? BOARD_STATUS.ready : BOARD_STATUS.backlog;
       }
     }
 
@@ -2604,6 +2640,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     attempt: number = 1,
     maxAttempts: number = 2
   ): Promise<Error | null> {
+    this.postMergeVerifyConfirmed = false;
     // Issue #3266: this body is now a thin shell over the Go binary's
     // pr-merge stage gate (`nightgauge gate verify pr-merge <N>`).
     // The gate logic lives in `internal/orchestrator/gates/pr_merge_gate.go`
@@ -2728,6 +2765,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
 
       if (gateResult.passed) {
+        this.postMergeVerifyConfirmed = true;
         this.logger.info("Post-merge verification passed", {
           issueNumber,
           prNumber,
@@ -4071,6 +4109,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // path out of here may leave the flag set without it.
     const alreadyMerged = this.mergeNoOp;
     this.mergeNoOp = false;
+    // Fail closed: until the hook answers there is no answer, so a hook that
+    // is skipped, times out or crashes parks the issue (#2745, #2878).
+    this.postMergeHookAnswer = null;
     try {
       const resolver = BinaryResolver.fromVSCode();
       const binary = await resolver.resolve();
@@ -4133,8 +4174,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         issueNumber,
         result: stdout.trim(),
       });
-      // A no-op that closed the issue finished it; only one left open parks.
-      this.mergeNoOp = alreadyMerged && this.hookWithheldReady(stdout);
+      this.applyPostMergeHookAnswer(stdout, alreadyMerged);
     } catch (err) {
       this.logger.warn("Post-merge hook failed (non-blocking)", {
         issueNumber,
@@ -6250,13 +6290,27 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     return state === "OPEN";
   }
 
-  /** Whether the post-merge hook's JSON says Ready was withheld. */
-  private hookWithheldReady(stdout: string): boolean {
+  /**
+   * Record the post-merge hook's answer. An unparseable answer is no answer,
+   * so Ready is not released (#2745). The hook withholds Ready on every
+   * already-merged run; a no-op that closed the issue finished it, so only
+   * one left open parks (#2878).
+   */
+  private applyPostMergeHookAnswer(stdout: string, alreadyMerged: boolean): void {
+    let answer: unknown;
     try {
-      return (JSON.parse(stdout) as { readyWithheld?: boolean }).readyWithheld === true;
+      answer = JSON.parse(stdout);
     } catch {
-      return false;
+      answer = null;
     }
+    if (answer === null || typeof answer !== "object") {
+      this.postMergeHookAnswer = null;
+      this.mergeNoOp = false;
+      return;
+    }
+    const hookWithheld = (answer as { readyWithheld?: unknown }).readyWithheld === true;
+    this.postMergeHookAnswer = alreadyMerged || hookWithheld ? "withhold" : "release";
+    this.mergeNoOp = alreadyMerged && hookWithheld;
   }
 
   /** The PR's state on the forge, upper-cased, or null when it cannot be read. */
@@ -11728,6 +11782,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.blockedTerminalState = null;
     this.prMergedGroundTruth = false;
     this.mergeNoOp = false;
+    this.postMergeHookAnswer = null;
+    this.postMergeVerifyConfirmed = false;
     this.resumedAtPrMerge = false;
     this.estimatorSnapshot = null;
 
@@ -13582,10 +13638,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // ===================================================================
         if (stage === "pr-merge") {
           const mergeVerifyError = await this.verifyPostMergeState(issueNumber, 1, 2);
-          if (!mergeVerifyError) {
+          if (!mergeVerifyError && this.postMergeVerifyConfirmed) {
             // #266: the deterministic gate confirms the PR is MERGED. Pin the
             // ground-truth flag so pipeline.notifyComplete can tell the Go
             // recording boundary the merge landed even if a later stage trips.
+            // A skipped check confirms nothing, so it pins nothing (#2745).
             void this.markPrMerged(issueNumber);
           }
           if (mergeVerifyError) {
@@ -13723,8 +13780,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                   error = retryVerifyError;
                   break;
                 }
-                // Retry succeeded and the gate confirms MERGED (#266).
-                void this.markPrMerged(issueNumber);
+                // Retry succeeded and the gate confirms MERGED (#266); a
+                // skipped check confirms nothing (#2745).
+                if (this.postMergeVerifyConfirmed) void this.markPrMerged(issueNumber);
                 // Retry succeeded — clear retry state and continue
                 if (this.stateService) {
                   try {
