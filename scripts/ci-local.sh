@@ -498,6 +498,8 @@ REQUIRED_FILES=(
   scripts/check-workflow-refs.py
   scripts/check-action-pins.py
   scripts/test-check-action-pins.sh
+  scripts/check-lock-satisfies-declared.mjs
+  scripts/test-check-lock-satisfies-declared.sh
   scripts/validate-proposal-artifact.mjs
   scripts/apply-proposal-artifact.sh
   scripts/test-validate-proposal-artifact.sh
@@ -2190,6 +2192,12 @@ run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-re
 #     as a pass. Mirrors .github/workflows/lint.yml.
 run_step "Action-pin gate regression suite" bash scripts/test-check-action-pins.sh
 run_step "workflow action pins resolve" python3 scripts/check-action-pins.py
+
+# 5f1b. Declared-versus-locked gate (#3268) — every workspace's declared range
+#      must be satisfied by the version package-lock.json installs. Self-test
+#      first. Mirrors .github/workflows/lint.yml.
+run_step "Declared-versus-locked gate regression suite" bash scripts/test-check-lock-satisfies-declared.sh
+run_step "lock satisfies declared ranges" node scripts/check-lock-satisfies-declared.mjs
 
 # 5f2. Proposal-artifact validator regression suite (#1304) — the schema gate
 # between the read-only model job and the write job in release-watchdog.yml
