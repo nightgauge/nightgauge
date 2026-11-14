@@ -1239,6 +1239,7 @@ func (s *IssueService) SearchIssues(ctx context.Context, owner, repo, query stri
 			NodeID: fmt.Sprintf("%v", f.ID),
 			Number: int(f.Number),
 			Title:  string(f.Title),
+			Body:   string(f.Body),
 			State:  string(f.State),
 			Repo:   string(f.Repository.NameWithOwner),
 			URL:    string(f.URL),

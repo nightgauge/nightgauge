@@ -147,7 +147,7 @@ func (s *Scheduler) queueEligibility(ctx context.Context) map[string]trust.Decis
 	items := make([]QueueItem, 0, len(s.queue))
 	for _, it := range s.queue {
 		held := it.Status == "paused" && it.PausedReason != nil && it.PausedReason.Kind == pausedNotVouchedFor
-		if (it.Status != "paused" && it.Status != "processing") || held {
+		if (it.Status != "paused" && it.Status != "processing" && it.Status != QueueStatusDropped) || held {
 			items = append(items, it)
 		}
 	}
