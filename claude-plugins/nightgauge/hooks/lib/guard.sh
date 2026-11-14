@@ -307,22 +307,8 @@ if [ -z "$NIGHTGAUGE_BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
   fi
 fi
 
-# 3a. Per-user shim written by the extension on activation (#2765).
-if [ -z "$NIGHTGAUGE_BINARY" ] && [ -f "$HOME/.nightgauge/bin/nightgauge" ] && \
-  [ -x "$HOME/.nightgauge/bin/nightgauge" ]; then
-  NIGHTGAUGE_BINARY="$HOME/.nightgauge/bin/nightgauge"
-fi
-
-# 4. VSCode extension-bundled binary (every extension user has a fresh copy).
-#    Selects the bundle VSCode RECORDS as installed, never the biggest-parsing
-#    version (#356); falls back to the first glob match with no record.
-_ng_recorded_dir=""
-_ng_recorded_version=""
-_ng_selected_version=""
-_ng_bundle_count=0
-_ng_divergence=""
-_ng_rejected=""
-# Code-signature gate for step 4 (#2776). On Darwin a bundle binary runs only
+# Code-signature gate for steps 3a and 4 (#2776, #3286). On Darwin the shim target or a
+# bundle binary runs only
 # when codesign verifies it against this pinned requirement (Apple anchor,
 # Developer ID intermediate and leaf, Nightgauge team). A bare --verify is not
 # enough: an ad-hoc re-signed tampered binary passes it. The string equals
@@ -333,6 +319,54 @@ _ng_bundle_verified() {
   [ "$(uname -s 2>/dev/null)" = "Darwin" ] || return 0
   codesign --verify --strict "-R=$_ng_bundle_requirement" "$1" >/dev/null 2>&1
 }
+# 3a. Per-user shim written by the extension on activation (#2765). Its
+#     target (followed through symlinks, since the extension links the shim to
+#     its bundle binary) must pass the same signature gate as step 4 (#3286);
+#     otherwise anyone able to write the shim would bypass that gate.
+_ng_shim_rejected=""
+_ng_shim_target=""
+_ng_shim="$HOME/.nightgauge/bin/nightgauge"
+if [ -z "$NIGHTGAUGE_BINARY" ] && [ -f "$_ng_shim" ] && [ -x "$_ng_shim" ]; then
+  # Bounded readlink loop: no readlink -f / realpath, which older macOS lacks.
+  _ng_shim_target="$_ng_shim"
+  _ng_shim_hops=0
+  while [ -L "$_ng_shim_target" ]; do
+    _ng_shim_hops=$((_ng_shim_hops + 1))
+    if [ "$_ng_shim_hops" -gt 16 ]; then
+      _ng_shim_target=""
+      break
+    fi
+    _ng_shim_link="$(readlink "$_ng_shim_target" 2>/dev/null)" || _ng_shim_link=""
+    if [ -z "$_ng_shim_link" ]; then
+      _ng_shim_target=""
+      break
+    fi
+    case "$_ng_shim_link" in
+      /*) _ng_shim_target="$_ng_shim_link" ;;
+      *) _ng_shim_target="${_ng_shim_target%/*}/$_ng_shim_link" ;;
+    esac
+  done
+  if [ -z "$_ng_shim_target" ] || [ ! -f "$_ng_shim_target" ] || \
+    [ ! -x "$_ng_shim_target" ]; then
+    _ng_shim_rejected="its target could not be resolved"
+  elif _ng_bundle_verified "$_ng_shim_target"; then
+    NIGHTGAUGE_BINARY="$_ng_shim"
+  else
+    _ng_shim_rejected="its code signature did not verify against the Nightgauge Developer ID requirement"
+  fi
+  unset _ng_shim_hops _ng_shim_link
+fi
+
+
+# 4. VSCode extension-bundled binary (every extension user has a fresh copy).
+#    Selects the bundle VSCode RECORDS as installed, never the biggest-parsing
+#    version (#356); falls back to the first glob match with no record.
+_ng_recorded_dir=""
+_ng_recorded_version=""
+_ng_selected_version=""
+_ng_bundle_count=0
+_ng_divergence=""
+_ng_rejected=""
 # Verifies $1 (path) for version $2; records a refusal and returns 1.
 _ng_bundle_accept() {
   _ng_bundle_verified "$1" && return 0
@@ -414,25 +448,38 @@ if [ -z "$NIGHTGAUGE_BINARY" ]; then
   unset _ng_recorded_path _ng_first_runnable _ng_first_runnable_version
 fi
 
-# Signature rejection (#2776): reported right after step 4 — before step 5 and
-# the missing-binary exit, so it is never lost — whether or not a bundle was
-# finally selected. Routed and deduped like the other [stale-binary] lines;
-# never stdout. It supersedes the record/unrecorded divergence below.
+# Signature rejection (#2776, #3286): reported right after step 4 — before
+# step 5 and the missing-binary exit, so it is never lost — whether or not a
+# binary was finally selected. Routed and deduped like the other [stale-binary]
+# lines; never stdout. It supersedes the record/unrecorded divergence below. A
+# refused shim and a refused bundle share one line so last-line dedup holds.
+_ng_rejected_message=""
+if [ -n "$NIGHTGAUGE_BINARY" ]; then
+  _ng_rejected_outcome="bundle $_ng_selected_version, running $NIGHTGAUGE_BINARY"
+else
+  _ng_rejected_outcome="no bundle"
+fi
+if [ -n "$_ng_shim_rejected" ]; then
+  _ng_rejected_message="[stale-binary] per-user shim $_ng_shim (target ${_ng_shim_target:-unresolved}) was not run: $_ng_shim_rejected; resolution fell through to $_ng_rejected_outcome"
+fi
 if [ -n "$_ng_rejected" ]; then
-  if [ -n "$NIGHTGAUGE_BINARY" ]; then
-    _ng_rejected_outcome="bundle $_ng_selected_version, running $NIGHTGAUGE_BINARY"
+  _ng_bundle_line="VSCode extension bundle $_ng_rejected was not run: its code signature did not verify against the Nightgauge Developer ID requirement; step 4 resolved $_ng_rejected_outcome"
+  if [ -n "$_ng_rejected_message" ]; then
+    _ng_rejected_message="$_ng_rejected_message; $_ng_bundle_line"
   else
-    _ng_rejected_outcome="no bundle"
+    _ng_rejected_message="[stale-binary] $_ng_bundle_line"
   fi
-  _ng_rejected_message="[stale-binary] VSCode extension bundle $_ng_rejected was not run: its code signature did not verify against the Nightgauge Developer ID requirement; step 4 resolved $_ng_rejected_outcome"
+  unset _ng_bundle_line
+fi
+if [ -n "$_ng_rejected_message" ]; then
   if [ "$NIGHTGAUGE_HOOK_SILENT" = "false" ]; then
     echo "$_ng_rejected_message" >&2
   elif ! _ng_message_already_last "$_ng_rejected_message"; then
     _log_to_side_channel "$_ng_rejected_message"
   fi
   _ng_divergence=""
-  unset _ng_rejected_outcome _ng_rejected_message
 fi
+unset _ng_rejected_outcome _ng_rejected_message _ng_shim _ng_shim_target _ng_shim_rejected
 unset _ng_rejected _ng_bundle_requirement
 
 # 5. `go install` default location.

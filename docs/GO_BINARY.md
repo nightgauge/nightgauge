@@ -5340,8 +5340,18 @@ no verified bundle, step 4 resolves nothing and the cascade continues to
 did not verify …` line with the usual routing and dedupe, and `doctor` reports
 `signature_rejected`. Linux bundles carry no platform signature, so on other
 platforms selection is unchanged. Dev-install bundles (`0.1.<epoch>`) are not
-Developer ID signed and are refused on macOS; resolve them through PATH or the
-shim instead.
+Developer ID signed and are refused on macOS; resolve them through PATH
+instead.
+
+The same check guards step 3a (#3286). The per-user shim
+`~/.nightgauge/bin/nightgauge` runs ahead of step 4, so its target (followed
+through symlinks) must verify against the same requirement; otherwise anyone
+able to write the shim would bypass the step-4 gate. A refused or unresolvable
+shim is skipped and the cascade continues to step 4. `guard.sh` reports it as
+`[stale-binary] per-user shim <path> (target <target>) was not run: <reason>;
+resolution fell through to <outcome>`, joined into one line with a step-4
+refusal, and `doctor` reports the same in its stale-binary finding. On other
+platforms the shim is selected unchanged.
 
 **Reading the record — one bounded fork, measured.** Both sides run the same
 extraction: find the ONE `"relativeLocation"` whose value is a plain
