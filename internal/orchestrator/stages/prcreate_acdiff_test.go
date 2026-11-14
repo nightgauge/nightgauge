@@ -2,6 +2,8 @@ package stages
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -891,13 +893,18 @@ func TestVerifyACAgainstDiff_Issue3052(t *testing.T) {
 
 func TestACIsPatternSpan(t *testing.T) {
 	for tok, want := range map[string]bool{
-		"<sha7>": true, "a/**": true, "*.go": true, "(Z+1)": true, "X.Y.(Z+1)-main.g<sha7>": true,
-		"--dry-run": false, "f()": false, "Promise<void>": false, "*p": false, "(not-found)": false, "a * b": false, "<sha7>-x": true, "<div>": false, "<Button>": false, "/* x */": false, "**kwargs": false, "<N>.md": true, "dir/*": true, "**/x": true, "<issue-number>": true, "state: SUCCESS": false, "docs/a.md": false,
+		"<sha7>": true, "a/**": false, "*.go": false, "(Z+1)": true, "X.Y.(Z+1)-main.g<sha7>": true,
+		"--dry-run": false, "f()": false, "Promise<void>": false, "*p": false, "(not-found)": false, "a * b": false, "<sha7>-x": true, "<div>": false, "<Button>": false, "/* x */": false, "**kwargs": false, "<N>.md": true, "dir/*": false, "**/x": false, "<issue-number>": true, "state: SUCCESS": false, "docs/a.md": false,
 		"text.length === maxLength": true, "a !== b": true, "x == y": true, "n != 0": true, "i <= n": true, "n >= 1": true, "p && q": true, "a || b": true,
 		"() => x": false, "--flag=value": false, "x = 1": false, "||": false, "<=": false,
 	} {
 		if got := acIsPatternSpan(tok); got != want {
 			t.Errorf("acIsPatternSpan(%q) = %v, want %v", tok, got, want)
+		}
+	}
+	for tok, want := range map[string]bool{"a/**": true, "*.go": true, "dir/*": true, "**/x": true, "/* x */": false, "**kwargs": false, "docs/a.md": false} {
+		if got := acIsGlobSpan(tok); got != want {
+			t.Errorf("acIsGlobSpan(%q) = %v, want %v", tok, got, want)
 		}
 	}
 }
@@ -1175,5 +1182,243 @@ func TestResolveACVerdicts_ProseRefKeepsValidateMet(t *testing.T) {
 	got := ResolveACVerdicts([]string{crit}, validate, nil, d.Checker(ACTestState{Passed: true}))
 	if len(got) != 1 || got[0].Status != ACMet {
 		t.Fatalf("got %+v, want met from validate", got)
+	}
+}
+
+// #3042 helpers: a repo with a base commit on main and a feature branch.
+func repo3042(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	gitOut(t, dir, "init", "-q", "-b", "main")
+	gitOut(t, dir, "config", "user.email", "test@example.com")
+	gitOut(t, dir, "config", "user.name", "Test")
+	gitOut(t, dir, "config", "commit.gpgsign", "false")
+	writeFile(t, dir, "README.md", "base\n")
+	for p, c := range files {
+		writeFile(t, dir, p, c)
+	}
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "base")
+	gitOut(t, dir, "checkout", "-q", "-b", "feat/3042")
+	return dir
+}
+
+func commitAll(t *testing.T, dir string) {
+	t.Helper()
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "change")
+}
+
+func wantStatus(t *testing.T, name string, got ACCheck, ok bool, status string) {
+	t.Helper()
+	switch {
+	case status == "" && ok:
+		t.Errorf("%s: got %+v, want undecided", name, got)
+	case status != "" && (!ok || got.Status != status):
+		t.Errorf("%s: got %+v ok=%v, want %s", name, got, ok, status)
+	}
+}
+
+// #3042 AC 0: a glob span is decided against the diffed paths.
+func TestVerifyACAgainstDiff_GlobSpan(t *testing.T) {
+	d := memDiff(`diff --git a/claude-plugins/nightgauge/hooks/a.sh b/claude-plugins/nightgauge/hooks/a.sh
+--- a/claude-plugins/nightgauge/hooks/a.sh
++++ b/claude-plugins/nightgauge/hooks/a.sh
+@@ -0,0 +1 @@
++echo a
+diff --git a/internal/x.go b/internal/x.go
+--- a/internal/x.go
++++ b/internal/x.go
+@@ -0,0 +1 @@
++package x
+`, map[string]string{"claude-plugins/nightgauge/hooks/a.sh": "echo a", "internal/x.go": "package x"})
+	got, ok := VerifyACAgainstDiff("The change updates `claude-plugins/nightgauge/**`.", nil, d, ACTestState{})
+	wantStatus(t, "matching glob", got, ok, ACMet)
+	got, ok = VerifyACAgainstDiff("The change updates `docs/**`.", nil, d, ACTestState{})
+	wantStatus(t, "glob matching none", got, ok, ACUnmet)
+	got, ok = VerifyACAgainstDiff("`internal/**` is unchanged.", nil, d, ACTestState{})
+	wantStatus(t, "unchanged glob with a diffed match", got, ok, ACUnmet)
+	got, ok = VerifyACAgainstDiff("`docs/**` is unchanged.", nil, d, ACTestState{})
+	wantStatus(t, "unchanged glob without a match", got, ok, ACMet)
+	got, ok = VerifyACAgainstDiff("`**/*.go` files are covered.", nil, d, ACTestState{})
+	wantStatus(t, "double-star prefix", got, ok, ACMet)
+	if got, ok = VerifyACAgainstDiff("The linter skips `**/*.gen.ts`.", nil, d, ACTestState{}); ok {
+		t.Errorf("descriptive glob matching none: want undecided, got %+v", got)
+	}
+}
+
+func TestACRevisionRepo_WholeName(t *testing.T) {
+	d := &ACDiff{Workdir: "/w", Repos: map[string]string{
+		"nightgauge/nightgauge": "/core", "nightgauge/nightgauge-internal": "/internal"}}
+	if p, _, ok := acRevisionRepo(acClause{Prose: "matches nightgauge-internal at the revision"}, d); !ok || p != "/internal" {
+		t.Errorf("nightgauge-internal: got %q ok=%v", p, ok)
+	}
+	if p, _, ok := acRevisionRepo(acClause{Prose: "matches the nightgauge file at the revision"}, d); !ok || p != "/core" {
+		t.Errorf("nightgauge: got %q ok=%v", p, ok)
+	}
+}
+
+// #3042 AC 1: replay of #3062 criterion 1 (PR #3065) — the trigger is a
+// nested key under an existing `on:`.
+func TestVerifyACAgainstDiff_Issue3062MarketplaceWorkflowCall(t *testing.T) {
+	const path = ".github/workflows/marketplace-publish.yml"
+	base := "name: publish\non:\n  workflow_dispatch:\n    inputs:\n      registries:\n        type: string\njobs:\n  guard:\n    runs-on: ubuntu-latest\n"
+	after := "name: publish\non:\n  workflow_dispatch:\n    inputs:\n      registries:\n        type: string\n  workflow_call:\n    inputs:\n      registries:\n        type: string\njobs:\n  guard:\n    runs-on: ubuntu-latest\n"
+	dir := repo3042(t, map[string]string{path: base})
+	writeFile(t, dir, path, after)
+	d := collect(t, dir)
+	crit := "`marketplace-publish.yml` accepts `on: workflow_call` with the same `registries` input, alongside `workflow_dispatch`. Every existing guard step runs unchanged under both triggers: …"
+	got, ok := VerifyACAgainstDiff(crit, nil, d, ACTestState{})
+	wantStatus(t, "#3062 criterion", got, ok, ACMet)
+
+	// Absent trigger: unmet.
+	dir = repo3042(t, map[string]string{path: base})
+	writeFile(t, dir, path, strings.Replace(base, "type: string\n", "type: string\n        default: npm\n", 1))
+	got, ok = VerifyACAgainstDiff("`marketplace-publish.yml` accepts `on: workflow_call`.", nil, collect(t, dir), ACTestState{})
+	wantStatus(t, "trigger absent", got, ok, ACUnmet)
+
+	// Malformed YAML: the line matcher stands alone, so a nested key is not found.
+	dir = repo3042(t, map[string]string{path: base})
+	writeFile(t, dir, path, after+"  bad: [unclosed\n")
+	got, ok = VerifyACAgainstDiff("`marketplace-publish.yml` accepts `on: workflow_call`.", nil, collect(t, dir), ACTestState{})
+	wantStatus(t, "malformed YAML falls back", got, ok, ACUnmet)
+}
+
+// #3042 AC 2: a bare file name resolves to its unique diffed path, and is
+// undecided when several diffed paths share it.
+func TestVerifyACAgainstDiff_BareFileName(t *testing.T) {
+	one := `diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -0,0 +1 @@
++  attest: true
+`
+	d := memDiff(one, map[string]string{".github/workflows/release.yml": "  attest: true"})
+	got, ok := VerifyACAgainstDiff("`release.yml` sets `attest: true`.", nil, d, ACTestState{})
+	wantStatus(t, "unique", got, ok, ACMet)
+	got, ok = VerifyACAgainstDiff("`release.yml` sets `sign: true`.", nil, d, ACTestState{})
+	wantStatus(t, "unique, missing token", got, ok, ACUnmet)
+
+	two := one + `diff --git a/templates/release.yml b/templates/release.yml
+--- a/templates/release.yml
++++ b/templates/release.yml
+@@ -0,0 +1 @@
++  sign: false
+`
+	d = memDiff(two, map[string]string{".github/workflows/release.yml": "  attest: true", "templates/release.yml": "  sign: false"})
+	got, ok = VerifyACAgainstDiff("`release.yml` sets `sign: true`.", nil, d, ACTestState{})
+	wantStatus(t, "ambiguous", got, ok, "")
+	got, ok = VerifyACAgainstDiff("`release.yml` sets `attest: true`.", []string{"`templates/release.yml` is the template."}, d, ACTestState{})
+	wantStatus(t, "ambiguous with inherited prior", got, ok, "")
+}
+
+// #3042 AC 5: `...` is a wildcard, never literal.
+func TestACSpanMatcher_Ellipsis(t *testing.T) {
+	m := acSpanMatcher("sha256=...")
+	if !m("<!-- nightgauge-workspace-rules:end sha256=ab12 -->") {
+		t.Error("`sha256=...` must match a marker carrying a digest")
+	}
+	if m("sha256=") || m("no digest here") {
+		t.Error("`sha256=...` must need text where the ellipsis stands")
+	}
+	if acSpanMatcher("{...props}")("<A {x} />") || !acSpanMatcher("{...props}")("<A {...props} />") {
+		t.Error("a spread span matches literally")
+	}
+	if acSpanMatcher("...")("any line") {
+		t.Error("a bare ellipsis span is literal, never a wildcard")
+	}
+	if !acSpanMatcher("run(…)")("run(x)") {
+		t.Error("a placeholder call span still matches by name")
+	}
+}
+
+// #3042 AC 5: replay of the #1054 marker criterion.
+func TestVerifyACAgainstDiff_EllipsisMarker(t *testing.T) {
+	marker := "<!-- nightgauge-workspace-rules:end sha256=" + strings.Repeat("ab", 32) + " -->"
+	d := memDiff("diff --git a/AGENTS.md b/AGENTS.md\n--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -0,0 +1 @@\n+"+marker+"\n",
+		map[string]string{"AGENTS.md": marker})
+	got, ok := VerifyACAgainstDiff("`AGENTS.md` ends the block with `<!-- nightgauge-workspace-rules:end sha256=... -->`.", nil, d, ACTestState{})
+	wantStatus(t, "full marker", got, ok, ACMet)
+	got, ok = VerifyACAgainstDiff("`AGENTS.md` records the `sha256=...` marker.", nil, d, ACTestState{})
+	wantStatus(t, "short marker", got, ok, ACMet)
+}
+
+// #3042 AC 3: replay of #3064 (PR #3066) — a digest decided by hashing the
+// named file at HEAD.
+func TestVerifyACAgainstDiff_Issue3064Digest(t *testing.T) {
+	const path = "claude-plugins/nightgauge/hooks/workflow-gate.sh"
+	content := "#!/usr/bin/env bash\nexec nightgauge hook workflow-gate \"$@\"\n"
+	dir := repo3042(t, nil)
+	writeFile(t, dir, path, content)
+	commitAll(t, dir)
+	d := collect(t, dir)
+	sum := sha256.Sum256([]byte(content))
+	digest := hex.EncodeToString(sum[:])
+	crit := "`" + path + "` hashes to the pinned sha256 `" + digest + "`."
+	got, ok := VerifyACAgainstDiff(crit, nil, d, ACTestState{})
+	wantStatus(t, "#3064 digest", got, ok, ACMet)
+	got, ok = VerifyACAgainstDiff("`"+path+"` hashes to the pinned sha256 `"+strings.Repeat("0", 64)+"`.", nil, d, ACTestState{})
+	wantStatus(t, "wrong digest", got, ok, ACUnmet)
+	got, ok = VerifyACAgainstDiff("The hook hashes to the pinned sha256 `"+digest+"`.", nil, d, ACTestState{})
+	wantStatus(t, "no named file", got, ok, "")
+}
+
+// #3042 AC 4: replay of #1054 (PR #1056) — a file byte-identical to the
+// core's file at a commit.
+func TestVerifyACAgainstDiff_Issue1054ByteIdentical(t *testing.T) {
+	const path = "scripts/post-merge-check.sh"
+	script := "#!/usr/bin/env bash\necho check\n"
+	core := repo3042(t, map[string]string{path: script})
+	sha := strings.TrimSpace(gitOut(t, core, "rev-parse", "HEAD"))
+	gitOut(t, core, "checkout", "-q", "main")
+	writeFile(t, core, path, "#!/usr/bin/env bash\necho newer\n")
+	commitAll(t, core) // the core has moved on; the criterion pins the old commit
+
+	crit := "`" + path + "` is byte-identical to the core's `" + path + "` at `" + sha + "` (`cmp` exits 0) and stays executable."
+	dir := repo3042(t, nil)
+	writeFile(t, dir, path, script)
+	commitAll(t, dir)
+	d := collect(t, dir)
+	d.Repos = map[string]string{"nightgauge/nightgauge": core}
+	got, ok := VerifyACAgainstDiff(crit, nil, d, ACTestState{})
+	wantStatus(t, "#1054 identical", got, ok, ACMet)
+
+	writeFile(t, dir, path, "#!/usr/bin/env bash\necho drift\n")
+	d = collect(t, dir)
+	d.Repos = map[string]string{"nightgauge/nightgauge": core}
+	got, ok = VerifyACAgainstDiff(crit, nil, d, ACTestState{})
+	wantStatus(t, "differs", got, ok, ACUnmet)
+
+	d.Repos = nil
+	got, ok = VerifyACAgainstDiff(crit, nil, d, ACTestState{})
+	wantStatus(t, "no checkout", got, ok, "")
+}
+
+// #3042 AC 4: a marker-bounded range is compared, not the whole file.
+func TestVerifyACAgainstDiff_Issue1054WorkspaceMarkers(t *testing.T) {
+	block := "<!-- nightgauge-workspace-rules:start -->\n- rule one\n<!-- nightgauge-workspace-rules:end sha256=" + strings.Repeat("cd", 32) + " -->\n"
+	core := repo3042(t, map[string]string{"AGENTS.md": "# Core\n\n" + block + "\ncore prose\n"})
+	sha := strings.TrimSpace(gitOut(t, core, "rev-parse", "HEAD"))
+	dir := repo3042(t, nil)
+	writeFile(t, dir, "AGENTS.md", "# Dashboard\n\n"+block+"\ndashboard prose\n")
+	d := collect(t, dir)
+	d.Repos = map[string]string{"nightgauge/nightgauge": core}
+	crit := "In `AGENTS.md` the lines from `<!-- nightgauge-workspace-rules:start -->` through `<!-- nightgauge-workspace-rules:end sha256=... -->` are byte-identical to the core's block at `" + sha + "`."
+	got, ok := VerifyACAgainstDiff(crit, nil, d, ACTestState{})
+	wantStatus(t, "#1054 markers", got, ok, ACMet)
+
+	writeFile(t, dir, "AGENTS.md", strings.Replace("# Dashboard\n\n"+block, "rule one", "rule 1", 1))
+	d = collect(t, dir)
+	d.Repos = map[string]string{"nightgauge/nightgauge": core}
+	got, ok = VerifyACAgainstDiff(crit, nil, d, ACTestState{})
+	wantStatus(t, "block differs", got, ok, ACUnmet)
+}
+
+func TestParseACClause_RevisionNeedsAdjacentWording(t *testing.T) {
+	if c := parseACClause("The log at startup prints `abc1234`."); len(c.Revisions) != 0 {
+		t.Errorf("a distant `at` must not make a revision: %+v", c.Revisions)
+	}
+	if c := parseACClause("`a.txt` matches the core's file at `abc1234`."); len(c.Revisions) != 1 {
+		t.Errorf("adjacent `at` names a revision: %+v", c.Revisions)
 	}
 }
