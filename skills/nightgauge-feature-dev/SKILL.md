@@ -35,7 +35,6 @@ orchestration:
   judge:
     mode: merge
     quorum: 1
-    promptRef: _includes/review-and-correction.md
 # Note: disable-model-invocation prevents the skill from making direct LLM
 # reasoning calls (e.g., free-form "think about X" prompts). Programmatic
 # SDK/API calls via allowed-tools (Bash, Task, etc.) are still permitted.
@@ -511,14 +510,13 @@ gracefully.
 printf '<!-- phase:start name="quality-review" index=10 total=17 stage="feature-dev" -->\n'
 ```
 
-**PURPOSE**: Run the 6 reviewer units declared in this skill's `orchestration:`
-frontmatter (code quality, security, test, documentation, performance,
-accessibility), aggregate findings, and set the quality-check result variables.
-On a provider with an orchestration capability the `WorkflowEngine` fans the six
-units out concurrently and a judge unit merges their verdicts. Without one, this
-phase reviews nothing and leaves `SECURITY_REVIEW_RESULT=skipped`: an author
-reading its own diff is not a review, and feature-validate runs the independent
-one. See
+**PURPOSE**: Run `nightgauge review quality`, which fans the 6 reviewer units
+declared in this skill's `orchestration:` frontmatter (code quality, security,
+test, documentation, performance, accessibility) out as concurrent read-only
+reviewers through the stage's adapter and merges their findings (judge
+`mode: merge`). On an adapter without a tool loop it spawns nothing and the
+result is `skipped`: an author reading its own diff is not a review, and
+feature-validate runs the independent one. See
 [docs/WORKFLOW_ORCHESTRATION.md](../../docs/WORKFLOW_ORCHESTRATION.md).
 
 > **Read `_includes/review-and-correction.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**

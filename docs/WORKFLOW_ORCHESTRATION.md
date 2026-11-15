@@ -340,6 +340,36 @@ body remains the portability floor. The shipped skills carrying the block are
 listed in `skills/` (security-audit / feature-dev / feature-validate / audit /
 migrate, #3917).
 
+### Go-dispatched stages: `nightgauge review quality`
+
+The scheduler runs every real stage through a Go `SkillRunner`, which never
+reaches `WorkflowExecutor`, so a stage's `orchestration:` block is otherwise
+unread in production. feature-dev's Phase 5 closes that gap for its six
+reviewer units with `nightgauge review quality --issue N` (#2850):
+
+- **Capability**: the stage adapter's `Agentic()` (has a tool loop) is the Go
+  analogue of `getOrchestrationCapability()`. Without one, or when the adapter
+  does not resolve, nothing is spawned; the result is `skipped` and
+  `[quality-review] skipped: <reason>` goes to stderr.
+- **Units**: read from the dispatched skill's frontmatter
+  (`NIGHTGAUGE_SKILL_DIR/SKILL.md`, else `skills/nightgauge-feature-dev/SKILL.md`).
+  A missing block or zero units fails closed to `skipped`. Each unit is one
+  read-only headless reviewer (stage `feature-dev-review`, 25 turns) over a
+  shared bundle under `.nightgauge/quality-review/<N>/`: the diff against the
+  merge base with `origin/<base>` and the changed-file list. All units run
+  concurrently, bounded by a 9-minute timeout.
+- **Judge**: only `mode: merge` is supported, and it is deterministic. A unit
+  fails exactly when it reports a `blocking` finding; a unit that wrote no valid
+  findings file is `unfinished`, never `passed`. Fewer than `quorum` finished
+  units makes the whole review `skipped`.
+- **Output**: `quality-review-{N}.json` in the pipeline state directory, also
+  printed on stdout. Phase 5 maps the `security` and `code-quality` units
+  onto `SECURITY_REVIEW_RESULT` and `CODE_STANDARDS_RESULT`.
+
+The SDK `selectExecutor` path would replace the whole stage with its units, so
+it is not used here. feature-validate's independent review (`nightgauge review
+run`) remains the merge gate.
+
 ### Router workflow sub-score
 
 `AutoProviderRouter` (`analysis/AutoProviderRouter.ts`) gains a workflow

@@ -16,6 +16,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- feature-dev's Phase 5 quality review now runs in the Go-dispatched pipeline. The new `nightgauge review quality --issue N` reads the six reviewer units from the skill's `orchestration:` frontmatter, spawns one read-only reviewer per unit concurrently through the stage's adapter, merges their findings (a unit that wrote nothing valid is unfinished, never passed) and writes `quality-review-{N}.json`. Before, the units were read only by an SDK path production never reaches, so `SECURITY_REVIEW_RESULT` was always `skipped`. An adapter without a tool loop spawns nothing and the review is `skipped`, with the reason on stderr (#2850).
+
 - `scripts/ci-local.sh --fast` now typechecks each TypeScript workspace package the change touches (`tsc --noEmit -p`, or the package's `typecheck` script), so a type error like #3312's fails feature-validate's pre-gate in seconds instead of the full gate (#2847). A package that depends on another workspace package is left out, since that dependency's types are build output; today that is `packages/nightgauge`, which the full gate still typechecks. `scripts/test-ci-local-fast-typecheck.sh` reproduces #3312 from a fixture of its `grep-for-symbol.ts`. `exit-records gate-summary --since` also accepts an RFC 3339 instant, to count only the runs of one build.
 
 - Pre-flight `grep-for-symbol` now also searches shell, YAML, JSON, TOML and SQL files, and a backticked span it cannot find leaves the criterion undecided instead of unmet, so a PR that meets it keeps `Closes`. A declared symbol (`function X`) that is absent is still unmet (#3312).
