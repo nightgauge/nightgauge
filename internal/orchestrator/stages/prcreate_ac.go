@@ -264,12 +264,40 @@ func firstACStatus(cands []ACVerdict, status string) (ACVerdict, bool) {
 	return ACVerdict{}, false
 }
 
-// acPRBodyRE matches a criterion that asks for content in the PR body: "the
-// command and its result are in the PR body", "the PR description lists the
-// boundary", "the PR records the cause" (#2941, #3154). It runs on prose with
-// code spans stripped.
-var acPRBodyRE = regexp.MustCompile(`(?i)\b(?:PR|pull request) (?:body|description)\b` +
-	`|\bthe PR (?:records|lists|names)\b`)
+// acPRClauseSplitRE splits prose into clauses for acAsksForPRBody.
+var acPRClauseSplitRE = regexp.MustCompile(`[.;,()\n]+`)
+
+// acSubordinateClauseRE matches a clause that opens with a subordinator: it
+// states a condition, not a demand.
+var acSubordinateClauseRE = regexp.MustCompile(
+	`(?i)^(?:when|whenever|if|unless|once|where|while|after|before)\b`)
+
+// acPRLeadVerb lets a clause open with a checking verb before its subject:
+// "Ensure the PR body includes the output", "Verify that the PR description
+// lists the boundary".
+const acPRLeadVerb = `(?:(?:ensure|verify|confirm|check|make sure)\s+(?:that\s+)?)?`
+
+// acPRBodySubjectRE matches a clause whose subject is this PR's body or
+// description, whatever verb follows: "The PR body should include the
+// output", "The PR description and the changelog name the flag". A body
+// phrase followed by with/of/that/which is a noun phrase, not a subject:
+// "the PR body with five met".
+var acPRBodySubjectRE = regexp.MustCompile(`(?i)^(?:(?:and|then)\s+)?` + acPRLeadVerb + `(?:(?:the|this|its)\s+)?` +
+	`(?:PR|pull request)\s+(?:body|description)\s+([a-z]+)`)
+
+// acPRSubjectRE matches a clause whose subject is the PR doing a verb that
+// puts words in its body, optionally after a modal: "The PR records the
+// cause", "The PR must name the follow-up". Verbs that describe the diff
+// (includes, contains) do not count.
+var acPRSubjectRE = regexp.MustCompile(`(?i)^(?:(?:and|then)\s+)?` + acPRLeadVerb + `(?:(?:the|this|its)\s+)?` +
+	`(?:PR|pull request)\s+(?:(?:must|should|shall|will|also)\s+)?` +
+	`(?:records?|lists?|names?|explains?|describes?|states?|documents?|notes?|reports?|says?|` +
+	`mentions?|links?)\b`)
+
+// acPRDestinationRE matches a clause that places content in this PR's body:
+// "the command and its result are in the PR body".
+var acPRDestinationRE = regexp.MustCompile(`(?i)\b(?:in|into|to|under)\s+(?:the|this)\s+` +
+	`(?:PR|pull request)\s+(?:body|description)\b`)
 
 // acResultEvidenceRE matches evidence that records a command's result, not
 // only that something was looked at: a zero exit status, Go's `ok  <pkg>`
@@ -286,8 +314,32 @@ var acFailureEvidenceRE = regexp.MustCompile(`(?i)\bFAIL(?:ED|S|URE)?\b|\bdid no
 // (#2941, #3154).
 const ACNoPRNote = "feature-validate recorded no pr_note or command result for this criterion"
 
+// acAsksForPRBody reports whether a criterion asks for content in this PR's
+// body (#2941, #3154). Only a main clause makes that demand: a criterion that
+// merely mentions PR bodies, such as code or a test that reads them, keeps
+// feature-validate's verdict (#3326): "A criterion the PR lists as unmet stays
+// in the remainder", "When the PR lists it as unmet", "the PR body with five
+// met". It runs per clause on prose with code spans stripped, so a subject cut
+// off from its verb by a comma ("The PR, after review, lists") is not read.
 func acAsksForPRBody(text string) bool {
-	return acPRBodyRE.MatchString(acStripCodeSpans(text))
+	for _, clause := range acPRClauseSplitRE.Split(acStripCodeSpans(text), -1) {
+		clause = strings.TrimSpace(clause)
+		if clause == "" || acSubordinateClauseRE.MatchString(clause) {
+			continue
+		}
+		if m := acPRBodySubjectRE.FindStringSubmatch(clause); m != nil {
+			switch strings.ToLower(m[1]) {
+			case "with", "of", "that", "which":
+			default:
+				return true
+			}
+		}
+		if acPRSubjectRE.MatchString(clause) ||
+			acPRDestinationRE.MatchString(clause) {
+			return true
+		}
+	}
+	return false
 }
 
 // acPRBodyVerdict judges feature-validate's verdict on a criterion that asks
