@@ -60,11 +60,75 @@ func TestShippedFeatureDevSkillDeclaresSixUnits(t *testing.T) {
 		if _, ok := focus[u.ID]; !ok {
 			t.Errorf("unit %q has no focus brief", u.ID)
 		}
+		if got := len(u.Paths) > 0; got != (u.ID == "accessibility") {
+			t.Errorf("unit %q paths = %v; only accessibility is path-scoped", u.ID, u.Paths)
+		}
+	}
+}
+
+func TestUnitApplies(t *testing.T) {
+	ui := Unit{ID: "accessibility", Paths: []string{"packages/nightgauge/src/webview/**", "**/*.tsx"}}
+	for files, want := range map[string]bool{
+		"cmd/x.go,internal/y.go":  false,
+		"a.tsx":                   true,
+		"packages/x/src/view.tsx": true,
+		"packages/nightgauge/src/webview/main.ts":    true,
+		"packages/nightgauge/src/webviewish/main.ts": false,
+		"": false,
+	} {
+		var list []string
+		if files != "" {
+			list = strings.Split(files, ",")
+		}
+		if got := ui.Applies(list); got != want {
+			t.Errorf("Applies(%q) = %v, want %v", files, got, want)
+		}
+	}
+	if !(Unit{ID: "security"}).Applies([]string{"cmd/x.go"}) {
+		t.Error("a unit without paths must always apply")
+	}
+}
+
+func TestMergeExcludesPathSkippedUnits(t *testing.T) {
+	spec := Spec{Judge: Judge{Mode: "merge", Quorum: 2}}
+	skipped := PathSkipped(Unit{ID: "accessibility", Paths: []string{"**/*.tsx"}})
+	if skipped.Status != ResultSkipped || !strings.Contains(skipped.Reason, "**/*.tsx") {
+		t.Fatalf("path-skipped = %+v", skipped)
+	}
+	one := UnitResult{ID: "security", Status: ResultPassed}
+	r := Merge(spec, "a", []UnitResult{one, skipped})
+	if r.Result != ResultPassed {
+		t.Errorf("one applicable unit finished, quorum capped to it: %+v", r)
+	}
+	if r.UnitStatus("accessibility") != ResultSkipped {
+		t.Error("path-skipped unit read as run")
+	}
+	unfinished := UnitResult{ID: "test", Status: StatusUnfinished}
+	if r := Merge(spec, "a", []UnitResult{one, unfinished, skipped}); r.Result != ResultSkipped {
+		t.Errorf("1 of 2 applicable finished under quorum 2 = %+v, want skipped", r)
+	}
+	all := Merge(spec, "a", []UnitResult{skipped})
+	if all.Result != ResultSkipped || all.Reason != "no unit applies to the diff" {
+		t.Errorf("all skipped = %+v", all)
+	}
+}
+
+func TestParseSpecRejectsUnsafeIDAndEmptyPath(t *testing.T) {
+	for name, body := range map[string]string{
+		"traversal id": "---\norchestration:\n  units:\n    - id: ../x\n---\n",
+		"empty glob":   "---\norchestration:\n  units:\n    - id: a\n      paths: [\"\"]\n---\n",
+	} {
+		if _, err := ParseSpec([]byte(body)); err == nil {
+			t.Errorf("%s: parsed", name)
+		}
 	}
 }
 
 func write(t *testing.T, b Bundle, id, body string) {
 	t.Helper()
+	if err := os.MkdirAll(b.UnitDir(id), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(b.FindingsPath(id), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -72,10 +136,10 @@ func write(t *testing.T, b Bundle, id, body string) {
 
 func TestReadUnitAndMerge(t *testing.T) {
 	b := Bundle{Dir: t.TempDir()}
-	write(t, b, "ok", `{"result":"failed","findings":[{"severity":"warning","file":"a","line":1,"claim":"c"}]}`)
-	write(t, b, "bad", `{"result":"passed","findings":[{"severity":"blocking","file":"a","line":1,"claim":"c"}]}`)
+	write(t, b, "ok", `{"unit":"ok","result":"failed","findings":[{"severity":"warning","file":"a","line":1,"claim":"c"}]}`)
+	write(t, b, "bad", `{"unit":"bad","result":"passed","findings":[{"severity":"blocking","file":"a","line":1,"claim":"c"}]}`)
 	write(t, b, "junk", `not json`)
-	write(t, b, "sev", `{"findings":[{"severity":"nit"}]}`)
+	write(t, b, "sev", `{"unit":"sev","findings":[{"severity":"nit"}]}`)
 
 	if r := ReadUnit(b, "ok"); r.Status != ResultPassed {
 		t.Errorf("warning-only unit = %s, want passed (status follows findings)", r.Status)
@@ -83,7 +147,8 @@ func TestReadUnitAndMerge(t *testing.T) {
 	if r := ReadUnit(b, "bad"); r.Status != ResultFailed {
 		t.Errorf("blocking unit = %s, want failed", r.Status)
 	}
-	for _, id := range []string{"junk", "sev", "missing"} {
+	write(t, b, "old", `{"findings":[]}`)
+	for _, id := range []string{"junk", "sev", "missing", "old"} {
 		if r := ReadUnit(b, id); r.Status != StatusUnfinished || r.Reason == "" {
 			t.Errorf("%s = %+v, want unfinished with reason", id, r)
 		}
@@ -110,11 +175,43 @@ func TestReadUnitAndMerge(t *testing.T) {
 }
 
 func TestPromptNamesUnitAndFindingsPath(t *testing.T) {
-	b := Bundle{Dir: "/b", DiffPath: "/b/diff.patch", FilesPath: "/b/files.txt"}
+	b := Bundle{Dir: "/b"}
 	p := Prompt("/root", b, Unit{ID: "security"})
-	for _, want := range []string{"security reviewer", focus["security"], filepath.Join("/b", "findings-security.json"), "/b/diff.patch"} {
+	for _, want := range []string{"security reviewer", focus["security"],
+		filepath.Join("/b", "security", "findings.json"), filepath.Join("/b", "security", "diff.patch"),
+		`"unit":"security"`} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt lacks %q", want)
 		}
+	}
+	if strings.Contains(p, filepath.Join("/b", "test")) {
+		t.Error("prompt names a sibling unit's directory")
+	}
+}
+
+func TestUnitsAreIsolated(t *testing.T) {
+	b := Bundle{Dir: t.TempDir(), Diff: []byte("d"), Files: []string{"a.go"}}
+	for _, id := range []string{"a", "b"} {
+		if err := b.PrepareUnit(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if b.UnitDir("a") == b.UnitDir("b") || filepath.Dir(b.FindingsPath("a")) == filepath.Dir(b.FindingsPath("b")) {
+		t.Fatal("units share a directory")
+	}
+	if pa := Prompt("/r", b, Unit{ID: "a"}); strings.Contains(pa, b.UnitDir("b")) {
+		t.Error("unit a's prompt names unit b's directory")
+	}
+	// A file at b's path, or one in a's path claiming to be b's, never becomes a's result.
+	write(t, b, "b", `{"unit":"b","findings":[{"severity":"blocking","file":"x","line":1,"claim":"c"}]}`)
+	if r := ReadUnit(b, "a"); r.Status != StatusUnfinished {
+		t.Errorf("a read b's file: %+v", r)
+	}
+	write(t, b, "a", `{"unit":"b","findings":[]}`)
+	if r := ReadUnit(b, "a"); r.Status != StatusUnfinished || !strings.Contains(r.Reason, `"b"`) {
+		t.Errorf("a accepted a file naming unit b: %+v", r)
+	}
+	if data, _ := os.ReadFile(b.FilesPath("a")); string(data) != "a.go\n" {
+		t.Errorf("files.txt = %q", data)
 	}
 }

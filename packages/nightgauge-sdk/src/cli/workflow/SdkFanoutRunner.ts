@@ -141,6 +141,11 @@ export interface WorkflowUnitContext {
    * the single-agent stage path does. @see Issue #2358
    */
   allowedTools?: readonly string[];
+  /**
+   * The spec's owning stage. A binding shared by several stages (the `run`
+   * command) takes the stage from here rather than binding one up front.
+   */
+  stage?: string;
 }
 
 /** Per-phase counts in the run summary. */
@@ -275,6 +280,7 @@ export async function runSdkFanout(
   const now = (): string => new Date().toISOString();
   const unit: WorkflowUnitContext = {
     abortSignal: options.abortSignal,
+    ...(spec.stage !== undefined && { stage: spec.stage }),
     ...(spec.allowedTools !== undefined &&
       spec.allowedTools.length > 0 && { allowedTools: spec.allowedTools }),
   };

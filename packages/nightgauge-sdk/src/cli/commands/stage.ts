@@ -21,7 +21,7 @@ import type { CLIConfig } from "../config.js";
 import { OutputFormatter } from "../output.js";
 import { EXIT_CODES } from "./run.js";
 import { runAdapterPreflightChecks } from "../codexPreflight.js";
-import { createAdapterQueryFunction } from "../adapterQuery.js";
+import { createAdapterQueryFunction, createWorkflowWiring } from "../adapterQuery.js";
 
 /**
  * Options for the stage command
@@ -247,6 +247,10 @@ export function registerStageCommand(cli: CAC, config: CLIConfig): void {
           defaultModel: finalConfig.defaultModel,
           // Provider id → provider-aware steering + preset on the SDK-CLI path (#4038).
           adapter: finalConfig.adapter,
+          ...createWorkflowWiring(finalConfig.adapter, finalConfig.orchestration, {
+            stage,
+            cwd: process.cwd(),
+          }),
         });
 
         // Stream every workflow node emission (run / phase / agent / judge) to

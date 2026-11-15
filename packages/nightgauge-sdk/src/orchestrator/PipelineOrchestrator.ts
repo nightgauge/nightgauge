@@ -29,7 +29,7 @@ import {
   type OrchestrationStage,
 } from "../cli/workflow/OrchestrationConfig.js";
 import { parseOrchestrationFrontmatter } from "../cli/workflow/parseOrchestrationFrontmatter.js";
-import type { WorkflowSpec } from "../cli/workflow/WorkflowSpec.js";
+import type { WorkflowPhaseSpec, WorkflowSpec } from "../cli/workflow/WorkflowSpec.js";
 import type { WorkflowExecutorBindings } from "../cli/workflow/SdkFanoutRunner.js";
 import { EphemeralTimeoutError } from "../cli/workflow/SdkFanoutExecutors.js";
 import { WorkflowExecutor, createNodeJournalFs, type JournalFs } from "./WorkflowExecutor.js";
@@ -382,6 +382,21 @@ export class PipelineOrchestrator {
     if (!spec) {
       return { kind: "single-agent" };
     }
+
+    // The frontmatter's units are a phase OF the stage, not the stage: the
+    // implementation runs first, from the same prompt the single-agent path
+    // builds, and the units (e.g. feature-dev's reviewers) run after it (#2908).
+    const implementation: WorkflowPhaseSpec = {
+      name: "implementation",
+      agents: [
+        {
+          agentId: `${stage}:implementation`,
+          role: "implementer",
+          prompt: composeStagePrompt(skill, stage, issueNumber),
+        },
+      ],
+    };
+    spec.phases = [implementation, ...spec.phases];
 
     // Every fanned-out unit is granted the tools the stage's single-agent query
     // would be, out of the same SKILL.md (#2358).

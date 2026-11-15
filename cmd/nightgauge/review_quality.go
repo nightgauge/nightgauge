@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,6 +78,15 @@ func runQualityReview(ctx context.Context, q qualityRun) qualityreview.Report {
 	units := make([]qualityreview.UnitResult, len(spec.Units))
 	var wg sync.WaitGroup
 	for i, u := range spec.Units {
+		if !u.Applies(b.Files) {
+			units[i] = qualityreview.PathSkipped(u)
+			continue
+		}
+		if err := b.PrepareUnit(u.ID); err != nil {
+			units[i] = qualityreview.UnitResult{ID: u.ID, Status: qualityreview.StatusUnfinished,
+				Findings: []qualityreview.Finding{}, Reason: "unit directory unavailable: " + err.Error()}
+			continue
+		}
 		wg.Add(1)
 		go func(i int, u qualityreview.Unit) {
 			defer wg.Done()
@@ -98,20 +109,33 @@ func runQualityReview(ctx context.Context, q qualityRun) qualityreview.Report {
 	return qualityreview.Merge(spec, q.Runner.Name(), units)
 }
 
-// qualitySkillPath is the dispatched stage's own SKILL.md when the stage
-// exported its directory, else the repository's source copy.
-func qualitySkillPath(root string) string {
-	if dir := os.Getenv("NIGHTGAUGE_SKILL_DIR"); dir != "" {
-		if p := filepath.Join(dir, "SKILL.md"); fileExists(p) {
-			return p
+// trustedQualitySkill returns the SKILL.md the units are read from: --skill
+// when given, else the dispatched stage's exported NIGHTGAUGE_SKILL_DIR. The
+// change under review can edit anything in the worktree, its own reviewer
+// matrix included, so a copy that resolves inside root is refused and the
+// review is skipped. There is no fallback to the worktree's source copy.
+func trustedQualitySkill(root, flag string) (string, error) {
+	p := flag
+	if p == "" {
+		dir := os.Getenv("NIGHTGAUGE_SKILL_DIR")
+		if dir == "" {
+			return "", errors.New("no trusted skill copy: NIGHTGAUGE_SKILL_DIR is unset")
 		}
+		p = filepath.Join(dir, "SKILL.md")
 	}
-	return filepath.Join(root, "skills", "nightgauge-"+qualityReviewSkill, "SKILL.md")
-}
-
-func fileExists(p string) bool {
-	st, err := os.Stat(p)
-	return err == nil && !st.IsDir()
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return "", fmt.Errorf("no trusted skill copy: %w", err)
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("no trusted skill copy: %w", err)
+	}
+	if rel, err := filepath.Rel(realRoot, resolved); err == nil &&
+		rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("no trusted skill copy: %s is inside the worktree under review", p)
+	}
+	return resolved, nil
 }
 
 func reviewQualityCmd() *cobra.Command {
@@ -122,10 +146,12 @@ func reviewQualityCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "quality",
 		Short: "Fan feature-dev's Phase 5 reviewer units out through the stage's adapter (#2850)",
-		Long: `Reads the units and judge from feature-dev's orchestration frontmatter, spawns
-one read-only reviewer per unit concurrently, merges their findings and writes
-quality-review-{N}.json. An adapter without a tool loop spawns nothing and the
-result is skipped. See docs/WORKFLOW_ORCHESTRATION.md.`,
+		Long: `Reads the units and judge from feature-dev's orchestration frontmatter in a
+trusted copy outside the worktree (--skill, else $NIGHTGAUGE_SKILL_DIR/SKILL.md),
+spawns one read-only reviewer per unit concurrently, merges their findings and
+writes quality-review-{N}.json. A unit whose paths: match no changed file is
+skipped. With no trusted copy, or on an adapter without a tool loop, nothing is
+spawned and the result is skipped. See docs/WORKFLOW_ORCHESTRATION.md.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), qualityReviewTimeout)
@@ -141,10 +167,11 @@ result is skipped. See docs/WORKFLOW_ORCHESTRATION.md.`,
 			q := qualityRun{Root: root, Issue: issue, Base: base, Spawn: spawnReview, Stderr: os.Stderr}
 			q.Adapter = config.ResolveStageAdapter(cfg, qualityReviewSkill, os.Getenv).Adapter
 			q.Runner, q.Resolve = adapters.NewRegistry().Resolve("", q.Adapter)
-			if skill == "" {
-				skill = qualitySkillPath(root)
+			if path, err := trustedQualitySkill(root, skill); err != nil {
+				q.SkillErr = err
+			} else {
+				q.Skill, q.SkillErr = os.ReadFile(path)
 			}
-			q.Skill, q.SkillErr = os.ReadFile(skill)
 			report := runQualityReview(ctx, q)
 			report.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 			data, err := json.MarshalIndent(report, "", "  ")
@@ -161,7 +188,7 @@ result is skipped. See docs/WORKFLOW_ORCHESTRATION.md.`,
 	cmd.Flags().IntVar(&issue, "issue", 0, "Issue number (required)")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory (default: cwd)")
 	cmd.Flags().StringVar(&base, "base", "main", "Base branch the diff is taken against (origin/<base>)")
-	cmd.Flags().StringVar(&skill, "skill", "", "SKILL.md to read units from (default: the dispatched feature-dev skill)")
+	cmd.Flags().StringVar(&skill, "skill", "", "SKILL.md to read units from; must be outside the worktree (default: $NIGHTGAUGE_SKILL_DIR/SKILL.md)")
 	_ = cmd.MarkFlagRequired("issue")
 	return cmd
 }

@@ -416,6 +416,28 @@ describe("SdkFanoutRunner (#3905)", () => {
   });
 });
 
+describe("every unit carries the spec's stage (#2908)", () => {
+  it("hands each agent and judge spec.stage", async () => {
+    const seen: Array<string | undefined> = [];
+    const bindings: WorkflowExecutorBindings = {
+      async runAgent(_agent, unit) {
+        seen.push(unit?.stage);
+        return { usage: usage(), terminalKind: "success" as const };
+      },
+      async runJudge(_judge, _target, unit) {
+        seen.push(unit?.stage);
+        return { verdict: "pass" as const, usage: usage() };
+      },
+    };
+    await runSdkFanout(
+      makeSpec(2, 1, { stage: "feature-dev" }),
+      new ArrayWorkflowEventSink(),
+      bindings
+    );
+    expect(seen).toEqual(["feature-dev", "feature-dev", "feature-dev"]);
+  });
+});
+
 describe("every unit is granted the spec's tools (#2358)", () => {
   /** Bindings that record the tools each agent and judge was handed. */
   function recordingBindings(seen: Array<readonly string[] | undefined>): WorkflowExecutorBindings {

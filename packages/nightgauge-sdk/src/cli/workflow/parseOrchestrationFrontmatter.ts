@@ -170,6 +170,9 @@ function extractOrchestrationBlock(skillContent: string): RawOrchestrationBlock 
  * `ceiling` keyword selects the safety ceiling, and the caller-supplied context
  * folds in run identity, `prefer_native_offload`, and the budget cap.
  *
+ * The units phase is a phase OF the stage: `PipelineOrchestrator.selectExecutor`
+ * prepends the stage's implementation phase before running it (#2908).
+ *
  * A skill with an orchestration block but zero usable units resolves to `null`
  * (nothing to fan out) so the stage takes the single-agent path — the prose
  * body remains the portability floor.

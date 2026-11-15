@@ -297,14 +297,25 @@ unchanged single-agent `StageExecutor`. It returns the single-agent path when:
   here).
 
 Otherwise it parses the stage SKILL's `orchestration:` frontmatter (the same
-skill content `buildStagePrompt` loads) via `parseOrchestrationFrontmatter` into a
-single-phase `WorkflowSpec`, folding in run identity, the resolved
-`prefer_native_offload[stage]`, and the `max_usd` budget cap. The
+skill content `buildStagePrompt` loads) via `parseOrchestrationFrontmatter` and
+compiles a two-phase `WorkflowSpec`: first an `implementation` phase with one
+`<stage>:implementation` agent (role `implementer`) running the same prompt the
+single-agent path builds, then the frontmatter's units phase with its judge. The
+units are a phase of the stage, not a replacement for it (#2908). The spec folds
+in run identity, the resolved `prefer_native_offload[stage]`, and the `max_usd`
+budget cap. The
 `WorkflowExecutor` then clamps the spec's ceiling to the config caps, so even a
 synthetic 1000-agent frontmatter cannot exceed the run budget or the hard
 provider ceiling. `runStageWorkflow` brackets the fan-out with the stage's own
 phase node so the stage still appears as one phase in the canonical tree while its
 sub-agent/judge nodes stream through the same sink (the EventBus **is** the sink).
+
+The `nightgauge stage` and `nightgauge run` SDK commands wire the engine through
+one helper, `createWorkflowWiring` (`cli/adapterQuery.ts`): it passes the
+resolved `orchestration` config, the adapter instance from the registry, and
+`makeSdkFanoutBindings` for it. `run` spans stages, so its bindings bind no stage
+and each unit takes its spec's stage from `WorkflowUnitContext.stage`.
+Orchestration still stays off unless the config enables it.
 
 ### `orchestration:` skill frontmatter
 
@@ -326,6 +337,7 @@ orchestration:
     - id: refuter
       role: refuter
       promptRef: _includes/refute.md
+      paths: ["**/*.go"] # optional: run only when a changed file matches
   judge: # optional adversarial judge
     mode: merge
     quorum: 1
@@ -340,6 +352,13 @@ body remains the portability floor. The shipped skills carrying the block are
 listed in `skills/` (security-audit / feature-dev / feature-validate / audit /
 migrate, #3917).
 
+`paths:` is a list of globs over the changed files (`*` and `?` stay in one
+segment, `**/` matches any leading directories, a trailing `**` matches
+everything beneath). A unit none of whose globs matches a changed file is not
+spawned. A unit without `paths` always runs. Only `nightgauge review quality`
+enforces it; the SDK `selectExecutor` path ignores `paths:` and runs every unit.
+feature-dev's `accessibility` unit declares UI globs.
+
 ### Go-dispatched stages: `nightgauge review quality`
 
 The scheduler runs every real stage through a Go `SkillRunner`, which never
@@ -351,23 +370,30 @@ reviewer units with `nightgauge review quality --issue N` (#2850):
   analogue of `getOrchestrationCapability()`. Without one, or when the adapter
   does not resolve, nothing is spawned; the result is `skipped` and
   `[quality-review] skipped: <reason>` goes to stderr.
-- **Units**: read from the dispatched skill's frontmatter
-  (`NIGHTGAUGE_SKILL_DIR/SKILL.md`, else `skills/nightgauge-feature-dev/SKILL.md`).
-  A missing block or zero units fails closed to `skipped`. Each unit is one
-  read-only headless reviewer (stage `feature-dev-review`, 25 turns) over a
-  shared bundle under `.nightgauge/quality-review/<N>/`: the diff against the
-  merge base with `origin/<base>` and the changed-file list. All units run
-  concurrently, bounded by a 9-minute timeout.
+- **Units**: read from a trusted skill copy: `--skill`, else
+  `NIGHTGAUGE_SKILL_DIR/SKILL.md`. A copy that resolves (symlinks followed)
+  inside the worktree under review is refused, because the change could edit
+  its own reviewer matrix; there is no fallback to the worktree's
+  `skills/` source. No trusted copy, a missing block or zero units fails closed
+  to `skipped`. Each unit is one read-only headless reviewer (stage
+  `feature-dev-review`, 25 turns) with its own directory
+  `.nightgauge/quality-review/<N>/<unit>/` holding its copy of the diff against
+  the merge base with `origin/<base>`, the changed-file list, and its
+  `findings.json`. A unit's prompt names only its own directory, and a findings
+  file whose `unit` field is not that unit's id is rejected. A unit whose
+  `paths:` match no changed file is `skipped` and not spawned. The other units
+  run concurrently, bounded by a 9-minute timeout.
 - **Judge**: only `mode: merge` is supported, and it is deterministic. A unit
   fails exactly when it reports a `blocking` finding; a unit that wrote no valid
-  findings file is `unfinished`, never `passed`. Fewer than `quorum` finished
-  units makes the whole review `skipped`.
+  findings file is `unfinished`, never `passed`. Path-skipped units are left out
+  of the count: fewer finished units than `quorum` (capped at the units that
+  applied) makes the whole review `skipped`, as does a diff no unit applies to.
 - **Output**: `quality-review-{N}.json` in the pipeline state directory, also
   printed on stdout. Phase 5 maps the `security` and `code-quality` units
   onto `SECURITY_REVIEW_RESULT` and `CODE_STANDARDS_RESULT`.
 
-The SDK `selectExecutor` path would replace the whole stage with its units, so
-it is not used here. feature-validate's independent review (`nightgauge review
+The Go scheduler does not use the SDK `selectExecutor` path, which runs the units
+after an implementation phase. feature-validate's independent review (`nightgauge review
 run`) remains the merge gate.
 
 ### Router workflow sub-score
