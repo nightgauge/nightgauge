@@ -37,10 +37,13 @@ printf '%s\n' "$QUALITY_REPORT" | jq -r '"quality review: \(.result) \(.reason /
     (.findings[] | "    [\(.severity)] \(.file):\(.line) \(.claim)"))'
 ```
 
-Each unit writes `{"result","findings":[{severity,file,line,claim}]}`; its
-status follows from its findings (`failed` exactly when one is `blocking`). A
-unit that wrote nothing valid is `unfinished`, never `passed`. With fewer than
-the judge's `quorum` units finished, or on an adapter without a tool loop, the
+Each unit writes `{"unit","result","findings":[{severity,file,line,claim}]}` in
+its own directory; its status follows from its findings (`failed` exactly when
+one is `blocking`). A unit that wrote nothing valid, or a file naming another
+unit, is `unfinished`, never `passed`. A unit whose `paths:` match no changed
+file (accessibility on a non-UI diff) is `skipped` and left out of the quorum.
+With fewer than the judge's `quorum` applicable units finished, with no trusted
+skill copy outside the worktree, or on an adapter without a tool loop, the
 whole review is `skipped` and the reason is printed on stderr as
 `[quality-review] skipped: <reason>`. The report is also written to
 `quality-review-{N}.json` in the pipeline state directory.
