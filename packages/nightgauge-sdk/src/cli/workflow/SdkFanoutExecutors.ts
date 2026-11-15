@@ -323,7 +323,10 @@ export interface SdkFanoutBindingsOptions {
    * adapter's real query function); tests pass a fake to avoid spawning a CLI.
    */
   exec?: EphemeralExec;
-  /** Owning pipeline stage, propagated to the adapter's ephemeral query options. */
+  /**
+   * Owning pipeline stage, propagated to the adapter's ephemeral query options.
+   * When omitted, each unit's {@link WorkflowUnitContext.stage} is used.
+   */
   stage?: string;
   /** Working directory for the ephemeral exec. */
   cwd?: string;
@@ -365,7 +368,7 @@ export function makeSdkFanoutBindings(
           adapter,
           prompt: agent.prompt,
           model: agent.model,
-          stage,
+          stage: stage ?? unit?.stage,
           cwd,
           abortSignal,
           ...(unit?.allowedTools !== undefined && { allowedTools: unit.allowedTools }),
@@ -396,7 +399,7 @@ export function makeSdkFanoutBindings(
       const result = await exec({
         adapter,
         prompt: judge.prompt,
-        stage,
+        stage: stage ?? unit?.stage,
         cwd,
         abortSignal: unit?.abortSignal,
         ...(unit?.allowedTools !== undefined && { allowedTools: unit.allowedTools }),

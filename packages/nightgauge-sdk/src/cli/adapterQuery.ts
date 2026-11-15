@@ -13,6 +13,10 @@ import type { SDKQueryFunction } from "../orchestrator/StageExecutor.js";
 import type { NightgaugeAdapter } from "./adapter.js";
 import type { QueryFunctionOptions } from "./adapters/ICliAdapter.js";
 import { defaultRegistry } from "./adapters/AdapterRegistry.js";
+import type { OrchestrationConfig } from "./workflow/OrchestrationConfig.js";
+import { makeSdkFanoutBindings } from "./workflow/SdkFanoutExecutors.js";
+import type { ICliAdapter } from "./adapters/ICliAdapter.js";
+import type { WorkflowExecutorBindings } from "./workflow/SdkFanoutRunner.js";
 
 /**
  * Token usage parsed from Codex's `turn.completed` event, normalized onto the
@@ -527,6 +531,34 @@ export function summarizeCopilotOutput(
     usage,
     sessionId,
     estimatedCostUsd,
+  };
+}
+
+/** The workflow options {@link createWorkflowWiring} hands a PipelineOrchestrator. */
+export interface WorkflowWiring {
+  orchestration: OrchestrationConfig;
+  workflowAdapter: ICliAdapter;
+  workflowBindings: WorkflowExecutorBindings;
+}
+
+/**
+ * The workflow options a production `PipelineOrchestrator` needs so its
+ * `selectExecutor` can route a stage with an `orchestration:` block to the
+ * fan-out: the resolved config, the adapter instance and its bindings. Both the
+ * `stage` and `run` commands spread this, so the two cannot drift. `stage` is
+ * omitted for a multi-stage run; each unit then carries its spec's stage.
+ * Orchestration stays off unless the config enables it. @see Issue #2908
+ */
+export function createWorkflowWiring(
+  adapter: NightgaugeAdapter,
+  orchestration: OrchestrationConfig | undefined,
+  options: { stage?: string; cwd?: string } = {}
+): WorkflowWiring {
+  const workflowAdapter = defaultRegistry.get(adapter);
+  return {
+    orchestration: orchestration ?? {},
+    workflowAdapter,
+    workflowBindings: makeSdkFanoutBindings(workflowAdapter, options),
   };
 }
 

@@ -6,7 +6,7 @@ description: Implement features following the approved PLAN.md and documented st
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.20.0"
+  version: "1.21.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 orchestration:
@@ -32,6 +32,13 @@ orchestration:
     - id: accessibility
       role: reviewer
       promptRef: _includes/review-and-correction.md
+      paths:
+        - "**/*.tsx"
+        - "**/*.jsx"
+        - "**/*.css"
+        - "**/*.html"
+        - "**/*.vue"
+        - "**/*.svelte"
   judge:
     mode: merge
     quorum: 1

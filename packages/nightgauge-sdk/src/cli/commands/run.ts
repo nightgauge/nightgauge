@@ -20,7 +20,7 @@ import { PRContextSchema } from "../../context/schemas/index.js";
 import type { CLIConfig } from "../config.js";
 import { OutputFormatter } from "../output.js";
 import { runAdapterPreflightChecks } from "../codexPreflight.js";
-import { createAdapterQueryFunction } from "../adapterQuery.js";
+import { createAdapterQueryFunction, createWorkflowWiring } from "../adapterQuery.js";
 
 /**
  * Exit codes for the CLI
@@ -128,6 +128,10 @@ export function registerRunCommand(cli: CAC, config: CLIConfig): void {
           // steering (AGENTS.md/GEMINI.md) + the correct system-prompt preset on
           // this SDK-CLI path (#4038).
           adapter: finalConfig.adapter,
+          // One binding for every stage: each unit carries its spec's stage.
+          ...createWorkflowWiring(finalConfig.adapter, finalConfig.orchestration, {
+            cwd: process.cwd(),
+          }),
         });
 
         // Stream every workflow node emission (run / phase / agent / judge) to
