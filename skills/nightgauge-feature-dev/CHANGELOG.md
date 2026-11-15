@@ -10,6 +10,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Phase 5 runs `nightgauge review quality`, which fans the six `orchestration:` reviewer units out through the stage's adapter and merges their findings; `SECURITY_REVIEW_RESULT` and `CODE_STANDARDS_RESULT` come from the security and code-quality units. Without a tool loop the review is `skipped` with the reason on stderr. The judge's unused `promptRef` is dropped (#2850).
 - New gotcha and Step 0.7.2b: an operator-revised plan (`revision_reasons` with `operator-origin:`) binds feature-dev — implement its files or record a `PLAN_REVISION_NEEDED` signal naming the disputed step; the steer is read from `planning.operator_steer` (#3163).
 - New gotcha: on a partial-delivery re-run the plan's focus criteria outrank `partial_delivery.criteria`; implement them and never emit `NOT_PIPELINE_ACTIONABLE` while one is unmet (#3235).
 - Phase 7 records `pr_summary`, one imperative line stating the change, in `dev-{N}.json` for the PR title (#2846).
