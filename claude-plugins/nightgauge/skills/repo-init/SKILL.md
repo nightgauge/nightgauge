@@ -138,9 +138,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -170,7 +172,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -318,7 +320,7 @@ this pairs with the pipeline's post-merge worktree + local-branch teardown
 idempotent, safe to re-run:
 
 ```bash
-nightgauge repo enable-delete-branch --owner "$OWNER" --repo "$REPO" --json
+"${NIGHTGAUGE_BIN:-nightgauge}" repo enable-delete-branch --owner "$OWNER" --repo "$REPO" --json
 ```
 
 (GitHub forge only. Skip on GitLab — the forge adapter doesn't expose this REST
@@ -426,7 +428,7 @@ directory, through the binary (JSON on stdin; never a direct file write):
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
 { ... the record below ... }
 JSON
 ```
@@ -481,7 +483,7 @@ The assessment record MUST follow this schema:
 # Validate JSON if written
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
+ASSESSMENT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

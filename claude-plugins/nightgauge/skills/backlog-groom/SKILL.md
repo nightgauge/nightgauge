@@ -300,9 +300,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -332,7 +334,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -413,7 +415,7 @@ issues) instead of re-dumping the whole backlog.
 SKILL_NAME="nightgauge-backlog-groom"
 RUN_LOG_CLASS="checkout"
 RUN_LOG_NAME="triage/backlog-groom-runs.jsonl"
-RUN_LOG="$(nightgauge layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
+RUN_LOG="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
 ```
 
 ### Run Reflection (memory across runs)
@@ -466,7 +468,7 @@ else
   RECORD=$(jq -nc --arg ts "$NOW" --arg skill "$SKILL_NAME" \
         --argjson counts "${RUN_COUNTS:-{}}" --arg summary "${RUN_SUMMARY:-}" \
         '{ts:$ts, skill:$skill, counts:$counts, summary:$summary}')
-  printf '%s\n' "$RECORD" | nightgauge layout append "$RUN_LOG_CLASS" "$RUN_LOG_NAME" >/dev/null
+  printf '%s\n' "$RECORD" | "${NIGHTGAUGE_BIN:-nightgauge}" layout append "$RUN_LOG_CLASS" "$RUN_LOG_NAME" >/dev/null
   echo "Appended run record to $RUN_LOG"
 fi
 ```
@@ -515,7 +517,7 @@ QUERY='query($owner:String!,$project:Int!,$endCursor:String){
 CURSOR=""
 : > /tmp/board_items.jsonl
 while :; do
-  PAGE=$(nightgauge forge graphql -f query="$QUERY" \
+  PAGE=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query="$QUERY" \
     -f owner="$OWNER" -F project="$PROJECT_NUMBER" \
     ${CURSOR:+-f endCursor="$CURSOR"})
   printf '%s\n' "$PAGE" | jq -c '.data.organization.projectV2.items.nodes[]' \
@@ -708,8 +710,8 @@ list, in this order, and confirms each mutation took by re-reading the issue:
 5. **Field corrections** — via the Go binary, never raw mutations:
 
    ```bash
-   nightgauge project set-field <num> --priority P1 --size M
-   nightgauge project sync-status <num> <status>
+   "${NIGHTGAUGE_BIN:-nightgauge}" project set-field <num> --priority P1 --size M
+   "${NIGHTGAUGE_BIN:-nightgauge}" project sync-status <num> <status>
    ```
 
 6. **Label changes** — resolve node IDs first with
@@ -717,8 +719,8 @@ list, in this order, and confirms each mutation took by re-reading the issue:
    commands:
 
    ```bash
-   nightgauge forge label add --issue-id <node> --labels <label-ids>
-   nightgauge forge label remove --issue-id <node> --labels <label-ids>
+   "${NIGHTGAUGE_BIN:-nightgauge}" forge label add --issue-id <node> --labels <label-ids>
+   "${NIGHTGAUGE_BIN:-nightgauge}" forge label remove --issue-id <node> --labels <label-ids>
    ```
 
    Never raw `nightgauge forge graphql` label mutations — the ADR-008
@@ -826,7 +828,7 @@ directory, through the binary (JSON on stdin; never a direct file write):
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
 { ... the record below ... }
 JSON
 ```
@@ -881,7 +883,7 @@ The assessment record MUST follow this schema:
 # Validate JSON if written
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
+ASSESSMENT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

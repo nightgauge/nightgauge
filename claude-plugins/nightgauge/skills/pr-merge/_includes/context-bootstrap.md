@@ -53,7 +53,7 @@ not history — start from it instead of re-deriving everything from scratch.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-FEEDBACK_FILE="$(nightgauge layout path pipeline feedback-${ISSUE_NUMBER}.json)"
+FEEDBACK_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline feedback-${ISSUE_NUMBER}.json)"
 PR_MERGE_RETRY_CONTEXT=""
 if [ -f "$FEEDBACK_FILE" ]; then
   PR_MERGE_RETRY_CONTEXT=$(jq -r '[.signals[]? | select(.signal_type == "PR_MERGE_RETRY")] | (last // empty) | .rationale' "$FEEDBACK_FILE" 2>/dev/null || echo "")
@@ -90,7 +90,7 @@ file):
 # merge ref, so only a base move can clear it.
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE="$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline pr-${ISSUE_NUMBER}.json)"
 # base_sha: the base branch head when the record is written (#3179). The
 # scheduler re-dispatches an inherited-ci-failure blocker once the base moves.
 BASE_REF=$(jq -r '.base_branch // "main"' "$CONTEXT_FILE" 2>/dev/null)
@@ -100,7 +100,7 @@ CONTEXT_FILE_TMP=$(mktemp)
 jq --arg cls "$CLASSIFICATION" --arg rem "$REMEDIATION" --arg base "$BASE_SHA" \
   '.blocker = {classification: $cls, remediation: $rem, non_retryable: true, base_sha: $base}' \
   "$CONTEXT_FILE" > "$CONTEXT_FILE_TMP" &&
-  nightgauge layout write pipeline "pr-${ISSUE_NUMBER}.json" --from "$CONTEXT_FILE_TMP" >/dev/null
+  "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "pr-${ISSUE_NUMBER}.json" --from "$CONTEXT_FILE_TMP" >/dev/null
 rm -f "$CONTEXT_FILE_TMP"
 ```
 
@@ -111,7 +111,7 @@ If context file missing, attempt auto-reconstruction from GitHub before failing:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE="$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline pr-${ISSUE_NUMBER}.json)"
 if [ ! -f "$CONTEXT_FILE" ]; then
   echo "WARNING: pr-${ISSUE_NUMBER}.json not found. Attempting to reconstruct from GitHub..."
 
@@ -161,7 +161,7 @@ if [ ! -f "$CONTEXT_FILE" ]; then
         ci_monitoring: { monitored: false, final_status: "unknown" },
         created_at: $created_at,
         reconstructed: true
-      }' | nightgauge layout write pipeline "pr-${ISSUE_NUMBER}.json" >/dev/null
+      }' | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "pr-${ISSUE_NUMBER}.json" >/dev/null
     echo "Reconstructed pr-${ISSUE_NUMBER}.json from Go binary pr view (pr-create may not have run)."
   else
     echo "ERROR: pr-${ISSUE_NUMBER}.json missing and could not reconstruct from GitHub."

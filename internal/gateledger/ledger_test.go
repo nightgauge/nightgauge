@@ -3,6 +3,8 @@ package gateledger
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,9 +154,71 @@ func TestUsageIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Usage{Runs: 2, Seconds: 1000, Reused: 1, Unfinished: 1}
-	if got != want {
+	want := Usage{Runs: 2, Seconds: 1000, Reused: 1, Unfinished: 1, FirstVerdict: VerdictFail}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("UsageIn = %+v, want %+v", got, want)
+	}
+}
+
+// TestUsageIn_FirstGate pins that the first finished full gate of the stage,
+// not the latest, sets FirstVerdict and FirstFailedSteps (#2847): a fail
+// fixed by a later pass is still a failed first gate.
+func TestUsageIn_FirstGate(t *testing.T) {
+	root := repo(t)
+	base := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	ev := func(id, verdict string, full bool, m int, steps ...string) Event {
+		return Event{RunID: id, Event: EventFinish, Kind: KindLocalGate, Verdict: verdict,
+			Full: full, Issue: 7, Stage: "feature-validate", FailedSteps: steps,
+			TS: base.Add(time.Duration(m) * time.Minute).Format(time.RFC3339Nano)}
+	}
+	for _, e := range []Event{
+		ev("scoped", VerdictFail, false, 1, "ESLint"), // not full: not a first gate
+		ev("first", VerdictFail, true, 2, "gofmt -l ./internal ./cmd", "Publication boundary"),
+		ev("second", VerdictPass, true, 30),
+	} {
+		if err := Append(root, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := UsageIn(root, 7, "feature-validate", base, base.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FirstVerdict != VerdictFail {
+		t.Errorf("FirstVerdict = %q, want fail", got.FirstVerdict)
+	}
+	want := []string{"gofmt -l ./internal ./cmd", "Publication boundary"}
+	if !reflect.DeepEqual(got.FirstFailedSteps, want) {
+		t.Errorf("FirstFailedSteps = %v, want %v", got.FirstFailedSteps, want)
+	}
+}
+
+// TestEvent_StepsRoundTrip pins the ledger's on-disk names for failing steps.
+func TestEvent_StepsRoundTrip(t *testing.T) {
+	root := repo(t)
+	in := finish(KindLocalGate, "abc", VerdictFail, true)
+	in.FailedSteps = []string{"Pipefail early-exit gate"}
+	in.InfraSteps = []string{"Go tests"}
+	if err := Append(root, in); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := Path(root)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"failed_steps":["Pipefail early-exit gate"]`, `"infra_steps":["Go tests"]`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("ledger line %s lacks %s", raw, want)
+		}
+	}
+	entries, err := read(root)
+	if err != nil || len(entries) != 1 || !entries[0].ok {
+		t.Fatalf("read = %+v, %v", entries, err)
+	}
+	if !reflect.DeepEqual(entries[0].ev.FailedSteps, in.FailedSteps) ||
+		!reflect.DeepEqual(entries[0].ev.InfraSteps, in.InfraSteps) {
+		t.Errorf("round trip = %+v", entries[0].ev)
 	}
 }
 

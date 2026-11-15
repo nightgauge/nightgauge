@@ -26,7 +26,14 @@ cat > "$TMP/bin/nightgauge" <<'STUB'
 echo "$*" >> "$STUB_LOG"
 case "$2" in
   gate-status) printf '%s\n' "$STUB_STATUS" ;;
-  gate-record) echo stub-run ;;
+  gate-record)
+    if [ "${3:-}" = "--help" ]; then
+      # A binary from before #2847 has no --failed-step in its help.
+      [ -n "${STUB_NO_STEPS:-}" ] || echo "      --failed-step stringArray"
+    else
+      echo stub-run
+    fi
+    ;;
 esac
 STUB
 printf '#!/usr/bin/env bash\necho "unknown command" >&2\nexit 1\n' > "$TMP/old/nightgauge"
@@ -101,6 +108,31 @@ run "$TMP/bin/nightgauge" "$UNPROVEN" --ledger-probe fail
 check "a failed run exits non-zero" "$(result test "$CODE" -ne 0)"
 check "a failed run records fail" "$(result has "$CALLS" "--verdict fail")"
 check "a failed run never records pass" "$(result test -n "$(has "$CALLS" "--verdict pass" || echo none)")"
+# The finish names the failing step (#2847), so a retro can count which check
+# failed a first gate; the passing step is not named.
+check "a failed run names its failing step" \
+  "$(result has "$(grep -- '--event finish' "$STUB_LOG")" "--failed-step ledger probe failing step")"
+check "a failed run names no passing step" \
+  "$(result test -n "$(has "$CALLS" "--failed-step ledger probe passing step" || echo none)")"
+check "an assertion failure is not named as infra" \
+  "$(result test -n "$(has "$CALLS" "--infra-step" || echo none)")"
+
+STUB_NO_STEPS=1 run "$TMP/bin/nightgauge" "$UNPROVEN" --ledger-probe fail
+check "a binary without --failed-step still records the fail" \
+  "$(result has "$(grep -- '--event finish' "$STUB_LOG")" "--verdict fail")"
+check "a binary without --failed-step is never passed it" \
+  "$(result test -n "$(has "$CALLS" "--failed-step" || echo none)")"
+check "a binary without --failed-step is named" "$(result has "$OUT" "has no gate-record --failed-step")"
+
+run "$TMP/bin/nightgauge" "$PASSED" --ledger-probe pass --no-reuse
+check "a passing run names no failed step" \
+  "$(result test -n "$(has "$CALLS" "--failed-step" || echo none)")"
+
+# `--fast` is not a gate: it runs its marked step and touches no ledger.
+run "$TMP/bin/nightgauge" "$PASSED" --ledger-probe pass --fast
+check "--fast runs its marked step" "$(result has "$OUT" "ledger probe passing step")"
+check "--fast is never reused" "$(result test -n "$(has "$OUT" "Gate skipped" || echo none)")"
+check "--fast touches no ledger" "$(result test -z "$CALLS")"
 
 run "" "$PASSED" --ledger-probe pass
 check "no binary runs in full" "$(result has "$OUT" "ledger probe passing step")"

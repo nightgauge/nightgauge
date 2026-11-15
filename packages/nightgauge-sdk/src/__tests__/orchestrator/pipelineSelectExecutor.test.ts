@@ -19,6 +19,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
+import { existsSync } from "node:fs";
+import { createWorkflowWiring } from "../../cli/adapterQuery.js";
+import { makeSdkFanoutBindings } from "../../cli/workflow/SdkFanoutExecutors.js";
+import { REVIEW_UNITS_PHASE_MARKER } from "../../cli/workflow/WorkflowSpec.js";
 import {
   PipelineOrchestrator,
   type PipelineConfig,
@@ -149,6 +153,17 @@ async function makeWorkspace(fanoutStages: string[]): Promise<{
   return { dir, cleanup: () => fs.rm(dir, { recursive: true, force: true }) };
 }
 
+/** The repository root: the nearest ancestor of the cwd holding go.mod. */
+function repoRoot(): string {
+  let dir = process.cwd();
+  while (!existsSync(path.join(dir, "go.mod"))) {
+    const parent = path.dirname(dir);
+    if (parent === dir) throw new Error("could not locate repo root");
+    dir = parent;
+  }
+  return dir;
+}
+
 /** Orchestrator wired with the temp workspace + (optionally) a fan-out backend. */
 function makeOrchestrator(
   workspaceDir: string,
@@ -254,8 +269,46 @@ describe("PipelineOrchestrator.selectExecutor", () => {
       expect(sel.kind).toBe("workflow");
       if (sel.kind !== "workflow") throw new Error("expected workflow");
       expect(sel.spec.stage).toBe("feature-dev");
-      expect(sel.spec.phases[0].agents.map((a) => a.agentId)).toEqual(["a", "b"]);
+      // The implementation runs first; the frontmatter's units are a later phase (#2908).
+      expect(sel.spec.phases.map((p) => p.name)).toEqual(["implementation", "review"]);
+      expect(sel.spec.phases[0].agents).toHaveLength(1);
+      expect(sel.spec.phases[0].agents[0]).toMatchObject({
+        agentId: "feature-dev:implementation",
+        role: "implementer",
+      });
+      expect(sel.spec.phases[0].agents[0].prompt).toContain("42");
+      expect(sel.spec.phases[1].agents.map((a) => a.agentId)).toEqual(["a", "b"]);
       expect(sel.executor).toBeDefined();
+    });
+
+    it("the shipped feature-dev skill compiles to implementation, then six reviewers", async () => {
+      const repoSkills = path.join(repoRoot(), "skills");
+      const orch = makeOrchestrator(ws.dir, {
+        ...withBackend(),
+        skillsPath: repoSkills,
+        orchestration: { disabled: false },
+      });
+      const sel = await orch.selectExecutor("feature-dev", 42);
+      if (sel.kind !== "workflow") throw new Error("expected workflow");
+      expect(sel.spec.phases).toHaveLength(2);
+      expect(sel.spec.phases[0].name).toBe("implementation");
+      expect(sel.spec.phases[0].agents.map((a) => a.role)).toEqual(["implementer"]);
+      expect(sel.spec.phases[1].name).toBe("quality-review");
+      expect(sel.spec.phases[1].agents.map((a) => a.agentId)).toEqual([
+        "code-quality",
+        "security",
+        "test",
+        "documentation",
+        "performance",
+        "accessibility",
+      ]);
+      expect(sel.spec.phases[1].judges?.map((j) => j.judgeId)).toEqual(["judge:merge"]);
+      // One review pass on this path: the implementation agent's body skips
+      // Phase 5's `review quality` because it carries the marker, and only the
+      // single quality-review phase runs the reviewers, none of them marked (#2908).
+      expect(sel.spec.phases[0].agents[0].env).toEqual(REVIEW_UNITS_PHASE_MARKER);
+      expect(sel.spec.phases.filter((p) => p.name === "quality-review")).toHaveLength(1);
+      expect(sel.spec.phases[1].agents.every((a) => a.env === undefined)).toBe(true);
     });
 
     it("a fan-out stage with NO adapter/bindings → single-agent (AC4 graceful downgrade)", async () => {
@@ -317,9 +370,11 @@ describe("PipelineOrchestrator.selectExecutor", () => {
     it("runStage drives the fan-out backend (not the single-agent StageExecutor) for a workflow stage", async () => {
       ws = await makeWorkspace(["feature-dev"]);
       let agentRuns = 0;
+      const order: string[] = [];
       const bindings: WorkflowExecutorBindings = {
-        async runAgent() {
+        async runAgent(agent) {
           agentRuns++;
+          order.push(agent.agentId);
           return { usage: usage(), terminalKind: "success" as const };
         },
         async runJudge() {
@@ -335,8 +390,10 @@ describe("PipelineOrchestrator.selectExecutor", () => {
 
       const result = await orch.runStage("feature-dev", 42);
       expect(result.success).toBe(true);
-      // The fan-out ran the two units; the single-agent path would run zero agents.
-      expect(agentRuns).toBe(2);
+      // The implementer ran, then the two units; the single-agent path would run zero agents.
+      expect(agentRuns).toBe(3);
+      expect(order[0]).toBe("feature-dev:implementation");
+      expect(order.slice(1).sort()).toEqual(["a", "b"]);
     });
 
     it("runStage keeps the single-agent path (zero fan-out) when orchestration is off", async () => {
@@ -429,6 +486,30 @@ describe("PipelineOrchestrator.selectExecutor", () => {
         },
       };
     }
+
+    it.each([
+      ["fail", false],
+      ["pass", true],
+    ] as const)(
+      "a feature-dev units-phase judge returning %s sets the stage success to %s (#2908)",
+      async (verdict, success) => {
+        // The units run after the implementation agent exits, so a failing
+        // judge has no one left to act on it: it must fail the stage.
+        await judgedWorkspace("feature-dev");
+        const orch = makeOrchestrator(ws.dir, {
+          workflowAdapter: fakeAdapter(),
+          workflowBindings: judgingBindings(verdict),
+          workflowJournalFs: new FakeFs(),
+          orchestration: { disabled: false },
+        });
+
+        const result = await orch.runStage("feature-dev", 42);
+
+        expect(result.success).toBe(success);
+        // Only feature-validate folds judges into gate-metrics.
+        expect(await gateRows()).toHaveLength(0);
+      }
+    );
 
     it("writes a judges row per verdict, attempted under the stage's run", async () => {
       await judgedWorkspace("feature-validate");
@@ -658,7 +739,8 @@ describe("PipelineOrchestrator.selectExecutor", () => {
       await orch.stop();
       await result;
 
-      expect(signals).toHaveLength(2);
+      // The implementer and both units each got the aborted stage signal.
+      expect(signals).toHaveLength(3);
       for (const signal of signals) expect(signal?.aborted).toBe(true);
     });
 
@@ -676,7 +758,8 @@ describe("PipelineOrchestrator.selectExecutor", () => {
 
       await orch.runStage("feature-dev", 42);
 
-      expect(signals).toHaveLength(2);
+      // The implementer and both units each got the aborted stage signal.
+      expect(signals).toHaveLength(3);
       for (const signal of signals) {
         expect(signal?.aborted).toBe(true);
         expect(signal?.reason).toBeInstanceOf(EphemeralTimeoutError);
@@ -773,6 +856,55 @@ describe("fan-out units are granted the stage skill's tools (#2358)", () => {
     expect(seen).toEqual([
       ["Read", "Grep"],
       ["Read", "Grep"],
+      ["Read", "Grep"],
     ]);
+  });
+});
+
+describe("production wiring: createWorkflowWiring (#2908)", () => {
+  let ws: { dir: string; cleanup: () => Promise<void> };
+  beforeEach(async () => {
+    ws = await makeWorkspace(["feature-dev"]);
+  });
+  afterEach(async () => {
+    await ws.cleanup();
+  });
+
+  it("makes a fan-out stage reach the workflow executor when orchestration is enabled", async () => {
+    const orch = makeOrchestrator(ws.dir, {
+      ...createWorkflowWiring("codex", { disabled: false }, { cwd: ws.dir }),
+      workflowJournalFs: new FakeFs(),
+    });
+    expect((await orch.selectExecutor("feature-dev", 42)).kind).toBe("workflow");
+  });
+
+  it("stays single-agent with orchestration at its default (off)", async () => {
+    const orch = makeOrchestrator(ws.dir, {
+      ...createWorkflowWiring("codex", undefined, { cwd: ws.dir }),
+      workflowJournalFs: new FakeFs(),
+    });
+    expect((await orch.selectExecutor("feature-dev", 42)).kind).toBe("single-agent");
+  });
+
+  it("a stage-less binding (the run command) takes each unit's stage", async () => {
+    const stages: Array<string | undefined> = [];
+    const bindings = makeSdkFanoutBindings(fakeAdapter(), {
+      exec: async (o) => {
+        stages.push(o.stage);
+        return { text: "" };
+      },
+    });
+    await bindings.runAgent({ agentId: "a", prompt: "p" }, { stage: "feature-validate" });
+    await bindings.runJudge({ judgeId: "j", prompt: "p" }, "n", { stage: "feature-validate" });
+    const pinned = makeSdkFanoutBindings(fakeAdapter(), {
+      stage: "feature-dev",
+      exec: async (o) => {
+        stages.push(o.stage);
+        return { text: "" };
+      },
+    });
+    await pinned.runAgent({ agentId: "a", prompt: "p" }, { stage: "feature-validate" });
+    // The stage command's explicit stage wins over the unit's.
+    expect(stages).toEqual(["feature-validate", "feature-validate", "feature-dev"]);
   });
 });

@@ -224,7 +224,7 @@ B and subsequent phases):
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BASE_BRANCH=$(jq -r '.base_branch // empty' \
-  "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
+  "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
 if [ -z "$BASE_BRANCH" ]; then
   BASE_BRANCH=$(git config --get nightgauge.branch.base 2>/dev/null || echo "main")
 fi

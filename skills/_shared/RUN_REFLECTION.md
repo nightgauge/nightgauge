@@ -48,7 +48,7 @@ else
   RECORD=$(jq -nc --arg ts "$NOW" --arg skill "$SKILL_NAME" \
         --argjson counts "${RUN_COUNTS:-{}}" --arg summary "${RUN_SUMMARY:-}" \
         '{ts:$ts, skill:$skill, counts:$counts, summary:$summary}')
-  printf '%s\n' "$RECORD" | nightgauge layout append "$RUN_LOG_CLASS" "$RUN_LOG_NAME" >/dev/null
+  printf '%s\n' "$RECORD" | "${NIGHTGAUGE_BIN:-nightgauge}" layout append "$RUN_LOG_CLASS" "$RUN_LOG_NAME" >/dev/null
   echo "Appended run record to $RUN_LOG"
 fi
 ```

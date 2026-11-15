@@ -7,7 +7,9 @@ ci-local.sh go test pass record
 go test cache and always-uncached list
 go test shard partitioner
 ci-local.sh gate ledger reuse
+ci-local.sh fast TypeScript typecheck (#3312 reproduction)
 state-backstop.sh regression suite
+TypeScript typecheck packages/nightgauge-sdk (tsc --noEmit -p)
 go build ./...
 go test shard plan
 go test ./... except sharded packages
@@ -39,6 +41,7 @@ go test -race internal/doctor shard 1/2
 go test internal/doctor shard 2/2
 go test -race internal/doctor shard 2/2
 gofmt -l ./internal ./cmd
+Go repository-policy tests
 branch-merged-check.sh regression suite
 post-merge-check.sh regression suite
 publish-vsix-set.sh regression suite

@@ -155,15 +155,27 @@ NO_REUSE=0
 # step, so scripts/test-ci-local-gate-reuse.sh asserts what a run records without
 # running the gate (#2784).
 LEDGER_PROBE=""
+# `--fast` runs only the steps marked `--fast` on their own run_step/run_group
+# call (#2847): cheap static checks that need no build. It is not a gate: it
+# opens no ledger run (so it is never counted, and never reused as a pass) and
+# skips the machine-state backstop. With `--list-steps` it lists that subset.
+# The subset is read from the calls themselves, so there is no second list.
+FAST_MODE=0
+# `--ts-scope-probe` prints the fast TypeScript typecheck decision for each
+# workspace package and exits, so scripts/test-ci-local-fast-typecheck.sh asserts
+# the derivation without running a gate (#2847).
+TS_SCOPE_PROBE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --list-steps) LIST_STEPS=1; shift ;;
+    --fast) FAST_MODE=1; shift ;;
     --env-probe) ENV_PROBE=1; shift ;;
     --budget-probe) BUDGET_PROBE=1; shift ;;
     --changed) CHANGED_SCOPE=1; shift ;;
     --no-reuse) NO_REUSE=1; shift ;;
     --ledger-probe) LEDGER_PROBE="${2:-pass}"; shift; [ "$#" -gt 0 ] && shift ;;
     --scope-probe) SCOPE_PROBE=1; shift ;;
+    --ts-scope-probe) TS_SCOPE_PROBE=1; shift ;;
     --summary-probe)
       SUMMARY_PROBE=1
       shift
@@ -397,6 +409,129 @@ EOF
   return 0
 }
 
+# ── The fast TypeScript typecheck (#2847) ────────────────────────────────────
+#
+# `--fast` typechecks each TypeScript workspace package the change touches, so a
+# type error like #3312's fails the pre-gate in seconds instead of the full gate
+# twenty minutes later. The packages come from the root package.json
+# `workspaces`, so a new package is picked up without editing this script.
+#
+# A package is ELIGIBLE only when its typecheck reads tracked files and installed
+# dependencies alone. One that depends on another workspace package is left out:
+# a workspace dependency resolves through that package's `types`, which is build
+# output a fresh worktree lacks. Today that leaves out packages/nightgauge, which
+# imports @nightgauge/sdk through packages/nightgauge-sdk/dist/index.d.ts; the
+# full gate typechecks it after "Build SDK types". An eligible package runs its
+# own `typecheck` script when it has one, and `tsc --noEmit -p <dir>` otherwise.
+#
+# TOUCHED, under `--fast`, is decided over changed_paths and FAILS CLOSED like
+# decide_go_scope: no origin/main or an empty derivation typechecks every
+# eligible package. A root package.json, package-lock.json or tsconfig*.json
+# touches every package. The full gate typechecks every eligible package.
+
+# One line per workspace package: <dir> TAB <script|tsc|excluded> TAB <reason>.
+ts_workspace_plan() {
+  node -e '
+const fs = require("fs"), path = require("path");
+const root = JSON.parse(fs.readFileSync("package.json", "utf8"));
+let globs = root.workspaces || [];
+if (!Array.isArray(globs)) globs = globs.packages || [];
+const dirs = [];
+for (const g of globs) {
+  if (g.endsWith("/*")) {
+    const base = g.slice(0, -2);
+    for (const e of fs.readdirSync(base).sort()) {
+      const d = base + "/" + e;
+      if (fs.existsSync(path.join(d, "package.json"))) dirs.push(d);
+    }
+  } else if (g.includes("*")) {
+    throw new Error("unsupported workspaces pattern: " + g);
+  } else {
+    dirs.push(g);
+  }
+}
+const pkgs = dirs.map((d) => ({ d, j: JSON.parse(fs.readFileSync(path.join(d, "package.json"), "utf8")) }));
+const names = new Set(pkgs.map((p) => p.j.name));
+for (const { d, j } of pkgs) {
+  const deps = Object.assign({}, j.dependencies, j.devDependencies, j.peerDependencies, j.optionalDependencies);
+  const ws = Object.keys(deps).filter((n) => names.has(n) && n !== j.name).sort();
+  const script = Boolean(j.scripts && j.scripts.typecheck);
+  if (ws.length) {
+    console.log(d + "\texcluded\tdepends on workspace package " + ws.join(", ") +
+      ", whose types resolve through its build output");
+  } else if (!script && !fs.existsSync(path.join(d, "tsconfig.json"))) {
+    console.log(d + "\texcluded\thas neither a typecheck script nor a tsconfig.json");
+  } else {
+    console.log(d + "\t" + (script ? "script" : "tsc") + "\t");
+  }
+}'
+}
+
+ts_typecheck_label() { # ts_typecheck_label <dir> <script|tsc>
+  if [ "$2" = script ]; then
+    printf 'TypeScript typecheck %s (npm run typecheck)\n' "$1"
+  else
+    printf 'TypeScript typecheck %s (tsc --noEmit -p)\n' "$1"
+  fi
+}
+
+TS_CHANGED_DERIVED=0
+TS_CHANGED=""
+TS_CHANGED_REASON=""
+
+# ts_package_touched <dir> — status 0 when `--fast` must typecheck <dir>.
+# Sets TS_TOUCH_REASON either way.
+ts_package_touched() {
+  local dir="$1" p
+  if [ "$TS_CHANGED_DERIVED" -eq 0 ]; then
+    TS_CHANGED_DERIVED=1
+    if ! git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+      TS_CHANGED_REASON="origin/main is not available, so the changed set cannot be derived"
+    else
+      TS_CHANGED="$(changed_paths)"
+      [ -n "$TS_CHANGED" ] ||
+        TS_CHANGED_REASON="the changed set came back EMPTY, which is indistinguishable from a broken derivation"
+    fi
+  fi
+  if [ -n "$TS_CHANGED_REASON" ]; then
+    TS_TOUCH_REASON="$TS_CHANGED_REASON — typechecking every eligible package"
+    return 0
+  fi
+  while IFS= read -r p; do
+    case "$p" in
+      "$dir"/*)
+        TS_TOUCH_REASON="$p changed"
+        return 0
+        ;;
+      package.json|package-lock.json|tsconfig*.json)
+        TS_TOUCH_REASON="$p changed, and it is an input to every package"
+        return 0
+        ;;
+    esac
+  done <<EOF
+$TS_CHANGED
+EOF
+  TS_TOUCH_REASON="none of the changed paths is under $dir or a root package.json, package-lock.json or tsconfig*.json"
+  return 1
+}
+
+if [ "$TS_SCOPE_PROBE" -eq 1 ]; then
+  ts_probe_plan="$(ts_workspace_plan)" || exit 2
+  while IFS="$(printf '\t')" read -r ts_dir ts_kind ts_reason; do
+    [ -n "$ts_dir" ] || continue
+    if [ "$ts_kind" = excluded ]; then
+      echo "$ts_dir: EXCLUDED — $ts_reason"
+    elif ts_package_touched "$ts_dir"; then
+      echo "$ts_dir: RUN ($(ts_typecheck_label "$ts_dir" "$ts_kind")) — $TS_TOUCH_REASON"
+    else
+      echo "$ts_dir: SKIP — $TS_TOUCH_REASON"
+    fi
+  done <<EOF
+$ts_probe_plan
+EOF
+  exit 0
+fi
+
 if [ "$SCOPE_PROBE" -eq 1 ]; then
   decide_go_scope
   scope_probe_paths="$(changed_paths)"
@@ -570,6 +705,8 @@ REQUIRED_FILES=(
   scripts/test-go-test-shard.sh
   scripts/test-ci-local-go-pass-stamp.sh
   scripts/test-ci-local-gate-reuse.sh
+  scripts/test-ci-local-fast-typecheck.sh
+  tests/fixtures/ci-local-fast-3312/grep-for-symbol.ts.fixture
   scripts/state-backstop.sh
   scripts/test-state-backstop.sh
   scripts/doctor-app-permission-walkthrough.sh
@@ -907,9 +1044,13 @@ GATE_LEDGER_BIN=""
 GATE_RUN_ID=""
 GATE_TREE=""
 GATE_RUN_STARTED=0
+GATE_LEDGER_STEPS=0
 
 gate_ledger_open() {
   [ -z "${GITHUB_ACTIONS:-}" ] || return 0
+  # `--fast` is not a gate (#2847): it is never recorded, so never counted and
+  # never reused as a pass.
+  [ "$FAST_MODE" -eq 0 ] || return 0
   local bin status full_flag=""
   bin="${NIGHTGAUGE_BIN:-}"
   [ -n "$bin" ] && [ -x "$bin" ] || bin="$(command -v nightgauge 2>/dev/null || true)"
@@ -923,6 +1064,15 @@ gate_ledger_open() {
     return 0
   fi
   GATE_LEDGER_BIN="$bin"
+  # A binary older than #2847 has no --failed-step and would reject the whole
+  # finish line, so the step names are passed only when its help lists them.
+  local record_help
+  record_help="$("$bin" ci gate-record --help 2>/dev/null || true)"
+  if grep -q -- '--failed-step' <<<"$record_help"; then
+    GATE_LEDGER_STEPS=1
+  else
+    echo "gate ledger: $bin has no gate-record --failed-step, so failing steps are not recorded"
+  fi
   GATE_TREE="$(printf '%s' "$status" | jq -r '.tree // ""')"
   if [ "$CHANGED_SCOPE" -eq 0 ] && [ "$NO_REUSE" -eq 0 ] &&
     [ "$(printf '%s' "$status" | jq -r '.reusable')" = "true" ]; then
@@ -961,10 +1111,23 @@ gate_ledger_finish() { # gate_ledger_finish <exit code>
     verdict=fail
   fi
   [ "$CHANGED_SCOPE" -eq 0 ] && [ "${SKIP_COUNT:-0}" -eq 0 ] && full_flag="--full"
+  # Name each failed step by its kind (#2847), in declared order, so a retro can
+  # count which check failed a first gate. An infra step asserted nothing.
+  local step_flags=() i
+  if [ "$GATE_LEDGER_STEPS" -eq 1 ]; then
+    for i in "${!FAILED_STEPS[@]}"; do
+      if [ "${FAILED_KINDS[$i]:-assert}" = "infra" ]; then
+        step_flags+=(--infra-step "${FAILED_STEPS[$i]}")
+      else
+        step_flags+=(--failed-step "${FAILED_STEPS[$i]}")
+      fi
+    done
+  fi
   # shellcheck disable=SC2086 # full_flag is one flag or nothing
   "$GATE_LEDGER_BIN" ci gate-record --event finish --run-id "$run" --kind local-gate \
     --tree "$GATE_TREE" --verdict "$verdict" --seconds "$((SECONDS - GATE_RUN_STARTED))" \
-    $full_flag >/dev/null || echo "gate ledger: this run's result was not recorded" >&2
+    $full_flag ${step_flags[@]+"${step_flags[@]}"} >/dev/null ||
+    echo "gate ledger: this run's result was not recorded" >&2
 }
 
 on_exit() {
@@ -1131,6 +1294,9 @@ record_failure() { # record_failure <label> <log> <kind>
 # and a scoped gate must not reintroduce that by another door. A step may be
 # skipped, loudly, by name; a step may never disappear.
 skip_step() { # skip_step <label> <reason>
+  # `--fast` runs only marked steps, and no skipped step is marked, so a skip
+  # there is neither listed nor reported: the subset never ran it.
+  [ "$FAST_MODE" -eq 1 ] && return 0
   if [ "$LIST_STEPS" -eq 1 ]; then
     printf '%s\n' "$1"
     return 0
@@ -1259,7 +1425,20 @@ print_timing_summary() {
   done | sort -rn | sed -n '1,8s/^/  /p'
 }
 
+# run_step [--fast] <label> <command...>
+#
+# `--fast` marks a cheap static step that needs no build output and reads only
+# tracked files (#2847). `ci-local.sh --fast` runs only marked steps, and
+# `--list-steps --fast` lists them, so the subset lives on the calls themselves.
 run_step() {
+  local fast=0
+  if [ "${1:-}" = "--fast" ]; then
+    fast=1
+    shift
+  fi
+  if [ "$FAST_MODE" -eq 1 ] && [ "$fast" -eq 0 ]; then
+    return 0
+  fi
   local label="$1"
   shift
   # `--list-steps` prints the inventory the gate WILL run, in execution order,
@@ -1357,10 +1536,20 @@ CI_LOCAL_SERIAL="${CI_LOCAL_SERIAL:-0}"
 # budget plus the one serial chain), and an inline step is serial, so it cannot
 # race the steps after it. Its failure is reported exactly as a serial step's.
 run_group() {
-  local wait_for_slot=0
-  if [ "${1:-}" = "--wait" ]; then
-    wait_for_slot=1
-    shift
+  # `--wait` and `--fast` (see run_step) lead the call, in either order.
+  local wait_for_slot=0 fast_marker=()
+  while :; do
+    case "${1:-}" in
+      --wait) wait_for_slot=1; shift ;;
+      --fast) fast_marker=(--fast); shift ;;
+      *) break ;;
+    esac
+  done
+  if [ "$FAST_MODE" -eq 1 ]; then
+    # The fast subset is a few seconds of static checks: run a marked step
+    # serially, through run_step, and nothing else.
+    [ "${#fast_marker[@]}" -eq 1 ] && run_step --fast "$@"
+    return 0
   fi
   local label="$1"
   shift
@@ -1603,7 +1792,9 @@ if [ -n "$LEDGER_PROBE" ]; then
     exit 2
   fi
   gate_ledger_open
-  run_step "ledger probe passing step" true
+  # Marked --fast so `--ledger-probe pass --fast` runs a step through the fast
+  # path and can show that path records nothing (#2847).
+  run_step --fast "ledger probe passing step" true
   case "$LEDGER_PROBE" in
     fail) run_step "ledger probe failing step" false ;;
     skip) skip_step "ledger probe skipped step" "the probe asked for one" ;;
@@ -1614,7 +1805,11 @@ fi
 
 if [ "$LIST_STEPS" -eq 0 ]; then
   gate_ledger_open
-  echo "CI-parity local validation — order mirrors .github/workflows/ci.yml"
+  if [ "$FAST_MODE" -eq 1 ]; then
+    echo "Fast static subset (--fast, #2847): not a gate, so not recorded and never reused"
+  else
+    echo "CI-parity local validation — order mirrors .github/workflows/ci.yml"
+  fi
   # Install dependencies once, before any step, when they are missing or stale
   # (#2562). A failed install means no npm step can run, so it is an
   # INFRASTRUCTURE stop, not a red step attributed to the change.
@@ -1639,7 +1834,7 @@ fi
 # compares them on exit. It records only: it never restores or deletes.
 BACKSTOP_DIR="$LOG_DIR/state-backstop"
 BACKSTOP_DONE=1
-if [ "$LIST_STEPS" -eq 0 ]; then
+if [ "$LIST_STEPS" -eq 0 ] && [ "$FAST_MODE" -eq 0 ]; then
   rm -rf "$BACKSTOP_DIR"
   if bash scripts/state-backstop.sh snapshot "$BACKSTOP_DIR/before"; then
     BACKSTOP_DONE=0
@@ -1713,6 +1908,13 @@ run_step "go test shard partitioner" bash scripts/test-go-test-shard.sh
 #      binary and one trivial step, so seconds.
 run_step "ci-local.sh gate ledger reuse" \
   bash scripts/test-ci-local-gate-reuse.sh
+
+# 0c5. The fast TypeScript typecheck and the #3312 reproduction (#2847): runs
+#      `--fast` once, in a throwaway worktree with #3312's grep-for-symbol.ts
+#      overlaid, and asserts the type error fails it in under 120 s, then stops
+#      the nested run at the SDK step's verdict. Seconds.
+run_step "ci-local.sh fast TypeScript typecheck (#3312 reproduction)" \
+  bash scripts/test-ci-local-fast-typecheck.sh
 
 # 0d. The machine-state backstop's own regression suite (#2311), before the
 #     steps it watches: the last step trusts it to go red when a run removes or
@@ -1835,6 +2037,45 @@ skip_go_test_steps() {
   done
 }
 
+# 0e. TypeScript workspace typecheck (#2847), before the Go build so that under
+#     `--fast` a type error is the first thing reported. Reads tracked files and
+#     installed dependencies only, never build output; see ts_workspace_plan.
+#     LEFT OUT: a package that depends on another workspace package, because
+#     that dependency's types are its build output. packages/nightgauge is left
+#     out for that reason (it imports @nightgauge/sdk via dist/index.d.ts) and
+#     is typechecked by the full gate after "Build SDK types".
+if ! TS_PLAN="$(ts_workspace_plan)"; then
+  echo "! cannot read the TypeScript workspace packages from package.json [INFRASTRUCTURE — the checks could not run]" >&2
+  exit 2
+fi
+while IFS="$(printf '\t')" read -r _ts_dir _ts_kind _ts_reason; do
+  [ -n "$_ts_dir" ] || continue
+  if [ "$_ts_kind" = excluded ]; then
+    if [ "$FAST_MODE" -eq 1 ] && [ "$LIST_STEPS" -eq 0 ]; then
+      echo ""
+      echo "⊘ TypeScript typecheck $_ts_dir is not in the fast subset: it $_ts_reason."
+      echo "  The full gate typechecks it after the build."
+    fi
+    continue
+  fi
+  _ts_label="$(ts_typecheck_label "$_ts_dir" "$_ts_kind")"
+  if [ "$FAST_MODE" -eq 1 ] && [ "$LIST_STEPS" -eq 0 ] && ! ts_package_touched "$_ts_dir"; then
+    echo ""
+    echo "⊘ $_ts_label"
+    echo "  not touched — $TS_TOUCH_REASON. Not run by --fast; the full gate runs it."
+    continue
+  fi
+  if [ "$_ts_kind" = script ]; then
+    run_step --fast "$_ts_label" npm run typecheck --workspace="$_ts_dir"
+  else
+    # The package's own compiler, not the root one: a workspace package can pin a
+    # different TypeScript (the SDK does), and the build uses that one.
+    run_step --fast "$_ts_label" npm exec --no --workspace="$_ts_dir" -- tsc --noEmit -p .
+  fi
+done <<EOF
+$TS_PLAN
+EOF
+
 decide_go_scope
 run_step "go build ./..." go build ./...
 if [ "$GO_SCOPE_RUN" -eq 0 ]; then
@@ -1869,7 +2110,13 @@ fi
 # switched to, which fixes an older Go on PATH but not a newer one (auto never
 # downgrades), so scripts/check-gofmt.sh fails first when `go env GOVERSION` is
 # not go.mod's toolchain.
-run_step "gofmt -l ./internal ./cmd" bash scripts/check-gofmt.sh
+run_step --fast "gofmt -l ./internal ./cmd" bash scripts/check-gofmt.sh
+
+# 1a. Go repository-policy tests (#2847) — internal/gittest holds the tests that
+#     police the rest of the Go tree, such as TestNoDirectGitSpawnsInTests. They
+#     run inside `go test ./...` too, minutes later; this cheap step puts them in
+#     the fast subset, where a policy failure costs seconds, not a gate.
+run_step --fast "Go repository-policy tests" go test ./internal/gittest/
 
 # 1b. branch-merged-check.sh regression suite — the shell-side decision
 #     procedure `git branch -D` reclaim decisions defer to (docs/GIT_WORKFLOW.md
@@ -2043,7 +2290,7 @@ run_step "npm audit allow-list" node scripts/npm-audit-check.js
 #    same as not having the gate.
 run_step "SKILL.md metadata gate regression suite" \
   bash scripts/test-validate-skill-metadata.sh
-run_step "SKILL.md metadata" bash scripts/validate-skill-metadata.sh
+run_step --fast "SKILL.md metadata" bash scripts/validate-skill-metadata.sh
 
 # 5. Publication boundary — allowlist, fail-closed. Catches private-class content
 #    before it is pushed rather than after CI rejects it.
@@ -2053,7 +2300,7 @@ run_step "SKILL.md metadata" bash scripts/validate-skill-metadata.sh
 #    silently, so this step handed back a pass it had not earned and CI failed
 #    on the very files it never opened. A run that scanned untracked files says
 #    so on its success line; one that exits non-zero names them inline.
-run_step "publication boundary" python3 scripts/publication-boundary-check.py
+run_step --fast "publication boundary" python3 scripts/publication-boundary-check.py
 
 # 5-i. The allowlist changes alone (#1970), on this branch. The workflow runs
 #      scripts/check-boundary-allowlist-isolation.sh on every pull request;
@@ -2157,7 +2404,7 @@ run_group "Publication push guard regression suite" \
 # 5c. Band-vocabulary reintroduction gate (#582) — fails on hand-inlined band
 #     closed sets / regex alternations in production source, outside the
 #     allowed surfaces (spike #568 §5).
-run_step "band-vocabulary reintroduction gate" python3 scripts/check-band-vocabulary.py
+run_step --fast "band-vocabulary reintroduction gate" python3 scripts/check-band-vocabulary.py
 
 # 5d. Band-vocabulary gate self-test — proves the gate still fails closed.
 run_group "Band-vocabulary gate regression suite" bash scripts/test-band-vocabulary-check.sh
@@ -2165,7 +2412,7 @@ run_group "Band-vocabulary gate regression suite" bash scripts/test-band-vocabul
 # 5e. Stale-visibility-prose reintroduction gate (#697) — fails on a tracked
 #     artifact unconditionally asserting this repository is private, the
 #     exact shape all four #697 instances took.
-run_step "visibility-prose reintroduction gate" python3 scripts/check-visibility-prose.py
+run_step --fast "visibility-prose reintroduction gate" python3 scripts/check-visibility-prose.py
 
 # 5f. Nonexistent-workflow-reference gate (#545) — fails when a tracked file
 # names a `.github/workflows/*.yml` path that does not exist. Self-test first:
@@ -2181,7 +2428,7 @@ run_group "Main build version regression suite" bash scripts/test-main-build-ver
 run_group "Playwright OS deps regression suite" bash scripts/test-playwright-os-deps.sh
 run_group "VSIX host-target regression suite" bash scripts/test-vsix-host-target.sh
 run_group "Release channel verification regression suite" bash scripts/test-verify-release-channels.sh
-run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-refs.py
+run_step --fast "nonexistent-workflow-reference gate" python3 scripts/check-workflow-refs.py
 
 # 5f1. Workflow action SHA-pin gate (#1782) — every `uses: owner/repo@sha` in
 #     .github/ must resolve on GitHub, and every ref must be a commit SHA.
@@ -2191,13 +2438,13 @@ run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-re
 #     limited) prints HARNESS ERROR and is reported as INFRASTRUCTURE, never
 #     as a pass. Mirrors .github/workflows/lint.yml.
 run_step "Action-pin gate regression suite" bash scripts/test-check-action-pins.sh
-run_step "workflow action pins resolve" python3 scripts/check-action-pins.py
+run_step --fast "workflow action pins resolve" python3 scripts/check-action-pins.py
 
 # 5f1b. Declared-versus-locked gate (#3268) — every workspace's declared range
 #      must be satisfied by the version package-lock.json installs. Self-test
 #      first. Mirrors .github/workflows/lint.yml.
 run_step "Declared-versus-locked gate regression suite" bash scripts/test-check-lock-satisfies-declared.sh
-run_step "lock satisfies declared ranges" node scripts/check-lock-satisfies-declared.mjs
+run_step --fast "lock satisfies declared ranges" node scripts/check-lock-satisfies-declared.mjs
 
 # 5f2. Proposal-artifact validator regression suite (#1304) — the schema gate
 # between the read-only model job and the write job in release-watchdog.yml
@@ -2255,7 +2502,7 @@ run_step "ESLint" npm run lint
 #    packages/nightgauge/package.json in place (generate:contributions writes it
 #    unconditionally) and Prettier checks that file. Grouped, Prettier could read
 #    it truncated mid-write and fail on bytes no commit contains.
-run_step "Prettier format:check" npm run format:check
+run_step --fast "Prettier format:check" npm run format:check
 
 # 7. Build all workspaces
 run_step "npm run build (all workspaces)" npm run build
@@ -2315,9 +2562,9 @@ run_step "@types/vscode <= engines.vscode" \
 #     directions, so "stop failing on an errored fetch" cannot be satisfied by
 #     no longer failing on a dead internal link.
 run_group "Link-check gate regression suite" bash scripts/test-check-md-links.sh
-run_group "Markdown link check" bash scripts/check-md-links.sh
+run_group --fast "Markdown link check" bash scripts/check-md-links.sh
 run_group "Decisions index regression suite" bash scripts/test-check-decisions-index.sh
-run_group "Decisions index matches docs/decisions" bash scripts/check-decisions-index.sh
+run_group --fast "Decisions index matches docs/decisions" bash scripts/check-decisions-index.sh
 run_group "Agent-guidance gate regression suite" \
   bash scripts/test-agent-guidance-check.sh
 run_group "Agent-guidance architecture" \
@@ -2371,7 +2618,7 @@ run_group "Agent-skill install target regression suite" \
 #       #711. Self-test first, same reasoning as 11 and 5b.
 run_group "Issue-body contract gate regression suite" \
   bash scripts/test-issue-body-contract.sh
-run_step "Issue-body heading contract" \
+run_step --fast "Issue-body heading contract" \
   python3 scripts/check-issue-body-contract.py
 
 # 11a2. Skill `echo "$VAR" | jq` gate (#1215) — zsh's builtin echo expands
@@ -2383,7 +2630,7 @@ run_step "Issue-body heading contract" \
 #       the fix did not reach the mirror. Self-test first, same reasoning as 11.
 run_group "Skill echo-into-jq gate regression suite" \
   bash scripts/test-skill-echo-json.sh
-run_step "Skill echo-into-jq gate" \
+run_step --fast "Skill echo-into-jq gate" \
   python3 scripts/check-skill-echo-json.py
 
 # 11a3. Pipefail early-exit gate (#2360) — a command piped into a reader that
@@ -2394,7 +2641,7 @@ run_step "Skill echo-into-jq gate" \
 #       script and workflow `run:` block. Self-test first, same reasoning as 11.
 run_group "Pipefail early-exit gate regression suite" \
   bash scripts/test-pipefail-early-exit.sh
-run_step "Pipefail early-exit gate" \
+run_step --fast "Pipefail early-exit gate" \
   python3 scripts/check-pipefail-early-exit.py
 
 # 11b. Plugin skills mirror drift — claude-plugins/nightgauge/skills/ is
@@ -2410,7 +2657,7 @@ run_step "Pipefail early-exit gate" \
 #      the previous form (regenerate in place, fail on a dirty index) therefore
 #      misfired in its primary use case (#546). When it does report drift, the
 #      fix is `bash scripts/install-agent-skills.sh --generate-only`.
-run_step "Plugin skills mirror in sync" \
+run_step --fast "Plugin skills mirror in sync" \
   bash scripts/install-agent-skills.sh --check-mirror
 
 # 11c. Mirror link integrity — the question 11b structurally cannot ask. The
@@ -2422,7 +2669,7 @@ run_step "Plugin skills mirror in sync" \
 #      Self-test first, same reasoning as 11 and 5b.
 run_step "Mirror link gate regression suite" \
   bash scripts/test-mirror-link-check.sh
-run_step "Mirror link integrity" python3 scripts/check-mirror-links.py
+run_step --fast "Mirror link integrity" python3 scripts/check-mirror-links.py
 
 # 11d. Mirror include expansion (#2764) — Claude Code loads a plugin skill as-is
 #      and never expands `<!-- include: -->`, so the generator does. 11b proves

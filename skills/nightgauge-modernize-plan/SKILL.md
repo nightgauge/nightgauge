@@ -163,9 +163,9 @@ SKIP_PHASES=""
 ```bash
 cd "$ASSESS_PATH"
 
-HEALTH_REPORT="$(nightgauge layout path checkout reports/health-report.json)"
-SECURITY_REPORT="$(nightgauge layout path checkout reports/security-audit.json)"
-SCAFFOLD_REPORT="$(nightgauge layout path checkout reports/test-scaffold-report.json)"
+HEALTH_REPORT="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout reports/health-report.json)"
+SECURITY_REPORT="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout reports/security-audit.json)"
+SCAFFOLD_REPORT="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout reports/test-scaffold-report.json)"
 
 HEALTH_AVAILABLE=false
 SECURITY_AVAILABLE=false
@@ -267,7 +267,7 @@ manual shell+jq extraction previously in Steps 2.1–2.4 (audit row B31).
 
 ```bash
 AGGREGATE_OUT=$(mktemp /tmp/aggregate-findings-XXXXXX.json)
-nightgauge modernize aggregate-findings \
+"${NIGHTGAUGE_BIN:-nightgauge}" modernize aggregate-findings \
   --workdir "$ASSESS_PATH" \
   --out "$AGGREGATE_OUT"
 
@@ -586,7 +586,7 @@ if [ -n "$OUTPUT_FILE" ]; then
   cp "$PLAN_TMP" "$OUTPUT_FILE"
   PLAN_PATH="$OUTPUT_FILE"
 else
-  PLAN_PATH="$(nightgauge layout write checkout reports/modernization-plan.json --from "$PLAN_TMP")"
+  PLAN_PATH="$("${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout reports/modernization-plan.json --from "$PLAN_TMP")"
 fi
 rm -f "$PLAN_TMP"
 echo "Plan written: $PLAN_PATH"
@@ -736,13 +736,13 @@ Only runs if `--create-issues` flag is set.
 #### Step 8.1: Verify GitHub Authentication
 
 ```bash
-if ! nightgauge forge auth status &>/dev/null; then
+if ! "${NIGHTGAUGE_BIN:-nightgauge}" forge auth status &>/dev/null; then
   echo "ERROR: forge CLI not authenticated."
   echo "Run: nightgauge forge auth login"
   exit 1
 fi
 
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug 2>/dev/null)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug 2>/dev/null)}"
 if [ -z "$REPO" ]; then
   echo "ERROR: Not in a GitHub repository."
   exit 1
@@ -790,7 +790,7 @@ For each task, create a GitHub issue using `nightgauge forge issue create`:
 
 ```bash
 for task in tasks; do
-  nightgauge forge issue create \
+  "${NIGHTGAUGE_BIN:-nightgauge}" forge issue create \
     --title "[Modernize] ${task.title}" \
     --body "$(cat <<'EOF'
 ## Description

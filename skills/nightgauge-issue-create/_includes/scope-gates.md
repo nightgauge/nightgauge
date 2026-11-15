@@ -45,7 +45,7 @@ provide specific functionality, verify those assumptions against reality:
    issue already exists in the target repo or companion repos:
 
    ```bash
-   nightgauge issue list --owner nightgauge --repo <repo> --search "<keywords>" --limit 5
+   "${NIGHTGAUGE_BIN:-nightgauge}" issue list --owner nightgauge --repo <repo> --search "<keywords>" --limit 5
    ```
 
    - If a match exists: reference it rather than creating a duplicate.
@@ -130,7 +130,7 @@ label.
 # Authors: cite evidence as markdown links (or declare file_ownership);
 # bare code paths in prose still count as targets.
 DISTINCT_TARGETS=$(printf '%s' "${ISSUE_BODY}" \
-  | nightgauge issue extract-targets --json 2>/dev/null \
+  | "${NIGHTGAUGE_BIN:-nightgauge}" issue extract-targets --json 2>/dev/null \
   | jq -r '.count' 2>/dev/null || echo 0)
 
 # --- Signal 2: predicted size == XL (data-driven, from the sizing phase) ---
@@ -155,7 +155,7 @@ AC_GROUP_COUNT=$(printf '%s\n' "${ISSUE_BODY}" \
 # targets another model, add `--adapter <a> --model <m>`. The same table caps
 # `size-gate check` at pickup and the scheduler at dispatch, so the three
 # enforcement points agree. An unknown window applies no cap.
-CAPACITY_MAX=$(nightgauge size-gate capacity --json 2>/dev/null \
+CAPACITY_MAX=$("${NIGHTGAUGE_BIN:-nightgauge}" size-gate capacity --json 2>/dev/null \
   | jq -r '.max_size // empty' 2>/dev/null || true)
 size_rank() {
   case "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')" in

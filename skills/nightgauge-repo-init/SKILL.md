@@ -183,7 +183,7 @@ this pairs with the pipeline's post-merge worktree + local-branch teardown
 idempotent, safe to re-run:
 
 ```bash
-nightgauge repo enable-delete-branch --owner "$OWNER" --repo "$REPO" --json
+"${NIGHTGAUGE_BIN:-nightgauge}" repo enable-delete-branch --owner "$OWNER" --repo "$REPO" --json
 ```
 
 (GitHub forge only. Skip on GitLab — the forge adapter doesn't expose this REST

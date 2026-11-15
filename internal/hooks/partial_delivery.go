@@ -18,6 +18,10 @@ const (
 	partialDeliveryMarkerFormat = "<!-- nightgauge:partial-delivery pr=%d -->"
 	// RemainingCriteriaHeading introduces the bulleted remainder list.
 	RemainingCriteriaHeading = "Remaining acceptance criteria:"
+	// MetCriteriaHeading introduces the criteria the PR met, as the issue
+	// words them (#3318). A numbered or plain criterion has no box to tick,
+	// so this list is where its met state persists for later remainders.
+	MetCriteriaHeading = "Met by this PR:"
 )
 
 var partialDeliveryMarkerRE = regexp.MustCompile(`<!-- nightgauge:partial-delivery pr=(\d+) -->`)
@@ -64,15 +68,37 @@ func ParsePartialDeliveryComment(body string) (pr int, criteria []string, ok boo
 	if idx < 0 {
 		return pr, nil, true
 	}
-	for _, line := range strings.Split(body[idx+len(RemainingCriteriaHeading):], "\n") {
+	return pr, bulletsUntil(body[idx+len(RemainingCriteriaHeading):], MetCriteriaHeading), true
+}
+
+// ParsePartialDeliveryMet returns the criteria a marker comment records as met
+// by its PR (#3318). It is nil when body carries no marker or no met list.
+func ParsePartialDeliveryMet(body string) []string {
+	if !partialDeliveryMarkerRE.MatchString(body) {
+		return nil
+	}
+	idx := strings.Index(body, MetCriteriaHeading)
+	if idx < 0 {
+		return nil
+	}
+	return bulletsUntil(body[idx+len(MetCriteriaHeading):], RemainingCriteriaHeading)
+}
+
+// bulletsUntil collects the "- " bullets in s up to the line holding stop.
+func bulletsUntil(s, stop string) []string {
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
 		line = strings.TrimSpace(line)
+		if strings.Contains(line, stop) {
+			break
+		}
 		if strings.HasPrefix(line, "- ") {
 			if c := strings.TrimSpace(strings.TrimPrefix(line, "- ")); c != "" {
-				criteria = append(criteria, c)
+				out = append(out, c)
 			}
 		}
 	}
-	return pr, criteria, true
+	return out
 }
 
 // PendingPartialDelivery finds the newest trusted partial-delivery marker on

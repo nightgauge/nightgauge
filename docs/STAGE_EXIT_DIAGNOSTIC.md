@@ -221,6 +221,28 @@ nightgauge exit-records gate-summary --since 2026-11-01 --json
 `review_phases`, since a stage that did its review takes longer for a reason
 unrelated to gates.
 
+`gate_first_verdict` and `gate_first_failed_steps` record the stage's first
+finished full gate and the steps whose assertion failed in it (#2847). From
+them `gate-summary` sets each run's `first_gate` (`stage`, `verdict`,
+`failed_steps`) from its earliest stage with a gate, totals
+`first_gate_totals` (`runs`, `passed`, `failed`, `other`, `pass_rate`), and
+ranks `failing_steps` (`step`, `first_gates`, `runs`) across runs.
+
+`--since` takes a UTC day (`YYYY-MM-DD`, every daily file from that day) or an
+RFC 3339 instant, compared in UTC. An instant keeps whole runs: a run counts
+only when every one of its records has a `ts` at or after the instant, so a run
+that spans it is left out instead of losing its earlier gates. That
+approximates one build's runs; a run whose first stage started before the
+instant but exited after it still counts. #2847's first-gate measurement
+counts feature-validate first gates over ten or more runs, against the 3 of 8
+baseline, from the merge of the change that added the fast TypeScript
+typecheck:
+
+```bash
+nightgauge exit-records gate-summary --json \
+  --since "$(git show -s --format=%cI <merge-sha>)"
+```
+
 ### `success` is the Post-Gate Outcome (#125)
 
 `success` and the run record's `V2StageDetail.status` describe the same

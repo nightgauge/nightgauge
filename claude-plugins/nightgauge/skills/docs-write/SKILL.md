@@ -127,9 +127,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -159,7 +161,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -286,7 +288,7 @@ Check for issue context from the current branch:
 ```bash
 BRANCH=$(git branch --show-current)
 ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
-CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)"
 
 if [ -f "$CONTEXT_FILE" ]; then
   # Load acceptance criteria to help infer source files and content requirements
@@ -373,7 +375,7 @@ replaces the former inline bash grep loop (audit row B35).
 ```bash
 # FILES_GLOB should be set to a glob covering the source files from Phase 1.
 # Adjust the glob to match the files identified in Phase 1 (e.g. "packages/**/*.ts").
-PATTERN_JSON=$(nightgauge docs detect-patterns --files "$FILES_GLOB" --json)
+PATTERN_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" docs detect-patterns --files "$FILES_GLOB" --json)
 
 PATTERNS_FOUND=()
 # Extract matched slugs and their files from the JSON result.
@@ -779,10 +781,10 @@ behavior of the previous bash implementation.
 # how the previous bash flow only inspected $WRITTEN_CONTENT.
 SECTION_NAME="${SECTION_NAME:-}"
 if [ -n "$SECTION_NAME" ]; then
-  LINK_RESULT=$(nightgauge docs check-links \
+  LINK_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" docs check-links \
     --target "$TARGET_FILE" --section "$SECTION_NAME" --json)
 else
-  LINK_RESULT=$(nightgauge docs check-links --target "$TARGET_FILE" --json)
+  LINK_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" docs check-links --target "$TARGET_FILE" --json)
 fi
 LINK_EXIT=$?
 
@@ -922,7 +924,7 @@ directory, through the binary (JSON on stdin; never a direct file write):
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
 { ... the record below ... }
 JSON
 ```
@@ -977,7 +979,7 @@ The assessment record MUST follow this schema:
 # Validate JSON if written
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
+ASSESSMENT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

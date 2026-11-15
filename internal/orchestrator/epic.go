@@ -69,7 +69,8 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 		if s.trustGate != nil {
 			marks := validationMarks{Gate: s.trustGate, issues: gh.NewIssueService(s.client)}
 			input.ValidationMarks = marks
-			input.Remainder = marks // the partial-delivery comment, once per PR (#2878)
+			input.Remainder = marks                         // the partial-delivery comment, once per PR (#2878)
+			input.BodyEditor = gh.NewIssueService(s.client) // tick met criteria (#3318)
 		}
 	}
 	result := evaluate(ctx, s.issueSvc, s.issueSvc, epicSvc, prVerifier, boardSvc, input)

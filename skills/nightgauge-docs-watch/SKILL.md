@@ -143,11 +143,11 @@ echo "Found ${PAGE_COUNT} documentation pages"
 # This checkout's doc-snapshots/ inside the git directory (ADR-024 § 7):
 # read by path, written only through `nightgauge layout write checkout`.
 SNAPSHOT_NAME="doc-snapshots/index.json"
-SNAPSHOT_FILE="$(nightgauge layout path checkout "$SNAPSHOT_NAME")"
+SNAPSHOT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout "$SNAPSHOT_NAME")"
 
 if [ ! -f "$SNAPSHOT_FILE" ]; then
   echo '{"last_check":"1970-01-01T00:00:00Z","page_count":0,"pages":{}}' \
-    | jq '.' | nightgauge layout write checkout "$SNAPSHOT_NAME" > /dev/null
+    | jq '.' | "${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout "$SNAPSHOT_NAME" > /dev/null
   echo "Initialized new snapshot file at ${SNAPSHOT_FILE}"
 fi
 ```
@@ -195,7 +195,7 @@ echo "Existing pages to check: ${EXISTING_COUNT}"
 Use the snapshot-diff script to detect content changes:
 
 ```bash
-nightgauge docs snapshot-diff \
+"${NIGHTGAUGE_BIN:-nightgauge}" docs snapshot-diff \
   --snapshot /tmp/docs-watch-snapshot.json \
   --urls /tmp/docs-watch-urls.txt \
   --json \
@@ -253,8 +253,8 @@ Only executes when `--skip-release-correlation` is not set AND this checkout's
 #### Step 5.5.1: Load release state and recent reports
 
 ```bash
-RELEASE_STATE_FILE="$(nightgauge layout path checkout release-watch/last-seen-claude-code.json)"
-REPORTS_DIR="$(nightgauge layout path checkout release-watch/reports)"
+RELEASE_STATE_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout release-watch/last-seen-claude-code.json)"
+REPORTS_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout release-watch/reports)"
 export RELEASE_STATE_FILE REPORTS_DIR
 
 if [ ! -f "$RELEASE_STATE_FILE" ]; then
@@ -518,7 +518,7 @@ with open('/tmp/docs-watch-snapshot-updated.json', 'w') as f:
 
 print(f'Snapshot updated: {len(snapshot[\"pages\"])} pages tracked')
 "
-nightgauge layout write checkout "$SNAPSHOT_NAME" \
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout "$SNAPSHOT_NAME" \
   --from /tmp/docs-watch-snapshot-updated.json > /dev/null
 ```
 
@@ -601,7 +601,7 @@ The snapshot (`index.json`) already tracks per-page state; this log tracks the
 SKILL_NAME="nightgauge-docs-watch"
 RUN_LOG_CLASS="checkout"
 RUN_LOG_NAME="doc-snapshots/runs.jsonl"
-RUN_LOG="$(nightgauge layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
+RUN_LOG="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
 ```
 
 <!-- include: ../_shared/RUN_REFLECTION.md -->

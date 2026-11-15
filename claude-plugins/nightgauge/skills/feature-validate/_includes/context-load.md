@@ -27,7 +27,7 @@ this is "no implementation work" — see below.
 BRANCH=$(git branch --show-current)
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE="$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline dev-${ISSUE_NUMBER}.json)"
 
 # Resolve the nightgauge binary now — needed both for the missing-context
 # ground-truth check below and for project move-status.

@@ -203,7 +203,7 @@ When `OPERATION="add"`:
 ```bash
 for ISSUE_NUM in $ISSUE_NUMBERS; do
   # Validate issue exists and is open
-  ISSUE_JSON=$(nightgauge forge issue view "$ISSUE_NUM" --repo "$REPO" --json 2>&1)
+  ISSUE_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" forge issue view "$ISSUE_NUM" --repo "$REPO" --json 2>&1)
   if [ $? -ne 0 ]; then
     echo "SKIP: Issue #$ISSUE_NUM not found"
     continue
@@ -275,8 +275,8 @@ When `OPERATION="from-label"`:
 
 ```bash
 # Fetch issues matching label that are open (`forge issue list` returns open issues only)
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
-MATCHING_ISSUES=$(nightgauge forge issue list --repo "$REPO" --labels "$LABEL" --json 2>&1)
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
+MATCHING_ISSUES=$("${NIGHTGAUGE_BIN:-nightgauge}" forge issue list --repo "$REPO" --labels "$LABEL" --json 2>&1)
 if [ $? -ne 0 ]; then
   echo "ERROR: Failed to fetch issues with label '$LABEL'"
   echo "$MATCHING_ISSUES"

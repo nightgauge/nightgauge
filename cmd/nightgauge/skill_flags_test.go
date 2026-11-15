@@ -21,8 +21,9 @@ import (
 
 // reInvocation finds `nightgauge` in command position: at the start of a
 // line or after a shell operator, `$(`, or a backtick. A `nightgauge` inside a
-// word (`nightgauge`, `nightgauge:baseline`) is not an invocation.
-var reInvocation = regexp.MustCompile("(?:^|[\\s;|&(`]|\\$\\()nightgauge[ \\t]+")
+// word (`nightgauge`, `nightgauge:baseline`) is not an invocation. Skill bash
+// blocks spell it `"${NIGHTGAUGE_BIN:-nightgauge}"` (#2933), which counts too.
+var reInvocation = regexp.MustCompile("(?:^|[\\s;|&(`]|\\$\\()(?:nightgauge|\"\\$\\{NIGHTGAUGE_BIN:-nightgauge\\}\")[ \\t]+")
 
 // reSubcommandWord is a word shaped like a subcommand name; a placeholder or
 // prose ("…", "<name>") in that position is not a claim about the tree.

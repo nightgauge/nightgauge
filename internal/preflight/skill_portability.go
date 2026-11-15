@@ -78,6 +78,13 @@ const (
 	// CheckClaudeSkillFlag flags `claude --skill`, a flag Claude Code does not
 	// have. Plugin skills run as `/nightgauge:<short>` (#2764).
 	CheckClaudeSkillFlag = "claude_skill_flag"
+
+	// CheckBareBinaryInvocation flags a bare `nightgauge <verb>` at command
+	// position inside a bash fence. An agent runs each fenced block in a fresh
+	// shell, so PREFLIGHT's PATH export never reaches a later block; when the
+	// host's NIGHTGAUGE_BIN is not on PATH the bare call is `command not
+	// found`. Blocks call "${NIGHTGAUGE_BIN:-nightgauge}" instead (#2933).
+	CheckBareBinaryInvocation = "bare_binary_invocation"
 )
 
 // SkillPortabilityOptions controls a single linter run.
@@ -122,6 +129,11 @@ var (
 		{name: "go bin", pattern: regexp.MustCompile(`go/bin/nightgauge`)},
 	}
 )
+
+// bareBinaryInvocationRE matches `nightgauge <verb>` at command position: line
+// start, after `$(`, a pipe, `&&`, `||`, `;`, `!`, `(`, or a shell keyword. A
+// backtick-quoted `nightgauge` in an echo string is prose and does not match.
+var bareBinaryInvocationRE = regexp.MustCompile(`(^|[;&|(!]|\$\(|\b(?:if|then|do|else|elif|while|until)\s)\s*nightgauge\s+[a-z]`)
 
 // hooksDirRefRE captures the file a `$HOOKS_DIR/...` or `${HOOKS_DIR}/...`
 // reference names. A trailing `.` is sentence punctuation, trimmed by the caller.
@@ -249,7 +261,11 @@ func RunSkillPortabilityCheck(_ context.Context, opts SkillPortabilityOptions) (
 				result.Findings = append(result.Findings, finding(rel, i+1, CheckStopHook, line))
 			}
 		}
+		history := historyFile(treeRel)
 		for _, block := range fencedBashBlocks(lines) {
+			if !history {
+				result.Findings = append(result.Findings, bareBinaryFindings(rel, block)...)
+			}
 			body := strings.Join(block.lines, "\n")
 			startOffset := firstMatchingLine(block.lines, cascadeStartRE)
 			if startOffset < 0 {
@@ -271,6 +287,21 @@ func RunSkillPortabilityCheck(_ context.Context, opts SkillPortabilityOptions) (
 	}
 
 	return result, nil
+}
+
+// bareBinaryFindings reports each non-comment line of one bash block that calls
+// the binary bare at command position (#2933).
+func bareBinaryFindings(rel string, block fencedBashBlock) []SkillPortabilityFinding {
+	var out []SkillPortabilityFinding
+	for offset, line := range block.lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if bareBinaryInvocationRE.MatchString(line) {
+			out = append(out, finding(rel, block.openLine+offset+1, CheckBareBinaryInvocation, line))
+		}
+	}
+	return out
 }
 
 // lineChecks returns the #2764 checks one line fails. treeRel is the file's

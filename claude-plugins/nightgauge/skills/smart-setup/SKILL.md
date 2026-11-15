@@ -803,7 +803,7 @@ SELECTED_LIST=$(printf '%s\n' "$USER_MULTISELECT" | jq -r '
 if [ -z "$SELECTED_LIST" ]; then
   echo "Tooling scaffold skipped."
 else
-  nightgauge setup scaffold-tooling --select "$SELECTED_LIST" --json \
+  "${NIGHTGAUGE_BIN:-nightgauge}" setup scaffold-tooling --select "$SELECTED_LIST" --json \
     | jq -r '
         "nightgauge setup scaffold-tooling — schema v\(.v)",
         "detected: package.json=\(.detected.package_json_found) node=\(.detected.node_version) ts=\(.detected.has_typescript) vitest=\(.detected.has_vitest) eslint=\(.detected.has_eslint) prettier=\(.detected.has_prettier)",

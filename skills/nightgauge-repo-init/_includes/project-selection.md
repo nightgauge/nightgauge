@@ -21,13 +21,13 @@ project discovery entirely.
 
 ```bash
 # Determine whether OWNER is an org or a user (used throughout Phase 1 and Phase 4)
-OWNER_TYPE=$(nightgauge forge graphql \
+OWNER_TYPE=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql \
   -f query='query($login: String!) { repositoryOwner(login: $login) { __typename } }' \
   -f login="$OWNER" 2>/dev/null | jq -r '.data.repositoryOwner.__typename // empty')
 # repositoryOwner.__typename is "Organization" or "User"
 
 # repository.projectsV2 works regardless of org vs user — no branching needed here
-LINKED_PROJECTS=$(nightgauge forge graphql -f query='
+LINKED_PROJECTS=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='
 {
   repository(owner: "'"$OWNER"'", name: "'"$REPO_NAME"'") {
     projectsV2(first: 10) {
@@ -71,7 +71,7 @@ USER_PROJECTS=""
 
 # Org projects (preferred when repo belongs to an org)
 if [ "$OWNER_TYPE" = "Organization" ]; then
-  ORG_PROJECTS=$(nightgauge forge graphql -f query='query($owner:String!){organization(login:$owner){projectsV2(first:30){nodes{number,title,url}}}}' -f owner="$OWNER" 2>/dev/null \
+  ORG_PROJECTS=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='query($owner:String!){organization(login:$owner){projectsV2(first:30){nodes{number,title,url}}}}' -f owner="$OWNER" 2>/dev/null \
     | jq -r '.data.organization.projectsV2.nodes[]? | "\(.number)\t\(.title)\t\(.url)"')
   if [ -n "$ORG_PROJECTS" ]; then
     echo "Org projects for $OWNER:"
@@ -82,7 +82,7 @@ if [ "$OWNER_TYPE" = "Organization" ]; then
 fi
 
 # Active user projects (fallback or supplemental)
-USER_PROJECTS=$(nightgauge forge graphql -f query='query($owner:String!){user(login:$owner){projectsV2(first:30){nodes{number,title,url}}}}' -f owner="$ACTIVE_USER" 2>/dev/null \
+USER_PROJECTS=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='query($owner:String!){user(login:$owner){projectsV2(first:30){nodes{number,title,url}}}}' -f owner="$ACTIVE_USER" 2>/dev/null \
   | jq -r '.data.user.projectsV2.nodes[]? | "\(.number)\t\(.title)\t\(.url)"')
 if [ -n "$USER_PROJECTS" ]; then
   echo "User projects for $ACTIVE_USER:"
@@ -107,7 +107,7 @@ RESOLVED_PROJECT_URL=""
 RESOLVED_PROJECT_ID=""
 
 if [ -n "$PROJECT_ARG" ]; then
-  RESOLVE_JSON=$(nightgauge project resolve --number "$PROJECT_ARG" --owner "$OWNER" --json 2>&1)
+  RESOLVE_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" project resolve --number "$PROJECT_ARG" --owner "$OWNER" --json 2>&1)
   RESOLVE_EXIT=$?
 
   if [ $RESOLVE_EXIT -eq 0 ]; then

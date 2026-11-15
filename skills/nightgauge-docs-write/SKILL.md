@@ -151,7 +151,7 @@ Check for issue context from the current branch:
 ```bash
 BRANCH=$(git branch --show-current)
 ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
-CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)"
 
 if [ -f "$CONTEXT_FILE" ]; then
   # Load acceptance criteria to help infer source files and content requirements
@@ -238,7 +238,7 @@ replaces the former inline bash grep loop (audit row B35).
 ```bash
 # FILES_GLOB should be set to a glob covering the source files from Phase 1.
 # Adjust the glob to match the files identified in Phase 1 (e.g. "packages/**/*.ts").
-PATTERN_JSON=$(nightgauge docs detect-patterns --files "$FILES_GLOB" --json)
+PATTERN_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" docs detect-patterns --files "$FILES_GLOB" --json)
 
 PATTERNS_FOUND=()
 # Extract matched slugs and their files from the JSON result.
@@ -644,10 +644,10 @@ behavior of the previous bash implementation.
 # how the previous bash flow only inspected $WRITTEN_CONTENT.
 SECTION_NAME="${SECTION_NAME:-}"
 if [ -n "$SECTION_NAME" ]; then
-  LINK_RESULT=$(nightgauge docs check-links \
+  LINK_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" docs check-links \
     --target "$TARGET_FILE" --section "$SECTION_NAME" --json)
 else
-  LINK_RESULT=$(nightgauge docs check-links --target "$TARGET_FILE" --json)
+  LINK_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" docs check-links --target "$TARGET_FILE" --json)
 fi
 LINK_EXIT=$?
 

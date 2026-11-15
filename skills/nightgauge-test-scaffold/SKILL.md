@@ -264,7 +264,7 @@ fi
 Detect existing health-check output for coverage data reuse:
 
 ```bash
-HEALTH_REPORT_PATH="$(nightgauge layout path checkout reports/health-report.json)"
+HEALTH_REPORT_PATH="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout reports/health-report.json)"
 HEALTH_CHECK_AVAILABLE=false
 
 if [ -f "$HEALTH_REPORT_PATH" ]; then
@@ -308,7 +308,7 @@ at walk time. Audit row **B39**.
 | `test_*`     | `test_qux.py` | `qux.py`        |
 
 ```bash
-INV_JSON=$(nightgauge test inventory --workdir "$ASSESS_PATH" --json)
+INV_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" test inventory --workdir "$ASSESS_PATH" --json)
 TEST_FILE_COUNT=$(printf '%s\n' "$INV_JSON"   | jq -r '.counts.test_files')
 SOURCE_FILE_COUNT=$(printf '%s\n' "$INV_JSON" | jq -r '.counts.source_files')
 UNTESTED_COUNT=$(printf '%s\n' "$INV_JSON"    | jq -r '.counts.untested_files')
@@ -457,7 +457,7 @@ verbatim so consumers can audit the verb without reading Go source.
 #### Step 3.1: Run risk-score
 
 ```bash
-RISK_JSON=$(nightgauge test risk-score \
+RISK_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" test risk-score \
   --files /tmp/ts_untested.txt \
   --workdir "$ASSESS_PATH" \
   --json)
@@ -878,7 +878,7 @@ if [ -n "$OUTPUT_FILE" ]; then
   cp "$REPORT_TMP" "$OUTPUT_FILE"
   REPORT_PATH="$OUTPUT_FILE"
 else
-  REPORT_PATH="$(nightgauge layout write checkout reports/test-scaffold-report.json --from "$REPORT_TMP")"
+  REPORT_PATH="$("${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout reports/test-scaffold-report.json --from "$REPORT_TMP")"
 fi
 rm -f "$REPORT_TMP"
 echo "Report written: $REPORT_PATH"

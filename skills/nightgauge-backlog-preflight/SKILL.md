@@ -155,7 +155,7 @@ Fetch issues from the project board filtered by status:
 ```bash
 # Get project number from config (prefer the deterministic Go binary; fall
 # back to the legacy grep|awk pattern so older binaries keep working).
-PROJECT_NUMBER=$(nightgauge config show --key project.number --raw 2>/dev/null \
+PROJECT_NUMBER=$("${NIGHTGAUGE_BIN:-nightgauge}" config show --key project.number --raw 2>/dev/null \
   || grep "number:" .nightgauge/config.yaml 2>/dev/null | head -1 | awk '{print $2}')
 if [ -z "$PROJECT_NUMBER" ]; then
   echo "ERROR: No project number in .nightgauge/config.yaml"
@@ -329,8 +329,8 @@ Generate the preflight report:
 DATE=$(date +%Y-%m-%d)
 REPORT_NAME="reports/preflight-${DATE}.md"
 REPORT_JSON_NAME="reports/preflight-${DATE}.json"
-REPORT="$(nightgauge layout path checkout "$REPORT_NAME")"
-REPORT_JSON="$(nightgauge layout path checkout "$REPORT_JSON_NAME")"
+REPORT="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout "$REPORT_NAME")"
+REPORT_JSON="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout "$REPORT_JSON_NAME")"
 
 # Count totals
 MISSING_TYPE_COUNT=${#MISSING_TYPE[@]}
@@ -345,7 +345,7 @@ READY_COUNT=$((ISSUE_COUNT - TOTAL_ISSUES_NEEDING_ATTENTION))
 [ "$READY_COUNT" -lt 0 ] && READY_COUNT=0
 
 # Write markdown report
-nightgauge layout write checkout "$REPORT_NAME" > /dev/null << REPORTEOF
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout "$REPORT_NAME" > /dev/null << REPORTEOF
 ## Backlog Preflight Report — ${DATE}
 
 ### Summary
@@ -445,7 +445,7 @@ jq -n \
     },
     report_md: $report_md,
     pipeline_ready: ($ready_count == $issue_count and ($cycles | length) == 0)
-  }' | nightgauge layout write checkout "$REPORT_JSON_NAME" > /dev/null
+  }' | "${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout "$REPORT_JSON_NAME" > /dev/null
 
 echo "JSON report written: $REPORT_JSON"
 ```
@@ -471,7 +471,7 @@ if [ "$FIX_MODE" = "true" ]; then
   for issue in "${MISSING_TYPE[@]}"; do
     NUMBER=$(printf '%s\n' "$issue" | grep -oE '#[0-9]+' | tr -d '#')
     TITLE=$(echo "$issue" | sed 's/#[0-9]*: //')
-    RESULT=$(nightgauge issue infer-type "$NUMBER" --apply --json 2>/dev/null)
+    RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" issue infer-type "$NUMBER" --apply --json 2>/dev/null)
     if [ -z "$RESULT" ]; then
       echo "  ERROR: infer-type failed for #$NUMBER"
       continue

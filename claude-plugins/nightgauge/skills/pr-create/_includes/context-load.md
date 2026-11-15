@@ -67,10 +67,10 @@ GROUP_B_PID=$!
 
 # Group C: Context file reads (1-2s)
 (
-  ISSUE=$(jq . "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null || echo '{}')
-  PLANNING=$(jq . "$(nightgauge layout path pipeline planning-${ISSUE_NUMBER}.json)" 2>/dev/null || echo '{}')
-  DEV=$(jq . "$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)" 2>/dev/null || echo '{}')
-  VALIDATE=$(jq . "$(nightgauge layout path pipeline validate-${ISSUE_NUMBER}.json)" 2>/dev/null || echo '{}')
+  ISSUE=$(jq . "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null || echo '{}')
+  PLANNING=$(jq . "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline planning-${ISSUE_NUMBER}.json)" 2>/dev/null || echo '{}')
+  DEV=$(jq . "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline dev-${ISSUE_NUMBER}.json)" 2>/dev/null || echo '{}')
+  VALIDATE=$(jq . "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline validate-${ISSUE_NUMBER}.json)" 2>/dev/null || echo '{}')
   PLAN=$(cat PLAN.md 2>/dev/null || true)
   jq -n \
     --argjson issue "$ISSUE" \

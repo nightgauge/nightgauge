@@ -107,9 +107,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -139,7 +141,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -211,7 +213,7 @@ diagnosis (#277).
 ## Phase 1: Detect New Posts
 
 ```bash
-DETECT=$(nightgauge blog-watch detect --json)
+DETECT=$("${NIGHTGAUGE_BIN:-nightgauge}" blog-watch detect --json)
 printf '%s\n' "$DETECT" | jq -r '.skipped[] | "skipped \(.source): \(.reason)"'
 printf '%s\n' "$DETECT" | jq -r '.new[] | "\(.source)\t\(.url)"'
 ```
@@ -233,7 +235,7 @@ For each new URL:
 
 ```bash
 TEXT_FILE=$(mktemp)
-nightgauge blog-watch screen --url "$URL" --source "$SOURCE" --out "$TEXT_FILE"
+"${NIGHTGAUGE_BIN:-nightgauge}" blog-watch screen --url "$URL" --source "$SOURCE" --out "$TEXT_FILE"
 ```
 
 - Exit `0`: the screened text is in `$TEXT_FILE`. Read it from there.
@@ -267,14 +269,14 @@ nightgauge blog-watch screen --url "$URL" --source "$SOURCE" --out "$TEXT_FILE"
 | `Deferred`        | Relevant, but blocked on something we cannot judge yet    | `record` (reason names the reopen trigger) |
 
 ```bash
-nightgauge blog-watch record --url "$URL" --source "$SOURCE" \
+"${NIGHTGAUGE_BIN:-nightgauge}" blog-watch record --url "$URL" --source "$SOURCE" \
   --verdict "Already covered" --reason "<one line>" --ref docs/X.md
 ```
 
 For `Adopted`, write our gap, in our words, to a file, then:
 
 ```bash
-nightgauge blog-watch adopt --url "$URL" --source "$SOURCE" \
+"${NIGHTGAUGE_BIN:-nightgauge}" blog-watch adopt --url "$URL" --source "$SOURCE" \
   --title "feat(<area>): <our gap>" --gap-file "$GAP_FILE" \
   --excerpt "<at most one short quote>"
 ```
@@ -307,7 +309,7 @@ Then the skipped sources.
 SKILL_NAME="nightgauge-blog-watch"
 RUN_LOG_CLASS="checkout"
 RUN_LOG_NAME="blog-watch/runs.jsonl"
-RUN_LOG="$(nightgauge layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
+RUN_LOG="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
 ```
 
 ### Run Reflection (memory across runs)
@@ -360,7 +362,7 @@ else
   RECORD=$(jq -nc --arg ts "$NOW" --arg skill "$SKILL_NAME" \
         --argjson counts "${RUN_COUNTS:-{}}" --arg summary "${RUN_SUMMARY:-}" \
         '{ts:$ts, skill:$skill, counts:$counts, summary:$summary}')
-  printf '%s\n' "$RECORD" | nightgauge layout append "$RUN_LOG_CLASS" "$RUN_LOG_NAME" >/dev/null
+  printf '%s\n' "$RECORD" | "${NIGHTGAUGE_BIN:-nightgauge}" layout append "$RUN_LOG_CLASS" "$RUN_LOG_NAME" >/dev/null
   echo "Appended run record to $RUN_LOG"
 fi
 ```

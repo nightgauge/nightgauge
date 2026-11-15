@@ -24,7 +24,7 @@ Silently skip to Phase 1.
 BRANCH=$(git branch --show-current)
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-FEEDBACK_FILE="$(nightgauge layout path pipeline feedback-${ISSUE_NUMBER}.json)"
+FEEDBACK_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline feedback-${ISSUE_NUMBER}.json)"
 
 REVISION_COUNT=0
 REVISION_REASONS="[]"
@@ -34,7 +34,7 @@ if [ -f "$FEEDBACK_FILE" ]; then
   IS_REVISION=true
   SIGNALS=$(jq -r '.signals' "$FEEDBACK_FILE")
   SIGNAL_COUNT=$(printf '%s\n' "$SIGNALS" | jq 'length')
-  REVISION_COUNT=$(jq -r '.revision_count // 0' "$(nightgauge layout path pipeline planning-${ISSUE_NUMBER}.json)" 2>/dev/null || echo 0)
+  REVISION_COUNT=$(jq -r '.revision_count // 0' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline planning-${ISSUE_NUMBER}.json)" 2>/dev/null || echo 0)
 
   echo "=== PLAN REVISION (Attempt $((REVISION_COUNT + 1))) ==="
   echo ""

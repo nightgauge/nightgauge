@@ -34,7 +34,7 @@ import {
   OPENCODE_CONFIG_CONTENT_ENV,
   OPENCODE_ISOLATION_XDG,
   OPENCODE_SERVER_PASSWORD_ENV,
-  curateChildEnv,
+  childEnvWithOverlay,
   curateOpenCodeChildEnv,
 } from "./childEnv.js";
 import { AdapterError } from "./errors.js";
@@ -208,7 +208,9 @@ export function createCliQueryFn(options: {
     // routed through here — receives only the curated allowlist, never the full
     // parent process.env. A compromised/prompt-injected sub-agent cannot read a
     // secret it doesn't need.
-    const env = curateChildEnv(process.env);
+    // The query's own variables (a workflow agent's env, #2908) only add to it;
+    // `childEnvWithOverlay` owns that precedence.
+    const env = childEnvWithOverlay(queryOptions.options?.env);
     const resumeSessionId = queryOptions.options?.resumeSessionId;
 
     // For Codex: inject --output-last-message to capture the final agent message
@@ -979,6 +981,8 @@ async function* openCodeStage(
   // A fresh value per spawn, never logged and never on argv (ADR-022 § 18).
   const password = randomBytes(24).toString("base64url");
   const env: NodeJS.ProcessEnv = {
+    // The query's own variables (#2908) only add: the run's own win.
+    ...queryOptions.options?.env,
     ...curateOpenCodeChildEnv(
       withholdInherited(run.parentEnv, runConfig.envWithhold),
       model,

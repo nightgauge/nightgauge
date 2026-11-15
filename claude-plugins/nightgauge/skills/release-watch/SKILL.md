@@ -150,9 +150,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -182,7 +184,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -263,7 +265,7 @@ if ! command -v nightgauge &> /dev/null; then
   exit 1
 fi
 
-if ! nightgauge forge auth status &>/dev/null; then
+if ! "${NIGHTGAUGE_BIN:-nightgauge}" forge auth status &>/dev/null; then
   echo "ERROR: nightgauge forge auth not configured. Run: nightgauge forge auth login"
   exit 1
 fi
@@ -286,7 +288,7 @@ only through `nightgauge layout write checkout release-watch/<file>`, which
 creates the directory and never follows a link out of it.
 
 ```bash
-WATCH_DIR="$(nightgauge layout path checkout release-watch)"
+WATCH_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout release-watch)"
 export WATCH_DIR
 ```
 
@@ -316,7 +318,7 @@ echo "Provider: ${PROVIDER}  Source: ${SOURCE}  Label: ${RELEASE_LABEL}"
 if [ ! -f "$LAST_SEEN_FILE" ]; then
   # Initialize with empty state (all releases are new)
   echo "{\"provider\":\"${PROVIDER}\",\"source\":\"${SOURCE}\",\"version\":\"0.0.0\",\"checked_at\":\"1970-01-01T00:00:00Z\",\"releases_seen\":[]}" \
-    | jq '.' | nightgauge layout write checkout "$LAST_SEEN_NAME" > /dev/null
+    | jq '.' | "${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout "$LAST_SEEN_NAME" > /dev/null
   LAST_VERSION="0.0.0"
   echo "Initialized new last-seen state for ${PROVIDER}"
 else
@@ -346,7 +348,7 @@ NEW_RELEASES_FILE="/tmp/release-watch-new.json"
 # applies a strict-semver --since filter, and emits a stable v1 JSON document
 # (FetchResult). Replaces ~50 lines of inline forge api + Python — audit row B33.
 # --source is the resolved provider repo (#4054); defaults to anthropics/claude-code.
-nightgauge release fetch \
+"${NIGHTGAUGE_BIN:-nightgauge}" release fetch \
   --source "$SOURCE" \
   --since "$LAST_VERSION" \
   --limit 10 \
@@ -385,7 +387,7 @@ CLASSIFIED_FILE="/tmp/release-watch-classified.json"
 # names ('version', 'published_at', 'changes[].type', '.description', '.tags')
 # match the legacy /tmp/release-watch-classified.json shape so Phases 5+
 # below need no changes.
-nightgauge release classify-changes \
+"${NIGHTGAUGE_BIN:-nightgauge}" release classify-changes \
   --input "$NEW_RELEASES_FILE" \
   --json > "$CLASSIFIED_FILE"
 
@@ -452,7 +454,7 @@ applied and `focus_adjusted` is `false`.
 
 ```bash
 SCORED_FILE="/tmp/release-watch-scored.json"
-export FOCUS_YAML="$(nightgauge layout path checkout focus.yaml)"
+export FOCUS_YAML="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout focus.yaml)"
 
 python3 << 'PYTHON_EOF'
 import json
@@ -791,7 +793,7 @@ with open(os.environ['REPORT_TMP'], 'w') as f:
     f.write(output)
 PYTHON_EOF
 
-REPORT_FILE="$(nightgauge layout write checkout "$REPORT_NAME" --from "$REPORT_TMP")"
+REPORT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout "$REPORT_NAME" --from "$REPORT_TMP")"
 rm -f "$REPORT_TMP"
 echo "Report saved to: ${REPORT_FILE}"
 ```
@@ -838,7 +840,7 @@ with open(os.environ['REPORT_JSON_TMP'], 'w') as f:
     json.dump(report, f, indent=2)
 PYTHON_EOF
 
-REPORT_JSON="$(nightgauge layout write checkout "$REPORT_JSON_NAME" --from "$REPORT_JSON_TMP")"
+REPORT_JSON="$("${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout "$REPORT_JSON_NAME" --from "$REPORT_JSON_TMP")"
 rm -f "$REPORT_JSON_TMP"
 echo "JSON report saved to: ${REPORT_JSON}"
 ```
@@ -897,7 +899,7 @@ else:
 PYTHON_EOF
 
 if [ -s "$STATE_TMP" ]; then
-  nightgauge layout write checkout "$LAST_SEEN_NAME" --from "$STATE_TMP" > /dev/null
+  "${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout "$LAST_SEEN_NAME" --from "$STATE_TMP" > /dev/null
 fi
 rm -f "$STATE_TMP"
 ```
@@ -943,12 +945,12 @@ Ensure required labels exist before creating issues:
 
 ```bash
 # Create label if it doesn't exist
-nightgauge forge label create "source:auto-discovery" \
+"${NIGHTGAUGE_BIN:-nightgauge}" forge label create "source:auto-discovery" \
   --description "Auto-created by release-watch assessment" \
   --color "0e8a16" 2>/dev/null || true
 
 # Per-provider release label (#4054): claude-code-release | codex-release | gemini-release.
-nightgauge forge label create "$RELEASE_LABEL" \
+"${NIGHTGAUGE_BIN:-nightgauge}" forge label create "$RELEASE_LABEL" \
   --description "Tracks ${PROVIDER} release impact and integration" \
   --color "1f6feb" 2>/dev/null || true
 ```
@@ -1047,7 +1049,7 @@ directory, through the binary (JSON on stdin; never a direct file write):
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
 { ... the record below ... }
 JSON
 ```
@@ -1102,7 +1104,7 @@ The assessment record MUST follow this schema:
 # Validate JSON if written
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
+ASSESSMENT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

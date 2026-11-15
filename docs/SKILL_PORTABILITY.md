@@ -45,7 +45,10 @@ it, so discovery is identical under every adapter:
 ### The skill cascade (PREFLIGHT)
 
 `skills/_shared/PREFLIGHT.md` resolves `$BINARY` in this **provider-neutral**
-order, then prepends `dirname($BINARY)` to `PATH`:
+order, then prepends `dirname($BINARY)` to `PATH`. That export reaches only the
+rest of its own block: an agent runs each fenced block in a fresh shell. Every
+later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}" <verb>`, never a
+bare `nightgauge <verb>` (#2933):
 
 1. `$NIGHTGAUGE_BIN` (host-exported — primary under any adapter)
 2. `command -v nightgauge` (PATH)
@@ -267,7 +270,9 @@ How the `opencode` adapter
 
 The deterministic gate is the regression guard: it fails the moment any skill
 reintroduces a VSCode-extension path, a Claude-only `hooks:` completion gate,
-or a fenced resolver block that drifted from PREFLIGHT.md. Cascade checks are
+a fenced resolver block that drifted from PREFLIGHT.md, or a bare
+`nightgauge <verb>` at command position in a bash block
+(`bare_binary_invocation`, #2933). Cascade checks are
 block-scoped: a complete block elsewhere in the same file cannot hide a
 truncated sibling. The live multi-adapter eval (running the
 skills against real Codex/Gemini binaries) cannot run in CI because it needs

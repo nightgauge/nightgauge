@@ -377,9 +377,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -409,7 +411,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -656,7 +658,7 @@ fi
 
 CI_CHUNK_PENDING=false
 CI_DEADLINE_NAME="ci-wait-deadline-${PR_NUMBER}"
-CI_DEADLINE_FILE="$(nightgauge layout path pipeline "$CI_DEADLINE_NAME")"
+CI_DEADLINE_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "$CI_DEADLINE_NAME")"
 
 if [ "$CI_EPIC_SKIP" = "true" ]; then
   echo "Skipping ci wait (epic branch PR)"
@@ -669,7 +671,7 @@ else
   _CI_NOW=$(date +%s)
   if [ ! -s "$CI_DEADLINE_FILE" ]; then
     echo $(( _CI_NOW + TIMEOUT * 60 )) \
-      | nightgauge layout write pipeline "$CI_DEADLINE_NAME" >/dev/null
+      | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "$CI_DEADLINE_NAME" >/dev/null
   fi
   _CI_DEADLINE=$(cat "$CI_DEADLINE_FILE" 2>/dev/null || echo $(( _CI_NOW + TIMEOUT * 60 )))
   _CI_REMAINING=$(( _CI_DEADLINE - _CI_NOW ))
@@ -703,7 +705,7 @@ fi
 # so the next PR (or a re-run after fixes) starts a fresh budget. An empty file
 # reads as "no deadline" above; nothing is deleted under the git directory.
 if [ "$CI_CHUNK_PENDING" != "true" ]; then
-  printf '' | nightgauge layout write pipeline "$CI_DEADLINE_NAME" >/dev/null
+  printf '' | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "$CI_DEADLINE_NAME" >/dev/null
 fi
 
 CI_ALL_PASSED=$(printf '%s\n' "$CI_RESULT" | jq -r 'if .state == "SUCCESS" then "true" else "false" end')
@@ -980,7 +982,7 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Read transient-failure flags from the prior stage's handoff.
 # pr-merge reads pr-{N}.json (written by pr-create Phase 4).
-PR_CONTEXT="$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)"
+PR_CONTEXT="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline pr-${ISSUE_NUMBER}.json)"
 if [ -f "$PR_CONTEXT" ]; then
   ALL_TRANSIENT=$(jq -r '
     (.ci_monitoring.failures // []) as $f
@@ -1109,7 +1111,7 @@ retro for why making this advisory burned a sham `[skip build]` commit).
    classification:
 
    ```bash
-   BASELINE="$(nightgauge layout path pipeline auto-fix-baseline-${PR_NUMBER}.json)"
+   BASELINE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline auto-fix-baseline-${PR_NUMBER}.json)"
    if [ -f "$BASELINE" ]; then
      INHERITED=$(jq '[.failures[]? | select(.classification == "inherited")] | length' "$BASELINE" 2>/dev/null || echo 0)
      REGRESSIONS=$(jq '[.failures[]? | select(.classification == "regression")] | length' "$BASELINE" 2>/dev/null || echo 0)
@@ -1260,7 +1262,7 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 jq -n --argjson pr "$PR_NUMBER" --arg sha "$(git rev-parse HEAD)" \
   --argjson attempt "$AUTO_FIX_ATTEMPT" \
   '{result: "fix-pushed", pr_number: $pr, head_sha: $sha, attempt: $attempt}' \
-  | nightgauge layout write pipeline "pr-merge-fix-${ISSUE_NUMBER}.json" >/dev/null
+  | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "pr-merge-fix-${ISSUE_NUMBER}.json" >/dev/null
 echo "Fix pushed to PR #$PR_NUMBER — handing back to the deterministic merge path."
 exit 0
 ```
@@ -1354,7 +1356,7 @@ more commits on this PR (#2730). Ask it first:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-REVIEW_GATE=$(nightgauge pr-stage review-gate "$ISSUE_NUMBER" --json)
+REVIEW_GATE=$("${NIGHTGAUGE_BIN:-nightgauge}" pr-stage review-gate "$ISSUE_NUMBER" --json)
 printf '%s\n' "$REVIEW_GATE" | jq '{proceed, verdict, reason, rounds, hold, filed}'
 ```
 
@@ -1391,10 +1393,10 @@ While a round is open nothing may enqueue, so `end` only after the push:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge pr-stage review-round begin "$ISSUE_NUMBER" || exit 1
+"${NIGHTGAUGE_BIN:-nightgauge}" pr-stage review-round begin "$ISSUE_NUMBER" || exit 1
 # Fix the `hold` findings, stage, commit with
 # `fix(#$ISSUE_NUMBER): address review feedback`, and push.
-nightgauge pr-stage review-round end "$ISSUE_NUMBER"
+"${NIGHTGAUGE_BIN:-nightgauge}" pr-stage review-round end "$ISSUE_NUMBER"
 ```
 
 Run one round, then wait for CI to re-run on the new head and continue to the
@@ -1450,7 +1452,7 @@ if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && [ -z "$(git ls-files 
     # push never runs, and pr-merge checks the remote branch. Best-effort,
     # fork tokens filtered, as on the behind path (#2749).
     PUSH_ERR=$(mktemp)
-    if ! nightgauge git push-branch 2>"$PUSH_ERR"; then
+    if ! "${NIGHTGAUGE_BIN:-nightgauge}" git push-branch 2>"$PUSH_ERR"; then
       echo "WARNING: Failed to push the concluded merge. Continuing with the local merge."
       grep -viE 'branch[-_]forked|non-fast-forward|push rejected|fetch first' "$PUSH_ERR" || true
     fi
@@ -1494,7 +1496,7 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
     PUSH_ERR=$(mktemp)
     # Exit 4 is a credential refusal (#2742): its `[push-auth-failed]` line
     # passes the filter, so a later push surfaces the same cause.
-    if ! nightgauge git push-branch 2>"$PUSH_ERR"; then
+    if ! "${NIGHTGAUGE_BIN:-nightgauge}" git push-branch 2>"$PUSH_ERR"; then
       echo "WARNING: Failed to push merged branch. Continuing with the local merge."
       grep -viE 'branch[-_]forked|non-fast-forward|push rejected|fetch first' "$PUSH_ERR" || true
     fi
@@ -1555,7 +1557,7 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
       if git commit --no-edit 2>/dev/null; then
         echo "Conflict resolution successful."
         PUSH_ERR=$(mktemp)
-        if ! nightgauge git push-branch 2>"$PUSH_ERR"; then
+        if ! "${NIGHTGAUGE_BIN:-nightgauge}" git push-branch 2>"$PUSH_ERR"; then
           echo "WARNING: Failed to push merged branch. Continuing with the local merge."
           grep -viE 'branch[-_]forked|non-fast-forward|push rejected|fetch first' "$PUSH_ERR" || true
         fi
@@ -1617,7 +1619,7 @@ if [ "$BEHIND_COUNT" -gt 0 ] && [ "$FRESHNESS_CHECK_FAILED" != "true" ] && [ "$C
   ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
   jq -n --argjson pr "$PR_NUMBER" --arg sha "$(git rev-parse HEAD)" \
     '{result: "fix-pushed", pr_number: $pr, head_sha: $sha, attempt: 0}' \
-    | nightgauge layout write pipeline "pr-merge-fix-${ISSUE_NUMBER}.json" >/dev/null
+    | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "pr-merge-fix-${ISSUE_NUMBER}.json" >/dev/null
   echo "Base merged and pushed — handing back to the deterministic merge path."
   exit 0
 fi
@@ -1783,7 +1785,7 @@ directory, through the binary (JSON on stdin; never a direct file write):
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
 { ... the record below ... }
 JSON
 ```
@@ -1838,7 +1840,7 @@ The assessment record MUST follow this schema:
 # Validate JSON if written
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
+ASSESSMENT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

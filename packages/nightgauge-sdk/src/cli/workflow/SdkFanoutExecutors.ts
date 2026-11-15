@@ -103,6 +103,8 @@ export type EphemeralExec = (input: {
    * claude-headless passes them as `--allowedTools`. @see Issue #2358
    */
   allowedTools?: readonly string[];
+  /** Variables added to the unit's environment (WorkflowAgentSpec `env`). @see Issue #2908 */
+  env?: Record<string, string>;
 }) => Promise<EphemeralExecResult>;
 
 /**
@@ -210,6 +212,7 @@ export const adapterEphemeralExec: EphemeralExec = async ({
   cwd,
   abortSignal,
   allowedTools,
+  env,
 }): Promise<EphemeralExecResult> => {
   // A unit queued behind the concurrency ceiling may start after the stage
   // stopped; it never spawns.
@@ -226,6 +229,7 @@ export const adapterEphemeralExec: EphemeralExec = async ({
     cwd,
     abortSignal,
     ...(allowedTools !== undefined && { allowedTools: [...allowedTools] }),
+    ...(env !== undefined && { env: { ...env } }),
   };
   for await (const message of query({ prompt, options })) {
     // An adapter whose query ignores the signal stops being drained; leaving
@@ -323,7 +327,10 @@ export interface SdkFanoutBindingsOptions {
    * adapter's real query function); tests pass a fake to avoid spawning a CLI.
    */
   exec?: EphemeralExec;
-  /** Owning pipeline stage, propagated to the adapter's ephemeral query options. */
+  /**
+   * Owning pipeline stage, propagated to the adapter's ephemeral query options.
+   * When omitted, each unit's {@link WorkflowUnitContext.stage} is used.
+   */
   stage?: string;
   /** Working directory for the ephemeral exec. */
   cwd?: string;
@@ -365,10 +372,11 @@ export function makeSdkFanoutBindings(
           adapter,
           prompt: agent.prompt,
           model: agent.model,
-          stage,
+          stage: stage ?? unit?.stage,
           cwd,
           abortSignal,
           ...(unit?.allowedTools !== undefined && { allowedTools: unit.allowedTools }),
+          ...(agent.env !== undefined && { env: agent.env }),
         });
         return {
           usage: usageFromExec(result, adapter, agent.model),
@@ -396,7 +404,7 @@ export function makeSdkFanoutBindings(
       const result = await exec({
         adapter,
         prompt: judge.prompt,
-        stage,
+        stage: stage ?? unit?.stage,
         cwd,
         abortSignal: unit?.abortSignal,
         ...(unit?.allowedTools !== undefined && { allowedTools: unit.allowedTools }),

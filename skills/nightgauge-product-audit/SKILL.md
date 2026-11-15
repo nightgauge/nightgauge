@@ -337,7 +337,7 @@ message. Each subagent writes its findings to
 1. Run the lifecycle audit via the Go binary:
 
    ```bash
-   nightgauge epic check-lifecycle --sweep --json > /tmp/lifecycle-raw.json
+   "${NIGHTGAUGE_BIN:-nightgauge}" epic check-lifecycle --sweep --json > /tmp/lifecycle-raw.json
    ```
 
    This detects all four lifecycle categories across all open epics and issues:
@@ -620,15 +620,15 @@ Only apply fixes to findings in the auto-fix whitelist from config:
 
 - `STALE_EPIC` — close epic:
   ```bash
-  nightgauge issue close ${EPIC_NUMBER}
+  "${NIGHTGAUGE_BIN:-nightgauge}" issue close ${EPIC_NUMBER}
   ```
 - `BOARD_STATUS_DRIFT` — move issue to "Done" on project board:
   ```bash
-  nightgauge project move-status ${ISSUE_NUMBER} done
+  "${NIGHTGAUGE_BIN:-nightgauge}" project move-status ${ISSUE_NUMBER} done
   ```
 - `STALE_BLOCKER` — remove blocking relationship:
   ```bash
-  nightgauge issue remove-blocked-by ${BLOCKED_ISSUE_NUMBER} ${BLOCKER_ISSUE_NUMBER}
+  "${NIGHTGAUGE_BIN:-nightgauge}" issue remove-blocked-by ${BLOCKED_ISSUE_NUMBER} ${BLOCKER_ISSUE_NUMBER}
   ```
 
 For each fix applied:

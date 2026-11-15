@@ -254,6 +254,12 @@ type StageExitRecord struct {
 	GateSeconds    int `json:"gate_seconds,omitempty"`
 	GateReused     int `json:"gate_reused,omitempty"`
 	GateUnfinished int `json:"gate_unfinished,omitempty"`
+	// GateFirstVerdict is the verdict of this stage's first finished full gate,
+	// and GateFirstFailedSteps names the steps whose assertion failed in it
+	// (#2847). A first gate that fails costs a whole extra gate, so these say
+	// how often that happens and which static check caused it.
+	GateFirstVerdict     string   `json:"gate_first_verdict,omitempty"`
+	GateFirstFailedSteps []string `json:"gate_first_failed_steps,omitempty"`
 	// ReviewPhases says whether a feature-dev stage reached its quality review
 	// (#2784): ReviewPhasesRan, ReviewPhasesMissing, or empty when the stage is
 	// another one or no runtime state was available to say. Its wall time depends
@@ -405,6 +411,7 @@ func applyGateUsage(rootDir string, rec *StageExitRecord) {
 	}
 	rec.GateRuns, rec.GateSeconds = usage.Runs, usage.Seconds
 	rec.GateReused, rec.GateUnfinished = usage.Reused, usage.Unfinished
+	rec.GateFirstVerdict, rec.GateFirstFailedSteps = usage.FirstVerdict, usage.FirstFailedSteps
 }
 
 // GateReasonWhenNoGate names why a record carries no gate verdict (#1919).

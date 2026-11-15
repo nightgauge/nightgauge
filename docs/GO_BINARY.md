@@ -1125,7 +1125,10 @@ now asserts that **no** directive survives expansion.
 **`skill-portability` check enum:** `vscode_extension_path` (hardcoded
 VSCode-extension binary path), `hooks_frontmatter` (Claude-only completion
 hook), and `truncated_binary_cascade` (a fenced bash resolver block missing any
-of the six PREFLIGHT rungs, the `NIGHTGAUGE_DEV_REPO_BIN` gate included). The cascade check is per block, not per file: one
+of the six PREFLIGHT rungs, the `NIGHTGAUGE_DEV_REPO_BIN` gate included),
+`hooks_dir_reference`, `source_repo_path`, `claude_skill_flag` (#2764), and
+`bare_binary_invocation` (a bare `nightgauge <verb>` at command position in a
+bash block, where `"${NIGHTGAUGE_BIN:-nightgauge}"` is required, #2933). The cascade check is per block, not per file: one
 complete resolver cannot hide a truncated sibling (#365). Scans every `*.md`
 under `skills/`; skills must resolve the binary provider-neutrally
 (`$NIGHTGAUGE_BIN` → PATH → gated repo bin → gated canonical-repo bin → `~/go/bin`). See
@@ -1481,6 +1484,9 @@ nightgauge issue close <number> [--owner ORG] [--repo REPO]
 # also writes the reconciled remainder to partial-delivery-{N}.json (removed when
 # nothing is pending or the read fails), the record both paths splice into the
 # planning context as `partial_delivery`; --json carries it too (#3163).
+# The comment also lists the criteria its PR met under `Met by this PR:`;
+# post-merge drops those from later remainders (#3318). This verb reports
+# only the remaining list.
 nightgauge issue partial-delivery <number> [--owner ORG] [--repo REPO] [--json] [--write-context]
 
 # Print the feature-dev prompt block for an operator-revised plan (#3163),
@@ -4614,11 +4620,28 @@ Phase 2.5 go through these verbs; nothing writes the file by path.
 ```bash
 nightgauge ci gate-status --kind local-gate --json
 nightgauge ci gate-run
+nightgauge ci gate-run --fast
 RUN=$(nightgauge ci gate-record --event start --kind parity --tree "$TREE" --full)
 nightgauge ci gate-record --event finish --run-id "$RUN" --kind parity --tree "$TREE" \
   --verdict pass --full --seconds 120
+nightgauge ci gate-record --event finish --run-id "$RUN" --tree "$TREE" --verdict fail \
+  --full --seconds 900 --failed-step "publication boundary"
 nightgauge ci gate-count --json
 ```
+
+`gate-record --event finish` takes repeatable `--failed-step` (an assertion
+failed) and `--infra-step` (the check could not run), stored on the ledger line
+as `failed_steps` and `infra_steps` in declared order (#2847). Other events
+refuse them. `ci-local.sh` passes them when the binary's help lists them, so an
+older binary still records the verdict.
+
+`gate-run --fast` runs the default gate's fast static subset, `bash
+scripts/ci-local.sh --fast`: the steps marked `--fast` on their own `run_step`
+or `run_group` call (`--list-steps --fast` lists them). The subset typechecks
+each TypeScript workspace package the change touches, unless the package
+depends on another workspace package, whose types are build output. It is not a gate: no
+worktree guard, no ledger event, never reused, and it exits with the script's
+code. A declared `local_gate` has no fast subset, so it says so and exits 0.
 
 `gate-status` prints `reusable`, `reason`, `tree`, `gate_command`,
 `gate_records_itself`, and `passed_stage`, `passed_at` and `passed_seconds` when

@@ -276,7 +276,7 @@ more commits on this PR (#2730). Ask it first:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-REVIEW_GATE=$(nightgauge pr-stage review-gate "$ISSUE_NUMBER" --json)
+REVIEW_GATE=$("${NIGHTGAUGE_BIN:-nightgauge}" pr-stage review-gate "$ISSUE_NUMBER" --json)
 printf '%s\n' "$REVIEW_GATE" | jq '{proceed, verdict, reason, rounds, hold, filed}'
 ```
 
@@ -313,10 +313,10 @@ While a round is open nothing may enqueue, so `end` only after the push:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge pr-stage review-round begin "$ISSUE_NUMBER" || exit 1
+"${NIGHTGAUGE_BIN:-nightgauge}" pr-stage review-round begin "$ISSUE_NUMBER" || exit 1
 # Fix the `hold` findings, stage, commit with
 # `fix(#$ISSUE_NUMBER): address review feedback`, and push.
-nightgauge pr-stage review-round end "$ISSUE_NUMBER"
+"${NIGHTGAUGE_BIN:-nightgauge}" pr-stage review-round end "$ISSUE_NUMBER"
 ```
 
 Run one round, then wait for CI to re-run on the new head and continue to the
@@ -348,7 +348,7 @@ if [ "$BEHIND_COUNT" -gt 0 ] && [ "$FRESHNESS_CHECK_FAILED" != "true" ] && [ "$C
   ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
   jq -n --argjson pr "$PR_NUMBER" --arg sha "$(git rev-parse HEAD)" \
     '{result: "fix-pushed", pr_number: $pr, head_sha: $sha, attempt: 0}' \
-    | nightgauge layout write pipeline "pr-merge-fix-${ISSUE_NUMBER}.json" >/dev/null
+    | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "pr-merge-fix-${ISSUE_NUMBER}.json" >/dev/null
   echo "Base merged and pushed — handing back to the deterministic merge path."
   exit 0
 fi

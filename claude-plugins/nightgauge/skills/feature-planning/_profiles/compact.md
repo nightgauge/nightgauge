@@ -223,7 +223,7 @@ priority from the `labels` array in the issue context JSON:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)"
 SIZE_LABEL=$(jq -r '[.labels[] | select(startswith("size:"))] | first // empty' "$CONTEXT_FILE" 2>/dev/null | sed 's/size://')
 PRIORITY_LABEL=$(jq -r '[.labels[] | select(startswith("priority:"))] | first // empty' "$CONTEXT_FILE" 2>/dev/null | sed 's/priority://')
 TYPE_LABEL=$(jq -r '.type // empty' "$CONTEXT_FILE" 2>/dev/null)
@@ -398,7 +398,7 @@ two facts that only the plan knows. Merge a `dependency_analysis` block into
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)"
 # Replace the two values from the plan; default to 0 / false when none apply.
 DEP_MAJOR_BUMPS=0
 PROD_AREA=false
@@ -406,7 +406,7 @@ tmp=$(mktemp)
 jq --argjson mb "$DEP_MAJOR_BUMPS" --argjson pa "$PROD_AREA" \
   '.dependency_analysis = {major_bumps_count: $mb, production_area: $pa}' \
   "$CONTEXT_FILE" > "$tmp" &&
-  nightgauge layout write pipeline "issue-${ISSUE_NUMBER}.json" --from "$tmp" >/dev/null
+  "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "issue-${ISSUE_NUMBER}.json" --from "$tmp" >/dev/null
 rm -f "$tmp"
 jq . "$CONTEXT_FILE" > /dev/null || { echo "ERROR: issue context JSON invalid after dependency_analysis merge" >&2; exit 1; }
 ```

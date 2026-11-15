@@ -31,7 +31,7 @@ func reviewCmd() *cobra.Command {
 run spawns that context as one headless process, and record validates its
 findings and writes the verdict. See docs/PR_REVIEW_PASSES.md.`,
 	}
-	cmd.AddCommand(reviewPrepareCmd(), reviewRunCmd(), reviewRecordCmd())
+	cmd.AddCommand(reviewPrepareCmd(), reviewRunCmd(), reviewRecordCmd(), reviewQualityCmd())
 	return cmd
 }
 

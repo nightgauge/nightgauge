@@ -14,109 +14,59 @@ remains inline in `SKILL.md`; the procedural bash for it lives here.
 
 ## Phase 5: Quality Review
 
-Run the **6 reviewer units** declared in the skill's `orchestration:`
-frontmatter (`phase: quality-review`). All reviewers are independent and review
-the same changed files concurrently. Aggregate their findings into a unified
-quality report (the `judge` unit) after all reviewers complete.
+The six reviewer units and the merge judge are declared in the skill's
+`orchestration:` frontmatter, the single source of the fan-out. The binary runs
+them; do not review the diff yourself and do not spawn reviewers by hand.
 
-### Reviewer Matrix
-
-| Reviewer      | Subagent description   | Key checks                                                             |
-| ------------- | ---------------------- | ---------------------------------------------------------------------- |
-| Code quality  | Code quality reviewer  | naming, file org, error handling, no magic values                      |
-| Security      | Security reviewer      | input validation, no secrets, safe errors, parameterized queries, auth |
-| Test          | Test reviewer          | unit tests, error cases, edge cases, mocking, readability              |
-| Documentation | Documentation reviewer | API changes, new patterns, README, docs/ updates, inline comments      |
-| Performance   | Performance reviewer   | N+1 queries, memory leaks, unnecessary re-renders, expensive loops     |
-| Accessibility | Accessibility reviewer | ARIA labels, keyboard navigation, color contrast, focus management     |
-
-### Parallel Execution
-
-The six reviewers are the portable units declared in the skill's
-`orchestration:` frontmatter. On a provider with an orchestration capability the
-`WorkflowEngine` fans them out concurrently. On a provider without one (Copilot,
-Cursor) this phase reviews nothing: skip to Phase 6 and leave
-`SECURITY_REVIEW_RESULT=skipped`. An author reading its own diff is not a review,
-and feature-validate runs the independent one (#2839). Do not encode a
-provider-specific spawn mechanism here; the frontmatter is the single source of
-the fan-out intent.
-
-Each reviewer receives:
-
-- The list of files changed (from Phase 3)
-- The relevant standards docs loaded in Phase 2
-- A focused review prompt for its domain
-
-```
-Task: Code quality reviewer
-  - Read changed files
-  - Check naming conventions per docs/CODE_STANDARDS.md
-  - Check file organization and structure
-  - Check error handling patterns
-  - Report: PASSED / FAILED with findings
-
-Task: Security reviewer
-  - Read changed files
-  - Check input validation on all external data
-  - Check for hardcoded secrets or credentials
-  - Check error messages don't expose internals
-  - Check parameterized queries, auth on every request
-  - Report: PASSED / FAILED with findings
-
-Task: Test reviewer
-  - Read changed files and test files
-  - Check unit test coverage for new code
-  - Check error case and edge case coverage
-  - Check mocking strategy matches docs/TESTING.md
-  - Check test readability and naming
-  - Report: PASSED / FAILED with findings
-
-Task: Documentation reviewer
-  - Read changed files
-  - Check that API changes are documented
-  - Check inline comments on non-obvious logic
-  - Check README and docs/ for needed updates
-  - Check JSDoc/GoDoc on exported functions
-  - Report: PASSED / FAILED with findings
-
-Task: Performance reviewer
-  - Read changed files
-  - Check for N+1 query patterns
-  - Check for memory leaks (unclosed resources, retained references)
-  - Check for expensive operations in hot paths or loops
-  - Check for unnecessary re-renders or recomputations
-  - Report: PASSED / WARNINGS / PASSED with findings
-
-Task: Accessibility reviewer
-  - Read changed files (UI components only — skip if no UI changes)
-  - Check ARIA labels on interactive elements
-  - Check keyboard navigation support
-  - Check color contrast compliance
-  - Check focus management for dynamic content
-  - Report: PASSED / WARNINGS / NOT_APPLICABLE with findings
+```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+# On the SDK workflow path the reviewer units run as the next phase of this
+# stage, and the orchestrator sets the marker in this agent's environment only:
+# reviewing here too would run every reviewer twice (#2908). The Go-dispatched
+# path never sets it, so it reviews here, once. Phase 6 has nothing to fix on
+# that path: a units-phase judge returning fail fails the stage instead.
+if [ "${NIGHTGAUGE_REVIEW_UNITS_PHASE:-}" = "1" ]; then
+  QUALITY_REPORT='{"result":"skipped","reason":"the review units run as the next phase of this workflow","units":[]}'
+else
+  # Bounded under 9 minutes; give the shell call a 600000 ms timeout and run it
+  # in the foreground.
+  QUALITY_REPORT=$("${NIGHTGAUGE_BIN:-nightgauge}" review quality --issue "$ISSUE_NUMBER") \
+    || QUALITY_REPORT='{"result":"skipped","reason":"review quality exited non-zero","units":[]}'
+fi
+unit_status() {
+  printf '%s\n' "$QUALITY_REPORT" | jq -r --arg id "$1" '
+    if .result == "skipped" then "skipped"
+    else ([.units[] | select(.id == $id and .status != "unfinished") | .status][0] // "skipped") end'
+}
+SECURITY_REVIEW_RESULT=$(unit_status security)
+CODE_STANDARDS_RESULT=$(unit_status code-quality)
+printf '%s\n' "$QUALITY_REPORT" | jq -r '"quality review: \(.result) \(.reason // "")",
+  (.units[] | "  \(.id): \(.status) \(.reason // "")",
+    (.findings[] | "    [\(.severity)] \(.file):\(.line) \(.claim)"))'
 ```
 
-### Aggregate Quality Report
+Each unit writes `{"unit","result","findings":[{severity,file,line,claim}]}` in
+its own directory; its status follows from its findings (`failed` exactly when
+one is `blocking`). A unit that wrote nothing valid, or a file naming another
+unit, is `unfinished`, never `passed`. A unit whose `paths:` match no changed
+file (accessibility on a non-UI diff) is `skipped` and left out of the quorum.
+With fewer than the judge's `quorum` applicable units finished, with no trusted
+skill copy outside the worktree, or on an adapter without a tool loop, the
+whole review is `skipped` and the reason is printed on stderr as
+`[quality-review] skipped: <reason>`. The report is also written to
+`quality-review-{N}.json` in the pipeline state directory.
 
-After all 6 reviewers complete, produce a consolidated report:
+On the SDK workflow path the orchestrator sets `NIGHTGAUGE_REVIEW_UNITS_PHASE=1`
+in this stage's implementation agent, because the same six units run as the
+workflow's next phase. The block then reports `skipped` without calling
+`nightgauge review quality`, so each path runs exactly one review.
 
-```
-## Quality Review Summary
+Every `blocking` finding is a Phase 6 fix. Warnings are fixed when cheap, or
+recorded as discovered work.
 
-| Reviewer      | Result   | Critical | Warnings |
-| ------------- | -------- | -------- | -------- |
-| Code quality  | PASSED   | 0        | 0        |
-| Security      | PASSED   | 0        | 0        |
-| Test          | PASSED   | 0        | 0        |
-| Documentation | PASSED   | 0        | 0        |
-| Performance   | PASSED   | 0        | 0        |
-| Accessibility | N/A      | 0        | 0        |
-
-### Findings Requiring Action
-(list any critical issues that must be resolved before continuing)
-```
-
-After aggregating, set the result variables using **exactly** these values:
+The block above sets the first two; set the others from Phase 4. Use
+**exactly** these values:
 
 | Variable                 | Valid values                  |
 | ------------------------ | ----------------------------- |
@@ -128,9 +78,8 @@ After aggregating, set the result variables using **exactly** these values:
 **Do NOT use truncated forms** like `pass`, `fail`, or `skip` — the schema
 requires the full past-tense value.
 
-**Note**: Documentation, Performance, and Accessibility reviewer results are
-captured in the aggregate report above. Critical findings from any reviewer
-are addressed in Phase 6 self-correction.
+**Note**: Test, Documentation, Performance, and Accessibility unit results live
+in the report; their blocking findings are addressed in Phase 6.
 
 ---
 
@@ -164,7 +113,7 @@ Run the project's code formatter on all files. This prevents CI failures from
 formatting drift — the #1 cause of avoidable CI failures.
 
 ```bash
-nightgauge format run 2>&1 || { echo "ERROR: format run failed"; exit 1; }
+"${NIGHTGAUGE_BIN:-nightgauge}" format run 2>&1 || { echo "ERROR: format run failed"; exit 1; }
 ```
 
 If the formatter modifies files, those changes must be included in the commit.
@@ -186,7 +135,7 @@ run it here, under any name: on #2700 and #2724 repeated gates took a run past
 four hours (#2784).
 
 ```bash
-nightgauge build run --json \
+"${NIGHTGAUGE_BIN:-nightgauge}" build run --json \
   | jq -se '.[0] | .status == "passed" or (.status == "skipped" and .ran == false)' >/dev/null \
   || { echo "ERROR: build did not pass (status must be passed, or skipped with no build system). Fix it before feature-validate."; exit 1; }
 ```
@@ -220,7 +169,7 @@ Recorded work does not count toward the `SCOPE_DISCOVERED` file threshold.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge discovered-work record \
+"${NIGHTGAUGE_BIN:-nightgauge}" discovered-work record \
   --issue "$ISSUE_NUMBER" \
   --source-stage feature-dev \
   --summary "Refactor duplicated retry loop in internal/forge/client.go" \

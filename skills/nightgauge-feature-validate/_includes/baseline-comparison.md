@@ -58,7 +58,7 @@ for FAILING_FILE in $FAILING_TEST_FILES; do
     echo "⏭ Pre-existing failure: $FAILING_FILE (also fails on main)"
     # Deferrable by definition — record it, never widen the fix (#479):
     # docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work
-    nightgauge discovered-work record --issue "$ISSUE_NUMBER" \
+    "${NIGHTGAUGE_BIN:-nightgauge}" discovered-work record --issue "$ISSUE_NUMBER" \
       --source-stage feature-validate \
       --summary "Pre-existing test failure: $FAILING_FILE (also fails on main)" \
       --evidence "$FAILING_FILE fails on main and on the branch" \

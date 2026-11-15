@@ -44,7 +44,7 @@ fi
 # --repo and --project are MANDATORY (#3232) so the issue lands in the project
 # matching its repo. Derive both from the workspace yaml (lookup the issue's
 # repo entry in `repositories[]`).
-nightgauge project add <issue-number> \
+"${NIGHTGAUGE_BIN:-nightgauge}" project add <issue-number> \
   --repo "<repo-name>" \
   --project <project-number> \
   --status Ready
@@ -58,14 +58,14 @@ to dispatch them — Phase 4.6 promotes them to Ready in bulk after that.
 
 ```bash
 # 0. Read the routing manifest written in Phase 2.4
-MANIFEST="$(nightgauge layout path pipeline issue-create-routing-<epic-number>.json)"
+MANIFEST="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-create-routing-<epic-number>.json)"
 test -f "$MANIFEST" || { echo "ERROR: routing-manifest-missing"; exit 1; }
 
 # 1. Add the epic itself to the board (always lives in the workspace primary repo)
-nightgauge project add <epic-number> \
+"${NIGHTGAUGE_BIN:-nightgauge}" project add <epic-number> \
   --repo "<primary-repo>" \
   --project <primary-project-number>
-nightgauge project sync-status <epic-number> backlog \
+"${NIGHTGAUGE_BIN:-nightgauge}" project sync-status <epic-number> backlog \
   --repo "<primary-repo>" --project <primary-project-number>
 
 # 2. Add each sub-issue to ITS OWN repo's project per the manifest.
@@ -74,8 +74,8 @@ jq -c '.sub_issues[]' "$MANIFEST" | while read -r row; do
   NUM=$(printf '%s\n' "$row" | jq -r .number)
   REPO=$(printf '%s\n' "$row" | jq -r .target_repo)
   PROJ=$(printf '%s\n' "$row" | jq -r .target_project)
-  nightgauge project add "$NUM" --repo "$REPO" --project "$PROJ"
-  nightgauge project sync-status "$NUM" backlog --repo "$REPO" --project "$PROJ"
+  "${NIGHTGAUGE_BIN:-nightgauge}" project add "$NUM" --repo "$REPO" --project "$PROJ"
+  "${NIGHTGAUGE_BIN:-nightgauge}" project sync-status "$NUM" backlog --repo "$REPO" --project "$PROJ"
 done
 ```
 
@@ -94,7 +94,7 @@ after `project add` (e.g., labels were added after the add, or the binary
 fallback was used), set them explicitly:
 
 ```bash
-nightgauge project set-field <number> --priority P1 --size M
+"${NIGHTGAUGE_BIN:-nightgauge}" project set-field <number> --priority P1 --size M
 ```
 
 ## Phase 4.6: Promote to Ready (After All Relationships Are Configured)
@@ -118,7 +118,7 @@ are configured.
 
 ```bash
 # Promote the epic itself
-nightgauge project sync-status <epic-number> ready
+"${NIGHTGAUGE_BIN:-nightgauge}" project sync-status <epic-number> ready
 
 # Promote all sub-issues to Ready
 # (blockedBy relationships enforce ordering — the pipeline respects them
@@ -126,13 +126,13 @@ nightgauge project sync-status <epic-number> ready
 for SUB_NUMBER in <sub-issue-numbers>; do
   # file_ownership gate (#561): a declared set that cannot satisfy the
   # sub-issue's own ACs blocks promotion — it stays in Backlog.
-  OWN=$(nightgauge issue check-ownership "$SUB_NUMBER" --repo "$REPO" --json) || {
+  OWN=$("${NIGHTGAUGE_BIN:-nightgauge}" issue check-ownership "$SUB_NUMBER" --repo "$REPO" --json) || {
     echo "check-ownership failed for #$SUB_NUMBER — left in Backlog" >&2; continue; }
   if [ "$(printf '%s\n' "$OWN" | jq '.count')" -gt 0 ]; then
     printf '%s\n' "$OWN" | jq -r '.findings[] | "#'"$SUB_NUMBER"' \(.type) \(.rule) \(.path): \(.reason)"' >&2
     continue
   fi
-  nightgauge project sync-status "$SUB_NUMBER" ready
+  "${NIGHTGAUGE_BIN:-nightgauge}" project sync-status "$SUB_NUMBER" ready
 done
 ```
 
@@ -163,7 +163,7 @@ update silently no-oped (e.g., wrong project board, missing Status field).
 
 ```bash
 # Standalone issues: re-run with --json and assert .status == "Ready"
-STATUS_OUT=$(nightgauge project add <issue-number> --status Ready --json | jq -r .status)
+STATUS_OUT=$("${NIGHTGAUGE_BIN:-nightgauge}" project add <issue-number> --status Ready --json | jq -r .status)
 if [ "$STATUS_OUT" != "Ready" ]; then
   echo "ERROR: Status not set to Ready (got: $STATUS_OUT)"
   exit 1
@@ -178,7 +178,7 @@ echo "To manually inspect: nightgauge issue view <NUMBER> --json"
 **If any field is empty**, retry with explicit set commands:
 
 ```bash
-nightgauge project set-field <number> --priority P1 --size M --status Backlog
+"${NIGHTGAUGE_BIN:-nightgauge}" project set-field <number> --priority P1 --size M --status Backlog
 ```
 
 **CRITICAL**: Do NOT report success if any field is empty. Empty fields make
@@ -200,7 +200,7 @@ the same resolver at audit time catches that drift instead of trusting
 either the manifest or the live board blindly:
 
 ```bash
-MANIFEST="$(nightgauge layout path pipeline issue-create-routing-<epic-number>.json)"
+MANIFEST="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-create-routing-<epic-number>.json)"
 EXIT_CODE=0
 jq -c '.sub_issues[]' "$MANIFEST" | while read -r row; do
   NUM=$(printf '%s\n' "$row" | jq -r .number)
@@ -208,7 +208,7 @@ jq -c '.sub_issues[]' "$MANIFEST" | while read -r row; do
   MANIFEST_PROJECT=$(printf '%s\n' "$row" | jq -r .target_project)
 
   # Re-resolve fresh — do NOT reuse $MANIFEST_PROJECT as the expected value.
-  RESOLVED_PROJECT=$(nightgauge project resolve --repo "nightgauge/$EXPECTED_REPO" --json | jq -r .number)
+  RESOLVED_PROJECT=$("${NIGHTGAUGE_BIN:-nightgauge}" project resolve --repo "nightgauge/$EXPECTED_REPO" --json | jq -r .number)
 
   # Query the issue's actual project memberships
   ACTUAL=$(gh api graphql -f query="query {
@@ -320,7 +320,7 @@ them:
 
 ```bash
 for SUB_NUMBER in <sub-issue-numbers>; do
-  nightgauge issue edit "$SUB_NUMBER" \
+  "${NIGHTGAUGE_BIN:-nightgauge}" issue edit "$SUB_NUMBER" \
     --append-body "\n\n> Knowledge directory: \`.nightgauge/knowledge/epics/${EPIC_NUMBER}-${SLUG}/\`\n> See [PRD.md](.nightgauge/knowledge/epics/${EPIC_NUMBER}-${SLUG}/PRD.md) for context."
 done
 ```
@@ -358,7 +358,7 @@ MANIFEST_PATH=$(jq -n \
     created_by_skill: "nightgauge-issue-create",
     project_number: $project,
     entries: $entries
-  }' | nightgauge layout write pipeline "issue-create-manifest-${TS}.json")
+  }' | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "issue-create-manifest-${TS}.json")
 
 # Validate the manifest can be parsed back as JSON
 jq . "$MANIFEST_PATH" > /dev/null || {

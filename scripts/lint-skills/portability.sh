@@ -114,8 +114,43 @@ if [ -n "$cascade_hits" ]; then
   printf '%s\n' "$cascade_hits" >&2
 fi
 
+# A bare `nightgauge <verb>` at command position in a bash fence fails when
+# the host's NIGHTGAUGE_BIN is not on PATH: each block runs in a fresh shell,
+# so PREFLIGHT's PATH export never reaches it (#2933). Mirrors the Go check
+# bare_binary_invocation: same fence scope, comments and backtick prose skipped.
+bare_hits=""
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  case "$f" in */CHANGELOG.md) continue ;; esac
+  hits=$(awk -v file="$f" '
+    BEGIN { in_bash = 0; fence = "" }
+    tolower($0) ~ /^[[:space:]]*```+[[:space:]]*(bash|sh|shell)[[:space:]]*$/ && !in_bash {
+      in_bash = 1; fence = "```"; next
+    }
+    tolower($0) ~ /^[[:space:]]*~~~+[[:space:]]*(bash|sh|shell)[[:space:]]*$/ && !in_bash {
+      in_bash = 1; fence = "~~~"; next
+    }
+    in_bash && /^[[:space:]]*```+[[:space:]]*$/ && fence == "```" { in_bash = 0; next }
+    in_bash && /^[[:space:]]*~~~+[[:space:]]*$/ && fence == "~~~" { in_bash = 0; next }
+    in_bash && $0 !~ /^[[:space:]]*#/ &&
+      $0 ~ /(^|[;&|(!]|\$\(|(^|[^A-Za-z0-9_])(if|then|do|else|elif|while|until)[[:space:]])[[:space:]]*nightgauge[[:space:]]+[a-z]/ {
+      printf "%s:%d: %s\n", file, NR, $0
+    }
+  ' "$f")
+  if [ -n "$hits" ]; then
+    bare_hits="${bare_hits}${bare_hits:+
+}${hits}"
+  fi
+done < <(find skills -type f -name '*.md' ! -path '*/.claude/*' 2>/dev/null)
+
+if [ -n "$bare_hits" ]; then
+  fail=1
+  echo "lint-skills: ERROR — bare nightgauge call in a bash block; use \"\${NIGHTGAUGE_BIN:-nightgauge}\" (#2933):" >&2
+  printf '%s\n' "$bare_hits" >&2
+fi
+
 if [ "$fail" -eq 0 ]; then
-  echo "lint-skills: all skills pass portability checks (paths, hooks, cascade) ✓"
+  echo "lint-skills: all skills pass portability checks (paths, hooks, cascade, bare binary) ✓"
   exit 0
 fi
 exit 1

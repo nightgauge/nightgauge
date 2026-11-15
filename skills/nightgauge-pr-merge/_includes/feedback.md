@@ -137,7 +137,7 @@ file using a safe temp-file swap:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE="$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline pr-${ISSUE_NUMBER}.json)"
 CAPTURED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 if [ -f "$CONTEXT_FILE" ]; then
@@ -153,7 +153,7 @@ if [ -f "$CONTEXT_FILE" ]; then
       captured_at: $captured_at,
       execution_mode: $exec_mode
     }' "$CONTEXT_FILE" > "$TMP_FILE" 2>/dev/null &&
-    nightgauge layout write pipeline "pr-${ISSUE_NUMBER}.json" --from "$TMP_FILE" >/dev/null; then
+    "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "pr-${ISSUE_NUMBER}.json" --from "$TMP_FILE" >/dev/null; then
     rm -f "$TMP_FILE"
     echo "Retrospective feedback written to $CONTEXT_FILE"
   else
@@ -177,7 +177,7 @@ if [ -n "$WHAT_TO_IMPROVE" ]; then
 
   IMPROVEMENTS_JSON=$(printf '%s\n' "$WHAT_TO_IMPROVE" | jq -Rc 'split(", ")')
 
-  nightgauge layout write pipeline "$ASSESSMENT_NAME" >/dev/null <<RECORD
+  "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "$ASSESSMENT_NAME" >/dev/null <<RECORD
 {
   "stage": "pr-merge",
   "phase": "retrospective",
@@ -188,7 +188,7 @@ if [ -n "$WHAT_TO_IMPROVE" ]; then
 }
 RECORD
 
-  echo "Improvement record written to $(nightgauge layout path pipeline "$ASSESSMENT_NAME")"
+  echo "Improvement record written to $("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "$ASSESSMENT_NAME")"
 fi
 ```
 

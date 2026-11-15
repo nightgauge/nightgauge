@@ -457,7 +457,7 @@ EXCLUDE_DIRS=(
 Detect existing health-check output to cross-reference:
 
 ```bash
-HEALTH_CHECK_PATH="$(nightgauge layout path checkout reports/health-report.json)"
+HEALTH_CHECK_PATH="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout reports/health-report.json)"
 HEALTH_CHECK_AVAILABLE=false
 
 if [ -f "$HEALTH_CHECK_PATH" ]; then
@@ -619,7 +619,7 @@ for the full pattern table and JSON shape (audit row B41).
 ```bash
 echo "=== Secret Detection ==="
 
-SECRETS_JSON=$(nightgauge scan secrets --workdir "$ASSESS_PATH" --json)
+SECRETS_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" scan secrets --workdir "$ASSESS_PATH" --json)
 
 # Per-pattern line counts (always populated — schema guarantees the six keys).
 SECRET_GENERIC=$(printf '%s\n' "$SECRETS_JSON" | jq -r '.patterns.generic_kv')
@@ -1326,7 +1326,7 @@ if [ -n "$OUTPUT_FILE" ]; then
   cp "$REPORT_TMP" "$OUTPUT_FILE"
   REPORT_PATH="$OUTPUT_FILE"
 else
-  REPORT_PATH="$(nightgauge layout write checkout reports/security-audit.json --from "$REPORT_TMP")"
+  REPORT_PATH="$("${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout reports/security-audit.json --from "$REPORT_TMP")"
 fi
 rm -f "$REPORT_TMP"
 ```

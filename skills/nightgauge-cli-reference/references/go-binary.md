@@ -22,42 +22,42 @@ Then `nightgauge doctor --json` confirms the environment is healthy.
 
 ```bash
 # Project board (deterministic board sync)
-nightgauge project add <issue> --status Backlog        # add + set Status
-nightgauge project move-status <issue> in-progress
-nightgauge project ensure-fields                       # idempotent field setup
+"${NIGHTGAUGE_BIN:-nightgauge}" project add <issue> --status Backlog        # add + set Status
+"${NIGHTGAUGE_BIN:-nightgauge}" project move-status <issue> in-progress
+"${NIGHTGAUGE_BIN:-nightgauge}" project ensure-fields                       # idempotent field setup
 
 # Epics
-nightgauge epic check-completion <epic>
-nightgauge epic assess <epic>
-nightgauge epic plan-waves <epic>
+"${NIGHTGAUGE_BIN:-nightgauge}" epic check-completion <epic>
+"${NIGHTGAUGE_BIN:-nightgauge}" epic assess <epic>
+"${NIGHTGAUGE_BIN:-nightgauge}" epic plan-waves <epic>
 
 # Issues (native sub-issues, blocking, routing)
-nightgauge issue create-sub <parent> --title "…" --labels …   # create + link + board
-nightgauge issue link-sub <parent> <child>
-nightgauge issue add-blocked-by <blocked> <blocker>     # blocker: N, owner/repo#N, repo#N, URL
-nightgauge issue route <issue>                          # change_type/complexity/route
+"${NIGHTGAUGE_BIN:-nightgauge}" issue create-sub <parent> --title "…" --labels …   # create + link + board
+"${NIGHTGAUGE_BIN:-nightgauge}" issue link-sub <parent> <child>
+"${NIGHTGAUGE_BIN:-nightgauge}" issue add-blocked-by <blocked> <blocker>     # blocker: N, owner/repo#N, repo#N, URL
+"${NIGHTGAUGE_BIN:-nightgauge}" issue route <issue>                          # change_type/complexity/route
 
 # Gates / CI
-nightgauge gate <name> …                                # stage post-condition gates
-nightgauge ci wait …                                    # wait for CI (don't --watch in a loop)
+"${NIGHTGAUGE_BIN:-nightgauge}" gate <name> …                                # stage post-condition gates
+"${NIGHTGAUGE_BIN:-nightgauge}" ci wait …                                    # wait for CI (don't --watch in a loop)
 
 # Telemetry / history (read-only aggregations)
-nightgauge pipeline aggregate
-nightgauge health trends --limit 10 --json
-nightgauge health gate-metrics --json
-nightgauge skills usage --json                          # skill-usage telemetry (#3957)
-nightgauge exit-records tail
-nightgauge exit-records gate-summary --issue 42         # full gates per run and stage
+"${NIGHTGAUGE_BIN:-nightgauge}" pipeline aggregate
+"${NIGHTGAUGE_BIN:-nightgauge}" health trends --limit 10 --json
+"${NIGHTGAUGE_BIN:-nightgauge}" health gate-metrics --json
+"${NIGHTGAUGE_BIN:-nightgauge}" skills usage --json                          # skill-usage telemetry (#3957)
+"${NIGHTGAUGE_BIN:-nightgauge}" exit-records tail
+"${NIGHTGAUGE_BIN:-nightgauge}" exit-records gate-summary --issue 42         # full gates per run and stage
 
 # Per-clone data layout (ADR-024 § 7): pipeline, plans, retros, logs
-nightgauge layout                                       # whole layout as JSON
-nightgauge layout path pipeline issue-42.json           # absolute path to read
-jq -n '{…}' | nightgauge layout write pipeline issue-42.json   # atomic write
-nightgauge layout write plans 42-slug.md --from /tmp/plan.md
-echo '{…}' | nightgauge layout append pipeline history/events.jsonl
+"${NIGHTGAUGE_BIN:-nightgauge}" layout                                       # whole layout as JSON
+"${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-42.json           # absolute path to read
+jq -n '{…}' | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline issue-42.json   # atomic write
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write plans 42-slug.md --from /tmp/plan.md
+echo '{…}' | "${NIGHTGAUGE_BIN:-nightgauge}" layout append pipeline history/events.jsonl
 
 # Hooks (invoked by the plugin's hooks.json wrappers, not by hand)
-nightgauge hook <subcommand>
+"${NIGHTGAUGE_BIN:-nightgauge}" hook <subcommand>
 ```
 
 Most read-only commands accept `--json`. Default owner is `nightgauge`, default

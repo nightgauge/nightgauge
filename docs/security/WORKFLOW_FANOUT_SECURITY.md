@@ -170,7 +170,8 @@ multiplies the exposure to up to 1000 concurrent children, which is why it was
 fixed at the shared spawn choke point.
 
 **Mitigation — DONE (#4094):** the single spawn choke point now passes
-`curateChildEnv(process.env)` (`cli/adapters/childEnv.ts`) — a **deny-by-default
+`curateChildEnv(process.env)` (`cli/adapters/childEnv.ts`), as does the Claude SDK
+adapter on every Agent SDK query (#3329) — a **deny-by-default
 allowlist** of only what a CLI adapter needs: system/runtime essentials
 (`PATH`, `HOME`, locale), the provider auth + routing vars (the union of every
 `process.env.*` read across the adapters), and the `NIGHTGAUGE_*` /
@@ -252,7 +253,7 @@ good (the tree is rendered in VSCode/dashboard/Flutter and persisted).
 | F1  | Caller-overridable hard ceiling              | merged          | Medium  | **Mitigated in this PR** (`ABSOLUTE_CEILING`)                                   |
 | F2  | Budget-exhaustion DoS bounding               | future (#3908)  | Low/Med | Bounded by F1; budget cutoff required in #3908/#3909                            |
 | F3  | `outputRef` replay sandbox (design)          | future (#3908)  | Medium  | Required guarantees specified; no live risk today                               |
-| F4  | Child agents inherit full `process.env`      | merged          | Medium  | **Implemented (#4094)** — `curateChildEnv` allowlist + drift guard              |
+| F4  | Child agents inherit full `process.env`      | merged          | Medium  | **Implemented (#4094, #3329)** — `curateChildEnv` allowlist (CLI + SDK paths)   |
 | F5  | Prompt injection (agent/judge/native script) | merged + future | Medium  | Partly mitigated (sanitizer warn-only by default, quorum); guarantees specified |
 | F6  | Secrets in logs / error messages             | merged          | Low     | Keep tree output-free; scrub stderr                                             |
 

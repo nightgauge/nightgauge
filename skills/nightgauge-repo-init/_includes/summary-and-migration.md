@@ -88,7 +88,7 @@ in the project board. Body-based references alone are not sufficient.
 
 ```bash
 # Count issues (open and closed, 100 most recent) with "Part of #" in body
-BODY_REFS=$(nightgauge forge graphql \
+BODY_REFS=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql \
   -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { issues(first: 100, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { body } } } }' \
   -f owner="${REPO%%/*}" -f name="${REPO#*/}" \
   | jq '[.data.repository.issues.nodes[] | select(.body != null) | select(.body | test("(?i)part of #[0-9]+"))] | length')

@@ -223,7 +223,7 @@ issues) instead of re-dumping the whole backlog.
 SKILL_NAME="nightgauge-backlog-groom"
 RUN_LOG_CLASS="checkout"
 RUN_LOG_NAME="triage/backlog-groom-runs.jsonl"
-RUN_LOG="$(nightgauge layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
+RUN_LOG="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
 ```
 
 <!-- include: ../_shared/RUN_REFLECTION.md -->
@@ -268,7 +268,7 @@ QUERY='query($owner:String!,$project:Int!,$endCursor:String){
 CURSOR=""
 : > /tmp/board_items.jsonl
 while :; do
-  PAGE=$(nightgauge forge graphql -f query="$QUERY" \
+  PAGE=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query="$QUERY" \
     -f owner="$OWNER" -F project="$PROJECT_NUMBER" \
     ${CURSOR:+-f endCursor="$CURSOR"})
   printf '%s\n' "$PAGE" | jq -c '.data.organization.projectV2.items.nodes[]' \
@@ -461,8 +461,8 @@ list, in this order, and confirms each mutation took by re-reading the issue:
 5. **Field corrections** — via the Go binary, never raw mutations:
 
    ```bash
-   nightgauge project set-field <num> --priority P1 --size M
-   nightgauge project sync-status <num> <status>
+   "${NIGHTGAUGE_BIN:-nightgauge}" project set-field <num> --priority P1 --size M
+   "${NIGHTGAUGE_BIN:-nightgauge}" project sync-status <num> <status>
    ```
 
 6. **Label changes** — resolve node IDs first with
@@ -470,8 +470,8 @@ list, in this order, and confirms each mutation took by re-reading the issue:
    commands:
 
    ```bash
-   nightgauge forge label add --issue-id <node> --labels <label-ids>
-   nightgauge forge label remove --issue-id <node> --labels <label-ids>
+   "${NIGHTGAUGE_BIN:-nightgauge}" forge label add --issue-id <node> --labels <label-ids>
+   "${NIGHTGAUGE_BIN:-nightgauge}" forge label remove --issue-id <node> --labels <label-ids>
    ```
 
    Never raw `nightgauge forge graphql` label mutations — the ADR-008

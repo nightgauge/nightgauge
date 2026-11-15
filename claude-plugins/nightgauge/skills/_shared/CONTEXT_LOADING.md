@@ -58,12 +58,12 @@ Valid statuses: `running`, `complete`, `failed`
 After completing stage work, write the output context file:
 
 ```bash
-nightgauge layout write pipeline <output>.json >/dev/null << EOF
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline <output>.json >/dev/null << EOF
 { ... }
 EOF
 
 # Validate JSON
-python3 -m json.tool "$(nightgauge layout path pipeline <output>.json)" > /dev/null && \
+python3 -m json.tool "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline <output>.json)" > /dev/null && \
   echo "Context written successfully"
 ```
 

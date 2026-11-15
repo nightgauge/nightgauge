@@ -23,28 +23,28 @@ nightgauge forge webhook     # Manage forge webhook receivers
 
 ```bash
 # Auth / identity
-nightgauge forge auth status
-nightgauge git repo-slug                                   # current repo as owner/name
-nightgauge forge repo view --repo "$REPO" --json | jq -r .owner   # --repo is required
+"${NIGHTGAUGE_BIN:-nightgauge}" forge auth status
+"${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug                                   # current repo as owner/name
+"${NIGHTGAUGE_BIN:-nightgauge}" forge repo view --repo "$REPO" --json | jq -r .owner   # --repo is required
 
 # Issues
-nightgauge forge issue view <number> --repo "$REPO" --json
-nightgauge forge issue view <number> --repo "$REPO" --json | jq -r .nodeId
-nightgauge forge issue view <number> --repo "$REPO" --json --comments  # only writers' (and trusted bots') comments
-nightgauge forge issue create --repo-id <REPO_NODE_ID> --title "…" --body "$(cat body.md)" \
+"${NIGHTGAUGE_BIN:-nightgauge}" forge issue view <number> --repo "$REPO" --json
+"${NIGHTGAUGE_BIN:-nightgauge}" forge issue view <number> --repo "$REPO" --json | jq -r .nodeId
+"${NIGHTGAUGE_BIN:-nightgauge}" forge issue view <number> --repo "$REPO" --json --comments  # only writers' (and trusted bots') comments
+"${NIGHTGAUGE_BIN:-nightgauge}" forge issue create --repo-id <REPO_NODE_ID> --title "…" --body "$(cat body.md)" \
   --labels type:bug,priority:high
-nightgauge forge issue edit --node-id <NODE_ID> --body "Updated body"
-nightgauge forge issue comment --subject-id <NODE_ID> --body "…"
+"${NIGHTGAUGE_BIN:-nightgauge}" forge issue edit --node-id <NODE_ID> --body "Updated body"
+"${NIGHTGAUGE_BIN:-nightgauge}" forge issue comment --subject-id <NODE_ID> --body "…"
 
 # PRs
-nightgauge forge pr create --repo-id <REPO_NODE_ID> --base main --head "$BRANCH" --title "…" \
+"${NIGHTGAUGE_BIN:-nightgauge}" forge pr create --repo-id <REPO_NODE_ID> --base main --head "$BRANCH" --title "…" \
   --body "$(cat b.md)"
-nightgauge forge pr checks <number> --repo "$REPO"
-nightgauge forge pr merge --node-id <PR_NODE_ID> --strategy squash
+"${NIGHTGAUGE_BIN:-nightgauge}" forge pr checks <number> --repo "$REPO"
+"${NIGHTGAUGE_BIN:-nightgauge}" forge pr merge --node-id <PR_NODE_ID> --strategy squash
 
 # Project board
-nightgauge forge project item-add --repo "$REPO" --project <N> <issue>
-nightgauge forge project field-set …
+"${NIGHTGAUGE_BIN:-nightgauge}" forge project item-add --repo "$REPO" --project <N> <issue>
+"${NIGHTGAUGE_BIN:-nightgauge}" forge project field-set …
 ```
 
 ## The `graphql` carve-out
@@ -54,8 +54,8 @@ through `nightgauge forge graphql` (ADR-008 carve-out). Flags follow the
 `gh api graphql` convention:
 
 ```bash
-nightgauge forge graphql -f query='mutation { … }' -F number=42
-nightgauge forge graphql --query-file ./q.graphql
+"${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='mutation { … }' -F number=42
+"${NIGHTGAUGE_BIN:-nightgauge}" forge graphql --query-file ./q.graphql
 ```
 
 GitLab caveat: the GitLab adapter does **not** yet expose a GraphQL transport —

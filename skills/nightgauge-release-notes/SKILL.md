@@ -149,7 +149,7 @@ if ! command -v nightgauge &> /dev/null; then
   echo "ERROR: nightgauge binary not found. Install via the VSCode extension or build from source."
   exit 1
 fi
-if ! nightgauge forge auth status &>/dev/null; then
+if ! "${NIGHTGAUGE_BIN:-nightgauge}" forge auth status &>/dev/null; then
   echo "ERROR: nightgauge forge auth not configured. Run: nightgauge forge auth login"
   exit 1
 fi
@@ -163,7 +163,7 @@ REPO=""
 if [[ "$*" == *"--repo"* ]]; then
   REPO=$(echo "$*" | sed -n 's/.*--repo[= ]\([^ ]*\).*/\1/p')
 fi
-[ -z "$REPO" ] && REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug 2>/dev/null)}"
+[ -z "$REPO" ] && REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug 2>/dev/null)}"
 echo "Target repo: ${REPO:-<current>}"
 
 # --dry-run: print both drafts to stdout instead of writing the fastlane files.
@@ -192,7 +192,7 @@ Use the Go binary to confirm the epic is fully closed and list its sub-issues.
 EPIC="<epic-number-from-args>"
 # Pass --repo: check-completion defaults to nightgauge/nightgauge, which is
 # the wrong repo for a store epic (e.g. Acme-Community/acme-tracker).
-EPIC_STATUS=$(nightgauge epic check-completion "$EPIC" --repo "$REPO" --json 2>/dev/null || echo '{"complete":false}')
+EPIC_STATUS=$("${NIGHTGAUGE_BIN:-nightgauge}" epic check-completion "$EPIC" --repo "$REPO" --json 2>/dev/null || echo '{"complete":false}')
 COMPLETE=$(printf '%s\n' "$EPIC_STATUS" | jq -r '.complete // false')
 if [ "$COMPLETE" != "true" ]; then
   echo "ERROR: epic #$EPIC is not fully closed. Release notes are drafted only after an epic closes."
@@ -205,7 +205,7 @@ fi
 # epic body lists every sub-issue as `#N` (the established pattern, cf.
 # nightgauge-retro). `forge issue view --json` exposes no sub-issue array
 # either, so body-parsing is the correct route.
-SUB_NUMBERS=$(nightgauge forge issue view "$EPIC" --repo "$REPO" --json 2>/dev/null \
+SUB_NUMBERS=$("${NIGHTGAUGE_BIN:-nightgauge}" forge issue view "$EPIC" --repo "$REPO" --json 2>/dev/null \
   | jq -r '.body // empty' | grep -oE '#[0-9]+' | grep -oE '[0-9]+' | sort -un)
 if [ -z "$SUB_NUMBERS" ]; then
   echo "ERROR: no sub-issues found referenced in epic #$EPIC's body (#N links). Cannot draft release notes from an empty set."
@@ -219,7 +219,7 @@ user-facing "what's new" material lives:
 ```bash
 SUB_CONTENT=""
 for n in $SUB_NUMBERS; do
-  ISSUE_JSON=$(nightgauge forge issue view "$n" --repo "$REPO" --json 2>/dev/null)
+  ISSUE_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" forge issue view "$n" --repo "$REPO" --json 2>/dev/null)
   TITLE=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.title')
   BODY=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.body')
   SUB_CONTENT+=$'\n### '"$TITLE"$'\n'"$BODY"$'\n'

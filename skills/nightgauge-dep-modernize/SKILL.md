@@ -319,8 +319,8 @@ fi
 Check for upstream assessment reports and extract relevant dimensions:
 
 ```bash
-HEALTH_REPORT="$(nightgauge layout path checkout reports/health-report.json)"
-SECURITY_REPORT="$(nightgauge layout path checkout reports/security-audit.json)"
+HEALTH_REPORT="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout reports/health-report.json)"
+SECURITY_REPORT="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout reports/security-audit.json)"
 HEALTH_AVAILABLE=false
 SECURITY_AVAILABLE=false
 
@@ -374,7 +374,7 @@ if [ "$STAGED" = true ]; then
     echo "Install: see nightgauge docs"
     exit 1
   fi
-  if ! nightgauge forge auth status &>/dev/null; then
+  if ! "${NIGHTGAUGE_BIN:-nightgauge}" forge auth status &>/dev/null; then
     echo "ERROR: forge CLI not authenticated. Run: nightgauge forge auth login"
     exit 1
   fi
@@ -874,7 +874,7 @@ if [ "$AUTO_FIX" = true ]; then
     # If --staged, create a new branch for this group
     if [ "$STAGED" = true ]; then
       BRANCH_NAME="chore/dep-modernize-group-${GROUP_NUM}"
-      export GITHUB_TOKEN=$(nightgauge forge auth token 2>/dev/null || echo "")
+      export GITHUB_TOKEN=$("${NIGHTGAUGE_BIN:-nightgauge}" forge auth token 2>/dev/null || echo "")
       BRANCH_RESULT=$("$BINARY" git branch-create "$BRANCH_NAME" --json 2>/dev/null || \
         echo '{"success":false,"error":"binary not found"}')
       if [ "$(printf '%s\n' "$BRANCH_RESULT" | jq -r '.success')" != "true" ]; then
@@ -983,7 +983,7 @@ if [ -n "$OUTPUT_FILE" ]; then
   cp "$REPORT_TMP" "$OUTPUT_FILE"
   OUTPUT_PATH="$OUTPUT_FILE"
 else
-  OUTPUT_PATH="$(nightgauge layout write checkout reports/dep-modernize-report.json --from "$REPORT_TMP")"
+  OUTPUT_PATH="$("${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout reports/dep-modernize-report.json --from "$REPORT_TMP")"
 fi
 rm -f "$REPORT_TMP"
 echo "Report written: $OUTPUT_PATH"

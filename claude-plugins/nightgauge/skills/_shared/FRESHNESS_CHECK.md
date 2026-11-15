@@ -35,7 +35,7 @@ if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && [ -z "$(git ls-files 
     # push never runs, and pr-merge checks the remote branch. Best-effort,
     # fork tokens filtered, as on the behind path (#2749).
     PUSH_ERR=$(mktemp)
-    if ! nightgauge git push-branch 2>"$PUSH_ERR"; then
+    if ! "${NIGHTGAUGE_BIN:-nightgauge}" git push-branch 2>"$PUSH_ERR"; then
       echo "WARNING: Failed to push the concluded merge. Continuing with the local merge."
       grep -viE 'branch[-_]forked|non-fast-forward|push rejected|fetch first' "$PUSH_ERR" || true
     fi
@@ -79,7 +79,7 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
     PUSH_ERR=$(mktemp)
     # Exit 4 is a credential refusal (#2742): its `[push-auth-failed]` line
     # passes the filter, so a later push surfaces the same cause.
-    if ! nightgauge git push-branch 2>"$PUSH_ERR"; then
+    if ! "${NIGHTGAUGE_BIN:-nightgauge}" git push-branch 2>"$PUSH_ERR"; then
       echo "WARNING: Failed to push merged branch. Continuing with the local merge."
       grep -viE 'branch[-_]forked|non-fast-forward|push rejected|fetch first' "$PUSH_ERR" || true
     fi
@@ -140,7 +140,7 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
       if git commit --no-edit 2>/dev/null; then
         echo "Conflict resolution successful."
         PUSH_ERR=$(mktemp)
-        if ! nightgauge git push-branch 2>"$PUSH_ERR"; then
+        if ! "${NIGHTGAUGE_BIN:-nightgauge}" git push-branch 2>"$PUSH_ERR"; then
           echo "WARNING: Failed to push merged branch. Continuing with the local merge."
           grep -viE 'branch[-_]forked|non-fast-forward|push rejected|fetch first' "$PUSH_ERR" || true
         fi

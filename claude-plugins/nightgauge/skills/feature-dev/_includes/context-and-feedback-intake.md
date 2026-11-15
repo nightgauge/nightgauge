@@ -52,7 +52,7 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 if [ "$INPUT_CONTEXT_TYPE" = "issue" ]; then
   # Fast-tracked (#4126/#4129): feature-planning was intentionally skipped —
   # issue-{N}.json is the real, and only, prerequisite context.
-  CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
+  CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)"
   if [ ! -f "$CONTEXT_FILE" ]; then
     echo "ERROR: Missing context file: $CONTEXT_FILE"
     echo "Orchestrator declared input context type 'issue' but issue-${ISSUE_NUMBER}.json is absent."
@@ -66,7 +66,7 @@ if [ "$INPUT_CONTEXT_TYPE" = "issue" ]; then
   FILES_TO_MODIFY="[]"
   FILES_TO_READ=$(jq -r '.requirements.technical_notes | @json' "$CONTEXT_FILE" 2>/dev/null)
 else
-  CONTEXT_FILE="$(nightgauge layout path pipeline planning-${ISSUE_NUMBER}.json)"
+  CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline planning-${ISSUE_NUMBER}.json)"
 
   if [ ! -f "$CONTEXT_FILE" ]; then
     echo "ERROR: Missing context file: $CONTEXT_FILE"
@@ -120,7 +120,7 @@ fi
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-FEEDBACK_FILE="$(nightgauge layout path pipeline feedback-${ISSUE_NUMBER}.json)"
+FEEDBACK_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline feedback-${ISSUE_NUMBER}.json)"
 RETRY_COUNT=0
 RETRY_REASONS_JSON="[]"
 IS_RETRY=false
@@ -150,8 +150,8 @@ if [ -f "$FEEDBACK_FILE" ]; then
     [ "$CONFLICT_SIGNAL_COUNT" -gt 0 ] && IS_CONFLICT_RESOLUTION=true
 
     # Determine retry count from any existing dev-{N}.json
-    if [ -f "$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)" ]; then
-      PREV_RETRY=$(jq -r '.retry_count // 0' "$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "0")
+    if [ -f "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline dev-${ISSUE_NUMBER}.json)" ]; then
+      PREV_RETRY=$(jq -r '.retry_count // 0' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline dev-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "0")
       RETRY_COUNT=$((PREV_RETRY + 1))
     else
       RETRY_COUNT=1
@@ -171,7 +171,7 @@ resolved work would not attach to the open PR.
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ "$IS_CONFLICT_RESOLUTION" = "true" ]; then
-  CONFLICT_CONTEXT="$(nightgauge layout path pipeline conflict-context-${ISSUE_NUMBER}.json)"
+  CONFLICT_CONTEXT="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline conflict-context-${ISSUE_NUMBER}.json)"
 
   if [ -f "$CONFLICT_CONTEXT" ]; then
     CONFLICT_BRANCH=$(jq -r '.branch // ""' "$CONFLICT_CONTEXT" 2>/dev/null)
@@ -253,7 +253,7 @@ retry: `IS_RETRY` is unchanged.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-PLANNING_CTX="$(nightgauge layout path pipeline planning-${ISSUE_NUMBER}.json)"
+PLANNING_CTX="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline planning-${ISSUE_NUMBER}.json)"
 jq -r '.operator_steer[]?.text' "$PLANNING_CTX" 2>/dev/null
 OPERATOR_REVISED=$(jq -r '[.revision_reasons[]? | select(contains("operator-origin:"))] | length > 0' \
   "$PLANNING_CTX" 2>/dev/null || echo false)
@@ -277,9 +277,9 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # The plan file is authoritative over planning-{N}.json approach field. When the prompt
 # quotes it in a Planning hand-off section, use that copy instead of reading it again.
-PLAN_FILE=$(jq -r '.plan_file' "$(nightgauge layout path pipeline planning-${ISSUE_NUMBER}.json)" 2>/dev/null)
+PLAN_FILE=$(jq -r '.plan_file' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline planning-${ISSUE_NUMBER}.json)" 2>/dev/null)
 if [ -z "$PLAN_FILE" ] || [ ! -f "$PLAN_FILE" ]; then
-  PLAN_FILE=$(ls "$(nightgauge layout path plans)"/${ISSUE_NUMBER}-*.md 2>/dev/null | head -1)
+  PLAN_FILE=$(ls "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path plans)"/${ISSUE_NUMBER}-*.md 2>/dev/null | head -1)
 fi
 # $PLAN_FILE is now set for Phase 1 to read
 ```

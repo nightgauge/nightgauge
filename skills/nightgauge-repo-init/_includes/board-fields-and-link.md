@@ -36,7 +36,7 @@ if [ "$OWNER_TYPE" = "user" ]; then
 fi
 
 # Create/ensure all required project board fields (idempotent)
-ENSURE_RESULT=$(nightgauge project ensure-fields \
+ENSURE_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" project ensure-fields \
   --number "$PROJECT_NUMBER" \
   --owner "$PROJECT_OWNER" \
   --owner-type "$ENSURE_OWNER_TYPE_FLAG" \
@@ -80,12 +80,12 @@ if [ "$ALREADY_LINKED" = "true" ]; then
   echo "  ✓ Repository already linked to project #$PROJECT_NUMBER"
 else
   # Resolve project node ID and repo node ID, then link via GraphQL mutation
-  PROJECT_NODE_ID=$(nightgauge forge graphql -f query='query($owner:String!,$number:Int!){organization(login:$owner){projectV2(number:$number){id}}}' -f owner="$PROJECT_OWNER" -F number="$PROJECT_NUMBER" 2>/dev/null | jq -r '.data.organization.projectV2.id // empty')
+  PROJECT_NODE_ID=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='query($owner:String!,$number:Int!){organization(login:$owner){projectV2(number:$number){id}}}' -f owner="$PROJECT_OWNER" -F number="$PROJECT_NUMBER" 2>/dev/null | jq -r '.data.organization.projectV2.id // empty')
   if [ -z "$PROJECT_NODE_ID" ]; then
-    PROJECT_NODE_ID=$(nightgauge forge graphql -f query='query($owner:String!,$number:Int!){user(login:$owner){projectV2(number:$number){id}}}' -f owner="$PROJECT_OWNER" -F number="$PROJECT_NUMBER" 2>/dev/null | jq -r '.data.user.projectV2.id // empty')
+    PROJECT_NODE_ID=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='query($owner:String!,$number:Int!){user(login:$owner){projectV2(number:$number){id}}}' -f owner="$PROJECT_OWNER" -F number="$PROJECT_NUMBER" 2>/dev/null | jq -r '.data.user.projectV2.id // empty')
   fi
-  REPO_NODE_ID=$(nightgauge forge graphql -f query='query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id}}' -f owner="$OWNER" -f name="$REPO_NAME" | jq -r '.data.repository.id')
-  nightgauge forge graphql -f query='mutation($projectId:ID!,$repoId:ID!){linkProjectV2ToRepository(input:{projectId:$projectId,repositoryId:$repoId}){repository{id}}}' -f projectId="$PROJECT_NODE_ID" -f repoId="$REPO_NODE_ID"
+  REPO_NODE_ID=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id}}' -f owner="$OWNER" -f name="$REPO_NAME" | jq -r '.data.repository.id')
+  "${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='mutation($projectId:ID!,$repoId:ID!){linkProjectV2ToRepository(input:{projectId:$projectId,repositoryId:$repoId}){repository{id}}}' -f projectId="$PROJECT_NODE_ID" -f repoId="$REPO_NODE_ID"
   echo "  + Linked $REPO to project #$PROJECT_NUMBER"
 fi
 ```
@@ -127,7 +127,7 @@ fi
 
 # Query existing views via GraphQL (for fast ✓ exists / + created display)
 if [ "$PROJECT_OWNER_TYPE" = "Organization" ]; then
-  EXISTING_VIEWS=$(nightgauge forge graphql -f query='
+  EXISTING_VIEWS=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='
   {
     organization(login: "'"$PROJECT_OWNER"'") {
       projectV2(number: '"$PROJECT_NUMBER"') {
@@ -138,7 +138,7 @@ if [ "$PROJECT_OWNER_TYPE" = "Organization" ]; then
     }
   }' | jq -r '.data.organization.projectV2.views.nodes[].name')
 else
-  EXISTING_VIEWS=$(nightgauge forge graphql -f query='
+  EXISTING_VIEWS=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='
   {
     user(login: "'"$PROJECT_OWNER"'") {
       projectV2(number: '"$PROJECT_NUMBER"') {
@@ -175,7 +175,7 @@ create_view_if_missing() {
     view_args+=(--filter "$filter")
   fi
 
-  if nightgauge project view-create "${view_args[@]}" 2>&1; then
+  if "${NIGHTGAUGE_BIN:-nightgauge}" project view-create "${view_args[@]}" 2>&1; then
     echo "  + created: $name ($layout)"
   else
     echo "  ✗ FAILED:  $name ($layout) — check token scopes (project write required)"
