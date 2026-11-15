@@ -103,6 +103,8 @@ export type EphemeralExec = (input: {
    * claude-headless passes them as `--allowedTools`. @see Issue #2358
    */
   allowedTools?: readonly string[];
+  /** Variables added to the unit's environment (WorkflowAgentSpec `env`). @see Issue #2908 */
+  env?: Record<string, string>;
 }) => Promise<EphemeralExecResult>;
 
 /**
@@ -210,6 +212,7 @@ export const adapterEphemeralExec: EphemeralExec = async ({
   cwd,
   abortSignal,
   allowedTools,
+  env,
 }): Promise<EphemeralExecResult> => {
   // A unit queued behind the concurrency ceiling may start after the stage
   // stopped; it never spawns.
@@ -226,6 +229,7 @@ export const adapterEphemeralExec: EphemeralExec = async ({
     cwd,
     abortSignal,
     ...(allowedTools !== undefined && { allowedTools: [...allowedTools] }),
+    ...(env !== undefined && { env: { ...env } }),
   };
   for await (const message of query({ prompt, options })) {
     // An adapter whose query ignores the signal stops being drained; leaving
@@ -372,6 +376,7 @@ export function makeSdkFanoutBindings(
           cwd,
           abortSignal,
           ...(unit?.allowedTools !== undefined && { allowedTools: unit.allowedTools }),
+          ...(agent.env !== undefined && { env: agent.env }),
         });
         return {
           usage: usageFromExec(result, adapter, agent.model),

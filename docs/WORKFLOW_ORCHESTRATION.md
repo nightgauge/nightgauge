@@ -301,7 +301,14 @@ skill content `buildStagePrompt` loads) via `parseOrchestrationFrontmatter` and
 compiles a two-phase `WorkflowSpec`: first an `implementation` phase with one
 `<stage>:implementation` agent (role `implementer`) running the same prompt the
 single-agent path builds, then the frontmatter's units phase with its judge. The
-units are a phase of the stage, not a replacement for it (#2908). The spec folds
+units are a phase of the stage, not a replacement for it (#2908). The
+implementation agent carries `env: { NIGHTGAUGE_REVIEW_UNITS_PHASE: "1" }`
+(`WorkflowAgentSpec.env`). Every adapter that spawns a process adds it to that
+agent's environment only, never replacing a variable the adapter sets itself;
+the in-process API adapters have no tool loop and run no Phase 5 shell.
+feature-dev's Phase 5 then skips its own
+`nightgauge review quality` call, so the units phase is the one review. The
+Go-dispatched path never sets the marker and reviews once in Phase 5. The spec folds
 in run identity, the resolved `prefer_native_offload[stage]`, and the `max_usd`
 budget cap. The
 `WorkflowExecutor` then clamps the spec's ceiling to the config caps, so even a
@@ -352,8 +359,9 @@ body remains the portability floor. The shipped skills carrying the block are
 listed in `skills/` (security-audit / feature-dev / feature-validate / audit /
 migrate, #3917).
 
-`paths:` is a list of globs over the changed files (`*` and `?` stay in one
-segment, `**/` matches any leading directories, a trailing `**` matches
+`paths:` is a list of globs over the changed files, which are listed
+NUL-separated so a non-ASCII path is matched as written rather than as git's
+quoted form (`*` and `?` stay in one segment, `**/` matches any leading directories, a trailing `**` matches
 everything beneath). A unit none of whose globs matches a changed file is not
 spawned. A unit without `paths` always runs. Only `nightgauge review quality`
 enforces it; the SDK `selectExecutor` path ignores `paths:` and runs every unit.

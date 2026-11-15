@@ -22,6 +22,7 @@ import * as os from "node:os";
 import { existsSync } from "node:fs";
 import { createWorkflowWiring } from "../../cli/adapterQuery.js";
 import { makeSdkFanoutBindings } from "../../cli/workflow/SdkFanoutExecutors.js";
+import { REVIEW_UNITS_PHASE_MARKER } from "../../cli/workflow/WorkflowSpec.js";
 import {
   PipelineOrchestrator,
   type PipelineConfig,
@@ -302,6 +303,12 @@ describe("PipelineOrchestrator.selectExecutor", () => {
         "accessibility",
       ]);
       expect(sel.spec.phases[1].judges?.map((j) => j.judgeId)).toEqual(["judge:merge"]);
+      // One review pass on this path: the implementation agent's body skips
+      // Phase 5's `review quality` because it carries the marker, and only the
+      // single quality-review phase runs the reviewers, none of them marked (#2908).
+      expect(sel.spec.phases[0].agents[0].env).toEqual(REVIEW_UNITS_PHASE_MARKER);
+      expect(sel.spec.phases.filter((p) => p.name === "quality-review")).toHaveLength(1);
+      expect(sel.spec.phases[1].agents.every((a) => a.env === undefined)).toBe(true);
     });
 
     it("a fan-out stage with NO adapter/bindings → single-agent (AC4 graceful downgrade)", async () => {
@@ -479,6 +486,30 @@ describe("PipelineOrchestrator.selectExecutor", () => {
         },
       };
     }
+
+    it.each([
+      ["fail", false],
+      ["pass", true],
+    ] as const)(
+      "a feature-dev units-phase judge returning %s sets the stage success to %s (#2908)",
+      async (verdict, success) => {
+        // The units run after the implementation agent exits, so a failing
+        // judge has no one left to act on it: it must fail the stage.
+        await judgedWorkspace("feature-dev");
+        const orch = makeOrchestrator(ws.dir, {
+          workflowAdapter: fakeAdapter(),
+          workflowBindings: judgingBindings(verdict),
+          workflowJournalFs: new FakeFs(),
+          orchestration: { disabled: false },
+        });
+
+        const result = await orch.runStage("feature-dev", 42);
+
+        expect(result.success).toBe(success);
+        // Only feature-validate folds judges into gate-metrics.
+        expect(await gateRows()).toHaveLength(0);
+      }
+    );
 
     it("writes a judges row per verdict, attempted under the stage's run", async () => {
       await judgedWorkspace("feature-validate");

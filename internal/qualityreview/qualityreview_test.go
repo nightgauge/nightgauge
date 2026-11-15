@@ -1,10 +1,14 @@
 package qualityreview
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 const skill = `---
@@ -86,6 +90,53 @@ func TestUnitApplies(t *testing.T) {
 	}
 	if !(Unit{ID: "security"}).Applies([]string{"cmd/x.go"}) {
 		t.Error("a unit without paths must always apply")
+	}
+}
+
+// TestBuildBundleListsNonASCIIPathsUnquoted pins #2908: git quotes and
+// octal-escapes a non-ASCII path in a newline listing, so a path-scoped unit
+// never matched it and was skipped at zero tokens. core.quotePath is forced on
+// so the operator's own git config cannot make the broken parse pass.
+func TestBuildBundleListsNonASCIIPathsUnquoted(t *testing.T) {
+	root := gittest.InitRepo(t, t.TempDir(), "-q")
+	gittest.Run(t, root, "config", "core.quotePath", "true")
+	write := func(rel string) {
+		t.Helper()
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".nightgauge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".nightgauge", ".gitignore"), []byte("quality-review/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write("a")
+	gittest.Run(t, root, "add", ".")
+	gittest.Run(t, root, "commit", "-qm", "base")
+	gittest.Run(t, root, "update-ref", "refs/remotes/origin/main", "HEAD")
+	write("ui/café/Button.tsx") // committed: reaches the list through git diff
+	gittest.Run(t, root, "add", ".")
+	gittest.Run(t, root, "commit", "-qm", "ui")
+	write("ui/naïve/Card.tsx") // untracked: reaches it through git ls-files
+
+	b, err := BuildBundle(context.Background(), root, 7, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"ui/café/Button.tsx", "ui/naïve/Card.tsx"} {
+		if !slices.Contains(b.Files, want) {
+			t.Errorf("Files = %q, missing %q", b.Files, want)
+		}
+	}
+	ui := Unit{ID: "accessibility", Paths: []string{"ui/café/**"}}
+	if !ui.Applies(b.Files) {
+		t.Errorf("unit scoped to ui/café/** does not apply to %q", b.Files)
 	}
 }
 
