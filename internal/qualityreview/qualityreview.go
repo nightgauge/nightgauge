@@ -95,7 +95,9 @@ func globRegexp(pattern string) *regexp.Regexp {
 		case c == '?':
 			b.WriteString("[^/]")
 		default:
-			b.WriteString(regexp.QuoteMeta(string(c)))
+			// pattern[i:i+1], not string(c): string(byte) re-encodes each byte
+			// of a multi-byte UTF-8 rune as its own rune, so "café" never matched.
+			b.WriteString(regexp.QuoteMeta(pattern[i : i+1]))
 		}
 	}
 	b.WriteString("$")
@@ -219,12 +221,14 @@ func BuildBundle(ctx context.Context, root string, issue int, base string) (Bund
 	if err != nil {
 		return Bundle{}, err
 	}
-	files, err := git(ctx, root, "diff", "--name-only", mergeBase)
+	// -z: without it git quotes and octal-escapes a non-ASCII path
+	// ("ui/caf\303\251/Button.tsx"), so no path-scoped unit would match it.
+	files, err := git(ctx, root, "diff", "--name-only", "-z", mergeBase)
 	if err != nil {
 		return Bundle{}, err
 	}
 	// New files are not in the diff until committed; list them so a unit reads them.
-	untracked, err := git(ctx, root, "ls-files", "--others", "--exclude-standard")
+	untracked, err := git(ctx, root, "ls-files", "-z", "--others", "--exclude-standard")
 	if err != nil {
 		return Bundle{}, err
 	}
@@ -237,8 +241,8 @@ func BuildBundle(ctx context.Context, root string, issue int, base string) (Bund
 		return Bundle{}, err
 	}
 	var list []string
-	for _, f := range strings.Split(string(files), "\n") {
-		if f = strings.TrimSpace(f); f != "" {
+	for _, f := range strings.Split(string(files), "\x00") {
+		if f != "" {
 			list = append(list, f)
 		}
 	}

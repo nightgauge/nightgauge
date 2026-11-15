@@ -72,7 +72,7 @@ export class ClaudeSdkAdapter implements ICliAdapter {
       // separately licensed Agent SDK, but Nightgauge distributions do not
       // bundle or redistribute it.
       const sdk = await import("@anthropic-ai/claude-agent-sdk");
-      return sdk.query as unknown as SDKQueryFunction;
+      return withEnvOverlay(sdk.query as unknown as SDKQueryFunction);
     } catch (error) {
       const missingPeer =
         error instanceof Error &&
@@ -125,4 +125,24 @@ export class ClaudeSdkAdapter implements ICliAdapter {
   requiresDirectApiKey(): boolean {
     return true;
   }
+}
+
+/**
+ * The Agent SDK's `env` replaces the child's environment; ours only adds to it
+ * (SDKQueryOptions `env`, #2908). Hand the SDK this process's environment with
+ * the query's variables added, and leave a query without any untouched.
+ */
+function withEnvOverlay(query: SDKQueryFunction): SDKQueryFunction {
+  return (queryOptions) => {
+    const overlay = queryOptions.options?.env;
+    if (overlay === undefined) return query(queryOptions);
+    const env: Record<string, string> = {};
+    for (const [name, value] of Object.entries(process.env)) {
+      if (value !== undefined) env[name] = value;
+    }
+    return query({
+      ...queryOptions,
+      options: { ...queryOptions.options, env: { ...overlay, ...env } },
+    });
+  };
 }

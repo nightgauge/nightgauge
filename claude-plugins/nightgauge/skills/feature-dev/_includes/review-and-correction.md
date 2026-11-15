@@ -21,10 +21,19 @@ them; do not review the diff yourself and do not spawn reviewers by hand.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-# Bounded under 9 minutes; give the shell call a 600000 ms timeout and run it
-# in the foreground.
-QUALITY_REPORT=$(nightgauge review quality --issue "$ISSUE_NUMBER") \
-  || QUALITY_REPORT='{"result":"skipped","reason":"review quality exited non-zero","units":[]}'
+# On the SDK workflow path the reviewer units run as the next phase of this
+# stage, and the orchestrator sets the marker in this agent's environment only:
+# reviewing here too would run every reviewer twice (#2908). The Go-dispatched
+# path never sets it, so it reviews here, once. Phase 6 has nothing to fix on
+# that path: a units-phase judge returning fail fails the stage instead.
+if [ "${NIGHTGAUGE_REVIEW_UNITS_PHASE:-}" = "1" ]; then
+  QUALITY_REPORT='{"result":"skipped","reason":"the review units run as the next phase of this workflow","units":[]}'
+else
+  # Bounded under 9 minutes; give the shell call a 600000 ms timeout and run it
+  # in the foreground.
+  QUALITY_REPORT=$(nightgauge review quality --issue "$ISSUE_NUMBER") \
+    || QUALITY_REPORT='{"result":"skipped","reason":"review quality exited non-zero","units":[]}'
+fi
 unit_status() {
   printf '%s\n' "$QUALITY_REPORT" | jq -r --arg id "$1" '
     if .result == "skipped" then "skipped"
@@ -47,6 +56,11 @@ skill copy outside the worktree, or on an adapter without a tool loop, the
 whole review is `skipped` and the reason is printed on stderr as
 `[quality-review] skipped: <reason>`. The report is also written to
 `quality-review-{N}.json` in the pipeline state directory.
+
+On the SDK workflow path the orchestrator sets `NIGHTGAUGE_REVIEW_UNITS_PHASE=1`
+in this stage's implementation agent, because the same six units run as the
+workflow's next phase. The block then reports `skipped` without calling
+`nightgauge review quality`, so each path runs exactly one review.
 
 Every `blocking` finding is a Phase 6 fix. Warnings are fixed when cheap, or
 recorded as discovered work.

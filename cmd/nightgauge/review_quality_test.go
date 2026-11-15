@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/qualityreview"
 )
 
@@ -23,7 +25,11 @@ func qualityFixture(t *testing.T, changed ...string) (qualityRun, []byte) {
 		changed = []string{"view.tsx"}
 	}
 	for _, f := range changed {
-		if err := os.WriteFile(filepath.Join(s.Root, f), []byte("x\n"), 0o600); err != nil {
+		p := filepath.Join(s.Root, filepath.FromSlash(f))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -184,6 +190,36 @@ func TestQualityReviewSkipsPathScopedUnitOnGoOnlyDiff(t *testing.T) {
 	}
 }
 
+// TestQualityReviewRunsPathScopedUnitOnNonASCIIPath pins #2908: git quotes a
+// non-ASCII path ("ui/caf\303\251/Button.tsx") unless the list is read with -z,
+// and the quoted form matches no "**/*.tsx" glob, so accessibility was skipped
+// on exactly the UI change it exists to review.
+func TestQualityReviewRunsPathScopedUnitOnNonASCIIPath(t *testing.T) {
+	q, _ := qualityFixture(t, "ui/café/Button.tsx")
+	// Pinned so a git config with core.quotePath=false cannot hide the defect.
+	gittest.Run(t, q.Root, "config", "core.quotePath", "true")
+	var spawned atomic.Bool
+	q.Runner, q.Stderr = fakeReviewer{agentic: true}, &bytes.Buffer{}
+	q.Spawn = func(_ context.Context, _ adapters.SkillRunner, o adapters.RunOptions, _ string) error {
+		m := findingsPath.FindStringSubmatch(o.Prompt)
+		if m == nil {
+			t.Errorf("prompt names no findings file: %s", o.Prompt)
+			return nil
+		}
+		if m[2] == "accessibility" {
+			spawned.Store(true)
+		}
+		return os.WriteFile(m[1], []byte(`{"unit":"`+m[2]+`","findings":[]}`), 0o600)
+	}
+	r := runQualityReview(context.Background(), q)
+	if !spawned.Load() {
+		t.Error("accessibility was not dispatched on a non-ASCII .tsx path")
+	}
+	if got := r.UnitStatus("accessibility"); got != qualityreview.ResultPassed {
+		t.Fatalf("accessibility status = %q, want passed; report = %+v", got, r)
+	}
+}
+
 func TestTrustedQualitySkillRefusesWorktreeCopy(t *testing.T) {
 	root := t.TempDir()
 	inside := filepath.Join(root, "skills", "nightgauge-feature-dev")
@@ -217,5 +253,78 @@ func TestTrustedQualitySkillRefusesWorktreeCopy(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_SKILL_DIR", outside)
 	if p, err := trustedQualitySkill(root, ""); err != nil || filepath.Base(p) != "SKILL.md" {
 		t.Errorf("outside copy refused: %q %v", p, err)
+	}
+}
+
+// phase5Block returns the first bash block under "## Phase 5: Quality Review"
+// in a shipped feature-dev review include.
+func phase5Block(t *testing.T, include string) string {
+	t.Helper()
+	data, err := os.ReadFile(include)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rest, ok := strings.Cut(string(data), "## Phase 5: Quality Review")
+	if !ok {
+		t.Fatalf("%s has no Phase 5 section", include)
+	}
+	_, rest, ok = strings.Cut(rest, "```bash\n")
+	block, _, closed := strings.Cut(rest, "\n```")
+	if !ok || !closed {
+		t.Fatalf("%s Phase 5 has no bash block", include)
+	}
+	return block
+}
+
+// TestFeatureDevPhase5RunsOneReviewPerPath runs the Phase 5 block feature-dev
+// ships, with a fake nightgauge that counts its review-quality calls. The
+// Go-dispatched stage has no units phase, so it reviews here exactly once. On
+// the SDK workflow path the orchestrator marks the implementation agent, the
+// units phase is the one review (pipelineSelectExecutor.test.ts), and this
+// block must not run another (#2908).
+func TestFeatureDevPhase5RunsOneReviewPerPath(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, include := range []string{
+		"../../skills/nightgauge-feature-dev/_includes/review-and-correction.md",
+		"../../claude-plugins/nightgauge/skills/feature-dev/_includes/review-and-correction.md",
+	} {
+		block := phase5Block(t, include)
+		for _, tc := range []struct {
+			path   string
+			marker string
+			want   int
+		}{
+			{"go-dispatched", "", 1},
+			{"sdk-workflow", "1", 0},
+		} {
+			bin := t.TempDir()
+			calls := filepath.Join(bin, "calls")
+			fake := "#!/bin/sh\n" +
+				`[ "$1 $2" = "review quality" ] && echo x >>"` + calls + `"` + "\n" +
+				`echo '{"result":"passed","units":[]}'` + "\n"
+			if err := os.WriteFile(filepath.Join(bin, "nightgauge"), []byte(fake), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(bash, "-c", block)
+			cmd.Dir = t.TempDir()
+			cmd.Env = append(os.Environ(),
+				"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"NIGHTGAUGE_ISSUE_NUMBER=7",
+				"NIGHTGAUGE_REVIEW_UNITS_PHASE="+tc.marker,
+			)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("%s %s: %v\n%s", include, tc.path, err, out)
+			}
+			data, err := os.ReadFile(calls)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err)
+			}
+			if got := strings.Count(string(data), "x"); got != tc.want {
+				t.Errorf("%s %s: review quality ran %d times, want %d", include, tc.path, got, tc.want)
+			}
+		}
 	}
 }

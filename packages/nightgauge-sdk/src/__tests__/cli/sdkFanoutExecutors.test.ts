@@ -537,6 +537,23 @@ describe("SdkFanoutExecutors (#3911)", () => {
       ]);
     });
 
+    it("an agent's env reaches its query; a judge and an agent without one get none (#2908)", async () => {
+      const seen: Array<Record<string, string> | undefined> = [];
+      const queryFn: SDKQueryFunction = (q) => {
+        seen.push(q.options?.env);
+        return (async function* (): AsyncGenerator<SDKMessage> {
+          yield { type: "result", usage: {}, total_cost_usd: 0, text: '{"verdict":"pass"}' };
+        })();
+      };
+      const bindings = makeSdkFanoutBindings(fakeAdapter("codex", queryFn));
+      const marker = { NIGHTGAUGE_REVIEW_UNITS_PHASE: "1" };
+      await bindings.runAgent({ agentId: "impl", prompt: "p", env: marker });
+      await bindings.runAgent({ agentId: "reviewer", prompt: "p" });
+      await bindings.runJudge({ judgeId: "j0", prompt: "p" }, "reviewer");
+
+      expect(seen).toEqual([marker, undefined, undefined]);
+    });
+
     it("a unit that starts after the stop never spawns", async () => {
       const create = vi.fn();
       const adapter = fakeAdapter("opencode");

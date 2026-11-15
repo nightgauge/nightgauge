@@ -619,6 +619,21 @@ describe("OpenCodeAdapter spawn (#1637)", () => {
     expect(helperEnv.XDG_DATA_HOME).toBe(config.env.XDG_DATA_HOME);
   });
 
+  it("adds a query's env to the child's, and never lets it replace the run's own (#2908)", async () => {
+    const research = join(TESTDATA, "opencode_stream_research_sample.jsonl");
+    const { dir, config, query } = await runStage(LOCAL_MODEL, `  cat '${research}'`);
+    const overlay = {
+      NIGHTGAUGE_REVIEW_UNITS_PHASE: "1",
+      NIGHTGAUGE_ADAPTER: "not-opencode",
+      NIGHTGAUGE_OPENCODE_PLUGIN_NONCE: "forged-nonce",
+    };
+    await drain(query({ prompt: "p", options: { env: overlay } }));
+    const env = readEnvFile(join(dir, "env"));
+    expect(env.NIGHTGAUGE_REVIEW_UNITS_PHASE).toBe("1");
+    expect(env.NIGHTGAUGE_ADAPTER).toBe("opencode");
+    expect(env.NIGHTGAUGE_OPENCODE_PLUGIN_NONCE).toBe(config.env.NIGHTGAUGE_OPENCODE_PLUGIN_NONCE);
+  });
+
   it("gives a local run no provider key and none of the operator's OpenCode or XDG state", async () => {
     const research = join(TESTDATA, "opencode_stream_research_sample.jsonl");
     const { dir, config, query } = await runStage(LOCAL_MODEL, `  cat '${research}'`);

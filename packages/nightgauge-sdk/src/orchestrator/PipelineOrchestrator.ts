@@ -29,7 +29,11 @@ import {
   type OrchestrationStage,
 } from "../cli/workflow/OrchestrationConfig.js";
 import { parseOrchestrationFrontmatter } from "../cli/workflow/parseOrchestrationFrontmatter.js";
-import type { WorkflowPhaseSpec, WorkflowSpec } from "../cli/workflow/WorkflowSpec.js";
+import {
+  REVIEW_UNITS_PHASE_MARKER,
+  type WorkflowPhaseSpec,
+  type WorkflowSpec,
+} from "../cli/workflow/WorkflowSpec.js";
 import type { WorkflowExecutorBindings } from "../cli/workflow/SdkFanoutRunner.js";
 import { EphemeralTimeoutError } from "../cli/workflow/SdkFanoutExecutors.js";
 import { WorkflowExecutor, createNodeJournalFs, type JournalFs } from "./WorkflowExecutor.js";
@@ -386,6 +390,9 @@ export class PipelineOrchestrator {
     // The frontmatter's units are a phase OF the stage, not the stage: the
     // implementation runs first, from the same prompt the single-agent path
     // builds, and the units (e.g. feature-dev's reviewers) run after it (#2908).
+    // The marker lives in the implementation agent's process only: its body
+    // skips the review the units phase is about to run, and a Go-dispatched
+    // stage, which never runs a units phase, never sees it.
     const implementation: WorkflowPhaseSpec = {
       name: "implementation",
       agents: [
@@ -393,6 +400,7 @@ export class PipelineOrchestrator {
           agentId: `${stage}:implementation`,
           role: "implementer",
           prompt: composeStagePrompt(skill, stage, issueNumber),
+          env: { ...REVIEW_UNITS_PHASE_MARKER },
         },
       ],
     };
@@ -463,16 +471,21 @@ export class PipelineOrchestrator {
         : null;
 
     const collected: WorkflowEvent[] = [];
-    const sink: WorkflowEventSink =
-      stage === "feature-validate"
-        ? {
-            emit: (event) => {
-              // Forward first: existing consumers see the stream unchanged.
-              this.events.emit(event);
-              collected.push(event);
-            },
-          }
-        : this.events;
+    // A units phase runs after the implementation agent has exited, so nothing
+    // in the stage can act on its judge's "fail": it fails the stage instead of
+    // passing silently (#2908). feature-validate's judges are gate evidence,
+    // which FeatureValidateGate judges, so they are folded, not thrown on.
+    const failedJudges: string[] = [];
+    const sink: WorkflowEventSink = {
+      emit: (event) => {
+        // Forward first: existing consumers see the stream unchanged.
+        this.events.emit(event);
+        if (stage === "feature-validate") collected.push(event);
+        else if (event.kind === "judge" && event.verdict === "fail") {
+          if (!failedJudges.includes(event.judgeId)) failedJudges.push(event.judgeId);
+        }
+      },
+    };
 
     // True only once the workflow returned un-aborted: an interrupted run's
     // judges are a partial set and must not form a superseding attempt.
@@ -498,6 +511,11 @@ export class PipelineOrchestrator {
       // The catch below emits the one failed terminal for this throw too.
       if (result.summary.status === "failed") {
         throw new Error(`workflow stage '${stage}' failed (status=${result.summary.status})`);
+      }
+      if (failedJudges.length > 0) {
+        throw new Error(
+          `workflow stage '${stage}' failed: judge ${failedJudges.join(", ")} returned fail`
+        );
       }
       this.emitter.stageCompleted(stage);
     } catch (error) {

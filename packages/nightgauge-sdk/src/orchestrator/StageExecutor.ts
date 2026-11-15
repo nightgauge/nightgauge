@@ -122,6 +122,13 @@ export interface SDKQueryOptions {
      * process group of the run it spawned when it fires. @see Issue #1637
      */
     abortSignal?: AbortSignal;
+    /**
+     * Variables added to the spawned agent's environment. They only add: a
+     * variable the adapter sets itself keeps the adapter's value, so a query
+     * cannot replace PATH or a run's handshake. A workflow agent's own `env`
+     * arrives here. @see Issue #2908
+     */
+    env?: Record<string, string>;
   };
 }
 

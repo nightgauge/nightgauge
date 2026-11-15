@@ -45,6 +45,18 @@ export const ABSOLUTE_CEILING: WorkflowConcurrencyCeiling = {
   maxTotal: CLAUDE_CEILING.maxTotal,
 };
 
+/**
+ * Set to "1" in a stage's implementation agent when the stage's orchestration
+ * units run as the next phase of the same workflow. feature-dev's Phase 5 reads
+ * it and does not run `nightgauge review quality` a second time. @see Issue #2908
+ */
+export const REVIEW_UNITS_PHASE_ENV = "NIGHTGAUGE_REVIEW_UNITS_PHASE";
+
+/** The implementation agent's `env` that carries {@link REVIEW_UNITS_PHASE_ENV}. */
+export const REVIEW_UNITS_PHASE_MARKER: Readonly<Record<string, string>> = {
+  [REVIEW_UNITS_PHASE_ENV]: "1",
+};
+
 /** One agent to fan out within a phase. */
 export interface WorkflowAgentSpec {
   agentId: string;
@@ -54,6 +66,13 @@ export interface WorkflowAgentSpec {
   /** Optional provider pin; when omitted the engine routes the agent. */
   provider?: string;
   model?: string;
+  /**
+   * Variables added to this agent's process environment only. The orchestrator
+   * marks a stage's implementation agent with {@link REVIEW_UNITS_PHASE_MARKER}
+   * so its body does not repeat the review the units phase runs next.
+   * @see Issue #2908
+   */
+  env?: Record<string, string>;
 }
 
 /** One adversarial judge to run against a phase's claims. */
