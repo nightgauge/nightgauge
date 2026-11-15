@@ -692,7 +692,7 @@ func fileExistsRule() acRule {
 }
 
 var (
-	acDeclRE       = regexp.MustCompile(`(?i)\b(?:function|class|const|interface|type|method)\s+([A-Za-z_][A-Za-z0-9_]*)`)
+	acDeclRE       = regexp.MustCompile(`(?i)\b(?:function|class|const|interface|type|method)\s+` + "`?" + `([A-Za-z_][A-Za-z0-9_]*)`)
 	acBacktickRE   = regexp.MustCompile("`([A-Za-z_][A-Za-z0-9_]{2,})`")
 	acSymbolVerbRE = regexp.MustCompile(`(?i)\b(added|implemented|exported|defined|introduced)\b`)
 
@@ -704,9 +704,15 @@ var (
 	acSourceExts = map[string]bool{
 		".ts": true, ".tsx": true, ".js": true, ".jsx": true,
 		".mjs": true, ".cjs": true, ".go": true, ".py": true, ".rs": true,
+		// Values named in a criterion often live in scripts and config (#3312).
+		".sh": true, ".bash": true, ".zsh": true, ".yml": true, ".yaml": true,
+		".json": true, ".toml": true, ".sql": true,
 	}
 )
 
+// grepForSymbolRule looks for a symbol the criterion says was added. A miss on a
+// declared symbol ("function X") is unmet; a miss on a bare backticked span is
+// undecided, because the span may be a value rather than a code symbol (#3312).
 func grepForSymbolRule() acRule {
 	return acRule{
 		name: "grep-for-symbol",
@@ -715,7 +721,7 @@ func grepForSymbolRule() acRule {
 				return nil
 			}
 			if m := acDeclRE.FindStringSubmatch(text); m != nil {
-				return map[string]string{"symbol": m[1]}
+				return map[string]string{"symbol": m[1], "declared": "true"}
 			}
 			if m := acBacktickRE.FindStringSubmatch(text); m != nil {
 				return map[string]string{"symbol": m[1]}
@@ -725,7 +731,12 @@ func grepForSymbolRule() acRule {
 		evaluate: func(workdir string, x map[string]string) (string, string, []string) {
 			refs := findSymbolReferences(workdir, x["symbol"], 5)
 			if len(refs) == 0 {
-				return ACUnsatisfied, fmt.Sprintf("Symbol `%s` not found in workspace", x["symbol"]), nil
+				if x["declared"] == "true" {
+					return ACUnsatisfied, fmt.Sprintf("Symbol `%s` not found in workspace", x["symbol"]), nil
+				}
+				return ACUndetectable, fmt.Sprintf(
+					"Symbol `%s` not found in the working tree; the span may be a value, not a code symbol",
+					x["symbol"]), nil
 			}
 			return ACSatisfied, fmt.Sprintf("Symbol `%s` found in %d file(s)", x["symbol"], len(refs)), refs
 		},

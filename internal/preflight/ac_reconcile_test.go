@@ -148,6 +148,43 @@ func TestReconcileACs_GrepForSymbol(t *testing.T) {
 	}
 }
 
+func TestReconcileACs_GrepForSymbol_ShellScriptValue(t *testing.T) {
+	dir := t.TempDir()
+	writeTreeFile(t, dir, "scripts/test-dev-stack-env.sh", "#!/bin/sh\nexport STRIPE_SECRET_KEY_TEST=rk_test_caller\n")
+
+	res := ReconcileACs(dir, 12, "- [ ] `scripts/test-dev-stack-env.sh` exported `rk_test_caller` as `STRIPE_SECRET_KEY_TEST=rk_test_caller`\n")
+	ac := res.AcceptanceCriteria[0]
+	if ac.RuleApplied == nil || *ac.RuleApplied != "grep-for-symbol" {
+		t.Fatalf("rule = %v, want grep-for-symbol", ac.RuleApplied)
+	}
+	if ac.Classification != ACSatisfied {
+		t.Fatalf("classification = %s, want satisfied (%+v)", ac.Classification, ac)
+	}
+	if len(ac.Evidence) != 1 || ac.Evidence[0] != filepath.Join("scripts", "test-dev-stack-env.sh") {
+		t.Errorf("evidence = %v, want scripts/test-dev-stack-env.sh", ac.Evidence)
+	}
+}
+
+func TestReconcileACs_GrepForSymbol_MissVerdicts(t *testing.T) {
+	dir := t.TempDir()
+	writeTreeFile(t, dir, "db/schema.sql", "CREATE TABLE ledger_rows (id int);\n")
+	writeTreeFile(t, dir, "deploy/app.yaml", "name: yaml_value_here\n")
+	writeTreeFile(t, dir, "node_modules/pkg/hidden.sh", "hidden_value_here\n")
+
+	body := "- [ ] Exported `bareMissing`\n" +
+		"- [ ] Added function `missingThing`\n" +
+		"- [ ] Added `ledger_rows`\n" +
+		"- [ ] Added `yaml_value_here`\n" +
+		"- [ ] Added `hidden_value_here`\n"
+	res := ReconcileACs(dir, 13, body)
+	want := []string{ACUndetectable, ACUnsatisfied, ACSatisfied, ACSatisfied, ACUndetectable}
+	for i, w := range want {
+		if got := res.AcceptanceCriteria[i].Classification; got != w {
+			t.Errorf("ac[%d] = %s, want %s (%+v)", i, got, w, res.AcceptanceCriteria[i])
+		}
+	}
+}
+
 func TestReconcileACs_DocSection(t *testing.T) {
 	dir := t.TempDir()
 	writeTreeFile(t, dir, "docs/GUIDE.md", "# Guide\n\n## Setup\n\ntext\n")

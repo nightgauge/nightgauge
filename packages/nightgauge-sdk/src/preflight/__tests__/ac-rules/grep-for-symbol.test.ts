@@ -19,6 +19,7 @@ describe("grep-for-symbol rule", () => {
     it("matches a function declaration with a verb", () => {
       expect(grepForSymbolRule.applies("Function reconcileAcceptanceCriteria added")).toEqual({
         symbol: "reconcileAcceptanceCriteria",
+        declared: "true",
       });
     });
 
@@ -52,7 +53,21 @@ describe("grep-for-symbol rule", () => {
       expect(r.evidence?.length).toBeGreaterThan(0);
     });
 
-    it("classifies unsatisfied when symbol is absent", async () => {
+    it("finds a value in a shell script (#3312)", async () => {
+      const file = path.join(workdir, "scripts", "test-dev-stack-env.sh");
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, "export STRIPE_SECRET_KEY_TEST=rk_test_caller\n", "utf-8");
+
+      const r = await grepForSymbolRule.evaluate({
+        workdir,
+        ac: { index: 0, text: "", checkbox_state: "unchecked" },
+        extracted: { symbol: "rk_test_caller" },
+      });
+      expect(r.classification).toBe("satisfied");
+      expect(r.evidence).toEqual([path.join("scripts", "test-dev-stack-env.sh")]);
+    });
+
+    it("classifies a backticked miss undetectable", async () => {
       await mkdir(path.join(workdir, "src"), { recursive: true });
       await writeFile(path.join(workdir, "src", "other.ts"), "const x = 1;", "utf-8");
 
@@ -60,6 +75,18 @@ describe("grep-for-symbol rule", () => {
         workdir,
         ac: { index: 0, text: "", checkbox_state: "unchecked" },
         extracted: { symbol: "doesNotExist" },
+      });
+      expect(r.classification).toBe("undetectable");
+    });
+
+    it("classifies unsatisfied when a declared symbol is absent", async () => {
+      await mkdir(path.join(workdir, "src"), { recursive: true });
+      await writeFile(path.join(workdir, "src", "other.ts"), "const x = 1;", "utf-8");
+
+      const r = await grepForSymbolRule.evaluate({
+        workdir,
+        ac: { index: 0, text: "", checkbox_state: "unchecked" },
+        extracted: { symbol: "doesNotExist", declared: "true" },
       });
       expect(r.classification).toBe("unsatisfied");
     });
@@ -72,7 +99,7 @@ describe("grep-for-symbol rule", () => {
       const r = await grepForSymbolRule.evaluate({
         workdir,
         ac: { index: 0, text: "", checkbox_state: "unchecked" },
-        extracted: { symbol: "trapped" },
+        extracted: { symbol: "trapped", declared: "true" },
       });
       expect(r.classification).toBe("unsatisfied");
     });
