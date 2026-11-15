@@ -6,10 +6,11 @@
  * review the units phase runs next. An adapter that dropped the variable would
  * review twice, so the CLI and Claude Agent SDK paths are checked here where
  * they build the env (opencode's is in tests/cli/opencodeAdapter.test.ts). The
- * variables only add: one the adapter sets itself keeps the adapter's value.
+ * variables only add: one the adapter sets itself keeps the adapter's value. The
+ * SDK path hands the child only the curated allowlist plus those (#3329).
  */
 
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
@@ -68,8 +69,22 @@ describe("CLI query env overlay (#2908)", () => {
   });
 });
 
-describe("Claude Agent SDK env overlay (#2908)", () => {
-  afterEach(() => sdkQueryMock.mockClear());
+describe("Claude Agent SDK env overlay (#2908, #3329)", () => {
+  // NIGHTGAUGE_* is allowlisted by prefix, so the sentinels use names outside
+  // every allowlist and prefix.
+  const SECRET = "SENTINEL_TEST_SECRET_TOKEN";
+  const QUERY_ONLY = "SENTINEL_QUERY_ONLY_VAR";
+  beforeEach(() => {
+    vi.stubEnv(REVIEW_UNITS_PHASE_ENV, undefined);
+    vi.stubEnv(SECRET, "leaked");
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
+    vi.stubEnv("PATH", "/test/bin");
+    vi.stubEnv("HOME", "/test/home");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    sdkQueryMock.mockClear();
+  });
 
   async function callAdapterQuery(q: SDKQueryOptions): Promise<SDKQueryOptions> {
     const query = await new ClaudeSdkAdapter().createQueryFunction();
@@ -77,14 +92,29 @@ describe("Claude Agent SDK env overlay (#2908)", () => {
     return sdkQueryMock.mock.calls.at(-1)![0] as unknown as SDKQueryOptions;
   }
 
-  it("hands the SDK this process's env with the query's added, since its env replaces", async () => {
-    const env = (await callAdapterQuery({ prompt: "p", options: { env: OVERLAY } })).options?.env;
+  it("hands the SDK the curated env plus every query variable, curated values winning", async () => {
+    const options = { env: { ...OVERLAY, [QUERY_ONLY]: "q" } };
+    const env = (await callAdapterQuery({ prompt: "p", options })).options?.env;
     expect(env?.[REVIEW_UNITS_PHASE_ENV]).toBe("1");
-    expect(env?.PATH).toBe(process.env.PATH);
+    expect(env?.[QUERY_ONLY]).toBe("q");
+    expect(env?.PATH).toBe("/test/bin");
   });
 
-  it("leaves a query without env untouched, so the SDK keeps its default", async () => {
-    const q: SDKQueryOptions = { prompt: "p", options: { cwd: "/x" } };
-    expect(await callAdapterQuery(q)).toBe(q);
+  it("hands a query without env a curated env rather than the SDK's inherited one", async () => {
+    const sent = await callAdapterQuery({ prompt: "p", options: { cwd: "/x" } });
+    expect(sent.options?.cwd).toBe("/x");
+    expect(sent.options?.env).toBeDefined();
+    expect(sent.options?.env?.[REVIEW_UNITS_PHASE_ENV]).toBeUndefined();
+  });
+
+  it.each([
+    ["with", { env: OVERLAY }],
+    ["without", {}],
+  ])("withholds parent secrets outside the allowlist for a query %s env", async (_l, options) => {
+    const env = (await callAdapterQuery({ prompt: "p", options })).options?.env;
+    expect(env?.[SECRET]).toBeUndefined();
+    expect(env?.PATH).toBe("/test/bin");
+    expect(env?.HOME).toBe("/test/home");
+    expect(env?.ANTHROPIC_API_KEY).toBe("sk-test");
   });
 });

@@ -17,6 +17,7 @@ import type {
 } from "./ICliAdapter.js";
 import type { WorkflowSpec, WorkflowEventSink } from "../workflow/index.js";
 import { AdapterError } from "./errors.js";
+import { curateChildEnv } from "./childEnv.js";
 import {
   detectClaudeSdkVersion,
   preflightNativeWorkflow,
@@ -128,21 +129,18 @@ export class ClaudeSdkAdapter implements ICliAdapter {
 }
 
 /**
- * The Agent SDK's `env` replaces the child's environment; ours only adds to it
- * (SDKQueryOptions `env`, #2908). Hand the SDK this process's environment with
- * the query's variables added, and leave a query without any untouched.
+ * The Agent SDK's `env` replaces the child's environment, and an absent `env`
+ * makes the SDK inherit all of `process.env`. Hand it, on every query, only the
+ * curated child-env allowlist with the query's own variables added, the same
+ * least-privilege contract as the CLI adapters (#3329). A curated
+ * variable keeps its value over the query's.
  */
 function withEnvOverlay(query: SDKQueryFunction): SDKQueryFunction {
   return (queryOptions) => {
-    const overlay = queryOptions.options?.env;
-    if (overlay === undefined) return query(queryOptions);
-    const env: Record<string, string> = {};
-    for (const [name, value] of Object.entries(process.env)) {
+    const env: Record<string, string> = { ...queryOptions.options?.env };
+    for (const [name, value] of Object.entries(curateChildEnv(process.env))) {
       if (value !== undefined) env[name] = value;
     }
-    return query({
-      ...queryOptions,
-      options: { ...queryOptions.options, env: { ...overlay, ...env } },
-    });
+    return query({ ...queryOptions, options: { ...queryOptions.options, env } });
   };
 }
