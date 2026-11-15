@@ -1,7 +1,7 @@
 package execution
 
 // A Nightgauge plugin gate block (#1635) must never be classified as an
-// OpenCode auto-reject: it is a thrown Error from tool.execute.before, never
+// OpenCode auto-reject: it is a thrown Error from the plugin's execute.before hook, never
 // OpenCode's own "! permission requested: ...; auto-rejecting" stderr
 // notice, so the model sees the gate's reason and the stage continues rather
 // than being classified adapter_permission_rejected (ADR-022 § 9,
@@ -21,7 +21,7 @@ func TestNightgaugeGateMarkerIsNeverAnAutoRejectNotice(t *testing.T) {
 		"[nightgauge-gate:careful] /careful is ON — blocked: docker compose down -v is a production-destructive Bash command (run `nightgauge careful off` to disable.)",
 		"[nightgauge-gate:careful] NIGHTGAUGE_BIN is not set to an absolute path; the careful gate cannot run, so the tool call is blocked closed",
 		"[nightgauge-gate:careful] the careful gate timed out or was killed (signal SIGTERM); the tool call is blocked closed",
-		"[nightgauge-gate:task-denied] subagent (task) sessions are denied: a subagent's steps and tokens never reach the stage's turn, token and cost budgets while it runs (ADR-022 amendment 2026-10-05, #1805)",
+		"[nightgauge-gate:subagent-denied] subagent sessions are denied: a subagent's steps and tokens never reach the stage's turn, token and cost budgets while it runs (ADR-022 amendment 2026-10-05, #1805)",
 	}
 	for _, msg := range messages {
 		if strings.HasSuffix(msg, openCodeAutoRejectEnd) {

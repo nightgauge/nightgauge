@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -120,7 +121,7 @@ func TestOpenCodeLateHandshakeFailsTheStage(t *testing.T) {
 
 	future := time.Now().Add(time.Hour).Format("200601021504.05")
 	installHandshakeFake(t, "", fmt.Sprintf(`
-sentinel_body="{\"nonce\":\"$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE\",\"plugin_version\":\"1\",\"hooks\":[]}"
+sentinel_body="{\"nonce\":\"$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE\",\"plugin_version\":\"`+opencodeplugin.PluginVersion+`\",\"hooks\":[]}"
 printf '%%s' "$sentinel_body" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
 echo '{"type":"step_start","sessionID":"s1"}'
 echo '{"type":"tool_use","sessionID":"s1","part":{"tool":"bash","state":{"status":"completed"}}}'
@@ -173,7 +174,7 @@ func TestOpenCodeHandshakeUsesToolStartTime(t *testing.T) {
 
 	installHandshakeFake(t, "", fmt.Sprintf(`
 sleep 0.3
-sentinel_body="{\"nonce\":\"$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE\",\"plugin_version\":\"1\",\"hooks\":[]}"
+sentinel_body="{\"nonce\":\"$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE\",\"plugin_version\":\"`+opencodeplugin.PluginVersion+`\",\"hooks\":[]}"
 printf '%%s' "$sentinel_body" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
 echo '{"type":"step_start","sessionID":"s1"}'
 echo '{"type":"tool_use","sessionID":"s1","part":{"tool":"bash","state":{"status":"completed","time":{"start":%d}}}}'

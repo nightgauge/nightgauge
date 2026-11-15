@@ -17,8 +17,7 @@ import (
 )
 
 // editJSPath writes a fresh copy of the embedded plugin tree and returns
-// both the entry file (nightgauge.js) and edit.js's own path, mirroring
-// writePluginTreeForGatesTest's (entry, gatesPath) shape.
+// both the plugin directory and edit.js's own path.
 func editJSPath(t *testing.T) (entry, editPath string) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "plugin")
@@ -30,46 +29,49 @@ func editJSPath(t *testing.T) (entry, editPath string) {
 }
 
 // toolExecuteAfterResult is what nodeToolExecuteAfterDriver prints: whether
-// the hook threw (it never should — edit.js's own contract), and the
-// (possibly mutated) output object the hook was handed.
+// the hook threw (it never should — edit.js's own contract), and the tool's
+// result as the model and the stream see it after the hook: Output["output"]
+// is the result's text parts joined with "\n" (2.x hands the model each
+// part), Output["metadata"] its metadata.
 type toolExecuteAfterResult struct {
 	Threw   bool           `json:"threw"`
 	Message string         `json:"message"`
 	Output  map[string]any `json:"output"`
 }
 
-// nodeToolExecuteAfterDriver drives nightgauge.js's own registered
-// `tool.execute.after` hook — the wiring itself (edit.js's optional import,
-// exactly as nightgauge.js's optionalHooks loads it), not edit.js's export
-// called directly — so a wiring gap (nightgauge.js forgetting to delegate)
-// would turn this red the same way plugin_gates_test.go's
-// TestCommandExecuteBeforeWiredThroughEntry catches the equivalent gap for
-// command.execute.before.
-const nodeToolExecuteAfterDriver = `
-import { pathToFileURL } from "node:url";
-
-const mod = await import(pathToFileURL(process.env.NG_PLUGIN_PATH).href);
-const plugin = mod.NightgaugePlugin || mod.default;
-const ctx = { directory: process.env.NG_CWD, worktree: process.env.NG_CWD };
-const hooks = await plugin(ctx);
-
-const input = {
-  tool: process.env.NG_TOOL || "edit",
-  sessionID: "s",
-  callID: "c",
-  args: JSON.parse(process.env.NG_ARGS || "{}"),
+// nodeToolExecuteAfterDriver drives the entry's own registered OpenCode 2.x
+// execute.after hook on the fake host — the wiring itself (edit.js's optional
+// import), not edit.js's export called directly — with the argument 2.2.7
+// hands it: {tool, sessionID, agent, messageID, id, input, status, result}.
+// NG_OUTPUT's {output, metadata} becomes a completed tool's result, whose
+// content holds the original output as one text part.
+var nodeToolExecuteAfterDriver = hostDriver(`
+const given = JSON.parse(process.env.NG_OUTPUT || '{"output":"original"}');
+const original = typeof given.output === "string" ? given.output : "";
+const result = {
+  output: {},
+  content: original === "" ? [] : [{ type: "text", text: original }],
+  metadata: given.metadata || {},
 };
-const output = JSON.parse(process.env.NG_OUTPUT || '{"output":"original"}');
+const arg = {
+  ...toolArg(process.env.NG_TOOL || "edit", JSON.parse(process.env.NG_ARGS || "{}")),
+  status: process.env.NG_STATUS || "completed",
+  result,
+};
+const view = () => ({
+  output: result.content.filter((p) => p && p.type === "text").map((p) => p.text).join("\n"),
+  metadata: result.metadata,
+});
 
-let result;
+let out;
 try {
-  await hooks["tool.execute.after"](input, output);
-  result = { threw: false, output };
+  await host.after(arg);
+  out = { threw: false, output: view() };
 } catch (e) {
-  result = { threw: true, message: String(e && e.message ? e.message : e), output };
+  out = { threw: true, message: String(e && e.message ? e.message : e), output: view() };
 }
-process.stdout.write(JSON.stringify(result));
-`
+process.stdout.write(JSON.stringify(out));
+`)
 
 // nodeEditTimeoutsDriver reads edit.js's own exported timeout constants
 // directly, so a test can pin the exact numbers (30000/10000/5000) without
@@ -100,14 +102,14 @@ const result = mod.classifyQualityVerbResult("test-quality", {
 process.stdout.write(JSON.stringify(result));
 `
 
-// runEditHarness drives one tool.execute.after call through nightgauge.js's
-// own registered hook for an opencode-shaped edit/write args object.
+// runEditHarness drives one execute.after call through the entry's own
+// registered hook for a 2.x-shaped edit/write `input` object.
 func runEditHarness(t *testing.T, node, cwd, tool, argsJSON, outputJSON, nightgaugeBin string, extraEnv map[string]string) toolExecuteAfterResult {
 	t.Helper()
 	entry, _ := editJSPath(t)
 	driver := writeGatesDriver(t, nodeToolExecuteAfterDriver)
 	env := append(os.Environ(),
-		"NG_PLUGIN_PATH="+entry,
+		"NG_PLUGIN_PATH="+filepath.Join(entry, EntryFile),
 		"NG_CWD="+cwd,
 		"NG_TOOL="+tool,
 		"NG_ARGS="+argsJSON,
@@ -221,7 +223,7 @@ func TestEditHooksOrderAndFormatterToggle(t *testing.T) {
 
 	writeArgs := func(t *testing.T) string {
 		t.Helper()
-		b, err := json.Marshal(map[string]any{"filePath": "a.test.ts", "content": "console.log(1)"})
+		b, err := json.Marshal(map[string]any{"path": "a.test.ts", "content": "console.log(1)"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -268,7 +270,7 @@ func TestEditHooksOrderAndFormatterToggle(t *testing.T) {
 		bin := writeRecordingBin(t, logPath, "", 0)
 		env := map[string]string{} // no OPENCODE_CONFIG_CONTENT at all
 
-		res := runEditHarness(t, node, root, "edit", `{"filePath":"a.test.ts","oldString":"x","newString":"console.log(1)"}`, `{"output":"orig"}`, bin, env)
+		res := runEditHarness(t, node, root, "edit", `{"path":"a.test.ts","oldString":"x","newString":"console.log(1)"}`, `{"output":"orig"}`, bin, env)
 		if res.Threw {
 			t.Fatalf("want no throw, got %q", res.Message)
 		}
@@ -342,7 +344,7 @@ func TestEditHookOutsideWorktreeSpawnsNothing(t *testing.T) {
 			bin := writeRecordingBin(t, logPath, "", 0)
 			env := map[string]string{"OPENCODE_CONFIG_CONTENT": `{"formatter":false}`}
 
-			argsJSON, err := json.Marshal(map[string]any{"filePath": filePath, "content": "x"})
+			argsJSON, err := json.Marshal(map[string]any{"path": filePath, "content": "x"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -377,7 +379,7 @@ func TestEditHookAbsolutePathInsideWorktreeRunsHooks(t *testing.T) {
 	env := map[string]string{"OPENCODE_CONFIG_CONTENT": `{"formatter":false}`}
 
 	absPath := filepath.Join(root, "src", "a.test.ts")
-	argsJSON, err := json.Marshal(map[string]any{"filePath": absPath, "content": "expect(true).toBe(true);"})
+	argsJSON, err := json.Marshal(map[string]any{"path": absPath, "content": "expect(true).toBe(true);"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +419,7 @@ func TestEditHookAppendsWarningsCappedAt2KB(t *testing.T) {
 		"NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS": "1",
 		"OPENCODE_CONFIG_CONTENT":          `{"formatter":true}`,
 	} // skip format
-	argsJSON := `{"filePath":"a.test.ts","content":"x"}`
+	argsJSON := `{"path":"a.test.ts","content":"x"}`
 	res := runEditHarness(t, node, root, "write", argsJSON, `{"output":"orig"}`, binPath, env)
 	if res.Threw {
 		t.Fatalf("want no throw, got %q", res.Message)
@@ -426,7 +428,8 @@ func TestEditHookAppendsWarningsCappedAt2KB(t *testing.T) {
 	if !strings.HasPrefix(out, "orig") {
 		t.Errorf("output.output = %q, want it to still start with the original tool output", out)
 	}
-	appended := len(out) - len("orig")
+	// The warning is its own text part, which the view joins after "orig\n".
+	appended := len(out) - len("orig\n")
 	if appended > 2048 {
 		t.Errorf("appended %d bytes, want <= 2048 (issue's own 2 KB cap)", appended)
 	}
@@ -458,7 +461,7 @@ func TestEditHookEPIPEWithSuccessfulStatusKeepsWarning(t *testing.T) {
 func TestEditHookQualityVerbDiagnostics(t *testing.T) {
 	node := requireNode(t)
 	root := t.TempDir()
-	argsJSON := `{"filePath":"a.test.ts","content":"x"}`
+	argsJSON := `{"path":"a.test.ts","content":"x"}`
 	env := map[string]string{
 		"NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS": "1",
 		"OPENCODE_CONFIG_CONTENT":          `{"formatter":true}`,
@@ -549,7 +552,7 @@ func TestEditHookTimeoutLeavesToolResultIntact(t *testing.T) {
 	bin := writeRecordingBin(t, logPath, "test-quality", 6)
 
 	env := map[string]string{"OPENCODE_CONFIG_CONTENT": `{"formatter":false}`}
-	argsJSON := `{"filePath":"a.test.ts","content":"x"}`
+	argsJSON := `{"path":"a.test.ts","content":"x"}`
 	res := runEditHarness(t, node, root, "write", argsJSON, `{"output":"orig"}`, bin, env)
 	if res.Threw {
 		t.Fatalf("want no throw even on a timed-out verb, got %q", res.Message)
@@ -570,8 +573,8 @@ func TestEditHookAppendsRealTestQualityWarnings(t *testing.T) {
 
 	env := map[string]string{"OPENCODE_CONFIG_CONTENT": `{"formatter":true}`} // skip format; no formatter binaries required
 	argsJSON, err := json.Marshal(map[string]any{
-		"filePath": "a.test.ts",
-		"content":  "it(\"does nothing\", () => {})\nexpect(true).toBe(true);",
+		"path":    "a.test.ts",
+		"content": "it(\"does nothing\", () => {})\nexpect(true).toBe(true);",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -592,24 +595,22 @@ func TestEditHookAppendsRealTestQualityWarnings(t *testing.T) {
 }
 
 // TestEditHookNoFileEditedRegistration is the AC's own "a formatter write
-// does not re-run the edit hooks" bullet: nightgauge.js registers no
-// `file.edited` hook at all — there is nothing for a formatter write's own
-// `file.edited` event to reach — so emitting one spawns nothing. This is
-// tested at the wiring level (the registered hooks object itself carries no
-// such key), which is what would actually change if a future edit ever added
-// one.
+// does not re-run the edit hooks" bullet: setup registers no hook and
+// subscribes to no event that a file edit publishes, so a formatter write's
+// own edit event reaches nothing. Tested at the wiring level (what setup
+// registers on the fake 2.x host), which is what would change if a future
+// edit ever added one.
 func TestEditHookNoFileEditedRegistration(t *testing.T) {
 	node := requireNode(t)
 	entry, _ := editJSPath(t)
-	driver := writeGatesDriver(t, `
-import { pathToFileURL } from "node:url";
-const mod = await import(pathToFileURL(process.env.NG_PLUGIN_PATH).href);
-const plugin = mod.NightgaugePlugin || mod.default;
-const hooks = await plugin({ directory: process.env.NG_CWD, worktree: process.env.NG_CWD });
-process.stdout.write(JSON.stringify(Object.keys(hooks)));
-`)
+	driver := writeGatesDriver(t, hostDriver(`
+process.stdout.write(JSON.stringify({
+  registered: host.registered,
+  types: host.subscriptions.flatMap((s) => s.types || ["*"]),
+}));
+`))
 	cmd := exec.Command(node, driver)
-	cmd.Env = append(os.Environ(), "NG_PLUGIN_PATH="+entry, "NG_CWD="+t.TempDir())
+	cmd.Env = append(os.Environ(), "NG_PLUGIN_PATH="+filepath.Join(entry, EntryFile), "NG_CWD="+t.TempDir())
 	out, err := cmd.Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
@@ -617,73 +618,89 @@ process.stdout.write(JSON.stringify(Object.keys(hooks)));
 		}
 		t.Fatalf("node harness failed: %v", err)
 	}
-	var keys []string
-	if err := json.Unmarshal(out, &keys); err != nil {
+	var got struct {
+		Registered []string `json:"registered"`
+		Types      []string `json:"types"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("node harness printed non-JSON: %s (%v)", out, err)
 	}
-	for _, k := range keys {
-		if k == "file.edited" {
-			t.Fatalf("nightgauge.js registers a file.edited hook (%v); a formatter write must never re-trigger the edit hooks", keys)
+	for _, name := range append(got.Registered, got.Types...) {
+		if name == "*" || strings.Contains(name, "file") || strings.Contains(name, "edited") {
+			t.Fatalf("setup registers or subscribes to %q (registered %v, types %v); a formatter write must never re-trigger the edit hooks", name, got.Registered, got.Types)
 		}
 	}
 }
 
-// --- guardrail: replaying 1.18.30's real tool.execute.after argument shape
-// (captured by this issue's own offline probe against the pinned binary —
-// see edit.js's header comment). The stub fixture below (tool-edit-stop)
-// supplies its OWN relative filePath ("calc.py") — that is a property of the
-// stub, not of 1.18.30's tool schemas, which require an absolute filePath;
-// TestEditHookMatchesRealModelCaptureArgumentShape below replays the
-// absolute-path shape this repository's own real-model captures show
-// (internal/execution/testdata/opencode_stream_local_capture.jsonl and
-// siblings), which is what a schema-conformant model actually sends. ---
+// TestEditHookSkipsAToolThatDidNotComplete: an edit whose execute.after
+// status is not "completed" changed no file, so no verb is spawned and the
+// result is untouched.
+func TestEditHookSkipsAToolThatDidNotComplete(t *testing.T) {
+	node := requireNode(t)
+	root := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "log.txt")
+	bin := writeRecordingBin(t, logPath, "", 0)
+	env := map[string]string{"OPENCODE_CONFIG_CONTENT": `{"formatter":false}`, "NG_STATUS": "error"}
+	res := runEditHarness(t, node, root, "edit", `{"path":"calc.py","oldString":"a","newString":"b"}`, `{"output":"orig"}`, bin, env)
+	if res.Threw {
+		t.Fatalf("want no throw, got %q", res.Message)
+	}
+	if got := readLogLines(t, logPath); len(got) != 0 {
+		t.Errorf("spawned verbs = %v for a tool that did not complete, want none", got)
+	}
+	if res.Output["output"] != "orig" {
+		t.Errorf("output = %v, want the original tool output unchanged", res.Output["output"])
+	}
+}
 
-func TestEditHookMatches1_18_30ArgumentShape(t *testing.T) {
+// --- guardrail: replaying 2.2.7's real execute.after argument shape
+// (captured by #3302's offline probe against opencode v2.2.7 — see edit.js's
+// header comment). The stub's edit names the worktree-relative path
+// "calc.py"; TestEditHookMatchesRealModelCaptureArgumentShape below replays
+// an absolute path inside the worktree. ---
+
+func TestEditHookMatches2xArgumentShape(t *testing.T) {
 	node := requireNode(t)
 	root := t.TempDir()
 	logPath := filepath.Join(t.TempDir(), "log.txt")
 	bin := writeRecordingBin(t, logPath, "", 0)
 	env := map[string]string{"OPENCODE_CONFIG_CONTENT": `{"formatter":false}`}
 
-	// Captured verbatim from the probe: an `edit` call's real input/output
-	// shape against opencode 1.18.30 (tool-edit-stop fixture).
-	const capturedEditInput = `{"filePath":"calc.py","newString":"return a - b","oldString":"return a + b"}`
-	res := runEditHarness(t, node, root, "edit", capturedEditInput, `{"metadata":{},"title":"calc.py","output":"Edit applied successfully."}`, bin, env)
+	// Captured from the probe: an `edit` call's input and its result's text
+	// against opencode v2.2.7 (tool-edit-stop@opencode2).
+	const capturedEditInput = `{"newString":"return a - b","oldString":"return a + b","path":"calc.py"}`
+	res := runEditHarness(t, node, root, "edit", capturedEditInput, `{"metadata":{},"output":"Edited calc.py (1 replacement)"}`, bin, env)
 	if res.Threw {
-		t.Fatalf("want no throw against the captured 1.18.30 edit shape, got %q", res.Message)
+		t.Fatalf("want no throw against the captured 2.2.7 edit shape, got %q", res.Message)
 	}
 	got := readLogLines(t, logPath)
 	want := []string{"format", "check-version", "test-quality"}
 	if !equalStrings(got, want) {
-		t.Errorf("spawned verbs = %v, want %v against the captured 1.18.30 edit shape", got, want)
+		t.Errorf("spawned verbs = %v, want %v against the captured 2.2.7 edit shape", got, want)
 	}
 
-	// Captured verbatim from the probe: a `write` call's real input/output
-	// shape against opencode 1.18.30 (write-then-stop fixture).
 	logPath2 := filepath.Join(t.TempDir(), "log2.txt")
 	bin2 := writeRecordingBin(t, logPath2, "", 0)
-	const capturedWriteInput = `{"content":"print(1)\n","filePath":"new.py"}`
-	res2 := runEditHarness(t, node, root, "write", capturedWriteInput, `{"title":"new.py","metadata":{},"output":"Wrote file successfully."}`, bin2, env)
+	const writeInput = `{"content":"print(1)\n","path":"new.py"}`
+	res2 := runEditHarness(t, node, root, "write", writeInput, `{"metadata":{},"output":"Wrote new.py"}`, bin2, env)
 	if res2.Threw {
-		t.Fatalf("want no throw against the captured 1.18.30 write shape, got %q", res2.Message)
+		t.Fatalf("want no throw against the 2.x write shape, got %q", res2.Message)
 	}
 	if got2 := readLogLines(t, logPath2); !equalStrings(got2, want) {
-		t.Errorf("spawned verbs = %v, want %v against the captured 1.18.30 write shape", got2, want)
+		t.Errorf("spawned verbs = %v, want %v against the 2.x write shape", got2, want)
 	}
 }
 
 // TestEditHookMatchesRealModelCaptureArgumentShape replays the ABSOLUTE
 // filePath shape this repository's own real-model captures show for a real
 // `edit` call (internal/execution/testdata/opencode_stream_local_capture.jsonl:
-// `"tool":"edit"... "input":{"filePath":"/tmp/nightgauge-fixture/repo/calc.py",
+// `"tool":"edit"... "input":{"path":"/tmp/nightgauge-fixture/repo/calc.py",
 // "oldString":"    return a - b","newString":"    return a + b"}`), rooted at
 // this test's own temp dir with the same relative structure
 // (root/repo/calc.py) so the path is genuinely INSIDE the run's cwd, exactly
-// as it was for the real capture's own worktree. Unlike
-// TestEditHookMatches1_18_30ArgumentShape's stub fixture (a relative
-// "calc.py", an artifact of the stub's own tool implementation), this is
-// what a schema-conformant model — which 1.18.30's own tool schemas require
-// to send an absolute filePath — actually produces.
+// as it was for the real capture's own worktree. That capture predates 2.x
+// (its key was filePath); the absolute-path form still reaches 2.x as
+// input.path when a model names its file that way.
 func TestEditHookMatchesRealModelCaptureArgumentShape(t *testing.T) {
 	node := requireNode(t)
 	root := t.TempDir()
@@ -696,7 +713,7 @@ func TestEditHookMatchesRealModelCaptureArgumentShape(t *testing.T) {
 
 	absPath := filepath.Join(root, "repo", "calc.py")
 	argsJSON, err := json.Marshal(map[string]any{
-		"filePath":  absPath,
+		"path":      absPath,
 		"oldString": "    return a - b",
 		"newString": "    return a + b",
 	})

@@ -2,12 +2,14 @@
 // entry module and its gate that give an OpenCode stage the same
 // careful-gate every Claude Code stage runs through hooks.json, since
 // OpenCode never reads Claude Code hooks and its only extension point is an
-// in-process JS plugin (tool.execute.before, blocking a tool by throwing).
+// in-process JS plugin (on 2.x, a ctx.tool.hook("execute.before") handler that
+// blocks a tool by throwing, #3302).
 //
 // Write copies the embedded plugin/ tree into the run's per-run OpenCode
-// plugin directory — never installed from npm or Bun — so opencode 1.18.30
-// loads it as a local plugin file, named directly in the per-run config's
-// `plugin` array (internal/execution/adapters/opencode.go). A startup
+// plugin directory — never installed from npm or Bun — and OpenCode 2.x loads
+// it as a local plugin directory (it loads the directory's index.js), named in
+// the per-run config's `plugins` array
+// (internal/execution/adapters/opencode.go). A startup
 // handshake (VerifyLoaded, VerifyNotLate) lets the manager's stream loop
 // (internal/execution/manager.go) confirm the plugin actually initialized
 // before any tool call could run, and fail the stage closed — never silently
@@ -33,41 +35,44 @@ import (
 var pluginFS embed.FS
 
 // pluginRoot is the go:embed directory name, stripped by Files/Write so
-// callers see a tree rooted at nightgauge.js itself.
+// callers see a tree rooted at the plugin directory itself.
 const pluginRoot = "plugin"
 
 // PluginVersion is the handshake's plugin_version. It MUST match
 // NIGHTGAUGE_PLUGIN_VERSION in plugin/nightgauge.js byte for byte
-// (TestPluginVersionMatchesGo).
-const PluginVersion = "1"
+// (TestPluginVersionAndHooksMatchGo). "2" is the OpenCode 2.x definition
+// (#3302): `export default { id, setup }` registering hooks through ctx.
+const PluginVersion = "2"
 
-// EntryFile is the plugin file the per-run config's `plugin` array names.
-const EntryFile = "nightgauge.js"
+// EntryFile is the module OpenCode 2.x loads from the directory Write returns.
+// Observed on 2.2.7 (#3302): it loads <dir>/index.js and ignores a
+// package.json `main` naming another file, loading nothing at all.
+const EntryFile = "index.js"
 
-// HookNames are every hook nightgauge.js registers, in registration order:
-// the handshake sentinel's "hooks" field, and what
-// TestPluginRegistersGoldenHooks compares plugin/nightgauge.js's own
-// NIGHTGAUGE_HOOK_NAMES against.
+// HookNames are every registration nightgauge.js's setup makes, in order, as
+// "<service>:<name>": the handshake sentinel's "hooks" field, and what
+// TestPluginVersionAndHooksMatchGo compares plugin/nightgauge.js's own
+// NIGHTGAUGE_HOOK_NAMES against. Each was observed firing on opencode v2.2.7;
+// nightgauge.js's header records what was tried and never fired.
 var HookNames = []string{
-	"tool.execute.before",
-	"tool.execute.after",
-	"command.execute.before",
-	"permission.ask",
-	"event",
-	"experimental.session.compacting",
-	"experimental.compaction.autocontinue",
+	"tool:execute.before",
+	"tool:execute.after",
+	"session:compaction",
+	"event:subscribe",
 }
 
-// Files returns the embedded plugin tree, rooted at nightgauge.js (i.e.
-// Files().Open("nightgauge.js") and Files().Open("nightgauge/gates.js")).
+// Files returns the embedded plugin tree, rooted at the plugin directory
+// (Files().Open("index.js"), Files().Open("nightgauge.js") and
+// Files().Open("nightgauge/gates.js")).
 func Files() (fs.FS, error) {
 	return fs.Sub(pluginFS, pluginRoot)
 }
 
 // Write copies the embedded plugin tree into dir (created 0700; every file
-// 0600) so opencode loads it as a local plugin file rather than an npm or
-// Bun package. Returns the absolute path to EntryFile, the value the
-// per-run config's `plugin` array names.
+// 0600) so opencode loads it as a local plugin directory rather than an npm
+// or Bun package. Returns dir itself, cleaned: the value the per-run config's
+// `plugins` array names. OpenCode 2.x refuses a file entry ("configured
+// plugin path must be a directory") and then runs with no plugin at all.
 //
 // Write always rewrites every file, so a plugin version upgrade between two
 // runs that share a stale PluginDir never leaves an old file mixed in with
@@ -100,7 +105,7 @@ func Write(dir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("opencodeplugin: writing plugin into %s: %w", dir, err)
 	}
-	return filepath.Join(dir, EntryFile), nil
+	return filepath.Clean(dir), nil
 }
 
 // NewNonce mints the handshake nonce: 128 random bits, hex-encoded.

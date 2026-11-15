@@ -213,10 +213,10 @@ func beginStageContext(adapterName, outputFile, runID string) stageContextProbe 
 }
 
 // compactionNote names the context compactions of an OpenCode attempt that
-// ended with no state change (#2180). A session that compacted more often
-// than the plugin resumes it (session.js COMPACTION_CONTINUE_MAX) ends at
-// idle with its task unfinished; the note tells that apart from a model that
-// simply stopped. It is empty for any other attempt.
+// ended with no state change (#2180). A session can end with its task
+// unfinished after compacting (OpenCode 2.x exposes no hook to resume it,
+// #3302); the note tells that apart from a model that simply stopped. It is
+// empty for any other attempt.
 func (p stageContextProbe) compactionNote() string {
 	if !p.eventsOK {
 		return ""
@@ -225,7 +225,7 @@ func (p stageContextProbe) compactionNote() string {
 	if n == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" (after %d context compaction(s): the session ended at idle once it had compacted more often than the plugin resumes it, or the model stopped after a resume)", n)
+	return fmt.Sprintf(" (after %d context compaction(s): the session may have ended after compacting with its task unfinished)", n)
 }
 
 // record replaces the stage's context entry with this attempt's: the

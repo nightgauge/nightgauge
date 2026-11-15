@@ -249,9 +249,9 @@ How the `opencode` adapter
   holds for the file tools only. A tree inside the stage's worktree gets
   neither flag: it is already reachable, and it is the checkout the stage may need to change.
 - **Hooks map to the Nightgauge OpenCode plugin.** Claude `PreToolUse` gates
-  run as the plugin's `tool.execute.before` handler; completion checks are Go
-  StageGates, as for every non-Claude host. A tool the plugin cannot map is
-  blocked closed.
+  run as the plugin's `execute.before` handler, registered through
+  `ctx.tool.hook` on OpenCode 2.x; completion checks are Go StageGates, as for
+  every non-Claude host. A tool the plugin cannot map is blocked closed.
 - **Headless permissions.** A permission that resolves to `ask` is
   auto-rejected and the process still exits 0 (opencode 1.18.30), so
   Nightgauge's permission maps contain only `allow` and `deny`, and a

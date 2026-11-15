@@ -50,7 +50,7 @@ func TestValidateOpenCodeConfigDocumentAcceptsTheBuildersOutput(t *testing.T) {
 		if err := validateOpenCodeConfigDocument(built.Content); err != nil {
 			t.Errorf("%s: the builder's own document is refused: %v", tc.model, err)
 		}
-		withPlugin, err := addNightgaugePluginToConfig(built.Content, filepath.Join(t.TempDir(), "nightgauge.js"))
+		withPlugin, err := addNightgaugePluginToConfig(built.Content, filepath.Join(t.TempDir(), "plugin"))
 		if err != nil {
 			t.Errorf("%s: the document with its plugins key is refused: %v", tc.model, err)
 		}

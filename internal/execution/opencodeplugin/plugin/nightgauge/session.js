@@ -1,54 +1,48 @@
 // session.js gives an OpenCode stage the same session-lifecycle coverage
-// Claude Code's hooks give a stage (#1641): compaction context re-injection,
-// a bounded post-compaction auto-continue (#2180), idle stop-verification,
-// skill-usage telemetry and a rate-limited permission-ask notification. Every
-// export here is OPTIONAL from nightgauge.js's point of view
-// (optionalHooks): a missing or throwing function here degrades that one
-// hook to a no-op, never breaks plugin load the way gates.js's mandatory
-// import does — this module observes and records, it is never a gate.
+// Claude Code's hooks give a stage (#1641), on the OpenCode 2.x plugin API
+// (#3302): compaction context re-injection, end-of-run stop-verification,
+// skill-usage telemetry, a rate-limited permission-ask notification and a
+// streaming heartbeat. Every export here is OPTIONAL from nightgauge.js's
+// point of view (optionalModule): a missing or throwing function degrades
+// that one hook to a no-op, never breaks plugin load the way gates.js's
+// mandatory import does — this module observes and records, it is never a
+// gate.
 //
 // Every spawn below is bounded — by SPAWN_TIMEOUT_MS here, or, for the one
 // verb spawned on a terminal event and deliberately let go of
-// (runHookDetached), by that verb's own Go-side bound — and its result is never
-// allowed to change what the tool call, permission decision or model turn
-// does: a hung, missing or failing verb degrades to "nothing recorded",
-// never a throw. Model-authored content never reaches a spawned verb's argv;
-// every payload travels as stdin JSON, exactly as gates.js's careful-gate
-// already does.
+// (runHookDetached), by that verb's own Go-side bound — and its result never
+// changes what the tool call or model turn does: a hung, missing or failing
+// verb degrades to "nothing recorded", never a throw. Model-authored content
+// never reaches a spawned verb's argv; every payload travels as stdin JSON.
 //
 // runHook is async (node:child_process spawn, not spawnSync) on purpose
-// (#1641 fixed forward): opencode is a single-threaded event loop process,
-// and spawnSync blocks that ENTIRE process — every other session's tool
-// calls, timers and bus events — for as long as the child runs, up to
-// SPAWN_TIMEOUT_MS. An async spawn lets opencode keep servicing everything
-// else while a hook verb runs; the bound, the argv/stdin contract and the
-// fail-open "not ok" result are unchanged.
+// (#1641): opencode is a single-threaded event loop process, and spawnSync
+// blocks every other session's tool calls, timers and bus events for as long
+// as the child runs.
 //
-// There are two spawn helpers, for two genuinely different lifetimes
-// (#1810):
+// The #1810 un-awaited-hook workaround, revisited on 2.x (#3302):
 //
-//   - runHook, for a verb whose result this process will still be alive to
-//     see. Its promise is either awaited (sessionCompacting's
-//     inject-context call, the one case where opencode is itself waiting on
-//     the output before it can proceed) or left unawaited and only
-//     .catch()-guarded (notifyOnce, toolExecuteBefore's skill-usage call).
-//     Its SPAWN_TIMEOUT_MS timer, which lives in THIS process, is what
-//     bounds the child.
+//   - On 1.18.30 OpenCode did not await a hook's promise, so the tool-hook
+//     verbs were left un-awaited and only .catch()-guarded. 2.x awaits
+//     execute.before (spike #3197 § 4: each tool ran only after its
+//     before-hook's 1.5 s delay ended), so toolExecuteBefore now awaits its
+//     skill-usage spawn, which SPAWN_TIMEOUT_MS bounds. That part of the
+//     workaround is removed. The permission notify stays un-awaited for a
+//     different reason: events are handled one at a time (notifyOnce).
 //
-//   - runHookDetached, for a verb spawned on a TERMINAL event, where this
-//     process may be gone before the child has even started work. Measured
-//     against the pinned 1.18.30 binary (#1810): opencode does NOT await the
-//     promise a plugin's `event` hook returns, and a one-shot `opencode run`
-//     exits within ~10 ms of publishing session.idle — a continuation
-//     scheduled 20 ms out never runs at all, and an `await` inside the event
-//     hook never resumes. Nothing this process schedules can therefore
-//     record a session.idle verb's result, and no timer of this process's
-//     can bound it either. So the child is unref'd (this process never waits
-//     on it), it writes its OWN result line into the run's events file, and
-//     it enforces its OWN bound. See event()'s session.idle branch.
+//   - runHookDetached is KEPT, for the stop-verify verb spawned on a
+//     session's terminal event (session.execution.succeeded or .failed).
+//     Events reach this module through an async-iterable subscription that
+//     nothing awaits, and a one-shot `opencode run` shuts its location down
+//     right after the last session ends (probe: the subscription's stream
+//     closed ~200 ms after session.execution.succeeded). Whether or not a
+//     hook is awaited, this process may be gone before a child it waits on
+//     finishes, so the child is unref'd, writes its OWN result line into the
+//     run's events file and enforces its OWN bound. See event().
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { gateCwd } from "./gates.js";
 
 const SPAWN_TIMEOUT_MS = 5000;
 
@@ -59,7 +53,7 @@ const EVENTS_MAX_BYTES = 1024 * 1024; // 1 MiB
 
 // PERMISSION_NOTIFY_INTERVAL_MS is the per-session notify throttle: at most
 // one desktop notification per session per 60 s, however many times
-// permission.ask fires in that window.
+// permission.asked fires in that window.
 const PERMISSION_NOTIFY_INTERVAL_MS = 60000;
 
 // INJECT_CONTEXT_MAX_BYTES bounds what `hook inject-context` may add to a
@@ -77,17 +71,14 @@ let eventsTruncated = false;
 const lastNotifyAt = new Map();
 
 // childSessionIDs is every session id this process has ever observed with a
-// non-empty session.info.parentID, learned from session.created/
-// session.updated events (1.18.30's Session.Info carries an optional
-// parentID: observed directly on the bundled client bundle's own
-// `session.updated` reducer and `experimental.session.list({roots: ...})`
-// call). Module-level for the same reason as eventsTruncated/lastNotifyAt: it
-// must survive across every hook call this one opencode process makes.
-// gates.js denies the `task` tool unconditionally (ADR-022, AC9), so no
-// child session is known to reach any hook this plugin registers today —
-// this set is expected to stay empty in production until that denial lifts,
-// and every appendEvent call below still reads it rather than hard-coding
-// false, so child reporting is correct the day it does.
+// non-empty parentID, learned from session.created events (observed on 2.2.7:
+// a subagent's session.created data carries sessionID and parentID).
+// Module-level for the same reason as eventsTruncated/lastNotifyAt: it must
+// survive across every hook call this one opencode process makes. gates.js
+// denies the `subagent` tool unconditionally (ADR-022), so no child session
+// is known to reach any hook this plugin registers today; every appendEvent
+// call below still reads this set rather than hard-coding false, so child
+// reporting is correct the day that denial lifts.
 const childSessionIDs = new Set();
 
 // SKILL_ID_RE bounds what toolExecuteBefore ever treats as a skill id: opaque
@@ -102,19 +93,17 @@ function isChildSession(sessionID) {
   return !!sessionID && childSessionIDs.has(sessionID);
 }
 
-// trackSessionParentage records session.created/session.updated's own
-// parentage, when present, so later events for the same sessionID can be
-// tagged as a child session rather than always reporting false.
-function trackSessionParentage(props) {
-  const info = props && props.info;
-  if (info && info.id && info.parentID) {
-    childSessionIDs.add(info.id);
+// trackSessionParentage records session.created's parentage, when present,
+// so later events for the same sessionID are tagged as a child session.
+function trackSessionParentage(data) {
+  if (data && typeof data.sessionID === "string" && data.sessionID && data.parentID) {
+    childSessionIDs.add(data.sessionID);
   }
 }
 
-function resolveCwd(ctx) {
-  return (ctx && (ctx.directory || ctx.worktree)) || process.cwd();
-}
+// resolveCwd is gates.js's gateCwd: the run's worktree. gates.js is the
+// plugin's mandatory module, so importing it here adds no load dependency.
+const resolveCwd = gateCwd;
 
 // resolveNightgaugeBin returns NIGHTGAUGE_BIN only when it is an absolute
 // path, the same closed-by-default rule gates.js's careful-gate uses: a
@@ -273,13 +262,11 @@ function eventsPath() {
 }
 
 // STREAM_HEARTBEAT_FILE is touched in the run's OpenCode data directory
-// (XDG_DATA_HOME/opencode, beside opencode.db) whenever a part streams or
-// updates (#2184). OpenCode 1.18.32 publishes a streaming delta only on its
-// bus and never writes it to the session database, and `opencode run
-// --format json` prints a part only when it completes, so the manager's stall
-// watchdog (#2176) could not tell a model slowly writing a long reasoning
-// block from a dead request. The watchdog reads this file's mtime as
-// progress. Mirrors execution.streamHeartbeatFile byte for byte.
+// (XDG_DATA_HOME/opencode, beside opencode.db) whenever a part streams
+// (#2184). `opencode run --format json` prints a part only when it completes,
+// so the manager's stall watchdog (#2176) could not tell a model slowly
+// writing a long block from a dead request. The watchdog reads this file's
+// mtime as progress. Mirrors execution.streamHeartbeatFile byte for byte.
 export const STREAM_HEARTBEAT_FILE = "nightgauge-stream.heartbeat";
 
 // STREAM_HEARTBEAT_INTERVAL_MS throttles the touch: one write per interval
@@ -357,19 +344,21 @@ function appendEvent(kind, sessionID, child, detail) {
   }
 }
 
-// sessionCompacting re-injects this stage's own context (branch, last
-// commit, plan progress) into the compaction prompt via the same `hook
-// inject-context` verb the Claude Code SessionStart hook runs
-// (internal/hooks/context.go). It only ever appends to output.context
-// (opencode's own "additional context strings" channel, observed on
-// 1.18.30's @opencode-ai/plugin types: experimental.session.compacting's
-// output is {context: string[], prompt?: string}) — output.prompt, which
-// would replace the default compaction prompt outright, is never touched.
-// Any failure (no NIGHTGAUGE_BIN, a non-zero exit, a timeout, output over
-// INJECT_CONTEXT_MAX_BYTES, output that is not JSON) is skipped silently:
-// compaction proceeds with no added context rather than failing.
-export async function sessionCompacting(ctx, input, output) {
-  if (!output) return;
+// sessionCompaction is the ctx.session.hook("compaction") contribution: it
+// re-injects this stage's own context (branch, last commit, plan progress)
+// into the compaction request via the same `hook inject-context` verb the
+// Claude Code SessionStart hook runs (internal/hooks/context.go). It only
+// ever appends one text part to arg.system (observed on 2.2.7: a part pushed
+// there reaches the compaction request); the existing system parts and the
+// messages are never touched. Any failure (no NIGHTGAUGE_BIN, a non-zero
+// exit, a timeout, output over INJECT_CONTEXT_MAX_BYTES, output that is not
+// JSON) is skipped silently: compaction proceeds with no added context.
+//
+// 1.x also capped how many times a session auto-continued after compacting
+// (experimental.compaction.autocontinue, #2180). No 2.x hook exposes that
+// decision (#3302 probe), so the cap is gone with the hook.
+export async function sessionCompaction(ctx, arg) {
+  if (!arg || !Array.isArray(arg.system)) return;
   const bin = resolveNightgaugeBin();
   if (!bin) return;
   const cwd = resolveCwd(ctx);
@@ -385,41 +374,7 @@ export async function sessionCompacting(ctx, input, output) {
   } catch {
     return;
   }
-  if (!Array.isArray(output.context)) output.context = [];
-  output.context.push(stdout);
-}
-
-// COMPACTION_CONTINUE_MAX is how many synthetic "Continue if you have next
-// steps..." turns one session may take after a successful compaction
-// (#2180). opencode adds that turn once a compaction succeeds; without it a
-// one-shot `opencode run` ends at idle, and a stage that compacted mid-task
-// exits 0 with its deliverable unwritten (leg 1 run 12: feature-planning
-// compacted at 100k tokens and ended with no plan). Always suppressing it
-// (ADR-022, #1641) guarded against a $0 local run looping on
-// compact/continue for hours: the negative control logged 311+ loop steps
-// with no bound at all. A per-session cap keeps both: the task resumes after
-// each of the first COMPACTION_CONTINUE_MAX compactions, and a session that
-// needs more ends at idle exactly as before, where the Go stage gates, the
-// turn and wall-clock budgets and #2176's stall watchdog take over.
-export const COMPACTION_CONTINUE_MAX = 2;
-
-// compactionContinues counts the continue turns each session was allowed.
-const compactionContinues = new Map();
-
-// compactionAutocontinue allows the continue turn for a session's first
-// COMPACTION_CONTINUE_MAX compactions and disables it after that. There is
-// nothing to spawn here, only a value to set, so this cannot itself hang or
-// fail.
-export async function compactionAutocontinue(ctx, input, output) {
-  if (!output) return;
-  const sessionID = (input && input.sessionID) || "";
-  const used = compactionContinues.get(sessionID) || 0;
-  if (used >= COMPACTION_CONTINUE_MAX) {
-    output.enabled = false;
-    return;
-  }
-  compactionContinues.set(sessionID, used + 1);
-  output.enabled = true;
+  arg.system.push({ type: "text", text: stdout });
 }
 
 // shouldNotify enforces the per-session, per-60s notify throttle: the first
@@ -433,35 +388,12 @@ function shouldNotify(sessionID) {
   return true;
 }
 
-// permissionAsk is the plugin's `permission.ask` hook contribution, kept for
-// forward compatibility only: empirically, opencode 1.18.30 never calls this
-// hook at all (0 occurrences of the literal "permission.ask" in the pinned
-// binary's own trigger sites; permissions are published only as the bus
-// event "permission.asked", handled in event() below). It records the ask in
-// the events file and, at most once per session per 60 s, runs `hook notify`
-// to alert the operator. It never reads or writes output.status: the
-// permission decision is opencode's own to make, and this hook only
-// observes it.
-export async function permissionAsk(ctx, input) {
-  if (!input) return;
-  const sessionID = input.sessionID || "";
-  appendEvent(
-    "permission_ask",
-    sessionID,
-    isChildSession(sessionID),
-    input.type ? { permission_type: input.type } : {}
-  );
-  notifyOnce(ctx, sessionID, input.type);
-}
-
-// notifyOnce runs `hook notify` at most once per sessionID per 60 s (the
-// shared throttle both the permission.ask export and event()'s own
-// permission.asked handling apply). Fire-and-forget: nothing here reads the
-// notify verb's result, so the returned promise is deliberately not
-// awaited — awaiting it would only delay this hook's own return without
-// opencode gaining anything, since runHook itself is already async and never
-// blocks the event loop while the child runs. The trailing .catch keeps a
-// spawn error from ever becoming an unhandled promise rejection.
+// notifyOnce runs `hook notify` at most once per sessionID per 60 s,
+// fire-and-forget. nightgauge.js handles subscribed events one at a time, so
+// awaiting a notify (up to SPAWN_TIMEOUT_MS) would hold every event behind it,
+// the session's terminal event included, and a one-shot run can exit before
+// that event is handled. SPAWN_TIMEOUT_MS still bounds the child; the trailing
+// .catch keeps a spawn error from becoming an unhandled rejection.
 function notifyOnce(ctx, sessionID, permissionType) {
   if (!shouldNotify(sessionID)) return;
   const bin = resolveNightgaugeBin();
@@ -476,41 +408,78 @@ function notifyOnce(ctx, sessionID, permissionType) {
   ).catch(() => {});
 }
 
-// event handles the session lifecycle events this module cares about:
-// session.created/session.updated (track parentage only, never recorded
-// directly), session.compacted (a compaction just succeeded: record one
-// "compaction" event), session.idle (the session went idle: record one
-// "idle" event, then hand a detached `hook stop-verify --emit-event` the job
-// of recording its own verdict as a "stop_verify" event, since this process
-// will not be alive to do it), and permission.asked — opencode 1.18.30's own bus
-// event for a permission prompt; the plugin hook named "permission.ask" is
-// never called on this binary (see permissionAsk's own comment), so this is
-// the path AC5/AC6 actually run on. Every other event type is ignored. This
-// function never sends a message into the session — it has no such
-// capability — and never re-prompts the model: it only spawns read-only
-// verification/notify verbs and records what they returned.
-export async function event(ctx, input) {
-  const evt = input && input.event;
+// HEARTBEAT_EVENT_TYPES are the 2.x events that mean a model response is
+// streaming, each observed on 2.2.7: a text delta, a step's stream opening,
+// a tool call's input starting to stream, and a running tool's progress.
+const HEARTBEAT_EVENT_TYPES = Object.freeze([
+  "session.text.delta",
+  "session.step.streamed",
+  "session.tool.input.started",
+  "session.tool.progress",
+]);
+
+// TERMINAL_EVENT_TYPES end a session's execution, each observed on 2.2.7:
+// .succeeded on a normal end (once per session, a subagent's included) and
+// .failed when the run ended on an error (a failed compaction, for one).
+// 2.x has no session.idle; this is where 1.x's idle verification moved.
+const TERMINAL_EVENT_TYPES = Object.freeze([
+  "session.execution.succeeded",
+  "session.execution.failed",
+]);
+
+// SUBSCRIBED_EVENT_TYPES is every event type event() reads, the `types`
+// filter nightgauge.js subscribes with. Each was observed on 2.2.7 (#3302):
+//
+//   - session.created: a subagent's session carries parentID.
+//   - session.compaction.started: a compaction began. 2.x also names
+//     session.compaction.ended, but no probe produced a successful
+//     compaction (the stub's summary never matched 2.x's template), so it
+//     was never seen firing and a compaction is recorded when it starts.
+//   - permission.asked: data {id, sessionID, action, resources, save,
+//     source} on a rejected `ask`.
+//   - HEARTBEAT_EVENT_TYPES and TERMINAL_EVENT_TYPES above.
+const SESSION_CREATED = "session.created";
+const COMPACTION_STARTED = "session.compaction.started";
+const PERMISSION_ASKED = "permission.asked";
+export const SUBSCRIBED_EVENT_TYPES = Object.freeze([
+  SESSION_CREATED,
+  COMPACTION_STARTED,
+  PERMISSION_ASKED,
+  ...HEARTBEAT_EVENT_TYPES,
+  ...TERMINAL_EVENT_TYPES,
+]);
+
+// event handles one 2.x bus event, {id, created, type, location, data}:
+// session.created tracks parentage only; session.compaction.started records
+// one "compaction" event; a terminal event records one "idle" event, then
+// hands a detached `hook stop-verify --emit-event` the job of recording its
+// own verdict as a "stop_verify" event, since this process may not be alive
+// to do it; permission.asked records the ask and notifies the operator; a
+// heartbeat event touches the stream heartbeat. Every other event is ignored.
+// This function never sends a message into the session and never re-prompts
+// the model.
+export async function event(ctx, evt) {
   if (!evt || typeof evt.type !== "string") return;
-  const props = evt.properties || {};
+  const data = evt.data && typeof evt.data === "object" ? evt.data : {};
 
-  if (evt.type === "message.part.delta" || evt.type === "message.part.updated") {
+  if (HEARTBEAT_EVENT_TYPES.includes(evt.type)) {
     streamHeartbeat();
-  }
-
-  if (evt.type === "session.created" || evt.type === "session.updated") {
-    trackSessionParentage(props);
     return;
   }
 
-  const sessionID = props.sessionID || "";
+  if (evt.type === SESSION_CREATED) {
+    trackSessionParentage(data);
+    return;
+  }
 
-  if (evt.type === "session.compacted") {
+  const sessionID = typeof data.sessionID === "string" ? data.sessionID : "";
+
+  if (evt.type === COMPACTION_STARTED) {
     appendEvent("compaction", sessionID, isChildSession(sessionID), {});
     return;
   }
 
-  if (evt.type === "session.idle") {
+  if (TERMINAL_EVENT_TYPES.includes(evt.type)) {
     appendEvent("idle", sessionID, isChildSession(sessionID), {});
     const bin = resolveNightgaugeBin();
     if (!bin) {
@@ -519,22 +488,11 @@ export async function event(ctx, input) {
     }
     const cwd = resolveCwd(ctx);
     const child = isChildSession(sessionID);
-    // session.idle is TERMINAL for a one-shot `opencode run`: measured
-    // against the pinned 1.18.30 binary (#1810), opencode neither awaits the
-    // promise this hook returns nor stays alive more than ~10 ms past
-    // publishing the event, so an `await` here never resumes and a
-    // .then()/.catch() continuation never runs. Either shape loses the
-    // verdict silently — which is exactly how #1641's first fix left
-    // TestCompactionAutocontinueSuppressionAgainstRealOpenCode reading 0
-    // stop_verify events where it wants 1.
-    //
-    // So the verdict is not recorded from here at all. The `hook
-    // stop-verify` child is handed --emit-event and writes its OWN
-    // stop_verify line into this same events file (Go side: events.go's
-    // AppendRunEvent, honouring the same 1 MiB cap and the same retention
+    // The verdict is not recorded from here (see the #1810 note at the top
+    // of this file). The `hook stop-verify` child is handed --emit-event and
+    // writes its OWN stop_verify line into this same events file (Go side:
+    // events.go's AppendRunEvent, honouring the same 1 MiB cap and retention
     // contract), from a process that outlives opencode and bounds itself.
-    // Nothing in this function waits on it, so no dispatch can be slowed by
-    // a slow or hung verb — not by a millisecond.
     //
     // The session id travels as argv, not stdin, because it is opencode's
     // own opaque id and never model-authored; the Go side re-checks its
@@ -543,22 +501,19 @@ export async function event(ctx, input) {
     if (sessionID) args.push("--session-id", sessionID);
     if (child) args.push("--child");
     if (!runHookDetached(bin, args, cwd)) {
-      // The one outcome this process can still determine synchronously, and
-      // therefore the one it still owns: the verb could not be started at
-      // all, so no child exists to write the line.
+      // The one outcome this process can still determine synchronously:
+      // the verb could not be started, so no child exists to write the line.
       appendEvent("stop_verify", sessionID, child, { verdict: "no_bin" });
     }
     return;
   }
 
-  if (evt.type === "permission.asked") {
-    // 1.18.30's permission.asked properties: {id, sessionID, permission,
-    // patterns, metadata, always, tool}. Only `permission` (the permission
-    // *type*, e.g. "bash") and sessionID are ever recorded: `patterns` and
-    // `metadata` carry the model-authored command text the permission asks
-    // about (e.g. a literal shell command), which the events file's own
-    // retention contract (never transcript or prompt text) forbids.
-    const permissionType = typeof props.permission === "string" ? props.permission : "";
+  if (evt.type === PERMISSION_ASKED) {
+    // Only `action` (the permission type, e.g. "shell") and sessionID are
+    // recorded: `resources` and `save` carry the model-authored command text
+    // the permission asks about, which the events file's retention contract
+    // (never transcript or prompt text) forbids.
+    const permissionType = typeof data.action === "string" ? data.action : "";
     appendEvent(
       "permission_ask",
       sessionID,
@@ -569,28 +524,27 @@ export async function event(ctx, input) {
   }
 }
 
-// toolExecuteBefore is this module's own tool.execute.before contribution:
-// skill-usage telemetry for the native "skill" tool. nightgauge.js's shared
-// tool.execute.before handler calls this AFTER gates.js's mandatory
-// toolExecuteBefore, so a throw here would still leave the careful gate's
-// own decision already applied — but this never throws regardless (fail-
-// open, telemetry only: technical notes, "asynchronous and fail-open").
+// toolExecuteBefore is this module's own execute.before contribution:
+// skill-usage telemetry for the native "skill" tool. nightgauge.js calls it
+// AFTER gates.js's mandatory toolExecuteBefore, so the gates' decision is
+// already applied; this never throws regardless (fail-open, telemetry only).
 // Every other tool is untouched.
 //
-// tool.execute.before fires on the model's raw arguments, before opencode's
-// own skill tool decodes its schema — so a confused or adversarial model can
-// put anything there, including nested objects or free-text sentences (see
-// the events file's own retention contract: no transcript or prompt text,
-// ever). `name` is read first (the skill tool's own schema field on 1.18.30;
-// `skill`/`id` are read only as a fallback for an older or divergent
-// shape), and is accepted only when it is a string matching SKILL_ID_RE — an
-// opaque identifier, never a sentence. Anything else records
+// The hook fires on the model's raw arguments (arg.input), before OpenCode's
+// own skill tool decodes its schema, so a confused or adversarial model can
+// put anything there, including nested objects or free-text sentences.
+// `name` is read first (`skill`/`id` only as a fallback), and is accepted
+// only when it is a string matching SKILL_ID_RE. Anything else records
 // {skill_invalid:true} instead of the raw value, and never reaches `hook
 // skill-usage`'s stdin either.
-export async function toolExecuteBefore(ctx, input, output) {
-  if (!input || input.tool !== "skill") return;
-  const args = (output && output.args) || {};
-  const sessionID = input.sessionID || "";
+//
+// 2.x awaits this hook, so the skill-usage spawn is awaited too (the #1810
+// note at the top of this file); SPAWN_TIMEOUT_MS bounds it, and a not-ok
+// result is "nothing recorded".
+export async function toolExecuteBefore(ctx, arg) {
+  if (!arg || arg.tool !== "skill") return;
+  const args = arg.input && typeof arg.input === "object" ? arg.input : {};
+  const sessionID = typeof arg.sessionID === "string" ? arg.sessionID : "";
   const child = isChildSession(sessionID);
   const raw = args.name !== undefined ? args.name : args.skill !== undefined ? args.skill : args.id;
   if (raw === undefined || raw === null || raw === "") return;
@@ -607,7 +561,5 @@ export async function toolExecuteBefore(ctx, input, output) {
   if (!bin) return;
   const cwd = resolveCwd(ctx);
   const payload = JSON.stringify({ tool_name: "Skill", cwd, tool_input: { skill } });
-  // Fire-and-forget, same reasoning as notifyOnce: nothing here reads the
-  // skill-usage verb's result, so its promise is not awaited.
-  runHook(bin, ["hook", "skill-usage"], cwd, payload).catch(() => {});
+  await runHook(bin, ["hook", "skill-usage"], cwd, payload);
 }

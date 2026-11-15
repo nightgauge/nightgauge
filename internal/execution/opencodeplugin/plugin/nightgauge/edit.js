@@ -5,35 +5,28 @@
 // against a Claude-shaped `{tool_name, tool_input:{file_path,...}}` payload
 // on stdin, the same envelope every Claude Code hook verb already reads.
 //
-// Loaded OPTIONALLY by nightgauge.js's own `tool.execute.after` registration
-// (its `optionalHooks`): a missing or throwing edit.js degrades that hook to
-// a no-op, never breaks plugin load the way gates.js's mandatory import does
-// (nightgauge.js's own header comment). This module is a warning surface,
-// never a gate — nothing it does may fail, delay past its own timeout, or
-// change the tool call's result beyond appending text to it.
+// Loaded OPTIONALLY by nightgauge.js's ctx.tool.hook("execute.after")
+// registration (its `optionalModule`): a missing or throwing edit.js degrades
+// that hook to a no-op, never breaks plugin load the way gates.js's mandatory
+// import does. This module is a warning surface, never a gate — nothing it
+// does may fail, delay past its own timeout, or change the tool call's result
+// beyond appending text to it.
 //
-// Observed against opencode 1.18.30 (a scripted, offline probe against the
-// pinned binary — a logging plugin loaded in place of this one, driven
-// through the #1618 stub's `tool-edit-stop` and a temporary `write-then-stop`
-// fixture, no live model and no network egress; the probe is quoted in
-// #1642's own PR description, not merely asserted from reading):
+// Observed against `opencode v2.2.7` (#3302: a logging probe plugin driven by
+// the stub provider's `tool-edit-stop@opencode2` script, offline):
 //
-//   - `tool.execute.after`'s `input` carries `{tool, sessionID, callID,
-//     args}`, where `args` IS the tool's own camelCase arguments —
-//     `{filePath, oldString, newString}` for `edit`, `{filePath, content}`
-//     for `write`. This is NOT where `tool.execute.before` puts them
-//     (gates.js reads `output.args` there): the two hooks disagree on
-//     which side of the call carries the arguments, and this module reads
-//     `input.args` accordingly.
-//   - `output` carries `{title, output, metadata}`. Mutating `output.output`
-//     IN PLACE is what the running session actually sends back to the model
-//     on its next turn — confirmed directly: the probe's own appended
-//     marker text showed up, byte for byte, in the very next
-//     chat-completions request's tool-result message content, not merely in
-//     the hook's own view of `output`.
+//   - execute.after receives one argument, {tool, sessionID, agent,
+//     messageID, id, input, status, result}, where `input` is the tool's own
+//     arguments — {path, oldString, newString} for `edit`, {path, content}
+//     for `write` — and `status` is "completed" for a tool that ran.
+//   - `result` is {output, content, metadata}. A text part pushed onto
+//     result.content reached the tool's output on the stream
+//     ("Edited calc.py (1 replacement)\nAFTER-MARKER-CONTENT"), and a field
+//     set on result.metadata reached the stream's tool_use metadata.
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import path from "node:path";
+import { gateCwd } from "./gates.js";
 
 // Claude-shaped hooks.json timeouts
 // (claude-plugins/nightgauge/hooks/hooks.json, PostToolUse:Edit|Write), in
@@ -44,7 +37,7 @@ export const CHECK_VERSION_TIMEOUT_MS = 10000;
 export const TEST_QUALITY_TIMEOUT_MS = 5000;
 
 // MAX_APPEND_BYTES bounds the total warning text this hook ever appends to
-// output.output — the issue's own "capped at 2 KB total", applied to every
+// a tool's result — the issue's own "capped at 2 KB total", applied to every
 // verb's stderr joined together, not to each verb individually.
 const MAX_APPEND_BYTES = 2048;
 
@@ -53,11 +46,9 @@ const MAX_APPEND_BYTES = 2048;
 // without exposing a child process's stderr in tool output.
 const EDIT_HOOK_DIAGNOSTICS_ENV = "NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS";
 
-// resolveCwd mirrors gates.js's gateCwd / session.js's resolveCwd: the run's
-// worktree, exactly what the Claude Code hook process sees.
-function resolveCwd(ctx) {
-  return (ctx && (ctx.directory || ctx.worktree)) || process.cwd();
-}
+// resolveCwd is gates.js's gateCwd: the run's worktree, exactly what the
+// Claude Code hook process sees.
+const resolveCwd = gateCwd;
 
 // resolveNightgaugeBin mirrors session.js's own helper: NIGHTGAUGE_BIN only
 // when it is an absolute path. Unlike gates.js's gate verbs, a missing or
@@ -82,11 +73,10 @@ function realpathOrSelf(p) {
 }
 
 // isPathContained mirrors internal/hooks/format.go's relativizeHookPath, not
-// ValidateFilePath: opencode 1.18.30's own tool schemas require an ABSOLUTE
-// filePath (the installed binary's own strings: write's is "The absolute
-// path to write... must be absolute, not relative", edit's is "The absolute
-// path to the file to modify"), so refusing every absolute path here made
-// every one of these hooks dead in production — format.go's own
+// ValidateFilePath: a model may name the file by an ABSOLUTE path (1.x's tool
+// schemas required one; 2.2.7's stub-driven edit sent the worktree-relative
+// `calc.py`), so refusing every absolute path here would make these hooks
+// dead for every such call — format.go's own
 // evaluateFormatFromHook exists to undo exactly that refusal on the Go side
 // ("format-on-save stays a no-op" otherwise, per its own comment); this
 // mirrors it here so the containment DECISION happens once, before anything
@@ -224,44 +214,38 @@ function runQualityVerb(bin, args, payload, cwd, timeoutMs) {
   return classifyQualityVerbResult(verb, result);
 }
 
-// appendWarnings joins the non-empty chunks with a blank line, builds the
-// full addition (a leading separator newline when output.output already has
-// content, none otherwise), and truncates THAT to MAX_APPEND_BYTES UTF-8
-// bytes (never splitting a multi-byte character — Buffer#toString("utf8")
-// drops a trailing incomplete sequence rather than emitting a replacement
-// character for it) before appending it — so output.output never grows by
-// more than MAX_APPEND_BYTES regardless of whether a separator was needed.
-// Mutating output IN PLACE is what the probe above confirmed actually
-// reaches the model's next turn; a caller with no warnings to add (every
-// chunk empty) leaves output untouched.
-function appendWarnings(output, chunks) {
+// appendWarnings joins the non-empty chunks with a blank line, truncates
+// the text to MAX_APPEND_BYTES UTF-8 bytes (never splitting a multi-byte
+// character — Buffer#toString("utf8") drops a trailing incomplete sequence),
+// and pushes it onto result.content as one text part, which the probe above
+// confirmed reaches the model. A caller with no warnings to add (every chunk
+// empty), or a result with no content array, leaves the result untouched.
+function appendWarnings(result, chunks) {
   const text = chunks.filter((c) => c !== "").join("\n\n");
-  if (text === "" || !output || typeof output !== "object") return;
-  const existing = typeof output.output === "string" ? output.output : "";
-  const addition = existing === "" ? text : "\n" + text;
-  const truncated = Buffer.from(addition, "utf8").subarray(0, MAX_APPEND_BYTES).toString("utf8");
-  output.output = existing + truncated;
+  if (text === "" || !result || typeof result !== "object") return;
+  if (!Array.isArray(result.content)) return;
+  const truncated = Buffer.from(text, "utf8").subarray(0, MAX_APPEND_BYTES).toString("utf8");
+  result.content.push({ type: "text", text: truncated });
 }
 
-// toolExecuteAfter is edit.js's one export, wired from nightgauge.js's own
-// `tool.execute.after` registration for EVERY tool call opencode makes, not
-// only edit/write — so the first check below is the tool-id filter itself
-// (issue's own scope: "Other mutating tool ids stay a follow-up (Claude
-// parity is Edit|Write)"). Never subscribes to, or otherwise reacts to,
-// `file.edited`: a formatter write must not re-trigger these hooks, and
-// nightgauge.js has no `file.edited` registration for this module to hook
-// into in the first place.
-export async function toolExecuteAfter(ctx, input, output) {
+// toolExecuteAfter is edit.js's one export, wired from nightgauge.js's
+// execute.after registration for EVERY tool call opencode makes, not only
+// edit/write — so the first checks are the tool-id filter itself (Claude
+// parity is Edit|Write) and the call's status: a tool that did not complete
+// changed no file, so there is nothing to format or check. It never reacts to
+// a file-edited event: a formatter write must not re-trigger these hooks.
+export async function toolExecuteAfter(ctx, arg) {
   try {
-    if (!input || (input.tool !== "edit" && input.tool !== "write")) return;
+    if (!arg || (arg.tool !== "edit" && arg.tool !== "write")) return;
+    if (arg.status !== "completed") return;
 
-    const args = (input && input.args) || {};
-    const filePath = typeof args.filePath === "string" ? args.filePath : "";
+    const args = arg.input && typeof arg.input === "object" ? arg.input : {};
+    const filePath = typeof args.path === "string" ? args.path : "";
     const cwd = resolveCwd(ctx);
     if (!isPathContained(filePath, cwd)) return;
 
     const bin = resolveNightgaugeBin();
-    const toolName = input.tool === "edit" ? "Edit" : "Write";
+    const toolName = arg.tool === "edit" ? "Edit" : "Write";
     const toolInput = { file_path: filePath };
     if (typeof args.content === "string") toolInput.content = args.content;
     if (typeof args.newString === "string") toolInput.new_string = args.newString;
@@ -286,16 +270,17 @@ export async function toolExecuteAfter(ctx, input, output) {
     );
 
     const results = [formatResult, checkVersionResult, testQualityResult].filter(Boolean);
+    const result = arg.result && typeof arg.result === "object" ? arg.result : null;
     appendWarnings(
-      output,
-      results.map((result) => result.warning)
+      result,
+      results.map((r) => r.warning)
     );
-    if (process.env[EDIT_HOOK_DIAGNOSTICS_ENV] === "1" && output && typeof output === "object") {
+    if (process.env[EDIT_HOOK_DIAGNOSTICS_ENV] === "1" && result) {
       const metadata =
-        output.metadata && typeof output.metadata === "object" ? output.metadata : {};
-      output.metadata = {
+        result.metadata && typeof result.metadata === "object" ? result.metadata : {};
+      result.metadata = {
         ...metadata,
-        nightgauge_edit_hook_outcomes: results.map((result) => result.outcome),
+        nightgauge_edit_hook_outcomes: results.map((r) => r.outcome),
       };
     }
   } catch {

@@ -158,7 +158,8 @@ export function installOpenCodeTree(opts: OpenCodeInstallOptions): {
   const { skillsSrc, root, pluginSrc } = opts;
   if (
     pluginSrc &&
-    (!fs.existsSync(path.join(pluginSrc, "nightgauge.js")) ||
+    (!fs.existsSync(path.join(pluginSrc, "index.js")) ||
+      !fs.existsSync(path.join(pluginSrc, "nightgauge.js")) ||
       !fs.existsSync(path.join(pluginSrc, "nightgauge")))
   ) {
     throw new Error(`OpenCode plugin source ${pluginSrc} is missing.`);
@@ -197,6 +198,7 @@ export function installOpenCodeTree(opts: OpenCodeInstallOptions): {
     cmdDir,
     pluginsDir,
     path.join(skillsDir, "_shared"),
+    path.join(pluginsDir, "index.js"),
     path.join(pluginsDir, "nightgauge.js"),
     path.join(pluginsDir, "nightgauge"),
   ];
@@ -252,6 +254,8 @@ export function installOpenCodeTree(opts: OpenCodeInstallOptions): {
 
   if (pluginSrc) {
     fs.mkdirSync(pluginsDir, { recursive: true });
+    // OpenCode 2.x loads the plugin directory's index.js, which re-exports nightgauge.js (#3302).
+    fs.copyFileSync(path.join(pluginSrc, "index.js"), path.join(pluginsDir, "index.js"));
     fs.copyFileSync(path.join(pluginSrc, "nightgauge.js"), path.join(pluginsDir, "nightgauge.js"));
     syncTree(path.join(pluginSrc, "nightgauge"), path.join(pluginsDir, "nightgauge"));
   }

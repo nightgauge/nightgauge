@@ -114,7 +114,7 @@ run)
   cat > /dev/null
   if [ -z "$NO_SENTINEL" ]; then
     mkdir -p "$(dirname "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL")"
-    printf '{"nonce":"%s","plugin_version":"1","hooks":[]}' "\${SENTINEL_NONCE:-$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE}" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+    printf '{"nonce":"%s","plugin_version":"2","hooks":[]}' "\${SENTINEL_NONCE:-$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE}" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
     [ -z "$SENTINEL_NOW" ] && touch -t 202001010000 "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
   fi
 ${runBody}

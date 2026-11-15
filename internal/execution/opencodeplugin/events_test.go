@@ -216,10 +216,12 @@ func TestEventsFileCapsAtOneMiBWithOneTruncatedLine(t *testing.T) {
 		t.Fatalf("test premise broken: seed file is %d bytes, want at least %d", before.Size(), eventsMaxBytes)
 	}
 
-	perm := map[string]any{"id": "p1", "type": "bash", "sessionID": "ses_cap_1", "messageID": "m1", "title": "t", "metadata": map[string]any{}, "time": map[string]any{"created": 1}}
+	perm := func() map[string]any {
+		return busEvent("permission.asked", map[string]any{"id": "p1", "sessionID": "ses_cap_1", "action": "shell"})
+	}
 	calls := []sessionCall{
-		{Fn: "permissionAsk", Input: perm, Output: map[string]any{"status": "ask"}},
-		{Fn: "permissionAsk", Input: perm, Output: map[string]any{"status": "ask"}},
+		{Fn: "event", Input: perm()},
+		{Fn: "event", Input: perm()},
 	}
 	results := runSessionHarness(t, node, root, calls, map[string]string{
 		"NIGHTGAUGE_OUTPUT_FILE": outputFile,

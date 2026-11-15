@@ -6844,7 +6844,7 @@ internal and unaffected by this output-format change.`,
 
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory (default: cwd)")
 	cmd.Flags().BoolVar(&emitEvent, "emit-event", false,
-		"Record the verdict as a stop_verify line in this run's OpenCode events file instead of printing it (used by the OpenCode plugin's session.idle hook)")
+		"Record the verdict as a stop_verify line in this run's OpenCode events file instead of printing it (used by the OpenCode plugin when a session's execution ends)")
 	cmd.Flags().StringVar(&sessionID, "session-id", "", "OpenCode session id to tag the emitted event with (--emit-event only)")
 	cmd.Flags().BoolVar(&childSession, "child", false, "Tag the emitted event as coming from a child session (--emit-event only)")
 	return cmd
@@ -6854,11 +6854,11 @@ internal and unaffected by this output-format change.`,
 // and appends ONE stop_verify line to this run's OpenCode events file,
 // rather than printing the verdict for a caller to read.
 //
-// It exists because opencode 1.18.30 does not await a plugin `event` hook's
-// promise and a one-shot `opencode run` exits within ~10 ms of publishing
-// session.idle (#1810, measured against the pinned binary). The plugin
-// therefore cannot observe this verb's result at all — neither by awaiting
-// it nor from a continuation — so the verdict is written by the process that
+// It exists because a one-shot `opencode run` shuts down right after its
+// last session ends: 1.18.30 exited within ~10 ms of session.idle (#1810),
+// and on 2.2.7 the plugin's event stream closed ~200 ms after
+// session.execution.succeeded (#3302). The plugin therefore cannot rely on
+// observing this verb's result, so the verdict is written by the process that
 // computes it, which is detached and outlives opencode.
 //
 // Only the verdict CODE is ever recorded, never EvaluateStopHookOutput's

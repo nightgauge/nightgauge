@@ -3453,6 +3453,42 @@ Decided:
 - **The canary's top-level diff reads both deprecation forms**, as the Go
   walker always did. Before this, the drift issues listed 4 of the 19.
 
+## The plugin on the 2.x definition and hook API (amendment 2026-11-15, #3302)
+
+OpenCode 2.x ignores the 1.x plugin: it loads only a plugin directory, and only
+that directory's `index.js` (a `package.json` `main` naming another file loads
+nothing, without an error), and a hook map returned from a plugin registers
+nothing. Every name below was observed firing on opencode v2.2.7 with a probe
+plugin under stub-provider runs; a name 2.x does not know registers without
+error and never fires.
+
+Decided:
+
+- **The plugin is `export default { id, setup }`.** `setup` registers
+  `ctx.tool.hook("execute.before")` (the gates; awaited, a throw blocks the
+  tool and its message is the tool's error), `ctx.tool.hook("execute.after")`
+  (the edit checks, appending to `result.content`),
+  `ctx.session.hook("compaction")` (context appended to `system`) and one
+  `ctx.event.subscribe({types})` stream. The handshake's `plugin_version` is
+  `2` and its `hooks` names those four registrations.
+- **The per-run config's `plugins` entry is the plugin directory**, whose
+  `index.js` re-exports `nightgauge.js`.
+- **Hook arguments are 2.x's**: `{tool, sessionID, agent, messageID, id,
+input}`, with a file tool's path at `input.path`. A file tool with no string
+  path is blocked closed. `shell` and `subagent` replace `bash` and `task`;
+  `subagent` stays denied (2026-10-05 amendment) with the marker
+  `[nightgauge-gate:subagent-denied]`; `execute` is blocked and `question`
+  passes; every 1.x-only tool id is refused as unknown.
+- **Three 1.x capabilities have no 2.x hook and are dropped**, not registered
+  on a guess: the sanitize-prompt screen of slash-command expansions
+  (`ctx.command` has no hook), the cap on resuming after compaction (2026-09-26
+  amendment), and the `permission.ask` hook (a permission ask is still
+  recorded from the `permission.asked` event).
+- **#1810's split is revisited.** `execute.before` is awaited on 2.x, so the
+  skill-usage spawn is awaited (bounded). Stop-verify stays detached: it runs
+  on `session.execution.succeeded` or `.failed` (2.x has no `session.idle`),
+  and the run can exit before the plugin sees a child's result.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special
