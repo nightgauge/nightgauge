@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   OPENCODE_DISABLE_FLAGS,
+  childEnvWithOverlay,
   curateChildEnv,
   curateOpenCodeChildEnv,
   isChildEnvAllowed,
@@ -437,5 +438,32 @@ describe("openCodeEnvWithholdFor is the Go verb's env_withhold (#1657)", () => {
     expect(openCodeWithholdsEnv("lmstudio/x", "GITHUB_TOKEN")).toBe(false);
     expect(openCodeWithholdsEnv("lmstudio/x", "OPENCODE_PERMISSION")).toBe(true);
     expect(openCodeWithholdsEnv("lmstudio/x", "XDG_CONFIG_HOME")).toBe(false);
+  });
+});
+
+describe("childEnvWithOverlay (#3331)", () => {
+  const parent = { PATH: "/p", HOME: "/h", SENTINEL_SECRET: "x" };
+  const overlay = { SENTINEL_OVERLAY: "o", PATH: "/overlay" };
+
+  it("adds overlay keys, drops non-allowlisted parent vars, keeps curated values", () => {
+    const env = childEnvWithOverlay(overlay, parent);
+    expect(env.SENTINEL_OVERLAY).toBe("o");
+    expect(env).not.toHaveProperty("SENTINEL_SECRET");
+    expect(env.PATH).toBe("/p");
+    expect(env.HOME).toBe("/h");
+  });
+
+  it("keeps an allowlisted overlay key the parent lacks", () => {
+    expect(childEnvWithOverlay({ HOME: "/o" }, { PATH: "/p" }).HOME).toBe("/o");
+  });
+
+  it("returns exactly the curated env for an undefined overlay", () => {
+    expect(childEnvWithOverlay(undefined, parent)).toEqual(curateChildEnv(parent));
+  });
+
+  it("mutates neither input", () => {
+    childEnvWithOverlay(overlay, parent);
+    expect(overlay).toEqual({ SENTINEL_OVERLAY: "o", PATH: "/overlay" });
+    expect(parent).toEqual({ PATH: "/p", HOME: "/h", SENTINEL_SECRET: "x" });
   });
 });
