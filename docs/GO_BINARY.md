@@ -4631,7 +4631,9 @@ older binary still records the verdict.
 
 `gate-run --fast` runs the default gate's fast static subset, `bash
 scripts/ci-local.sh --fast`: the steps marked `--fast` on their own `run_step`
-or `run_group` call (`--list-steps --fast` lists them). It is not a gate: no
+or `run_group` call (`--list-steps --fast` lists them). The subset typechecks
+each TypeScript workspace package the change touches, unless the package
+depends on another workspace package, whose types are build output. It is not a gate: no
 worktree guard, no ledger event, never reused, and it exits with the script's
 code. A declared `local_gate` has no fast subset, so it says so and exits 0.
 

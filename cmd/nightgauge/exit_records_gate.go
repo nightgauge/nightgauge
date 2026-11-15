@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
 	"github.com/nightgauge/nightgauge/internal/gateledger"
@@ -89,7 +90,7 @@ func summarizeGates(records []diagnostics.StageExitRecord) gateSummary {
 	stepRuns := map[string]map[string]bool{}
 	var keys []string
 	for _, rec := range records {
-		key := fmt.Sprintf("%012d/%s", rec.Issue, rec.RunID)
+		key := gateRunKey(rec)
 		run, ok := byRun[key]
 		if !ok {
 			run = &gateRunSummary{Issue: rec.Issue, RunID: rec.RunID, Stages: map[string]*gateTally{}}
@@ -164,34 +165,86 @@ func summarizeGates(records []diagnostics.StageExitRecord) gateSummary {
 	return sum
 }
 
-// readExitRecordsSince reads every daily file on or after since (YYYY-MM-DD; an
-// empty since reads them all). The file name is its UTC day, so the comparison
-// is lexical.
+// readExitRecordsSince reads the stage-exit records on or after since. since is
+// empty (every record), a UTC day YYYY-MM-DD (every daily file from that day),
+// or an RFC 3339 instant. An instant filters whole runs, not records: a run
+// (issue and run_id) is kept only when every record it has, in any daily file,
+// has a ts at or after the instant. Filtering records alone would drop a run's
+// earlier failed gate and report a later pass as its first gate (#2847). A file
+// name is its UTC day, so the day comparison is lexical.
 func readExitRecordsSince(root string, issue int, since string) ([]diagnostics.StageExitRecord, error) {
+	day, instant, err := parseGateSince(since)
+	if err != nil {
+		return nil, err
+	}
+	if !instant.IsZero() {
+		// A run can span days, so its earlier records may sit in any file.
+		day = ""
+	}
 	dir, err := diagnostics.ExitRecordsDir(root)
 	if err != nil {
 		return nil, err
 	}
 	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read exit-records dir: %w", err)
+		return nil, err
 	}
 	var out []diagnostics.StageExitRecord
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".jsonl") || strings.TrimSuffix(name, ".jsonl") < since {
+		if e.IsDir() || !strings.HasSuffix(name, ".jsonl") || strings.TrimSuffix(name, ".jsonl") < day {
 			continue
 		}
-		day, err := readDailyFile(filepath.Join(dir, name), issue)
+		recs, err := readDailyFile(filepath.Join(dir, name), issue)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, day...)
+		out = append(out, recs...)
 	}
-	return out, nil
+	if instant.IsZero() {
+		return out, nil
+	}
+	// A record whose ts does not parse cannot be shown to follow the instant,
+	// so its run is not counted toward the build's runs.
+	early := map[string]bool{}
+	for _, rec := range out {
+		ts, perr := time.Parse(time.RFC3339Nano, rec.Timestamp)
+		if perr != nil || ts.Before(instant) {
+			early[gateRunKey(rec)] = true
+		}
+	}
+	kept := out[:0]
+	for _, rec := range out {
+		if !early[gateRunKey(rec)] {
+			kept = append(kept, rec)
+		}
+	}
+	return kept, nil
+}
+
+// gateRunKey identifies a run: its issue and run_id.
+func gateRunKey(rec diagnostics.StageExitRecord) string {
+	return fmt.Sprintf("%012d/%s", rec.Issue, rec.RunID)
+}
+
+// parseGateSince splits a --since value into the earliest daily file to read
+// and, for an RFC 3339 instant, the instant records must not precede.
+func parseGateSince(since string) (string, time.Time, error) {
+	if since == "" {
+		return "", time.Time{}, nil
+	}
+	if _, err := time.Parse("2006-01-02", since); err == nil {
+		return since, time.Time{}, nil
+	}
+	instant, err := time.Parse(time.RFC3339Nano, since)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("--since %q: want a UTC day YYYY-MM-DD or an RFC 3339 instant", since)
+	}
+	instant = instant.UTC()
+	return instant.Format("2006-01-02"), instant, nil
 }
 
 func printGateSummary(sum gateSummary) {
@@ -256,7 +309,8 @@ func exitRecordsGateSummaryCmd() *cobra.Command {
 		Short:        "Total full gates per run and per stage, and first-gate failures (#2784, #2847)",
 		SilenceUsage: true,
 		Example: `  nightgauge exit-records gate-summary --issue 2784
-  nightgauge exit-records gate-summary --since 2026-11-01 --json`,
+  nightgauge exit-records gate-summary --since 2026-11-01 --json
+  nightgauge exit-records gate-summary --since 2026-11-15T03:04:05Z --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root, err := gateWorkdir(workdir)
 			if err != nil {
@@ -275,7 +329,7 @@ func exitRecordsGateSummaryCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVar(&issue, "issue", 0, "Filter to a single issue number (0 = all)")
-	cmd.Flags().StringVar(&since, "since", "", "Earliest UTC day to read, YYYY-MM-DD")
+	cmd.Flags().StringVar(&since, "since", "", "Earliest record: a UTC day YYYY-MM-DD, or an RFC 3339 instant")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output JSON instead of a table")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Project root (default: current working directory)")
 	return cmd
