@@ -53,7 +53,7 @@ fi
 # with GitHub (issue fetch, parent epic detection, remote branch lookup). Export
 # it explicitly so the binary can authenticate even when the shell environment
 # lacks it.
-export GITHUB_TOKEN=$(nightgauge forge auth token 2>/dev/null || echo "")
+export GITHUB_TOKEN=$("${NIGHTGAUGE_BIN:-nightgauge}" forge auth token 2>/dev/null || echo "")
 
 BRANCH_RESULT=$("$BINARY" git branch-create --issue "$ISSUE_NUMBER" --json 2>/dev/null || echo '{"success":false,"error":"binary not found"}')
 

@@ -91,7 +91,7 @@ fi
 
 CI_CHUNK_PENDING=false
 CI_DEADLINE_NAME="ci-wait-deadline-${PR_NUMBER}"
-CI_DEADLINE_FILE="$(nightgauge layout path pipeline "$CI_DEADLINE_NAME")"
+CI_DEADLINE_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "$CI_DEADLINE_NAME")"
 
 if [ "$CI_EPIC_SKIP" = "true" ]; then
   echo "Skipping ci wait (epic branch PR)"
@@ -104,7 +104,7 @@ else
   _CI_NOW=$(date +%s)
   if [ ! -s "$CI_DEADLINE_FILE" ]; then
     echo $(( _CI_NOW + TIMEOUT * 60 )) \
-      | nightgauge layout write pipeline "$CI_DEADLINE_NAME" >/dev/null
+      | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "$CI_DEADLINE_NAME" >/dev/null
   fi
   _CI_DEADLINE=$(cat "$CI_DEADLINE_FILE" 2>/dev/null || echo $(( _CI_NOW + TIMEOUT * 60 )))
   _CI_REMAINING=$(( _CI_DEADLINE - _CI_NOW ))
@@ -138,7 +138,7 @@ fi
 # so the next PR (or a re-run after fixes) starts a fresh budget. An empty file
 # reads as "no deadline" above; nothing is deleted under the git directory.
 if [ "$CI_CHUNK_PENDING" != "true" ]; then
-  printf '' | nightgauge layout write pipeline "$CI_DEADLINE_NAME" >/dev/null
+  printf '' | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "$CI_DEADLINE_NAME" >/dev/null
 fi
 
 CI_ALL_PASSED=$(printf '%s\n' "$CI_RESULT" | jq -r 'if .state == "SUCCESS" then "true" else "false" end')

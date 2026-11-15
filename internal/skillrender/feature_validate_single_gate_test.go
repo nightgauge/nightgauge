@@ -68,7 +68,7 @@ func TestValidateRunsTheFullGateOnceAfterTheReview(t *testing.T) {
 	}
 
 	full := section(t, text, "### Step 2.7.4:")
-	for _, want := range []string{"once", "after Step 2.7.3", "before the pre-push gate", "nightgauge ci gate-run", "nightgauge ci gate-count"} {
+	for _, want := range []string{"once", "after Step 2.7.3", "before the pre-push gate", "nightgauge ci gate-run", `"${NIGHTGAUGE_BIN:-nightgauge}" ci gate-count`} {
 		if !strings.Contains(full, want) {
 			t.Errorf("Step 2.7.4 must say %q", want)
 		}

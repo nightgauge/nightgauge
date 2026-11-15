@@ -161,10 +161,10 @@ version numbers across all related files.
 
 ```bash
 # Validate version consistency
-nightgauge docs version-consistency --root . --json | jq '.'
+"${NIGHTGAUGE_BIN:-nightgauge}" docs version-consistency --root . --json | jq '.'
 
 # List mismatches only
-nightgauge docs version-consistency --root . --json | \
+"${NIGHTGAUGE_BIN:-nightgauge}" docs version-consistency --root . --json | \
   jq '.mismatches[] | "\(.file):\(.line) expected \(.expected_version) got \(.found_version)"'
 ```
 
@@ -179,10 +179,10 @@ with stale "Updated" metadata.
 
 ```bash
 # Check for stale Updated: dates
-nightgauge docs check-freshness --root . --json | jq '.'
+"${NIGHTGAUGE_BIN:-nightgauge}" docs check-freshness --root . --json | jq '.'
 
 # List stale files only
-nightgauge docs check-freshness --root . --json | \
+"${NIGHTGAUGE_BIN:-nightgauge}" docs check-freshness --root . --json | \
   jq '.stale_findings[] | "\(.file):\(.line) (\(.days_stale) days stale)"'
 ```
 

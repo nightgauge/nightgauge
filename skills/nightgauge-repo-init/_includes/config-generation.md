@@ -136,7 +136,7 @@ discovery flow this skill used to maintain inline:
 ```bash
 # Online mode — populates field IDs from GitHub in one call.
 # OWNER, OWNER_TYPE, REPO_NAME, PROJECT_NUMBER were resolved in Phase 1/4.
-nightgauge config init \
+"${NIGHTGAUGE_BIN:-nightgauge}" config init \
   --owner "$OWNER" \
   --owner-type "$OWNER_TYPE" \
   --repo "$REPO_NAME" \
@@ -155,7 +155,7 @@ without forge auth), pass `--no-fetch` to emit the same template with
 expected to fill the IDs in manually:
 
 ```bash
-nightgauge config init \
+"${NIGHTGAUGE_BIN:-nightgauge}" config init \
   --owner "$OWNER" \
   --owner-type "$OWNER_TYPE" \
   --repo "$REPO_NAME" \

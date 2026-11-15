@@ -188,9 +188,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -220,7 +222,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -331,8 +333,8 @@ fi
 Extract owner, repo, and self_assessment config:
 
 ```bash
-OWNER=$(nightgauge config show --key owner --raw 2>/dev/null)
-REPO=$(nightgauge config show --key repo --raw 2>/dev/null)
+OWNER=$("${NIGHTGAUGE_BIN:-nightgauge}" config show --key owner --raw 2>/dev/null)
+REPO=$("${NIGHTGAUGE_BIN:-nightgauge}" config show --key repo --raw 2>/dev/null)
 ```
 
 ### Step 1.2 — Mode Detection
@@ -354,20 +356,20 @@ adapts to available data.
 
 ```bash
 DATA_SOURCES=""
-PIPELINE_DIR="$(nightgauge layout path pipeline)"
-CHECKOUT_DIR="$(nightgauge layout path checkout)"
+PIPELINE_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline)"
+CHECKOUT_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout)"
 [ -f ".nightgauge/execution-history.jsonl" ] && DATA_SOURCES="$DATA_SOURCES execution-history"
 [ -d "${PIPELINE_DIR}/assessments" ] && DATA_SOURCES="$DATA_SOURCES assessments"
 [ -f ".nightgauge/calibration.json" ] && DATA_SOURCES="$DATA_SOURCES calibration"
 [ -d "${CHECKOUT_DIR}/analysis" ] && DATA_SOURCES="$DATA_SOURCES analysis"
-[ -f "$(nightgauge layout path logs gate-metrics.jsonl)" ] && DATA_SOURCES="$DATA_SOURCES gate-metrics"
+[ -f "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path logs gate-metrics.jsonl)" ] && DATA_SOURCES="$DATA_SOURCES gate-metrics"
 [ -f ".nightgauge/skill-effectiveness.jsonl" ] && DATA_SOURCES="$DATA_SOURCES skill-effectiveness"
 [ -d "${CHECKOUT_DIR}/health" ] && DATA_SOURCES="$DATA_SOURCES health-trends"
 [ -f "${CHECKOUT_DIR}/complexity-model.yaml" ] && DATA_SOURCES="$DATA_SOURCES complexity-model"
 [ -f "${PIPELINE_DIR}/recommendation-history.jsonl" ] && DATA_SOURCES="$DATA_SOURCES recommendations"
 # Out-of-band findings (#102): only when the list is non-empty, so an absent
 # file leaves the review unchanged.
-FINDINGS_JSON=$(nightgauge finding list --json 2>/dev/null || echo "[]")
+FINDINGS_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" finding list --json 2>/dev/null || echo "[]")
 [ "$(printf '%s\n' "$FINDINGS_JSON" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ] && DATA_SOURCES="$DATA_SOURCES findings"
 ```
 
@@ -380,12 +382,12 @@ Load the active focus lens from the checkout's `focus.yaml`. This is optional
 — missing file or parse errors default to `general` (no weighting applied).
 
 ```bash
-FOCUS_FILE="$(nightgauge layout path checkout focus.yaml)"
+FOCUS_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout focus.yaml)"
 ACTIVE_LENS="general"
 FOCUS_DESCRIPTION="Balanced improvement across all dimensions — no specific bias."
 
 if [ -f "$FOCUS_FILE" ]; then
-  PARSED_LENS=$(nightgauge config show --key focus.active_lens --raw 2>/dev/null)
+  PARSED_LENS=$("${NIGHTGAUGE_BIN:-nightgauge}" config show --key focus.active_lens --raw 2>/dev/null)
   if [ -n "$PARSED_LENS" ]; then
     ACTIVE_LENS="$PARSED_LENS"
     echo "Focus lens loaded: $ACTIVE_LENS"
@@ -552,7 +554,7 @@ VERDICTS_FILE=$(mktemp /tmp/loop-verdicts-XXXXXX.json)
 USE_BINARY_VERDICTS=false
 
 if command -v nightgauge >/dev/null 2>&1; then
-  nightgauge intelligence loop-verdicts --workdir "$WORKDIR" --period "$PERIOD" \
+  "${NIGHTGAUGE_BIN:-nightgauge}" intelligence loop-verdicts --workdir "$WORKDIR" --period "$PERIOD" \
     > "$VERDICTS_FILE" 2>/dev/null && USE_BINARY_VERDICTS=true || {
     echo "WARNING: loop-verdicts binary call failed — falling back to manual analysis"
   }
@@ -573,7 +575,7 @@ if [ "$USE_BINARY_VERDICTS" = "true" ] && [ -s "$VERDICTS_FILE" ]; then
   RELIABILITY_VERDICT=$(jq -r '.loops[] | select(.loop=="reliability") | .verdict' "$VERDICTS_FILE")
 else
   # --- Prose fallback: manual analysis ---
-  echo "Running manual loop analysis (nightgauge binary not available)"
+  echo "Running manual loop analysis (the nightgauge binary is not available)"
 fi
 ```
 
@@ -744,7 +746,7 @@ prose sub-step (no phase marker) so it does not alter the phase total.
 SKILL_NAME="nightgauge-continuous-improvement"
 RUN_LOG_CLASS="pipeline"
 RUN_LOG_NAME="continuous-improvement-runs.jsonl"
-RUN_LOG="$(nightgauge layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
+RUN_LOG="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
 ```
 
 ### Run Reflection (memory across runs)
@@ -797,7 +799,7 @@ else
   RECORD=$(jq -nc --arg ts "$NOW" --arg skill "$SKILL_NAME" \
         --argjson counts "${RUN_COUNTS:-{}}" --arg summary "${RUN_SUMMARY:-}" \
         '{ts:$ts, skill:$skill, counts:$counts, summary:$summary}')
-  printf '%s\n' "$RECORD" | nightgauge layout append "$RUN_LOG_CLASS" "$RUN_LOG_NAME" >/dev/null
+  printf '%s\n' "$RECORD" | "${NIGHTGAUGE_BIN:-nightgauge}" layout append "$RUN_LOG_CLASS" "$RUN_LOG_NAME" >/dev/null
   echo "Appended run record to $RUN_LOG"
 fi
 ```
@@ -939,7 +941,7 @@ printf '%s' "$PROPOSALS_JSON" > "$PROPOSALS_FILE"
 
 RANKED_FILE=$(mktemp /tmp/proposals-ranked-XXXXXX.json)
 if command -v nightgauge >/dev/null 2>&1; then
-  nightgauge focus rank \
+  "${NIGHTGAUGE_BIN:-nightgauge}" focus rank \
     --proposals "$PROPOSALS_FILE" \
     --lens "${ACTIVE_LENS:-general}" \
     > "$RANKED_FILE" 2>/dev/null || {
@@ -1202,7 +1204,7 @@ Keep the last 10 continuous improvement reports. Delete oldest when limit
 exceeded.
 
 ```bash
-REPORT_DIR="$(nightgauge layout path pipeline)"
+REPORT_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline)"
 ls -t "$REPORT_DIR"/continuous-improvement-*.json 2>/dev/null | tail -n +11 | xargs rm -f
 ```
 
@@ -1257,7 +1259,7 @@ directory, through the binary (JSON on stdin; never a direct file write):
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
 { ... the record below ... }
 JSON
 ```
@@ -1312,7 +1314,7 @@ The assessment record MUST follow this schema:
 # Validate JSON if written
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
+ASSESSMENT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

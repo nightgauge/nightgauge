@@ -125,9 +125,9 @@ When `-i` flag is provided or user rejects auto-selection:
 
 ```bash
 # List open issues (`issue list` returns open issues only), first 15
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
-nightgauge issue list --repo "$REPO" --json \
+"${NIGHTGAUGE_BIN:-nightgauge}" issue list --repo "$REPO" --json \
   | jq -r '(. // [])[:15][] | "#\(.number) - \(.title) [\(.labels // [] | join(", "))]"'
 ```
 

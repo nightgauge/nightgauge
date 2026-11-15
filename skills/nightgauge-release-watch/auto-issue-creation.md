@@ -406,19 +406,19 @@ After creating an issue:
 ```bash
 # Step 1: Add issue to project board
 ISSUE_NUMBER=<created-issue-number>
-nightgauge project add "$ISSUE_NUMBER"
+"${NIGHTGAUGE_BIN:-nightgauge}" project add "$ISSUE_NUMBER"
 
 # Step 2: Set Priority field
 # High = score >= 70 or override rule applies
 # Medium = score 40-69 (only in creation log, not created as issue)
-nightgauge project set-field "$ISSUE_NUMBER" Priority "High"
+"${NIGHTGAUGE_BIN:-nightgauge}" project set-field "$ISSUE_NUMBER" Priority "High"
 
 # Step 3: Set Size field
 # S = <2 hours, M = 2-8 hours, L = 8+ hours
-nightgauge project set-field "$ISSUE_NUMBER" Size "M"
+"${NIGHTGAUGE_BIN:-nightgauge}" project set-field "$ISSUE_NUMBER" Size "M"
 
 # Step 4: Set Status to Ready (for backlog item)
-nightgauge project sync-status "$ISSUE_NUMBER" ready
+"${NIGHTGAUGE_BIN:-nightgauge}" project sync-status "$ISSUE_NUMBER" ready
 
 # Log success; the structured entry goes to the creation log (Rail 4)
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) | Created issue #$ISSUE_NUMBER on board"
@@ -859,12 +859,12 @@ gh auth login
 
 ```bash
 # Manually re-sync issue to board
-nightgauge project add <issue-number>
+"${NIGHTGAUGE_BIN:-nightgauge}" project add <issue-number>
 
 # Re-set fields
-nightgauge project set-field <issue-number> Priority "High"
-nightgauge project set-field <issue-number> Size "M"
-nightgauge project sync-status <issue-number> ready
+"${NIGHTGAUGE_BIN:-nightgauge}" project set-field <issue-number> Priority "High"
+"${NIGHTGAUGE_BIN:-nightgauge}" project set-field <issue-number> Size "M"
+"${NIGHTGAUGE_BIN:-nightgauge}" project sync-status <issue-number> ready
 
 # Verify
 gh issue view <issue-number>
@@ -909,7 +909,7 @@ cd /path/to/nightgauge
 gh issue list --label claude-code-release --limit 5
 
 # 6. Check creation log
-jq '.entries[-1]' "$(nightgauge layout path checkout release-watch/creation-log.json)"
+jq '.entries[-1]' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout release-watch/creation-log.json)"
 ```
 
 ### Deduplication Testing

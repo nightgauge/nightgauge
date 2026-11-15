@@ -836,13 +836,13 @@ func TestRepoInitUsesSupportedModelInitializer(t *testing.T) {
 	// The model is per-checkout state in the git dir (ADR-024 § 7): the skill
 	// resolves it through the layout command and writes a seed only through
 	// the confined `layout write`, never by a hand-built working-tree path.
-	if !strings.Contains(text, `MODEL_PATH="$(nightgauge layout path checkout complexity-model.yaml)"`) {
+	if !strings.Contains(text, `MODEL_PATH="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout complexity-model.yaml)"`) {
 		t.Fatal("repo-init does not resolve the model through `nightgauge layout path checkout`")
 	}
 	if !strings.Contains(text, `if [ -e "$MODEL_PATH" ]; then`) {
 		t.Fatal("repo-init does not preserve an existing model before seeding")
 	}
-	if !strings.Contains(text, "nightgauge layout write checkout complexity-model.yaml") {
+	if !strings.Contains(text, `"${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout complexity-model.yaml`) {
 		t.Fatal("repo-init seed install bypasses the confined per-checkout writer")
 	}
 	if strings.Contains(text, ".nightgauge/complexity-model.yaml") {

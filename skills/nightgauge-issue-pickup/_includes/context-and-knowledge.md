@@ -50,7 +50,7 @@ Durable sources, in order of authority:
 set -u
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 
 # The branch. HEAD is authoritative: `nightgauge git branch-create` creates AND
@@ -60,7 +60,7 @@ case "$BRANCH_NAME" in
   */"$ISSUE_NUMBER"-*) ;;
   *)
     echo "ERROR: HEAD is on '$BRANCH_NAME', which is not issue #$ISSUE_NUMBER's branch." >&2
-    echo "       Re-run Phase 5 (nightgauge git branch-create --issue $ISSUE_NUMBER --json)," >&2
+    echo "       Re-run Phase 5 (it runs: nightgauge git branch-create --issue $ISSUE_NUMBER --json)," >&2
     echo "       which is idempotent, then repeat this step." >&2
     exit 1
     ;;
@@ -75,7 +75,7 @@ BASE_BRANCH="${BASE_BRANCH:-main}"
 # The issue itself. One fetch, only when this shell does not already hold it.
 ISSUE_JSON="${ISSUE_JSON:-}"
 if [ -z "$ISSUE_JSON" ]; then
-  ISSUE_JSON=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json)
+  ISSUE_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json)
 fi
 if [ -z "$ISSUE_JSON" ] || ! printf '%s\n' "$ISSUE_JSON" | jq -e . >/dev/null 2>&1; then
   echo "ERROR: could not fetch issue #$ISSUE_NUMBER as JSON" >&2
@@ -83,7 +83,7 @@ if [ -z "$ISSUE_JSON" ] || ! printf '%s\n' "$ISSUE_JSON" | jq -e . >/dev/null 2>
 fi
 
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)"
 
 TITLE="${TITLE:-$(printf '%s\n' "$ISSUE_JSON" | jq -r '.title // ""')}"
 LABELS_JSON=$(printf '%s\n' "$ISSUE_JSON" | jq -c '[.labels[].name]')
@@ -137,7 +137,7 @@ jq -n \
     dependency_analysis: null,
     knowledge_path: null,
     created_at: $created_at
-  }' | nightgauge layout write pipeline "issue-${ISSUE_NUMBER}.json" >/dev/null
+  }' | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "issue-${ISSUE_NUMBER}.json" >/dev/null
 # Atomic write: `layout write` writes a temp file and renames it into place. A
 # plain redirect truncates the file before jq writes it, so a concurrent reader
 # (the gate, loadFeatureBranch) could see it empty (#1904).
@@ -179,7 +179,7 @@ parsed config rather than from `grep -A5 "^knowledge:"`.
 To scaffold by hand (outside a pipeline run):
 
 ```bash
-nightgauge knowledge scaffold --issue-number <N> --title "<title>" \
+"${NIGHTGAUGE_BIN:-nightgauge}" knowledge scaffold --issue-number <N> --title "<title>" \
   --knowledge-enabled true --json
 ```
 
@@ -211,10 +211,10 @@ ROUTING_JSON=$(jq -n \
     estimated_time_minutes: 30
   }')
 
-CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)"
 tmp=$(mktemp)
 jq --argjson routing "$ROUTING_JSON" '.routing = $routing' "$CONTEXT_FILE" > "$tmp" &&
-  nightgauge layout write pipeline "issue-${ISSUE_NUMBER}.json" --from "$tmp" >/dev/null
+  "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "issue-${ISSUE_NUMBER}.json" --from "$tmp" >/dev/null
 rm -f "$tmp"
 ```
 
@@ -274,7 +274,7 @@ Also include `pickup_recommendation` with explicit stage skip recommendations
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)"
 jq . "$CONTEXT_FILE" > /dev/null && \
   echo "Context file written: $CONTEXT_FILE"
 ```

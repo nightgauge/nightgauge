@@ -314,7 +314,7 @@ from a source that survives:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 BRANCH=$(git branch --show-current)
 : "${BRANCH:?detached HEAD: check out the issue branch}"
@@ -331,6 +331,12 @@ instead.
 `nightgauge preflight skill-shell-state` fails a stage-skill block that reads
 `$ISSUE_NUMBER`, `$BRANCH`, `$BRANCH_NAME` or `$REPO` without deriving it, or
 expands one with an empty default.
+
+The same fresh-shell rule applies to the binary. PREFLIGHT's `PATH` export does
+not outlive its block, so every call at command position in a bash fence is
+`"${NIGHTGAUGE_BIN:-nightgauge}" <verb>`; the host-exported binary wins and a
+plain `PATH` lookup is the fallback. `nightgauge preflight skill-portability`
+fails a bare `nightgauge <verb>` there (#2933).
 
 ---
 

@@ -88,7 +88,7 @@ cleanup_failed_pr() {
     \"stage\": \"pr-merge\",
     \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",
     \"branch\": \"$(git branch --show-current 2>/dev/null || echo unknown)\"
-  }" | nightgauge layout write pipeline "$FAILURE_LOG" >/dev/null 2>&1 || true
+  }" | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "$FAILURE_LOG" >/dev/null 2>&1 || true
 
   # 3. Move issue back to Ready on the project board so it's visible
   BINARY="${NIGHTGAUGE_BIN:-}"

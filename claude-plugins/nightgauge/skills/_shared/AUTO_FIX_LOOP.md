@@ -103,7 +103,7 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Read transient-failure flags from the prior stage's handoff.
 # pr-merge reads pr-{N}.json (written by pr-create Phase 4).
-PR_CONTEXT="$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)"
+PR_CONTEXT="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline pr-${ISSUE_NUMBER}.json)"
 if [ -f "$PR_CONTEXT" ]; then
   ALL_TRANSIENT=$(jq -r '
     (.ci_monitoring.failures // []) as $f
@@ -232,7 +232,7 @@ retro for why making this advisory burned a sham `[skip build]` commit).
    classification:
 
    ```bash
-   BASELINE="$(nightgauge layout path pipeline auto-fix-baseline-${PR_NUMBER}.json)"
+   BASELINE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline auto-fix-baseline-${PR_NUMBER}.json)"
    if [ -f "$BASELINE" ]; then
      INHERITED=$(jq '[.failures[]? | select(.classification == "inherited")] | length' "$BASELINE" 2>/dev/null || echo 0)
      REGRESSIONS=$(jq '[.failures[]? | select(.classification == "regression")] | length' "$BASELINE" 2>/dev/null || echo 0)
@@ -383,7 +383,7 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 jq -n --argjson pr "$PR_NUMBER" --arg sha "$(git rev-parse HEAD)" \
   --argjson attempt "$AUTO_FIX_ATTEMPT" \
   '{result: "fix-pushed", pr_number: $pr, head_sha: $sha, attempt: $attempt}' \
-  | nightgauge layout write pipeline "pr-merge-fix-${ISSUE_NUMBER}.json" >/dev/null
+  | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "pr-merge-fix-${ISSUE_NUMBER}.json" >/dev/null
 echo "Fix pushed to PR #$PR_NUMBER — handing back to the deterministic merge path."
 exit 0
 ```

@@ -132,9 +132,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -164,7 +166,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -278,11 +280,11 @@ echo "Found ${PAGE_COUNT} documentation pages"
 # This checkout's doc-snapshots/ inside the git directory (ADR-024 § 7):
 # read by path, written only through `nightgauge layout write checkout`.
 SNAPSHOT_NAME="doc-snapshots/index.json"
-SNAPSHOT_FILE="$(nightgauge layout path checkout "$SNAPSHOT_NAME")"
+SNAPSHOT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout "$SNAPSHOT_NAME")"
 
 if [ ! -f "$SNAPSHOT_FILE" ]; then
   echo '{"last_check":"1970-01-01T00:00:00Z","page_count":0,"pages":{}}' \
-    | jq '.' | nightgauge layout write checkout "$SNAPSHOT_NAME" > /dev/null
+    | jq '.' | "${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout "$SNAPSHOT_NAME" > /dev/null
   echo "Initialized new snapshot file at ${SNAPSHOT_FILE}"
 fi
 ```
@@ -330,7 +332,7 @@ echo "Existing pages to check: ${EXISTING_COUNT}"
 Use the snapshot-diff script to detect content changes:
 
 ```bash
-nightgauge docs snapshot-diff \
+"${NIGHTGAUGE_BIN:-nightgauge}" docs snapshot-diff \
   --snapshot /tmp/docs-watch-snapshot.json \
   --urls /tmp/docs-watch-urls.txt \
   --json \
@@ -388,8 +390,8 @@ Only executes when `--skip-release-correlation` is not set AND this checkout's
 #### Step 5.5.1: Load release state and recent reports
 
 ```bash
-RELEASE_STATE_FILE="$(nightgauge layout path checkout release-watch/last-seen-claude-code.json)"
-REPORTS_DIR="$(nightgauge layout path checkout release-watch/reports)"
+RELEASE_STATE_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout release-watch/last-seen-claude-code.json)"
+REPORTS_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout release-watch/reports)"
 export RELEASE_STATE_FILE REPORTS_DIR
 
 if [ ! -f "$RELEASE_STATE_FILE" ]; then
@@ -653,7 +655,7 @@ with open('/tmp/docs-watch-snapshot-updated.json', 'w') as f:
 
 print(f'Snapshot updated: {len(snapshot[\"pages\"])} pages tracked')
 "
-nightgauge layout write checkout "$SNAPSHOT_NAME" \
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout "$SNAPSHOT_NAME" \
   --from /tmp/docs-watch-snapshot-updated.json > /dev/null
 ```
 
@@ -736,7 +738,7 @@ The snapshot (`index.json`) already tracks per-page state; this log tracks the
 SKILL_NAME="nightgauge-docs-watch"
 RUN_LOG_CLASS="checkout"
 RUN_LOG_NAME="doc-snapshots/runs.jsonl"
-RUN_LOG="$(nightgauge layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
+RUN_LOG="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
 ```
 
 ### Run Reflection (memory across runs)
@@ -789,7 +791,7 @@ else
   RECORD=$(jq -nc --arg ts "$NOW" --arg skill "$SKILL_NAME" \
         --argjson counts "${RUN_COUNTS:-{}}" --arg summary "${RUN_SUMMARY:-}" \
         '{ts:$ts, skill:$skill, counts:$counts, summary:$summary}')
-  printf '%s\n' "$RECORD" | nightgauge layout append "$RUN_LOG_CLASS" "$RUN_LOG_NAME" >/dev/null
+  printf '%s\n' "$RECORD" | "${NIGHTGAUGE_BIN:-nightgauge}" layout append "$RUN_LOG_CLASS" "$RUN_LOG_NAME" >/dev/null
   echo "Appended run record to $RUN_LOG"
 fi
 ```
@@ -848,7 +850,7 @@ directory, through the binary (JSON on stdin; never a direct file write):
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
 { ... the record below ... }
 JSON
 ```
@@ -903,7 +905,7 @@ The assessment record MUST follow this schema:
 # Validate JSON if written
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
+ASSESSMENT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

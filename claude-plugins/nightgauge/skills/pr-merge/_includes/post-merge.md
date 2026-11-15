@@ -53,7 +53,7 @@ If `POST_MERGE_BUILD_FAILED=true`, warn prominently in Phase 8 summary.
 board sync needed.
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
@@ -119,7 +119,7 @@ CLOSE_VERIFIED=false
 if [ "$ISSUE_CLOSED" = "true" ]; then
   echo "Verifying issue #$ISSUE_NUMBER is closed..."
 
-  ISSUE_STATE=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null | jq -r '.state // "ERROR"')
+  ISSUE_STATE=$("${NIGHTGAUGE_BIN:-nightgauge}" forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null | jq -r '.state // "ERROR"')
 
   if [ "$ISSUE_STATE" = "CLOSED" ]; then
     CLOSE_VERIFIED=true
@@ -128,7 +128,7 @@ if [ "$ISSUE_CLOSED" = "true" ]; then
     echo "Issue state is $ISSUE_STATE (not CLOSED yet), retrying in 5s..."
     sleep 5
 
-    ISSUE_STATE=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null | jq -r '.state // "ERROR"')
+    ISSUE_STATE=$("${NIGHTGAUGE_BIN:-nightgauge}" forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null | jq -r '.state // "ERROR"')
     if [ "$ISSUE_STATE" = "CLOSED" ]; then
       CLOSE_VERIFIED=true
       echo "Issue #$ISSUE_NUMBER verified CLOSED (after retry)"
@@ -219,14 +219,14 @@ if [ "$CONFIG_AUTO_INDEX" = "true" ] && [ -d "$KNOWLEDGE_DIR" ]; then
 fi
 
 # Write issue_closed and issue_closed_verified to pr-{N}.json for pipeline history
-MERGE_CONTEXT_FILE="$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)"
+MERGE_CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline pr-${ISSUE_NUMBER}.json)"
 if [ -f "$MERGE_CONTEXT_FILE" ]; then
   TMP_FILE=$(mktemp)
   if jq --argjson issue_closed "$ISSUE_CLOSED" \
        --argjson issue_closed_verified "$CLOSE_VERIFIED" \
     '.issue_closed = $issue_closed | .issue_closed_verified = $issue_closed_verified' \
     "$MERGE_CONTEXT_FILE" > "$TMP_FILE" 2>/dev/null &&
-    nightgauge layout write pipeline "pr-${ISSUE_NUMBER}.json" --from "$TMP_FILE" >/dev/null; then
+    "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "pr-${ISSUE_NUMBER}.json" --from "$TMP_FILE" >/dev/null; then
     rm -f "$TMP_FILE"
   else
     rm -f "$TMP_FILE"
@@ -297,8 +297,8 @@ the epic branch (not main):
 # feature branch comes from the pickup context, not from HEAD.
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-BRANCH=$(jq -r '.branch // empty' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)")
-: "${BRANCH:?no branch recorded in issue-${ISSUE_NUMBER}.json (nightgauge layout path pipeline)}"
+BRANCH=$(jq -r '.branch // empty' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)")
+: "${BRANCH:?no branch recorded in issue-${ISSUE_NUMBER}.json (in the directory from: nightgauge layout path pipeline)}"
 # Branch cleanup (local + remote + prune)
 git fetch --prune
 git branch -d "$BRANCH" 2>/dev/null || git branch -D "$BRANCH" 2>/dev/null || true
@@ -333,11 +333,11 @@ as warnings and do not block the pipeline.
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Read context files (all guaranteed available at this phase)
-ISSUE_NUMBER=$(jq -r '.issue_number' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "$ISSUE_NUMBER")
-PR_NUMBER=$(jq -r '.pr_number' "$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "$PR_NUMBER")
-MODEL_USED=$(jq -r '.quality_checks.model_used // "claude-sonnet-4-6"' "$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "claude-sonnet-4-6")
-PREDICTED_SIZE=$(jq -r '.complexity.label // "M"' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "M")
-ISSUE_TYPE=$(jq -r '.issue_type // "feature"' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null | tr '[:upper:]' '[:lower:]' | sed 's/ /_/g' || echo "feature")
+ISSUE_NUMBER=$(jq -r '.issue_number' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "$ISSUE_NUMBER")
+PR_NUMBER=$(jq -r '.pr_number' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline pr-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "$PR_NUMBER")
+MODEL_USED=$(jq -r '.quality_checks.model_used // "claude-sonnet-4-6"' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline dev-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "claude-sonnet-4-6")
+PREDICTED_SIZE=$(jq -r '.complexity.label // "M"' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "M")
+ISSUE_TYPE=$(jq -r '.issue_type // "feature"' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null | tr '[:upper:]' '[:lower:]' | sed 's/ /_/g' || echo "feature")
 
 # Get actual lines changed via Go binary (additions/deletions fields added in #2668)
 ACTUAL_LINES=0

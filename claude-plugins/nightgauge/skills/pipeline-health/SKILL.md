@@ -260,7 +260,7 @@ invocations to `skills/usage.jsonl` in this checkout's directory
 (`nightgauge layout path checkout skills/usage.jsonl`). Read the rollup with:
 
 ```bash
-nightgauge skills usage --json
+"${NIGHTGAUGE_BIN:-nightgauge}" skills usage --json
 ```
 
 Surface as findings:
@@ -327,9 +327,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -359,7 +361,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -504,7 +506,7 @@ SOURCES_FOUND=()
 SOURCES_MISSING=()
 
 # Check each data source
-PIPELINE_DIR="$(nightgauge layout path pipeline)"
+PIPELINE_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline)"
 HISTORY_DIR="${PIPELINE_DIR}/history"
 if ls "${HISTORY_DIR}"/*.jsonl 2>/dev/null | head -1 > /dev/null; then
   SOURCES_FOUND+=("execution-history")
@@ -518,13 +520,13 @@ else
   SOURCES_MISSING+=("history-index")
 fi
 
-if [ -f "$(nightgauge layout path checkout health/trends.jsonl)" ]; then
+if [ -f "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout health/trends.jsonl)" ]; then
   SOURCES_FOUND+=("health-series")
 else
   SOURCES_MISSING+=("health-series")
 fi
 
-ANALYSIS_DIR="$(nightgauge layout path checkout analysis)"
+ANALYSIS_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout analysis)"
 if ls "${ANALYSIS_DIR}"/*.json 2>/dev/null | head -1 > /dev/null; then
   SOURCES_FOUND+=("post-pipeline-analysis")
 else
@@ -680,7 +682,7 @@ python3 /tmp/health_extract_history.py ${PERIOD_DAYS} "${SINCE_DATE}" "${UNTIL_D
 
 ```bash
 # Extract health trend scores using Go binary (replaces Python script)
-nightgauge health trends --limit 50 --json > /tmp/health_scores.json 2>/tmp/health_scores_warn.txt
+"${NIGHTGAUGE_BIN:-nightgauge}" health trends --limit 50 --json > /tmp/health_scores.json 2>/tmp/health_scores_warn.txt
 SCORE_COUNT=$(jq 'length' /tmp/health_scores.json 2>/dev/null || echo 0)
 echo "Extracted ${SCORE_COUNT} health trend entries to /tmp/health_scores.json"
 [ -s /tmp/health_scores_warn.txt ] && cat /tmp/health_scores_warn.txt
@@ -690,7 +692,7 @@ echo "Extracted ${SCORE_COUNT} health trend entries to /tmp/health_scores.json"
 
 ```bash
 # Aggregate analysis files into single summary
-ANALYSIS_DIR="$(nightgauge layout path checkout analysis)"
+ANALYSIS_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout analysis)"
 python3 -c "
 import json, glob
 analyses = []
@@ -709,7 +711,7 @@ print(f'Extracted {len(analyses)} analysis files')
 #### Step 2.5: Extract A/B Experiment Data
 
 ```bash
-ANALYSIS_DIR="$(nightgauge layout path checkout analysis)"
+ANALYSIS_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout analysis)"
 python3 -c "
 import json, glob
 experiments = []
@@ -732,7 +734,7 @@ print(f'Extracted {len(experiments)} experiment records')
 
 ```bash
 # Extract gate metrics with hit rates using Go binary (replaces jq aggregation)
-nightgauge health gate-metrics --json > /tmp/health_gates.json 2>/tmp/health_gates_warn.txt
+"${NIGHTGAUGE_BIN:-nightgauge}" health gate-metrics --json > /tmp/health_gates.json 2>/tmp/health_gates_warn.txt
 GATE_COUNT=$(jq 'length' /tmp/health_gates.json 2>/dev/null || echo 0)
 if [ "$GATE_COUNT" -eq 0 ]; then
   echo "No gate metrics found — gate hit-rate analysis will be skipped"
@@ -869,14 +871,14 @@ Before creating, search for duplicates across both open and recently closed
 issues:
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 # Open matches (`issue list --search` is scoped to open issues)
-nightgauge issue list --repo "$REPO" --search "${FINDING_KEYWORDS}" --json | jq '[(. // [])[] | {number, title}]'
+"${NIGHTGAUGE_BIN:-nightgauge}" issue list --repo "$REPO" --search "${FINDING_KEYWORDS}" --json | jq '[(. // [])[] | {number, title}]'
 # Closed matches (no list verb reaches closed issues: GraphQL search)
-nightgauge forge graphql -f query='query($q: String!) { search(query: $q, type: ISSUE, first: 20) { nodes { ... on Issue { number title } } } }' \
+"${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='query($q: String!) { search(query: $q, type: ISSUE, first: 20) { nodes { ... on Issue { number title } } } }' \
   -f q="repo:$REPO is:issue is:closed ${FINDING_KEYWORDS}" | jq '.data.search.nodes'
 # Open epics
-nightgauge forge issue list --repo "$REPO" --labels "type:epic" --json | jq '[.[:30][] | {number, title}]'
+"${NIGHTGAUGE_BIN:-nightgauge}" forge issue list --repo "$REPO" --labels "type:epic" --json | jq '[.[:30][] | {number, title}]'
 ```
 
 Skip creation if a matching issue exists.
@@ -887,19 +889,19 @@ When creating 3+ findings as issues, create as an epic with sub-issues:
 
 ```bash
 # Create epic
-nightgauge forge issue create \
+"${NIGHTGAUGE_BIN:-nightgauge}" forge issue create \
   --title "epic: Pipeline health findings — ${SUMMARY}" \
   --body "${EPIC_BODY}" \
   --labels "type:epic,priority:high,size:L"
 
 # Create sub-issues. --labels takes label NAMES and resolves them itself
 # (#1214); an unknown name fails before anything is created.
-nightgauge issue create-sub <EPIC_NUMBER> \
+"${NIGHTGAUGE_BIN:-nightgauge}" issue create-sub <EPIC_NUMBER> \
   --title "<FINDING_TITLE>" --body "<FINDING_BODY>" \
   --labels "type:bug,priority:medium"
 
 # Sync epic to project board
-nightgauge project add <EPIC_NUMBER>
+"${NIGHTGAUGE_BIN:-nightgauge}" project add <EPIC_NUMBER>
 ```
 
 For `--dry-run`, output what would be created without actually creating.
@@ -1118,7 +1120,7 @@ directory, through the binary (JSON on stdin; never a direct file write):
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
 { ... the record below ... }
 JSON
 ```
@@ -1173,7 +1175,7 @@ The assessment record MUST follow this schema:
 # Validate JSON if written
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
+ASSESSMENT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

@@ -63,7 +63,7 @@ Instead, resolve each repository's project number with the single
 authoritative resolver:
 
 ```bash
-nightgauge project resolve --repo <owner>/<repo> --json
+"${NIGHTGAUGE_BIN:-nightgauge}" project resolve --repo <owner>/<repo> --json
 # → { "number": 4, "owner": "...", "owner_type": "...", "id": "...", "title": "...", "url": "..." }
 ```
 
@@ -227,7 +227,7 @@ When agent teams are disabled, use the Go binary for deterministic dependency
 analysis. After creating all sub-issues (Phase 3), call:
 
 ```bash
-nightgauge epic plan-waves \
+"${NIGHTGAUGE_BIN:-nightgauge}" epic plan-waves \
   --sub-issues <comma-separated-issue-numbers> \
   --json
 ```

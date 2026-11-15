@@ -92,7 +92,7 @@ printf '<!-- phase:start name="validate-prerequisites" index=1 total=6 stage="is
 #### Step 1.1: Verify GitHub Authentication
 
 ```bash
-nightgauge forge auth status || { echo "ERROR: Forge auth not configured. Run: nightgauge forge auth login"; exit 1; }
+"${NIGHTGAUGE_BIN:-nightgauge}" forge auth status || { echo "ERROR: Forge auth not configured. Run: nightgauge forge auth login"; exit 1; }
 ```
 
 #### Step 1.2: Resolve Issue Number
@@ -114,13 +114,13 @@ echo "Refining issue #${ISSUE_NUMBER}..."
 #### Step 1.3: Fetch Issue Details
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # --comments returns only comments by users with write access (or a trusted
 # bot); the rest never reach this skill (#2130).
-ISSUE_JSON=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" \
+ISSUE_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" forge issue view "$ISSUE_NUMBER" --repo "$REPO" \
   --json --comments 2>/dev/null)
 
 if [ -z "$ISSUE_JSON" ] || [ "$(printf '%s\n' "$ISSUE_JSON" | jq -r '.number // empty')" = "" ]; then
@@ -460,11 +460,11 @@ BODYEOF
 #### Step 5.2: Update Issue Body
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge issue edit "$ISSUE_NUMBER" --repo "$REPO" --body "$(cat "$BODY_FILE")"
+"${NIGHTGAUGE_BIN:-nightgauge}" issue edit "$ISSUE_NUMBER" --repo "$REPO" --body "$(cat "$BODY_FILE")"
 
 if [ $? -ne 0 ]; then
   echo "ERROR: Failed to update issue #${ISSUE_NUMBER} body."
@@ -482,7 +482,7 @@ echo "Issue #${ISSUE_NUMBER} body updated."
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if ! printf '%s\n' "$ISSUE_LABELS" | grep -qE '(^|,)type:'; then
-  nightgauge forge graphql -f query="mutation{addLabelsToLabelable(input:{labelableId:\"$ISSUE_NUMBER\",labelIds:[\"type:${ISSUE_TYPE}\"]}){clientMutationId}}" 2>/dev/null || \
+  "${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query="mutation{addLabelsToLabelable(input:{labelableId:\"$ISSUE_NUMBER\",labelIds:[\"type:${ISSUE_TYPE}\"]}){clientMutationId}}" 2>/dev/null || \
     echo "WARNING: Could not add type:${ISSUE_TYPE} label (may not exist in repo)."
 fi
 ```
@@ -521,11 +521,11 @@ fi
 #### Step 5.5: Report Success
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ISSUE_URL=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null | jq -r '.url // empty')
+ISSUE_URL=$("${NIGHTGAUGE_BIN:-nightgauge}" forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null | jq -r '.url // empty')
 [ -n "$ISSUE_URL" ] || ISSUE_URL="https://github.com/${REPO}/issues/${ISSUE_NUMBER}"
 
 echo ""

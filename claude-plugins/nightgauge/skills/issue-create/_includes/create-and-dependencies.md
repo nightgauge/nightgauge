@@ -31,7 +31,7 @@ spike issues with missing contracts (historical incident: #3331).
 First, verify the `nightgauge spike validate` command is available:
 
 ```bash
-if ! nightgauge spike validate --help >/dev/null 2>&1; then
+if ! "${NIGHTGAUGE_BIN:-nightgauge}" spike validate --help >/dev/null 2>&1; then
   echo "ERROR: nightgauge spike validate not available."
   echo "Update the binary: go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest"
   exit 1
@@ -44,7 +44,7 @@ For each `type:spike` sub-issue body assembled into a temp file `$BODY_FILE`:
 LABEL_LIST="<comma-separated label string for this sub-issue>"
 
 if printf '%s\n' "$LABEL_LIST" | grep -q "type:spike"; then
-  if ! nightgauge spike validate --body-file "$BODY_FILE"; then
+  if ! "${NIGHTGAUGE_BIN:-nightgauge}" spike validate --body-file "$BODY_FILE"; then
     echo ""
     echo "ERROR: type:spike sub-issue body failed contract validation."
     echo "Refusing to create the issue. Fix the body before retrying."
@@ -80,7 +80,7 @@ For each sub-issue, two cases:
    # line so the relationship reads in the issue text itself.
    # Use --body-file with a temp file (heredoc bodies trigger local hooks).
 
-   nightgauge project add <new-sub-number> \
+   "${NIGHTGAUGE_BIN:-nightgauge}" project add <new-sub-number> \
      --repo "<target_repo>" \
      --project <target_project_number>
 
@@ -107,7 +107,7 @@ invisible in the extension's tree views.
 **Standalone issue**:
 
 ```bash
-nightgauge issue create \
+"${NIGHTGAUGE_BIN:-nightgauge}" issue create \
   --owner <OWNER> --repo <REPO> \
   --title "<title>" \
   --body "<body>" \
@@ -119,7 +119,7 @@ nightgauge issue create \
 script:
 
 ```bash
-nightgauge issue create-sub <parent-issue-number> \
+"${NIGHTGAUGE_BIN:-nightgauge}" issue create-sub <parent-issue-number> \
   --title "<title>" --body "<body>" [--labels "<name>,<name>"] \
   [--repo <owner/repo>] [--blocked-by <N>,<M>] \
   [--wave <wave-number>] [--depends-on <N>,<M>]
@@ -137,8 +137,8 @@ the semantic alias `--depends-on` with a comma-separated list of blocker issue
 numbers:
 
 ```bash
-nightgauge issue create-sub 295 --title "Task" --blocked-by 280,290
-nightgauge issue create-sub 295 --title "Task" --wave 2 --depends-on 280,290
+"${NIGHTGAUGE_BIN:-nightgauge}" issue create-sub 295 --title "Task" --blocked-by 280,290
+"${NIGHTGAUGE_BIN:-nightgauge}" issue create-sub 295 --title "Task" --wave 2 --depends-on 280,290
 ```
 
 Both `--blocked-by` and `--depends-on` create `addBlockedBy` relationships.
@@ -214,7 +214,7 @@ optional.
 Linking existing sub-issues to an epic:
 
 ```bash
-nightgauge issue link-sub \
+"${NIGHTGAUGE_BIN:-nightgauge}" issue link-sub \
   <parent-epic-number> <child-issue-number> [--repo <owner/repo>]
 ```
 
@@ -264,7 +264,7 @@ whose foundational prerequisites don't exist yet.
 
 ```bash
 # New epic is blocked by prerequisite epic
-nightgauge issue add-blocked-by <NEW_EPIC_NUMBER> <PREREQ_EPIC_NUMBER>
+"${NIGHTGAUGE_BIN:-nightgauge}" issue add-blocked-by <NEW_EPIC_NUMBER> <PREREQ_EPIC_NUMBER>
 ```
 
 If the binary is unavailable, this skill fails with a clear error (see
@@ -279,7 +279,7 @@ Phase 1). There is no CLI fallback.
 # Get prerequisite epic's leaf sub-issues (those that don't block siblings)
 # Get new epic's root sub-issues (those that have no intra-epic blockers)
 # For each (root, leaf) pair: root is blocked by leaf
-nightgauge issue add-blocked-by <ROOT_NUMBER> <LEAF_NUMBER>
+"${NIGHTGAUGE_BIN:-nightgauge}" issue add-blocked-by <ROOT_NUMBER> <LEAF_NUMBER>
 ```
 
 **Why both levels?** Epic-to-epic blocking lets the scheduler skip an entire
@@ -290,7 +290,7 @@ prerequisite epic completes.
 4. **Verification**: Confirm the epic-level blocking is set:
 
 ```bash
-nightgauge issue view <NEW_EPIC_NUMBER> --json | jq -r '.blockedBy[] | "#\(.number) \(.title)"'
+"${NIGHTGAUGE_BIN:-nightgauge}" issue view <NEW_EPIC_NUMBER> --json | jq -r '.blockedBy[] | "#\(.number) \(.title)"'
 ```
 
 #### Step 2: Intra-Epic Dependencies (within the same epic)
@@ -311,7 +311,7 @@ native blocking relationship:
 
 ```bash
 # B depends on A → A blocks B
-nightgauge issue add-blocked-by <B_NUMBER> <A_NUMBER>
+"${NIGHTGAUGE_BIN:-nightgauge}" issue add-blocked-by <B_NUMBER> <A_NUMBER>
 ```
 
 For an injected serialization, the conflict's `issues` array is sorted ascending
@@ -325,7 +325,7 @@ Phase 1). There is no CLI fallback.
 **Verification** — after setting relationships, confirm they're visible:
 
 ```bash
-nightgauge issue view <B_NUMBER> --json | jq -r '.blockedBy[] | "#\(.number) \(.title)"'
+"${NIGHTGAUGE_BIN:-nightgauge}" issue view <B_NUMBER> --json | jq -r '.blockedBy[] | "#\(.number) \(.title)"'
 ```
 
 **CRITICAL — Never Block a Sub-Issue on Its Own Epic**: A sub-issue must
@@ -336,7 +336,7 @@ the relationship when the blocker is the parent epic of the blocked issue:
 
 ```bash
 # Guard is enforced by the binary — add-blocked-by rejects circular blocker == parent epic
-nightgauge issue add-blocked-by "$B_NUMBER" "$A_NUMBER" || echo "SKIP: circular blocker rejected by binary"
+"${NIGHTGAUGE_BIN:-nightgauge}" issue add-blocked-by "$B_NUMBER" "$A_NUMBER" || echo "SKIP: circular blocker rejected by binary"
 ```
 
 **CRITICAL — Dependency Ordering for Concurrent Safety (deterministically

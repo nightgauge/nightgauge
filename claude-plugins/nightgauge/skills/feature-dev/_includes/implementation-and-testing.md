@@ -37,7 +37,7 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Issue #3542: WIP checkpoint — commit in-progress work when the orchestrator
 # signals the pipeline is approaching its budget ceiling.
-CHECKPOINT_SIGNAL="$(nightgauge layout path pipeline checkpoint-signal-${ISSUE_NUMBER}.json)"
+CHECKPOINT_SIGNAL="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline checkpoint-signal-${ISSUE_NUMBER}.json)"
 if [ -f "$CHECKPOINT_SIGNAL" ]; then
   echo "=== WIP CHECKPOINT SIGNAL DETECTED ==="
   cat "$CHECKPOINT_SIGNAL"
@@ -182,7 +182,7 @@ must be surfaced here. Record results in `BUILD_RAN`, `BUILD_STATUS`,
 in `dev-{N}.json`.
 
 ```bash
-BUILD_RESULT=$(nightgauge build run --json 2>/dev/null || \
+BUILD_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" build run --json 2>/dev/null || \
   echo '{"ran":false,"status":"skipped","commands":[],"output":"","timestamp":""}')
 BUILD_RAN=$(printf '%s\n' "$BUILD_RESULT" | jq -r '.ran')
 BUILD_STATUS=$(printf '%s\n' "$BUILD_RESULT" | jq -r '.status')

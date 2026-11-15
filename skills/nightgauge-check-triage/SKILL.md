@@ -136,7 +136,7 @@ the record a log of what happened rather than a summary composed afterwards.
 ### Phase 1: Has It Ever Been Green?
 
 ```bash
-nightgauge ci history --repo "$REPO" --workflow "$WORKFLOW" --branch "$BRANCH" --limit 100 --json
+"${NIGHTGAUGE_BIN:-nightgauge}" ci history --repo "$REPO" --workflow "$WORKFLOW" --branch "$BRANCH" --limit 100 --json
 ```
 
 This is first, and it is mechanical, because the answer changes what the rest of
@@ -249,7 +249,7 @@ Write the record and let the binary check it. The binary writes it to
 `nightgauge layout path checkout`):
 
 ```bash
-nightgauge triage record --file "$RECORD_JSON"
+"${NIGHTGAUGE_BIN:-nightgauge}" triage record --file "$RECORD_JSON"
 ```
 
 Exit 1 means the investigation does not meet the contract, and the message names

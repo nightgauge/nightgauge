@@ -110,7 +110,7 @@ func TestFeatureValidate_PhaseTwoFiveRunsOneGate(t *testing.T) {
 	}
 	body := string(data)
 	order := []string{
-		"nightgauge ci gate-status --kind parity --json",
+		`"${NIGHTGAUGE_BIN:-nightgauge}" ci gate-status --kind parity --json`,
 		`CI_PARITY_COMMANDS=("nightgauge ci gate-run")`,
 		"--event finish --run-id \"$CI_GATE_RUN\" --kind parity",
 		`if [ "$CI_GATE_REUSABLE" = "true" ]; then`,
@@ -129,7 +129,7 @@ func TestFeatureValidate_PhaseTwoFiveRunsOneGate(t *testing.T) {
 	// second start: that start would never finish, and would count as a killed
 	// gate.
 	if !strings.Contains(body, `if [ "${CI_PARITY_COMMANDS[0]:-}" != "nightgauge ci gate-run" ]; then
-    CI_GATE_RUN=$(nightgauge ci gate-record --event start`) {
+    CI_GATE_RUN=$("${NIGHTGAUGE_BIN:-nightgauge}" ci gate-record --event start`) {
 		t.Error("the parity start is not guarded against gate-run's own recording")
 	}
 	if !strings.Contains(body, "NIGHTGAUGE_PROGRESS:") {

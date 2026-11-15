@@ -145,7 +145,7 @@ grep -qF '<!-- nightgauge:agent-guidance v1 -->' AGENTS.md || echo "DC-18 WARN: 
 
 ```bash
 if command -v nightgauge >/dev/null 2>&1; then
-  nightgauge preflight managed-steering || echo "DC-20 FAIL: managed steering block committed"
+  "${NIGHTGAUGE_BIN:-nightgauge}" preflight managed-steering || echo "DC-20 FAIL: managed steering block committed"
 else
   git grep -nF '<!-- BEGIN NIGHTGAUGE MANAGED STEERING -->' HEAD -- ':(glob)**/AGENTS.md' \
     && echo "DC-20 FAIL: managed steering block committed"

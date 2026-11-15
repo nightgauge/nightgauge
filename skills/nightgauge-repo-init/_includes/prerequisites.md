@@ -22,7 +22,7 @@ if ! command -v nightgauge &>/dev/null; then
   echo "ERROR: nightgauge binary not installed — see docs/GO_BINARY.md"
   exit 1
 fi
-if ! nightgauge forge auth status &>/dev/null; then
+if ! "${NIGHTGAUGE_BIN:-nightgauge}" forge auth status &>/dev/null; then
   echo "ERROR: forge auth not configured — run: nightgauge forge auth login (or set GITHUB_TOKEN env var)"
   exit 1
 fi
@@ -39,7 +39,7 @@ Capture the active forge account once and pin it. **Never switch to another acco
 during this skill — fail with a clear error instead.**
 
 ```bash
-ACTIVE_USER=$(nightgauge forge auth whoami --json 2>/dev/null | jq -r '.login // empty')
+ACTIVE_USER=$("${NIGHTGAUGE_BIN:-nightgauge}" forge auth whoami --json 2>/dev/null | jq -r '.login // empty')
 if [ -z "$ACTIVE_USER" ]; then
   echo "ERROR: Could not detect active forge account — run: nightgauge forge auth login"
   exit 1
@@ -54,7 +54,7 @@ so the skill fails fast with an actionable error rather than silently falling
 back to a wrong account.
 
 ```bash
-if ! nightgauge forge auth status 2>&1 | grep -q "project"; then
+if ! "${NIGHTGAUGE_BIN:-nightgauge}" forge auth status 2>&1 | grep -q "project"; then
   echo ""
   echo "ERROR: Active token for '$ACTIVE_USER' is missing the 'project' scope."
   echo ""
@@ -131,8 +131,8 @@ fi
 ## Step 0.2: Get Repo Identity
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
-REPO_JSON=$(nightgauge forge repo view --repo "$REPO" --json)
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
+REPO_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" forge repo view --repo "$REPO" --json)
 OWNER=$(printf '%s\n' "$REPO_JSON" | jq -r '.owner')
 REPO_NAME=$(printf '%s\n' "$REPO_JSON" | jq -r '.name')
 echo "Repository: $REPO"

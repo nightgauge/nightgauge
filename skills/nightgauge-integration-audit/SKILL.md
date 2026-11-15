@@ -103,7 +103,7 @@ TOKEN=$(curl -s -X POST http://localhost:3000/v1/auth/test-token \
   -d '{"githubLogin":"audit-user"}' | jq -r .token)
 
 # Run the probe — emits a 6-category JSON ProbeReport
-nightgauge integration probe-platform \
+"${NIGHTGAUGE_BIN:-nightgauge}" integration probe-platform \
   --base-url http://localhost:3000 \
   --auth-mode jwt --token "$TOKEN" \
   --json > /tmp/integration-probe.json

@@ -357,7 +357,7 @@ to estimating size from expected effort as before.
 on issue metadata (title, body, labels, sub-issue count), call:
 
 ```bash
-nightgauge size predict <issue-number> --json
+"${NIGHTGAUGE_BIN:-nightgauge}" size predict <issue-number> --json
 ```
 
 Use `SizeLabel` from the output as the recommended project board Size field.

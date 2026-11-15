@@ -18,9 +18,9 @@ change-detection and routing decision, and produce the requirements summary.
 ## Step 3.1: Fetch Full Issue Details
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
-nightgauge forge issue view <number> --repo "$REPO" --json
+"${NIGHTGAUGE_BIN:-nightgauge}" forge issue view <number> --repo "$REPO" --json
 ```
 
 ## Step 3.1.4: Detect Parent Epic
@@ -113,7 +113,7 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 TYPE_LABEL=$(printf '%s\n' "$LABELS" | grep -oE "type:(feature|bug|docs|refactor|chore)" | cut -d: -f2)
 
 # Read Size and Priority from project board fields (board-first, label fallback)
-CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)"
 SIZE_LABEL=""
 PRIORITY_BOARD=""
 if [[ -f "$CONTEXT_FILE" ]]; then
@@ -123,11 +123,11 @@ fi
 
 # Fallback: query board directly if context not yet available
 if [[ -z "$SIZE_LABEL" || -z "$PRIORITY_BOARD" ]]; then
-  REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+  REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
   : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
   OWNER="${REPO%/*}"
   REPO_NAME="${REPO#*/}"
-  BOARD_RESULT=$(nightgauge forge graphql -f query="
+  BOARD_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query="
     query { repository(owner: \"$OWNER\", name: \"$REPO_NAME\") {
       issue(number: $ISSUE_NUMBER) { projectItems(first: 5) {
         nodes { fieldValues(first: 15) { nodes {

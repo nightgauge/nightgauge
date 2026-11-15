@@ -278,7 +278,7 @@ across two phases here. Schema is stable v1 — see
 ```bash
 cd "$ASSESS_PATH"
 
-ECO_JSON=$(nightgauge scan ecosystem --workdir . --json 2>/dev/null \
+ECO_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" scan ecosystem --workdir . --json 2>/dev/null \
   || echo '{"v":1,"ecosystems":[],"is_monorepo":false,"monorepo_kind":"","packages":[],"warnings":["scan ecosystem failed"]}')
 
 ECOSYSTEMS=( $(printf '%s\n' "$ECO_JSON" | jq -r '.ecosystems[]') )
@@ -365,7 +365,7 @@ done
 SCAN_ARGS=(--json --workdir . --include-vulns="$INCLUDE_VULNS")
 [ -n "$SCAN_ECOSYSTEMS" ] && SCAN_ARGS+=(--ecosystems "$SCAN_ECOSYSTEMS")
 
-nightgauge scan deps "${SCAN_ARGS[@]}" > /tmp/hc_scan_deps.json 2>/dev/null \
+"${NIGHTGAUGE_BIN:-nightgauge}" scan deps "${SCAN_ARGS[@]}" > /tmp/hc_scan_deps.json 2>/dev/null \
   || echo '{"v":1,"ecosystems":{},"totals":{},"warnings":["scan deps failed"]}' \
        > /tmp/hc_scan_deps.json
 
@@ -474,7 +474,7 @@ path classification — no file content read. Schema version 1; field names
 are stable. See [docs/GO_BINARY.md](../../docs/GO_BINARY.md#scan--testsource-ratio).
 
 ```bash
-TESTS_JSON=$(nightgauge scan tests --workdir "$ASSESS_PATH" --json)
+TESTS_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" scan tests --workdir "$ASSESS_PATH" --json)
 TEST_FILE_COUNT=$(printf '%s\n' "$TESTS_JSON" | jq -r '.test_files')
 SOURCE_FILE_COUNT=$(printf '%s\n' "$TESTS_JSON" | jq -r '.source_files')
 TEST_RATIO=$(printf '%s\n' "$TESTS_JSON" | jq -r '.test_to_source_ratio')
@@ -533,7 +533,7 @@ semantics so existing scoring rubrics stay calibrated. See
 [docs/GO_BINARY.md](../../docs/GO_BINARY.md#scan--debt-markers-todofixmehackxxx).
 
 ```bash
-DEBT_JSON=$(nightgauge scan debt --workdir "$ASSESS_PATH" --json)
+DEBT_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" scan debt --workdir "$ASSESS_PATH" --json)
 DEBT_MARKERS=$(printf '%s\n' "$DEBT_JSON" | jq -r '.markers.total')
 
 echo "Debt markers (TODO/FIXME/HACK/XXX): $DEBT_MARKERS"
@@ -554,7 +554,7 @@ sections. Linter keys: `eslint`, `ruff`, `golangci`, `clippy`, `flake8`,
 [docs/GO_BINARY.md](../../docs/GO_BINARY.md#scan--linter--formatter-tooling).
 
 ```bash
-TOOLING_JSON=$(nightgauge scan tooling --workdir "$ASSESS_PATH" --json)
+TOOLING_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" scan tooling --workdir "$ASSESS_PATH" --json)
 LINTER_PRESENT=$(printf '%s\n' "$TOOLING_JSON" | jq -r '.linter_present')
 FORMATTER_PRESENT=$(printf '%s\n' "$TOOLING_JSON" | jq -r '.formatter_present')
 
@@ -978,7 +978,7 @@ if [ -n "$OUTPUT_FILE" ]; then
   cp "$REPORT_TMP" "$OUTPUT_FILE"
   REPORT_PATH="$OUTPUT_FILE"
 else
-  REPORT_PATH="$(nightgauge layout write checkout reports/health-report.json --from "$REPORT_TMP")"
+  REPORT_PATH="$("${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout reports/health-report.json --from "$REPORT_TMP")"
 fi
 rm -f "$REPORT_TMP"
 ```

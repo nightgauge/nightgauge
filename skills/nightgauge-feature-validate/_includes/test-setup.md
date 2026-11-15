@@ -19,7 +19,7 @@ Procedural detail for **Phase 1 (Detect Testing Environment)** and **Phase 1.8
 Use the Go binary for deterministic test-command selection (Issue #221):
 
 ```bash
-TESTCMD_DETECT=$(nightgauge scan testcmd --json --workdir . 2>/dev/null || echo '{"command":"","source":"","framework":"","warnings":[]}')
+TESTCMD_DETECT=$("${NIGHTGAUGE_BIN:-nightgauge}" scan testcmd --json --workdir . 2>/dev/null || echo '{"command":"","source":"","framework":"","warnings":[]}')
 TEST_CMD=$(printf '%s\n' "$TESTCMD_DETECT" | jq -r '.command' 2>/dev/null || echo "")
 TEST_CMD_SOURCE=$(printf '%s\n' "$TESTCMD_DETECT" | jq -r '.source' 2>/dev/null || echo "")
 UNIT_TEST_FRAMEWORK=$(printf '%s\n' "$TESTCMD_DETECT" | jq -r '.framework' 2>/dev/null || echo "")
@@ -60,7 +60,7 @@ pytest/behave, and `go.mod` for go-test — but this loses the `scripts.test` /
 Use the Go binary for deterministic E2E framework detection (audit row B8):
 
 ```bash
-E2E_DETECT=$(nightgauge e2e detect --json --workdir . 2>/dev/null || echo '{"detected":false,"frameworks":[],"config_files":[],"test_dirs":[]}')
+E2E_DETECT=$("${NIGHTGAUGE_BIN:-nightgauge}" e2e detect --json --workdir . 2>/dev/null || echo '{"detected":false,"frameworks":[],"config_files":[],"test_dirs":[]}')
 E2E_DETECTED=$(printf '%s\n' "$E2E_DETECT" | jq -r '.detected' 2>/dev/null || echo "false")
 E2E_FRAMEWORKS=$(printf '%s\n' "$E2E_DETECT" | jq -r '.frameworks | join(",")' 2>/dev/null || echo "")
 E2E_FRAMEWORK=$(printf '%s\n' "$E2E_DETECT" | jq -r '.frameworks[0] // empty' 2>/dev/null || echo "")

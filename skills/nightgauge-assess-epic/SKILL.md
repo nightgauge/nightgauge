@@ -264,7 +264,7 @@ REPORT_FILE=$(printf '%s\n' "$ASSESS_JSON" | jq \
     "epic_title": $epic_title,
     "sub_issues": { "total": $sub_total, "open": (.issues | length) },
     "assessed_at": $assessed_at
-  }' | nightgauge layout write pipeline "epic-assessment-${EPIC_NUMBER}.json")
+  }' | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "epic-assessment-${EPIC_NUMBER}.json")
 
 echo ""
 echo "Report written to: $REPORT_FILE"

@@ -11,7 +11,7 @@ member. A non-empty payload is the exact signal the extension's
 
 ```bash
 cd "$WORKSPACE_ROOT"
-PAYLOAD="$(nightgauge workspace sync-payload 2>/dev/null)"
+PAYLOAD="$("${NIGHTGAUGE_BIN:-nightgauge}" workspace sync-payload 2>/dev/null)"
 REPO_COUNT="$(printf '%s\n' "$PAYLOAD" | jq '.repos | length')"
 DISPLAY_NAME="$(printf '%s\n' "$PAYLOAD" | jq -r '.workspace.display_name // ""')"
 
@@ -42,7 +42,7 @@ Run `workspace doctor` and surface fatal validation errors (non-fatal warnings
 do not block):
 
 ```bash
-nightgauge workspace doctor || \
+"${NIGHTGAUGE_BIN:-nightgauge}" workspace doctor || \
   echo "Note: workspace doctor reported issues (above) — review before relying on autonomous routing."
 ```
 

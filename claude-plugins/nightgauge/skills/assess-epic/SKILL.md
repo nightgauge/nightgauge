@@ -119,9 +119,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -151,7 +153,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -406,7 +408,7 @@ fi
    ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
    : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
    # stdout only: a warning on stderr must not land in the JSON.
-   if ! RESULT=$(nightgauge issue list --epic "$ISSUE_NUMBER" --json); then
+   if ! RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" issue list --epic "$ISSUE_NUMBER" --json); then
      echo "ERROR: could not read the sub-issues of epic #$ISSUE_NUMBER" >&2
      exit 1
    fi
@@ -491,7 +493,7 @@ EPIC_NUMBER=$(printf '%s\n' "$EPIC_RESULT" | jq -r '.epicNumber')
 EPIC_TITLE=$(printf '%s\n' "$EPIC_RESULT" | jq -r '.title')
 # a+b. Classify the tier and generate the summary in one deterministic call
 #      (no AI tokens). Tiers: minimal, standard, detailed.
-SUMMARY_JSON=$(nightgauge epic summary "$EPIC_NUMBER" --json 2>/dev/null || echo '{}')
+SUMMARY_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" epic summary "$EPIC_NUMBER" --json 2>/dev/null || echo '{}')
 TIER=$(printf '%s\n' "$SUMMARY_JSON" | jq -r '.tier // "minimal"')
 SUMMARY=$(printf '%s\n' "$SUMMARY_JSON" | jq -r '.summary // empty')
 
@@ -715,7 +717,7 @@ REPORT_FILE=$(printf '%s\n' "$ASSESS_JSON" | jq \
     "epic_title": $epic_title,
     "sub_issues": { "total": $sub_total, "open": (.issues | length) },
     "assessed_at": $assessed_at
-  }' | nightgauge layout write pipeline "epic-assessment-${EPIC_NUMBER}.json")
+  }' | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "epic-assessment-${EPIC_NUMBER}.json")
 
 echo ""
 echo "Report written to: $REPORT_FILE"
@@ -768,7 +770,7 @@ directory, through the binary (JSON on stdin; never a direct file write):
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
 { ... the record below ... }
 JSON
 ```
@@ -823,7 +825,7 @@ The assessment record MUST follow this schema:
 # Validate JSON if written
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
+ASSESSMENT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

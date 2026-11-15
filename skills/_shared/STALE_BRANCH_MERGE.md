@@ -40,7 +40,7 @@ if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && [ -z "$(git ls-files 
     # Push it now: the branch then reads as up-to-date below, so Step 5 never
     # runs for it. Same handling as Step 5.
     PUSH_EXIT=0
-    nightgauge git push-branch 2>&1 || PUSH_EXIT=$?
+    "${NIGHTGAUGE_BIN:-nightgauge}" git push-branch 2>&1 || PUSH_EXIT=$?
     if [ "$PUSH_EXIT" -ne 0 ]; then
       if [ "$PUSH_EXIT" -eq 3 ]; then
         echo "ERROR: origin rejected '$CURRENT_BRANCH' and the rejection was not reconciled." >&2
@@ -88,7 +88,7 @@ else
 
     # Step 5: Push merged branch
     PUSH_EXIT=0
-    nightgauge git push-branch 2>&1 || PUSH_EXIT=$?
+    "${NIGHTGAUGE_BIN:-nightgauge}" git push-branch 2>&1 || PUSH_EXIT=$?
     if [ "$PUSH_EXIT" -ne 0 ]; then
       if [ "$PUSH_EXIT" -eq 3 ]; then
         # Exit 3 printed `[branch-forked]`: the run stops on the fork.

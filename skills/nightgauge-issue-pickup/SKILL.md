@@ -169,7 +169,7 @@ printf '<!-- phase:start name="validate-environment" index=0 total=14 stage="iss
 #### Step 1.1: Check Forge Authentication
 
 ```bash
-nightgauge forge auth status
+"${NIGHTGAUGE_BIN:-nightgauge}" forge auth status
 ```
 
 If not authenticated: "Please run `nightgauge forge auth login` to authenticate."
@@ -183,9 +183,9 @@ git remote -v | grep -E "(github\.com|github\.)"
 #### Step 1.3: Get Repository Info
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
-nightgauge forge repo view --repo "$REPO" --json | jq -r .nameWithOwner
+"${NIGHTGAUGE_BIN:-nightgauge}" forge repo view --repo "$REPO" --json | jq -r .nameWithOwner
 ```
 
 #### Step 1.4: Verify Repo Identity

@@ -344,7 +344,7 @@ E2E_SKIPPED=false
 E2E_REASON=""
 
 if [ "${E2E_DETECTED:-false}" = "true" ] && [ -n "${E2E_FRAMEWORK:-}" ]; then
-  E2E_RUN_RESULT=$(nightgauge e2e run --json --workdir . \
+  E2E_RUN_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" e2e run --json --workdir . \
     --framework "$E2E_FRAMEWORK" 2>/dev/null || \
     echo '{"ran":false,"status":"skipped","framework":"","commands":[],"output":"","timestamp":""}')
   E2E_RAN=$(printf '%s\n' "$E2E_RUN_RESULT" | jq -r '.ran' 2>/dev/null || echo "false")
@@ -396,7 +396,7 @@ merged without ever being run once.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge gate check-test-execution --issue "$ISSUE_NUMBER" --json > /tmp/ng-test-exec-$$.json
+"${NIGHTGAUGE_BIN:-nightgauge}" gate check-test-execution --issue "$ISSUE_NUMBER" --json > /tmp/ng-test-exec-$$.json
 CHECK_EXIT=$?
 cat /tmp/ng-test-exec-$$.json
 ```
@@ -414,7 +414,7 @@ remediation command**. Run that command. Then record what happened:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge gate record-test-execution --issue "$ISSUE_NUMBER" \
+"${NIGHTGAUGE_BIN:-nightgauge}" gate record-test-execution --issue "$ISSUE_NUMBER" \
   --file "integration_test/app_e2e/setup_flow_test.dart" \
   --outcome pass \
   --command "flutter test --tags=app-e2e integration_test/app_e2e/setup_flow_test.dart"
