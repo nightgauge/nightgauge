@@ -39,7 +39,8 @@ gate stays until those controls exist and the beta decision in § 23 lifts it.
 Three things are fixed by the change that carries this ADR:
 
 1. The argv is exactly
-   `opencode run --format json --print-logs --log-level ERROR -m <provider/model> --dir <worktree>`.
+   `opencode run --format json --print-logs --log-level error -m <provider/model>`
+   (amended for OpenCode 2.x, 2026-11-15, #3300: see § The command).
    No auto-approve, share or discovery flag is ever emitted.
 2. The prompt goes on stdin and nowhere else.
 3. Every spawn carries a fresh random `OPENCODE_SERVER_PASSWORD`.
@@ -249,15 +250,21 @@ has opted in.
 ### The command
 
 ```text
-opencode run --format json --print-logs --log-level ERROR -m <provider/model> --dir <worktree>
+opencode run --format json --print-logs --log-level error -m <provider/model>
 ```
+
+Amendment 2026-11-15 (#3300): OpenCode 2.x removed `run --dir` and reads a
+positional path as prompt text, and requires `--log-level` in lower case
+(spike #3197). The worktree is now only the process working directory, which
+the manager sets for every adapter; it is on no argv element. The 1.x text
+below records the original command.
 
 The prompt goes on stdin (§ 19). `--format json` is the NDJSON event stream the
 parser reads. `--print-logs --log-level ERROR` also prints OpenCode's own log to
 stderr, limited to errors. It does not replace the log file: observed, 1.18.30
 still writes `log/opencode.log` in the run's data directory, and an error goes
-to both (§ 22). `--dir` is the worktree; the manager also sets the process
-working directory to it.
+to both (§ 22). On 1.x, `--dir` was the worktree and the manager also set the
+process working directory to it; on 2.x only the working directory remains.
 
 The adapter never emits `--auto`, `--yolo`, `--dangerously-skip-permissions`,
 `--share`, `--port`, `--mdns` or `--cors` (§ 15). In 1.18.30 `--auto` and
@@ -1615,9 +1622,12 @@ The compat manifest (#1613) is the single source for the floor and the
 max-tested version; the doctor (#1627) and `PreDispatch` enforce the floor,
 through the same functions (`internal/execution/adapters/opencode_preflight.go`).
 A refusal is `adapter_incompatible`: it names the installed version and the
-manifest's, and its remediation is the managed install,
-`npm i --prefix ~/.nightgauge/tools/opencode opencode-ai@<max-tested>`, with a
-`binary` pin (§ 7) to what it installs.
+manifest's, and its remediation is the managed install, with a `binary` pin
+(§ 7) to what it installs. Amendment 2026-11-15 (#3300): OpenCode 2.x is not on
+npm, so the managed install downloads the 2.x installer, verifies it against
+the manifest's `install.installer_sha256`, and only then runs it for
+`max_tested`; the pin is `~/.opencode/bin/opencode`. It was
+`npm i --prefix ~/.nightgauge/tools/opencode opencode-ai@<max-tested>` on 1.x.
 
 - **The binary.** `opencode.binary` pins the binary a dispatch checks and
   spawns and the doctor checks; without it the `opencode` on PATH is used. A

@@ -1,37 +1,32 @@
-opencode run [message..]
+DESCRIPTION
+  Run OpenCode with a message
 
-run opencode with a message
+USAGE
+  opencode run [flags] [<message...>]
 
-Positionals:
-  message  message to send                                                     [array] [default: []]
+ARGUMENTS
+  message... string    Message to send (optional)
 
-Options:
-  -h, --help         show help                                                             [boolean]
-  -v, --version      show version number                                                   [boolean]
-      --print-logs   print logs to stderr                                                  [boolean]
-      --log-level    log level                  [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
-      --pure         run without external plugins                                          [boolean]
-      --command      the command to run, use message for args                               [string]
-  -c, --continue     continue the last session                                             [boolean]
-  -s, --session      session id to continue                                                 [string]
-      --fork         fork the session before continuing (requires --continue or --session) [boolean]
-      --share        share the session                                                     [boolean]
-  -m, --model        model to use in the format of provider/model                           [string]
-      --agent        agent to use                                                           [string]
-      --format       format: default (formatted) or json (raw JSON events)
-                                          [string] [choices: "default", "json"] [default: "default"]
-  -f, --file         file(s) to attach to message                                            [array]
-      --title        title for the session (uses truncated prompt if no value provided)     [string]
-      --attach       attach to a running opencode server (e.g., http://localhost:4096)      [string]
-  -p, --password     basic auth password (defaults to OPENCODE_SERVER_PASSWORD)             [string]
-  -u, --username     basic auth username (defaults to OPENCODE_SERVER_USERNAME or 'opencode')
-                                                                                            [string]
-      --dir          directory to run in, path on remote server if attaching                [string]
-      --port         port for the local server (defaults to random port if no value provided)
-                                                                                            [number]
-      --variant      model variant (provider-specific reasoning effort, e.g., high, max, minimal)
-                                                                                            [string]
-      --thinking     show thinking blocks                                                  [boolean]
-  -i, --interactive  run in direct interactive split-footer mode          [boolean] [default: false]
-      --auto         auto-approve permissions that are not explicitly denied (dangerous!)
-                                                                          [boolean] [default: false]
+FLAGS
+  --continue, -c            Continue the last session
+  --session, -s string      Session ID to continue, or to create if it does not exist
+  --fork                    Fork the session before continuing
+  --worktree, -w [=name]    Start a new session in a new git worktree, optionally with this name
+  --model, -m string        Model to use in the format provider/model#variant
+  --agent string            Agent to use
+  --format choice           Output format (choices: default, json)
+  --file, -f string         File to attach to the message
+  --title string            Session title
+  --archived                Create the session archived so it stays out of session lists (useful for scripted or CI runs)
+  --thinking                Show thinking blocks
+  --auto                    Auto-approve permissions that are not explicitly denied
+
+GLOBAL FLAGS
+  --help, -h                                                          Show help information
+  --version, -v                                                       Show version information
+  --wizard                                                            Start wizard mode for a command
+  --completions <bash|zsh|fish|powershell|sh|pwsh>                    Print shell completion script (choices: bash, zsh, fish, powershell, sh, pwsh)
+  --log-level <all|trace|debug|info|warn|warning|error|fatal|none>    Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none)
+  --print-logs                                                        Print logs to stderr (server logs require --standalone)
+  --standalone                                                        Run with a private server instead of the background service
+  --server string                                                     Connect to a server URL instead of the background service

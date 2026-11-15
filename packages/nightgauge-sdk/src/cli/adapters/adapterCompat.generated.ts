@@ -25,6 +25,10 @@ export interface AdapterCompatEntry {
   readonly maxTested: string;
   /** "warn" reports a CLI below minVersion and keeps the adapter usable; "fail_closed" disables it. */
   readonly floorPolicy: "warn" | "fail_closed";
+  /** The https URL of the vendor's install script. Empty when the CLI installs from npm. */
+  readonly installer: string;
+  /** The pinned sha256 a downloaded installer must match before it runs. Empty without an installer. */
+  readonly installerSha256: string;
 }
 
 export type AdapterCompatKey =
@@ -37,10 +41,46 @@ export type AdapterCompatKey =
 
 export const ADAPTER_COMPAT: Readonly<Record<AdapterCompatKey, AdapterCompatEntry>> =
   Object.freeze({
-    "claude-headless": { minVersion: "2.1.223", maxTested: "2.1.258", floorPolicy: "warn" },
-    "codex": { minVersion: "0.111.0", maxTested: "0.145.0", floorPolicy: "warn" },
-    "copilot": { minVersion: "", maxTested: "", floorPolicy: "warn" },
-    "gemini": { minVersion: "0.29.0", maxTested: "", floorPolicy: "warn" },
-    "grok": { minVersion: "1.0.0", maxTested: "1.0.4", floorPolicy: "warn" },
-    "opencode": { minVersion: "1.18.30", maxTested: "1.18.30", floorPolicy: "fail_closed" },
+    "claude-headless": {
+      minVersion: "2.1.223",
+      maxTested: "2.1.258",
+      floorPolicy: "warn",
+      installer: "",
+      installerSha256: "",
+    },
+    "codex": {
+      minVersion: "0.111.0",
+      maxTested: "0.145.0",
+      floorPolicy: "warn",
+      installer: "",
+      installerSha256: "",
+    },
+    "copilot": {
+      minVersion: "",
+      maxTested: "",
+      floorPolicy: "warn",
+      installer: "",
+      installerSha256: "",
+    },
+    "gemini": {
+      minVersion: "0.29.0",
+      maxTested: "",
+      floorPolicy: "warn",
+      installer: "",
+      installerSha256: "",
+    },
+    "grok": {
+      minVersion: "1.0.0",
+      maxTested: "1.0.4",
+      floorPolicy: "warn",
+      installer: "https://x.ai/cli/install.sh",
+      installerSha256: "7fd6fdc75d9418b2e58356726fcbf1ae849416f773925da07d0ccc7a60d3e791",
+    },
+    "opencode": {
+      minVersion: "2.2.7",
+      maxTested: "2.2.7",
+      floorPolicy: "fail_closed",
+      installer: "https://opencode.ai/v2/install",
+      installerSha256: "bbc4584fd6a888bcd14623b8a63afa0f1b4075a2e84a2c3518cd509b446b3135",
+    },
   });

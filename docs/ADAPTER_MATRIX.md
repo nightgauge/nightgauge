@@ -71,17 +71,17 @@ below are the whole declared surface: `agentic` (:87),
 - **direct API key** — `requiresDirectApiKey()`; `true` means a raw provider key
   is mandatory rather than a CLI session.
 
-| Adapter           | agentic | orchestration     | direct API key | `runWorkflow?()`       | Auth method                                                                                             | Min version           |
-| ----------------- | :-----: | ----------------- | :------------: | ---------------------- | ------------------------------------------------------------------------------------------------------- | --------------------- |
-| claude-headless   |    ✓    | `native-workflow` |       ✗        | ✓ (gated ≥ `v2.1.154`) | `claude auth status` (OAuth)                                                                            | none declared         |
-| claude-sdk        |    ✓    | `native-workflow` |       ✓        | ✓ (gated ≥ `v2.1.154`) | `ANTHROPIC_API_KEY` (checked in `validateAuth`)                                                         | N/A (SDK)             |
-| codex             |    ✓    | `sdk-fanout`      |       ✗        | —                      | `codex login status`                                                                                    | `0.111.0` warn        |
-| gemini            |    ✓    | `sdk-fanout`      |       ✗        | —                      | Cascade: `GEMINI_API_KEY` / Vertex / `gcloud`                                                           | `0.29.0` warn         |
-| gemini-sdk        |    ✗    | `sdk-fanout`      |       ✓        | —                      | `GEMINI_API_KEY` or `GOOGLE_API_KEY` (checked in `validateAuth`)                                        | N/A (SDK)             |
-| grok              |    ✓    | `sdk-fanout`      |       ✗        | —                      | `grok login` session or `XAI_API_KEY`                                                                   | `1.0.0` warn          |
-| copilot           |    ✓    | `sdk-fanout`      |       ✗        | —                      | `GH_TOKEN` / `GITHUB_TOKEN` / `COPILOT_GITHUB_TOKEN` → `copilot auth status`                            | none declared         |
-| opencode          |    ✓    | `sdk-fanout`      |       ✗        | —                      | Per-model, at dispatch (ADR-022 § 17): `ANTHROPIC_API_KEY` for `anthropic/*`; none for a local endpoint | `1.18.30` fail-closed |
-| openai-compatible |    ✗    | `sdk-fanout`      |       ✗        | —                      | Optional key, from the variable `NIGHTGAUGE_OPENAI_COMPATIBLE_API_KEY_ENV` names                        | N/A (HTTP)            |
+| Adapter           | agentic | orchestration     | direct API key | `runWorkflow?()`       | Auth method                                                                                             | Min version         |
+| ----------------- | :-----: | ----------------- | :------------: | ---------------------- | ------------------------------------------------------------------------------------------------------- | ------------------- |
+| claude-headless   |    ✓    | `native-workflow` |       ✗        | ✓ (gated ≥ `v2.1.154`) | `claude auth status` (OAuth)                                                                            | none declared       |
+| claude-sdk        |    ✓    | `native-workflow` |       ✓        | ✓ (gated ≥ `v2.1.154`) | `ANTHROPIC_API_KEY` (checked in `validateAuth`)                                                         | N/A (SDK)           |
+| codex             |    ✓    | `sdk-fanout`      |       ✗        | —                      | `codex login status`                                                                                    | `0.111.0` warn      |
+| gemini            |    ✓    | `sdk-fanout`      |       ✗        | —                      | Cascade: `GEMINI_API_KEY` / Vertex / `gcloud`                                                           | `0.29.0` warn       |
+| gemini-sdk        |    ✗    | `sdk-fanout`      |       ✓        | —                      | `GEMINI_API_KEY` or `GOOGLE_API_KEY` (checked in `validateAuth`)                                        | N/A (SDK)           |
+| grok              |    ✓    | `sdk-fanout`      |       ✗        | —                      | `grok login` session or `XAI_API_KEY`                                                                   | `1.0.0` warn        |
+| copilot           |    ✓    | `sdk-fanout`      |       ✗        | —                      | `GH_TOKEN` / `GITHUB_TOKEN` / `COPILOT_GITHUB_TOKEN` → `copilot auth status`                            | none declared       |
+| opencode          |    ✓    | `sdk-fanout`      |       ✗        | —                      | Per-model, at dispatch (ADR-022 § 17): `ANTHROPIC_API_KEY` for `anthropic/*`; none for a local endpoint | `2.2.7` fail-closed |
+| openai-compatible |    ✗    | `sdk-fanout`      |       ✗        | —                      | Optional key, from the variable `NIGHTGAUGE_OPENAI_COMPATIBLE_API_KEY_ENV` names                        | N/A (HTTP)          |
 
 Beyond this surface, `opencode` is gated: `Manager.RunStage` refuses every
 dispatch unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set in the process
@@ -105,7 +105,7 @@ version runs exactly like a tested one. Only the floor is enforced, as its
 | `copilot`         | none                  | warn         | none captured               |
 | `gemini`          | `0.29.0`              | warn         | none captured               |
 | `grok`            | `1.0.0`               | warn         | `1.0.4`                     |
-| `opencode`        | `1.18.30`             | fail closed  | `1.18.30`                   |
+| `opencode`        | `2.2.7`               | fail closed  | `2.2.7`                     |
 
 `nightgauge doctor` reports the tested-up-to version as a note on the
 adapter's row, never as a warning.
@@ -191,8 +191,8 @@ connect/sendto/sendmsg/bind/listen attempts across the whole process tree,
 with a hostile parent environment (fake OPENAI_API_KEY/ANTHROPIC_API_KEY/
 XAI_API_KEY values) to prove isolation strips them before spawn.
 
-- **opencode version (tested up to, `max_tested`):** 1.18.30
-  (`internal/adaptercompat/manifests/opencode.json`)
+- **opencode version the check ran on:** 1.18.30, the `max_tested` of
+  `internal/adaptercompat/manifests/opencode.json` at the time
 - **CI run:** PASS, 2026-09-20 —
   https://github.com/nightgauge/nightgauge/actions/runs/35514658308
   (job "Linux network-namespace egress check", conclusion `success`).
@@ -633,8 +633,8 @@ recorded yet (pending #1659).
 | CLI command            | `opencode`                                                                                                                                                                                                            |
 | Auth method            | Per model, at dispatch: `ANTHROPIC_API_KEY` for `anthropic/*`; no credential for a local endpoint; a platform-provider key (`github-copilot`, `gitlab`, `amazon-bedrock`, `google-vertex*`) is refused (ADR-022 § 17) |
 | Prompt delivery        | stdin                                                                                                                                                                                                                 |
-| Default args           | `run --format json --print-logs --log-level ERROR`                                                                                                                                                                    |
-| Min version            | `1.18.30` (fail-closed below floor; tested up to `1.18.30`, and a newer version runs unchanged with no warning — ADR-022 § 20)                                                                                        |
+| Default args           | `run --format json --print-logs --log-level error`                                                                                                                                                                    |
+| Min version            | `2.2.7` (fail-closed below floor; tested up to `2.2.7`, and a newer version runs unchanged with no warning — ADR-022 § 20)                                                                                            |
 | `requiresDirectApiKey` | `false`                                                                                                                                                                                                               |
 
 One adapter id reaches every provider: the provider is a property of the

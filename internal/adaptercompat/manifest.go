@@ -152,6 +152,12 @@ type Feed struct {
 type Install struct {
 	NPM       string `json:"npm,omitempty"`
 	Installer string `json:"installer,omitempty"`
+	// InstallerSHA256 is the pinned sha256 of the script at Installer, as 64
+	// lowercase hex characters. It is required with Installer and refused
+	// without it: a remediation verifies the downloaded script against it
+	// before running it, and the canary and capture scripts refuse a script
+	// that does not match it.
+	InstallerSHA256 string `json:"installer_sha256,omitempty"`
 }
 
 // Catalog is how the CLI lists the models it serves: exactly one of Command
@@ -475,6 +481,10 @@ func (m Manifest) validate(file string, tree fs.FS) error {
 		return fail("install.npm", "%q is not an npm package name", m.Install.NPM)
 	case m.Install.Installer != "" && !httpsURLRe.MatchString(m.Install.Installer):
 		return fail("install.installer", "%q is not a plain https URL", m.Install.Installer)
+	case m.Install.Installer != "" && !sha256Re.MatchString(m.Install.InstallerSHA256):
+		return fail("install.installer_sha256", "%q is not 64 lowercase hex characters; an installer needs a pinned sha256", m.Install.InstallerSHA256)
+	case m.Install.Installer == "" && m.Install.InstallerSHA256 != "":
+		return fail("install.installer_sha256", "is set without install.installer")
 	}
 	if strings.IndexFunc(m.ManagedInstall, unicode.IsControl) >= 0 {
 		return fail("managed_install", "contains a control character; it is one line of display text")

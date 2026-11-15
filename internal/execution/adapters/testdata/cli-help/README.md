@@ -73,16 +73,20 @@ hand.
 | `codex-0.145.0.txt`           | `codex --help`        | npm `@openai/codex@0.145.0`                                                                                                                       | 0         |
 | `codex-exec-0.145.0.txt`      | `codex exec --help`   | npm `@openai/codex@0.145.0`                                                                                                                       | 0         |
 | `grok-1.0.4.txt`              | `grok --help`         | `https://x.ai/cli/install.sh` with version argument `1.0.4` (installer sha256 `7fd6fdc75d9418b2e58356726fcbf1ae849416f773925da07d0ccc7a60d3e791`) | 0         |
-| `opencode-run-1.18.30.txt`    | `opencode run --help` | npm `opencode-ai@1.18.30`                                                                                                                         | 0         |
+| `opencode-run-2.2.7.txt`      | `opencode run --help` | `https://opencode.ai/v2/install` with `--version 2.2.7` (installer sha256 `bbc4584fd6a888bcd14623b8a63afa0f1b4075a2e84a2c3518cd509b446b3135`)     | 0         |
 
-opencode 1.18.30 prints `run --help` on stderr, so the script captures stdout
-and stderr together, as `../opencode-cli/capture.sh` does.
+opencode 2.2.7 prints `run --help` on stdout (1.x printed it on stderr); the
+script captures stdout and stderr together, as `../opencode-cli/capture.sh`
+does. 2.x no longer defines `run --dir`, and the adapter no longer emits it:
+the dispatch runs in the worktree as its working directory (#3300).
 
-The grok installer's sha256 above is not only recorded here: it is also
-pinned in `scripts/capture-cli-help.sh`'s `expected_installer_sha256`, which
-the script checks the freshly downloaded installer against before running it,
-refusing a mismatch (#1721). Update both together, only after confirming a
-changed installer by hand.
+The installer sha256s above are not only recorded here: each is pinned in its
+compat manifest's `install.installer_sha256`, which
+`scripts/capture-cli-help.sh` and `scripts/adapter-canary.sh` check the freshly
+downloaded installer against before running it, refusing a mismatch (#1721),
+and which the doctor's install remediation verifies before it runs the
+installer (#3300). Update both together, only after confirming a changed
+installer by hand.
 
 ## Not captured
 
@@ -146,7 +150,7 @@ top-level help, was captured on 2026-10-01 by
 `codex --ask-for-approval never --sandbox workspace-write exec --json -` on
 codex-cli 0.153.4.
 
-### opencode 1.18.30 `run`
+### opencode 1.18.30 `run` (superseded by 2.2.7; kept until #3307 re-records ADR-022)
 
 ADR-022 § "The command" rests on these rows.
 

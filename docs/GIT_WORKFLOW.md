@@ -1576,8 +1576,9 @@ Four things about it are deliberate:
   repository adopts them by copying both `[[rules]]` blocks.
 
 **The OpenCode integration tests are not part of the local gate, by
-decision.** PR CI runs them (`-tags opencode_integration`, against an exact
-pin of `opencode-ai`) on every change. Locally they cost minutes plus a pinned
+decision.** PR CI runs them (`-tags opencode_integration`, against the
+manifest's `max_tested` OpenCode, installed through its sha256-pinned 2.x
+installer) on every change. Locally they cost minutes plus a pinned
 install, and a change that does not touch OpenCode cannot regress them. Run
 them yourself before pushing when the change touches OpenCode:
 

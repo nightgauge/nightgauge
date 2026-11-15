@@ -469,8 +469,8 @@ export interface OpenCodeQueryContext {
    * by default), before anything is spawned.
    */
   runConfig: (request: Omit<OpenCodeRunConfigRequest, "repo">) => Promise<OpenCodeRunConfig>;
-  /** The `opencode run` argv for a worktree. */
-  argv: (worktree: string) => string[];
+  /** The `opencode run` argv. The worktree is the spawn's cwd, never on argv. */
+  argv: readonly string[];
   /** Deletes a per-run root (`nightgauge opencode cleanup`). */
   cleanRunRoot: (runId: string) => Promise<void>;
   /** The environment the child's is curated from. */
@@ -962,9 +962,9 @@ async function* openCodeStage(
 ): AsyncGenerator<SDKMessage> {
   const { model } = run;
   const { worktree, stage, runConfig, spawnFn } = q;
-  // The binary the verb vetted, and the argv for this query's worktree.
+  // The binary the verb vetted, and the argv; the worktree is the spawn's cwd.
   const spawnCommand = runConfig.binary || command;
-  const spawnArgs = run.argv(worktree);
+  const spawnArgs = [...run.argv];
   const signal = queryOptions.options?.abortSignal;
   // The run config was checked to carry the handshake (checkRunConfig).
   const handshake = openCodeHandshakeFromEnv(runConfig.env, runConfig.pluginVersion);

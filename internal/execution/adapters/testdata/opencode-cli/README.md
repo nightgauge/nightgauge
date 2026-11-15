@@ -13,21 +13,26 @@ and update the table below in the same change.
 
 ## What was captured
 
-| Field       | Value                                            |
-| ----------- | ------------------------------------------------ |
-| Host OS     | macOS 27.0 (Darwin 27.0.0, arm64)                |
-| Captured at | 2026-09-12                                       |
-| Command     | `opencode run --help`, stdin from `/dev/null`    |
-| Stream      | stderr; stdout is empty. `capture.sh` keeps both |
-| CLI version | `1.18.30` (`opencode --version`, `version.txt`)  |
-| Install     | npm package `opencode-ai`                        |
-| Exit code   | 0                                                |
-| Redaction   | `capture.sh`; nothing needed redacting           |
+| Field       | Value                                                                       |
+| ----------- | --------------------------------------------------------------------------- |
+| Host OS     | macOS 27.2 (Darwin 27.2.0, arm64)                                           |
+| Captured at | 2026-11-14                                                                  |
+| Command     | `opencode run --help`, stdin from `/dev/null`                               |
+| Stream      | stdout; stderr is empty (1.x printed it on stderr). `capture.sh` keeps both |
+| CLI version | `2.2.7` (`opencode --version` prints `opencode v2.2.7`, `version.txt`)      |
+| Install     | `https://opencode.ai/v2/install --version 2.2.7`                            |
+| Exit code   | 0                                                                           |
+| Redaction   | `capture.sh`; nothing needed redacting                                      |
 
-## Behaviour observed on the same version
+## Behaviour observed on 1.18.30
+
+These observations were made on OpenCode 1.18.30, before the 2.x capture
+above. The OpenCode 2.x port (epic #3196) re-observes each one; until then the
+`opencode_integration` suites that assert them skip on 2.x and name the issue
+that ports them.
 
 ADR-022 rests on behaviour, not only on flags, so the observations it cites were
-made on this version, the same day unless a row gives a later date. Each run
+made on 1.18.30, the same day unless a row gives a later date. Each run
 used a throwaway directory for all four XDG base directories, a scratch git
 repository as `--dir`, and a stub OpenAI-compatible model server on
 `127.0.0.1` that recorded every request and returned canned replies, so no

@@ -613,8 +613,20 @@ as not yet enforced. A dispatch to an `anthropic/*` model is refused while
 
 **Prerequisites:**
 
-- OpenCode CLI installed (`npm install -g opencode-ai`, or a version pin per
-  below)
+- OpenCode 2.x CLI installed through its 2.x installer (2.x is not on npm),
+  verified against the sha256 the compat manifest pins before it runs, then
+  pinned with `opencode.binary` (below). `nightgauge doctor` prints this
+  command; nothing is piped into a shell:
+
+  ```bash
+  f="$(mktemp)" && curl -fsSL --proto '=https' -o "$f" https://opencode.ai/v2/install \
+    && echo "bbc4584fd6a888bcd14623b8a63afa0f1b4075a2e84a2c3518cd509b446b3135  $f" | shasum -a 256 -c - \
+    && bash "$f" --no-modify-path --version 2.2.7
+  ```
+
+  On Linux without `shasum`, `sha256sum -c -` reads the same line. The pin is
+  `install.installer_sha256` in `internal/adaptercompat/manifests/opencode.json`.
+
 - `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` set in the environment the pipeline
   runs in
 - For a hosted `anthropic/*` model: `ANTHROPIC_API_KEY` set
@@ -703,13 +715,13 @@ its hidden aliases (observed on opencode 1.18.30) are never emitted; approval is
 
 **Troubleshooting:**
 
-| Problem                                    | Solution                                                                            |
-| ------------------------------------------ | ----------------------------------------------------------------------------------- |
-| Dispatch refused, gate not enabled         | Set `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` where the pipeline runs                    |
-| `anthropic/*` refused                      | Set `ANTHROPIC_API_KEY`; a subscription or OAuth login is never accepted here       |
-| `opencode/*` or `opencode-go/*` auth fails | `OPENCODE_API_KEY` is always withheld; use a provider with its own key variable     |
-| Stage fails on an auto-rejected tool call  | Widen the stage's allowed tools so the permission map generates `allow`, not `deny` |
-| CLI not found                              | `npm install -g opencode-ai`, or pin `opencode.binary` to an absolute path          |
+| Problem                                    | Solution                                                                                               |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| Dispatch refused, gate not enabled         | Set `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` where the pipeline runs                                       |
+| `anthropic/*` refused                      | Set `ANTHROPIC_API_KEY`; a subscription or OAuth login is never accepted here                          |
+| `opencode/*` or `opencode-go/*` auth fails | `OPENCODE_API_KEY` is always withheld; use a provider with its own key variable                        |
+| Stage fails on an auto-rejected tool call  | Widen the stage's allowed tools so the permission map generates `allow`, not `deny`                    |
+| CLI not found                              | Run the verified install under Prerequisites, then pin `opencode.binary` to `~/.opencode/bin/opencode` |
 
 **Environment Variables:**
 

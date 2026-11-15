@@ -215,9 +215,10 @@ const openCodeCanaryDirectRunID = "0199a8b3-0000-7000-8000-000000001639"
 // blocks use (openCodeEndpointNPM, opencode_config.go). The fixed argv ADR-022
 // § 1 pins:
 //
-//	opencode run --format json --print-logs --log-level ERROR -m <model> --dir <worktree>
+//	opencode run --format json --print-logs --log-level error -m <model>
 //
-// with prompt on stdin. Bypassing Manager.RunStage keeps this canary a check
+// run in the worktree as its working directory (OpenCode 2.x has no run
+// --dir, #3300), with prompt on stdin. Bypassing Manager.RunStage keeps this canary a check
 // of the CLI's own contract, decoupled from Manager.RunStage's own
 // reclassification of a self-rejected permission (ADR-022 § 9,
 // opencode_usage.go): exitCode here is the CHILD PROCESS's own raw exit, the
@@ -266,8 +267,9 @@ func openCodeCanaryDirectRun(t *testing.T, real, model string, extraConfig map[s
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, real, "run", "--format", "json", "--print-logs", "--log-level", "ERROR",
-		"-m", model, "--dir", worktree)
+	cmd := exec.CommandContext(ctx, real, "run", "--format", "json", "--print-logs", "--log-level", "error",
+		"-m", model)
+	cmd.Dir = worktree
 	cmd.Env = envSlice
 	cmd.Stdin = strings.NewReader("implement the issue")
 	var outBuf, errBuf bytes.Buffer

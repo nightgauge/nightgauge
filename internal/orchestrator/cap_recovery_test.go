@@ -411,7 +411,7 @@ func stubOpenCodeMachine(t *testing.T) {
 	bin := t.TempDir()
 	stub := "#!/bin/sh\n" +
 		"case \"$1\" in\n" +
-		"  --version) echo 1.18.30 ;;\n" +
+		"  --version) echo 2.2.7 ;;\n" +
 		"  models) echo anthropic/claude-sonnet-4-5 ;;\n" +
 		"esac\n"
 	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(stub), 0o755); err != nil {

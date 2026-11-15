@@ -40,6 +40,10 @@ export interface AdapterCompatEntry {
   readonly maxTested: string;
   /** "warn" reports a CLI below minVersion and keeps the adapter usable; "fail_closed" disables it. */
   readonly floorPolicy: "warn" | "fail_closed";
+  /** The https URL of the vendor's install script. Empty when the CLI installs from npm. */
+  readonly installer: string;
+  /** The pinned sha256 a downloaded installer must match before it runs. Empty without an installer. */
+  readonly installerSha256: string;
 }
 
 `
@@ -51,7 +55,7 @@ const tsFooter = `;
 // payload is built from the PARSED manifests rather than copied from their
 // source bytes, so the output depends only on their content: reformatting a
 // manifest (key order, whitespace) cannot produce a spurious drift failure,
-// while a changed min_version, max_tested or floor_policy does.
+// while a changed min_version, max_tested, floor_policy or installer pin does.
 func renderTypeScript(manifests []adaptercompat.Manifest) ([]byte, error) {
 	sorted := make([]adaptercompat.Manifest, len(manifests))
 	copy(sorted, manifests)
@@ -72,8 +76,8 @@ func renderTypeScript(manifests []adaptercompat.Manifest) ([]byte, error) {
 	b.WriteString("export const ADAPTER_COMPAT: Readonly<Record<AdapterCompatKey, AdapterCompatEntry>> =\n")
 	b.WriteString("  Object.freeze({\n")
 	for _, m := range sorted {
-		fmt.Fprintf(&b, "    %q: { minVersion: %q, maxTested: %q, floorPolicy: %q },\n",
-			m.Adapter, m.MinVersion, m.MaxTested, m.FloorPolicy)
+		fmt.Fprintf(&b, "    %q: {\n      minVersion: %q,\n      maxTested: %q,\n      floorPolicy: %q,\n      installer: %q,\n      installerSha256: %q,\n    },\n",
+			m.Adapter, m.MinVersion, m.MaxTested, m.FloorPolicy, m.Install.Installer, m.Install.InstallerSHA256)
 	}
 	b.WriteString("  })")
 	b.WriteString(tsFooter)

@@ -58,15 +58,21 @@ import { createCliQueryFn } from "./cliQueryHelper.js";
 const ADAPTER_NAME = "OpenCode";
 const OPENCODE_DOCS_URL = "https://opencode.ai/docs/cli/";
 /**
- * The remediation for a missing or refused opencode: the managed install of
- * the build Nightgauge is tested up to and its pin, as the Go refusals word it
- * (`OpenCodeManagedInstall` in opencode_preflight.go). Any newer build works
- * too: a version above the tested one is never refused or warned about
- * (ADR-022 § 20, 2026-09-25 amendment).
+ * The managed install of the opencode build Nightgauge is tested up to, the
+ * command the Go refusals print (`OpenCodeManagedInstall` in
+ * opencode_preflight.go). It downloads the 2.x installer, verifies it against
+ * the manifest's pinned sha256, and only then runs it: nothing is piped into a
+ * shell. Any newer build works too: a version above the tested one is never
+ * refused or warned about (ADR-022 § 20, 2026-09-25 amendment).
  */
+export const OPENCODE_MANAGED_INSTALL =
+  `f="$(mktemp)" && curl -fsSL --proto '=https' -o "$f" ${ADAPTER_COMPAT.opencode.installer}` +
+  ` && echo "${ADAPTER_COMPAT.opencode.installerSha256}  $f" | shasum -a 256 -c -` +
+  ` && bash "$f" --no-modify-path --version ${ADAPTER_COMPAT.opencode.maxTested}`;
+/** The remediation for a missing or refused opencode: the managed install, then its pin. */
 const OPENCODE_INSTALL_CMD =
-  `npm i --prefix ~/.nightgauge/tools/opencode opencode-ai@${ADAPTER_COMPAT.opencode.maxTested}, ` +
-  "then pin it with opencode.binary: ~/.nightgauge/tools/opencode/node_modules/.bin/opencode " +
+  `\`${OPENCODE_MANAGED_INSTALL}\`, ` +
+  "then pin it with opencode.binary: ~/.opencode/bin/opencode " +
   "(as an absolute path) in ~/.nightgauge/config.yaml";
 const ADR = "docs/decisions/022-opencode-multi-provider-adapter.md";
 
@@ -97,23 +103,14 @@ export const OPENCODE_FORBIDDEN_FLAGS: readonly string[] = Object.freeze([
 
 /**
  * The `opencode run` argv for one stage, identical to the Go adapter's
- * `BuildCommand`: `run --format json --print-logs --log-level ERROR -m
- * <provider/model> --dir <worktree>`. The prompt is never on argv: it goes on
- * stdin (ADR-022 § 19).
+ * `BuildCommand`: `run --format json --print-logs --log-level error -m
+ * <provider/model>`. The prompt is never on argv: it goes on stdin (ADR-022
+ * § 19). The worktree is never on argv either: it is the spawn's working
+ * directory, since OpenCode 2.x has no `run --dir` and reads a positional path
+ * as prompt text (spike #3197).
  */
-export function buildOpenCodeArgv(model: string, worktree: string): string[] {
-  return [
-    "run",
-    "--format",
-    "json",
-    "--print-logs",
-    "--log-level",
-    "ERROR",
-    "-m",
-    model,
-    "--dir",
-    worktree,
-  ];
+export function buildOpenCodeArgv(model: string): string[] {
+  return ["run", "--format", "json", "--print-logs", "--log-level", "error", "-m", model];
 }
 
 /**
@@ -200,8 +197,19 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-/** The version `opencode --version` prints: its first line, as the Go fold reads it. */
-const OPENCODE_VERSION_RE = /^[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*$/;
+/**
+ * The version `opencode --version` prints on its first line: `X.Y.Z` or
+ * `vX.Y.Z` (1.x) and `opencode vX.Y.Z` (2.x), with an optional suffix. Group 1
+ * is the version without the prefix. It is Go's `openCodeVersionRE`
+ * (opencode_preflight.go), so the SDK and the Go floor check read one shape.
+ */
+const OPENCODE_VERSION_RE = /^(?:opencode\s+)?v?([0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*)$/;
+
+/** The version on `opencode --version`'s first line, or undefined when it carries none. */
+export function parseOpenCodeVersion(stdout: string): string | undefined {
+  const line = stdout.trim().split("\n")[0].trim();
+  return OPENCODE_VERSION_RE.exec(line)?.[1];
+}
 
 // ---------------------------------------------------------------------------
 // The per-run config (#1648)
@@ -460,8 +468,8 @@ export class OpenCodeAdapter implements ICliAdapter {
         installCmd: OPENCODE_INSTALL_CMD,
         docsUrl: OPENCODE_DOCS_URL,
       });
-      const version = result.stdout.trim().split("\n")[0].trim();
-      if (!OPENCODE_VERSION_RE.test(version)) {
+      const version = parseOpenCodeVersion(result.stdout);
+      if (version === undefined) {
         throw new AdapterError(
           `opencode --version printed no version, so it cannot be checked against the minimum ` +
             `supported version ${OPENCODE_MIN_KNOWN_VERSION}; the opencode adapter fails closed.\n` +
@@ -515,7 +523,7 @@ export class OpenCodeAdapter implements ICliAdapter {
     const provider = this.runConfigProvider;
     return createCliQueryFn({
       command: this.cliCommand,
-      args: buildOpenCodeArgv(model, worktree),
+      args: buildOpenCodeArgv(model),
       adapter: this.name,
       promptDelivery: "stdin",
       openCode: {
@@ -527,7 +535,7 @@ export class OpenCodeAdapter implements ICliAdapter {
         // of a pipeline (run.ts) still gets each stage its own config.
         runConfig: async (request) =>
           checkRunConfig(await provider({ ...request, ...(repo && { repo }) })),
-        argv: (dir) => buildOpenCodeArgv(model, dir),
+        argv: buildOpenCodeArgv(model),
         cleanRunRoot: this.runRootCleaner,
         parentEnv: this.env,
         spawn: this.spawn,
@@ -537,7 +545,7 @@ export class OpenCodeAdapter implements ICliAdapter {
   }
 
   getDefaultArgs(): string[] {
-    return ["run", "--format", "json", "--print-logs", "--log-level", "ERROR"];
+    return ["run", "--format", "json", "--print-logs", "--log-level", "error"];
   }
 
   /** ADR-022 § 16: OpenCode's `task` subagents are not a workflow backend; fan-out is portable. */

@@ -64,14 +64,20 @@ func TestOpenCodeBuildCommandArgv(t *testing.T) {
 		t.Errorf("cmd = %q, want opencode", cmd)
 	}
 	want := []string{
-		"run", "--format", "json", "--print-logs", "--log-level", "ERROR",
+		"run", "--format", "json", "--print-logs", "--log-level", "error",
 		"-m", "lmstudio/qwen/qwen3.8-27b",
-		"--dir", "/work/nightgauge-issue-1612",
 	}
 	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("argv =\n  %q\nwant\n  %q", args, want)
 	}
 	assertNoForbiddenFlag(t, args)
+	// OpenCode 2.x rejects `run --dir` and reads a positional as prompt text
+	// (spike #3197): the worktree reaches opencode only as cmd.Dir.
+	for i, a := range args {
+		if a == "--dir" || a == "/work/nightgauge-issue-1612" {
+			t.Errorf("argv[%d] = %q; the worktree must reach opencode as the working directory, not on argv", i, a)
+		}
+	}
 }
 
 // TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild (#1635/A11
@@ -789,45 +795,46 @@ func TestOpenCodeArgvMatchesCapturedHelp(t *testing.T) {
 		t.Fatal(err)
 	}
 	help := string(raw)
-	ver := strings.TrimSpace(string(version))
+	ver, _ := ParseOpenCodeVersion(string(version))
 
-	if !strings.HasPrefix(help, "opencode run [message..]") {
+	if !strings.Contains(help, "USAGE\n  opencode run [flags]") {
 		t.Fatalf("capture is not `opencode run --help` (opencode %s): %.60q", ver, help)
 	}
 
-	// Each option starts a line: optional "-x, " short form, then "--long".
-	// Its block runs to the next option line and holds any [choices: ...].
-	optionLine := regexp.MustCompile(`(?m)^\s+(?:-([a-z]), )?--([a-z][a-z-]*)\s`)
-	locs := optionLine.FindAllStringSubmatchIndex(help, -1)
-	options := map[string]string{} // "--long" and "-x" → the option's text block
-	for i, loc := range locs {
-		end := len(help)
-		if i+1 < len(locs) {
-			end = locs[i+1][0]
-		}
-		block := help[loc[0]:end]
-		options["--"+help[loc[4]:loc[5]]] = block
-		if loc[2] >= 0 {
-			options["-"+help[loc[2]:loc[3]]] = block
+	// OpenCode 2.x prints one option per line: "--long", an optional
+	// ", -x" short form, then a value placeholder (a bare type such as
+	// `string` or `choice`, or a bracketed one) unless the option is a
+	// boolean, then the description, which may end in "(choices: a, b)".
+	optionLine := regexp.MustCompile(`(?m)^\s+--([a-z][a-z-]*)(?:, -([a-z]))?( (?:string|number|choice|<[^>]*>|\[[^\]]*\]))?\s{2,}(.*)$`)
+	type option struct {
+		takesValue bool
+		desc       string
+	}
+	options := map[string]option{} // "--long" and "-x"
+	for _, m := range optionLine.FindAllStringSubmatch(help, -1) {
+		o := option{takesValue: m[3] != "" && !strings.HasPrefix(strings.TrimSpace(m[3]), "[="), desc: m[4]}
+		options["--"+m[1]] = o
+		if m[2] != "" {
+			options["-"+m[2]] = o
 		}
 	}
 	if len(options) < 20 {
 		t.Fatalf("parsed only %d options from the capture; the parser no longer matches the help format", len(options))
 	}
 
-	choices := regexp.MustCompile(`\[choices: ([^\]]+)\]`)
+	choices := regexp.MustCompile(`\(choices: ([^)]+)\)`)
 	_, args, _ := NewOpenCodeAdapter().BuildCommand(RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: "/w", Prompt: "p"})
 	if args[0] != "run" {
 		t.Fatalf("argv[0] = %q, want the run subcommand", args[0])
 	}
 	for i := 1; i < len(args); i++ {
 		flag := args[i]
-		block, ok := options[flag]
+		o, ok := options[flag]
 		if !ok {
 			t.Errorf("argv flag %q is not an option of opencode %s run", flag, ver)
 			continue
 		}
-		if strings.Contains(block, "[boolean]") {
+		if !o.takesValue {
 			continue
 		}
 		if i+1 >= len(args) {
@@ -836,18 +843,17 @@ func TestOpenCodeArgvMatchesCapturedHelp(t *testing.T) {
 		}
 		value := args[i+1]
 		i++
-		if m := choices.FindStringSubmatch(block); m != nil && !strings.Contains(m[1], `"`+value+`"`) {
+		if m := choices.FindStringSubmatch(o.desc); m != nil && !slices.Contains(strings.Split(m[1], ", "), value) {
 			t.Errorf("%s %q is not one of the captured choices %s (opencode %s)", flag, value, m[1], ver)
 		}
 	}
 
-	// The forbidden flags this version's help lists. --yolo and
-	// --dangerously-skip-permissions are hidden `run` options in 1.18.30 that
-	// switch on the same auto-approval as --auto, so the help never shows them;
-	// --mdns and --cors are not `run` options, and `run` exits 1 on either
-	// (testdata/cli-help/README.md). All of them stay forbidden, and
-	// TestOpenCodeNeverEmitsBypassFlags checks the full list.
-	for _, f := range []string{"--auto", "--share", "--port"} {
+	// The forbidden flags this version's help lists. --auto approves every
+	// permission that is not explicitly denied. 1.x's --share and --port are
+	// gone from 2.x's `run`, and its hidden --yolo and
+	// --dangerously-skip-permissions were never listed. All of them stay
+	// forbidden, and TestOpenCodeNeverEmitsBypassFlags checks the full list.
+	for _, f := range []string{"--auto"} {
 		if _, ok := options[f]; !ok {
 			t.Errorf("forbidden flag %s is no longer an option of opencode %s run; re-check ADR-022 § 9 before editing the list", f, ver)
 		}

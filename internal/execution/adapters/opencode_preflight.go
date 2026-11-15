@@ -84,6 +84,9 @@ const openCodeBinaryName = "opencode"
 // and TestOpenCodeAnthropicModelsMatchTheBinary, build tag
 // opencode_integration), then raise this.
 // TestOpenCodeCatalogSnapshotIsTheMaxTestedVersion holds the two together.
+// OpenCode 2.x bundles no catalog to re-read (it fetches models at run time),
+// so the snapshots stay 1.18.30's until they are ported; that test records the
+// gap as pending.
 const openCodeCatalogVersion = "1.18.30"
 
 // openCodeManifest is the opencode compat manifest (#1613), the single source
@@ -98,22 +101,32 @@ func openCodeManifest() (adaptercompat.Manifest, error) {
 	return adaptercompat.Manifest{}, errors.New("the adapter compat manifests hold no opencode manifest, so opencode's version floor is unknown")
 }
 
-// openCodeToolsPrefix is where the managed install puts a tested opencode.
-const openCodeToolsPrefix = "~/.nightgauge/tools/opencode"
+// openCodeInstallDir is where the OpenCode 2.x installer puts the binary. The
+// installer has no prefix option: it always writes $HOME/.opencode/bin.
+const openCodeInstallDir = "~/.opencode/bin"
 
 // OpenCodeManagedInstall returns, for printing and never for running, the
-// command that installs the manifest's max-tested opencode beside Nightgauge
-// and the path to pin opencode.binary to once it has run. home, when set,
-// makes the pin the absolute path a pin must be.
+// command that installs the manifest's max-tested opencode through the
+// vendor's 2.x installer and the path to pin opencode.binary to once it has
+// run. home, when set, makes the pin the absolute path a pin must be.
+//
+// The command is one `&&` chain of three steps: download the installer to a
+// fresh temporary file, verify it against the manifest's pinned sha256, and
+// only then run that file. Nothing is piped into a shell, so a changed or
+// tampered installer stops at the check instead of running. The check uses
+// `shasum -a 256`, which ships with macOS and with Perl on most Linux hosts;
+// a minimal Linux image without it fails at the check, and `sha256sum -c -`
+// reads the same line there (docs/ADAPTER_GUIDE.md).
+//
+// The opencode manifest always names an installer and its pin:
+// TestShippedInstallersCarryTheirPin and manifest validation hold both.
 func OpenCodeManagedInstall(m adaptercompat.Manifest, home string) (command, pin string) {
-	pkg := m.Install.NPM
-	if pkg == "" {
-		pkg = openCodeBinaryName
-	}
-	command = "npm i --prefix " + openCodeToolsPrefix + " " + pkg + "@" + m.MaxTested
-	pin = openCodeToolsPrefix + "/node_modules/.bin/" + openCodeBinaryName
+	command = `f="$(mktemp)" && curl -fsSL --proto '=https' -o "$f" ` + m.Install.Installer +
+		` && echo "` + m.Install.InstallerSHA256 + `  $f" | shasum -a 256 -c -` +
+		` && bash "$f" --no-modify-path --version ` + m.MaxTested
+	pin = openCodeInstallDir + "/" + openCodeBinaryName
 	if home != "" {
-		pin = filepath.Join(home, ".nightgauge", "tools", "opencode", "node_modules", ".bin", openCodeBinaryName)
+		pin = filepath.Join(home, ".opencode", "bin", openCodeBinaryName)
 	}
 	return command, pin
 }
@@ -391,6 +404,16 @@ func ParseOpenCodeVersion(line string) (version string, ok bool) {
 	return m[1], true
 }
 
+// OpenCodeVersionFromOutput reads the version from the whole stdout of
+// `opencode --version`: the first non-blank line, parsed by
+// ParseOpenCodeVersion. The adapter's floor check and the usage fold both read
+// the output through it, so neither the line they pick nor the shapes they
+// accept can drift apart.
+func OpenCodeVersionFromOutput(out []byte) (version string, ok bool) {
+	line, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	return ParseOpenCodeVersion(line)
+}
+
 // OpenCodeVersionOf runs `bin --version` as a probe under ctx and returns the
 // version it prints. The output is never quoted back: a binary that prints
 // something else is reported as printing no version.
@@ -407,9 +430,7 @@ func OpenCodeVersionOf(ctx context.Context, bin string) (string, error) {
 	if res.ExitCode != 0 {
 		return "", fmt.Errorf("`%s --version` exited %d", bin, res.ExitCode)
 	}
-	line, _, _ := strings.Cut(strings.TrimSpace(string(res.Stdout)), "\n")
-	line = strings.TrimSpace(line)
-	v, ok := ParseOpenCodeVersion(line)
+	v, ok := OpenCodeVersionFromOutput(res.Stdout)
 	if !ok {
 		return "", fmt.Errorf("`%s --version` printed no version", bin)
 	}

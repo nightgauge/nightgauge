@@ -900,7 +900,7 @@ func captureStderr(t *testing.T, fn func()) string {
 // openCodeFakeVersion is the first line of every fake `opencode`: it answers
 // the `opencode --version` the stream parser runs after a stage (#1624) and
 // exits, so the invocation is never recorded as the stage's own run.
-const openCodeFakeVersion = `[ "$1" = --version ] && { echo 1.18.30; exit 0; }`
+const openCodeFakeVersion = `[ "$1" = --version ] && { echo 2.2.7; exit 0; }`
 
 // TestOpenCodeDispatchRefusedUntilEnabled is ADR-022's enable gate, observed at
 // the only place it matters: whether RunStage spawns the CLI. A fake `opencode`
@@ -918,10 +918,11 @@ func TestOpenCodeDispatchRefusedUntilEnabled(t *testing.T) {
 	invocations := filepath.Join(stubDir, "invocations.log")
 	argvFile := filepath.Join(stubDir, "argv.txt")
 	stdinFile := filepath.Join(stubDir, "stdin.txt")
+	cwdFile := filepath.Join(stubDir, "cwd.txt")
 	// The version the stream parser reads after the run is answered and not
 	// counted: only the stage's own `run` is an invocation here.
-	script := fmt.Sprintf("#!/bin/sh\n%s\necho invoked >> %q\nprintf '%%s\\n' \"$@\" > %q\ncat > %q\nexit 0\n",
-		openCodeFakeVersion, invocations, argvFile, stdinFile)
+	script := fmt.Sprintf("#!/bin/sh\n%s\necho invoked >> %q\nprintf '%%s\\n' \"$@\" > %q\npwd -P > %q\ncat > %q\nexit 0\n",
+		openCodeFakeVersion, invocations, argvFile, cwdFile, stdinFile)
 	if err := os.WriteFile(filepath.Join(stubDir, "opencode"), []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -1028,12 +1029,27 @@ func TestOpenCodeDispatchRefusedUntilEnabled(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// OpenCode 2.x has no `run --dir` and reads a positional as prompt
+		// text, so the worktree is on no argv element (#3300).
 		wantArgv := strings.Join([]string{
-			"run", "--format", "json", "--print-logs", "--log-level", "ERROR",
-			"-m", "lmstudio/qwen/qwen3.8-27b", "--dir", worktree,
+			"run", "--format", "json", "--print-logs", "--log-level", "error",
+			"-m", "lmstudio/qwen/qwen3.8-27b",
 		}, "\n") + "\n"
 		if string(gotArgv) != wantArgv {
 			t.Errorf("argv the binary received =\n%s\nwant\n%s", gotArgv, wantArgv)
+		}
+		// The worktree reaches opencode as its working directory: the
+		// manager's cmd.Dir.
+		gotCwd, err := os.ReadFile(cwdFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantCwd, err := filepath.EvalSymlinks(worktree)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(string(gotCwd)); got != wantCwd {
+			t.Errorf("opencode ran in %q, want the worktree %q", got, wantCwd)
 		}
 		if strings.Contains(string(gotArgv), "implement the issue") || strings.Contains(string(gotArgv), "--auto") {
 			t.Errorf("prompt bytes reached argv:\n%s", gotArgv)

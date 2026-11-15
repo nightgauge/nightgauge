@@ -13,15 +13,15 @@ same change.
 
 ## What was captured
 
-| Field       | Value                                                            |
-| ----------- | ---------------------------------------------------------------- |
-| Captured at | 2026-09-13                                                       |
-| Commands    | `gh api repos/anomalyco/opencode/releases --paginate` (names)    |
-|             | `gh api repos/anomalyco/opencode/tags --paginate` (names)        |
-| Order       | sorted bytewise (`LC_ALL=C sort`)                                |
-| Releases    | 872 names; 866 are `v<major>.<minor>.<patch>`, newest `v1.18.30` |
-| Tags        | 1106 names; 1013 are `v<major>.<minor>.<patch>`                  |
-| Redaction   | none needed: public names only; `capture.sh` refuses odd lines   |
+| Field       | Value                                                          |
+| ----------- | -------------------------------------------------------------- |
+| Captured at | 2026-11-14                                                     |
+| Commands    | `gh api repos/anomalyco/opencode/releases --paginate` (names)  |
+|             | `gh api repos/anomalyco/opencode/tags --paginate` (names)      |
+| Order       | sorted bytewise (`LC_ALL=C sort`)                              |
+| Releases    | 897 names; 886 are `v<major>.<minor>.<patch>`, newest `v2.3.0` |
+| Tags        | 1172 names; 1067 are `v<major>.<minor>.<patch>`                |
+| Redaction   | none needed: public names only; `capture.sh` refuses odd lines |
 
 Every release name is also a tag name.
 

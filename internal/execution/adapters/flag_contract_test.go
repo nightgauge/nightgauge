@@ -81,7 +81,8 @@ var helpNotCaptured = map[string]string{
 // not needed, when the flag appears in the help or BuildCommand stops
 // emitting it. Probes: testdata/cli-help/README.md.
 //
-// Empty since #1716 stopped the claude adapters emitting --max-tokens.
+// Empty since #1716 stopped the claude adapters emitting --max-tokens, and
+// #3300 stopped the opencode adapter emitting --dir, which 2.x removed.
 // TestFlagContractTablesFailWhenNotNeeded plants an entry of its own.
 var knownBroken = map[string]map[string]int{}
 
@@ -393,8 +394,10 @@ func emittedFlagsByAdapter(t *testing.T) map[string]map[string]string {
 var helpHeaderRE = regexp.MustCompile(`^# adapter=(\S+) version=([0-9]+\.[0-9]+\.[0-9]+) command=(.+)$`)
 
 const (
-	helpFlagPattern        = `--?[A-Za-z0-9][A-Za-z0-9-]*`
-	helpPlaceholderPattern = `(?:<[^>]*>|\[[^\]]*\])(?:\.\.\.)?`
+	helpFlagPattern = `--?[A-Za-z0-9][A-Za-z0-9-]*`
+	// A placeholder is bracketed (`<path>`, `[=name]`) or, in OpenCode 2.x's
+	// help, a bare value type (`--model, -m string`, `--format choice`).
+	helpPlaceholderPattern = `(?:<[^>]*>|\[[^\]]*\]|string|number|choice|boolean)(?:\.\.\.)?`
 	helpOptionPattern      = helpFlagPattern + `(?:=` + helpPlaceholderPattern + `)?`
 )
 
@@ -402,8 +405,8 @@ var (
 	// helpOptionLineRE matches a line that defines options: at most eight
 	// spaces of indentation, one or more flags separated by ", ", the value
 	// placeholders, then the end of the line or two spaces and a description.
-	// That is the shape commander (claude), clap (codex, grok) and yargs
-	// (opencode) print. Wrapped description text is indented further or does
+	// That is the shape commander (claude), clap (codex, grok) and OpenCode
+	// 2.x print. Wrapped description text is indented further or does
 	// not start with a flag, so a flag named in prose is not an option.
 	helpOptionLineRE = regexp.MustCompile(`^ {1,8}(` + helpOptionPattern + `(?:, ` + helpOptionPattern + `)*)(?: ` + helpPlaceholderPattern + `)*(?: {2,}\S.*)?$`)
 	// helpAliasesRE is clap's alias annotation, as in "[aliases: --effort]".
@@ -861,7 +864,7 @@ func TestFlagContractReadsTheHelpDirOverride(t *testing.T) {
 
 	for _, c := range []struct{ adapter, flag string }{
 		{"claude-headless", "--allowedTools"},
-		{"opencode", "--dir"},
+		{"opencode", "--format"},
 	} {
 		t.Run("drops "+c.adapter+" "+c.flag, func(t *testing.T) {
 			dir := copyHelpDir(t)
@@ -1104,7 +1107,7 @@ func TestHelpOptionParser(t *testing.T) {
 		{"claude-headless", []string{"-p", "--print", "--allowedTools", "--allowed-tools", "--exclude-dynamic-system-prompt-sections", "--max-budget-usd", "--no-session-persistence", "--output-format"}, nil, 50},
 		{"codex", []string{"-s", "--sandbox", "-m", "--model", "--json", "--dangerously-bypass-approvals-and-sandbox", "-i", "--image"}, []string{"--last"}, 20},
 		{"grok", []string{"-p", "--single", "--prompt-file", "--reasoning-effort", "--effort", "--worktree-ref", "--ref", "-r", "--resume"}, []string{"--allowedTools", "--disallowedTools", "--system-prompt"}, 40},
-		{"opencode", []string{"-m", "--model", "--format", "--print-logs", "--log-level", "--dir", "--auto", "--share", "--port"}, []string{"--yolo", "--dangerously-skip-permissions"}, 20},
+		{"opencode", []string{"-m", "--model", "-s", "--session", "--format", "--print-logs", "--log-level", "--standalone", "--auto", "--worktree", "-w", "--completions"}, []string{"--dir", "--yolo", "--dangerously-skip-permissions"}, 20},
 	}
 	for _, c := range cases {
 		t.Run(c.adapter, func(t *testing.T) {
@@ -1154,7 +1157,7 @@ func TestOpenCodeHelpCaptureMatchesTheOpenCodeEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(string(version)); capture.version != got {
+	if got, _ := ParseOpenCodeVersion(string(version)); capture.version != got {
 		t.Errorf("%s is opencode %s; testdata/opencode-cli is opencode %s", path, capture.version, got)
 	}
 	if capture.body != string(evidence) {
@@ -1228,7 +1231,7 @@ func TestOpenCodeForbiddenFlagSpellings(t *testing.T) {
 		}
 	}
 	for _, arg := range []string{
-		"run", "--format", "json", "--print-logs", "--log-level", "ERROR", "-m",
+		"run", "--format", "json", "--print-logs", "--log-level", "error", "-m",
 		"lmstudio/qwen/qwen3.8-27b", "--dir", "/work/--auto", "-", "--",
 		"--no-auto", "--autoupdate", "--sharex", "auto", "yolo",
 	} {

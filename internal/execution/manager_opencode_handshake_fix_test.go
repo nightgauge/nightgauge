@@ -29,7 +29,7 @@ func installHandshakeFake(t *testing.T, onVersion string, body string) {
 	script := fmt.Sprintf(`#!/bin/sh
 if [ "$1" = "--version" ]; then
 %s
-  echo 1.18.30
+  echo 2.2.7
   exit 0
 fi
 %s

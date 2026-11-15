@@ -948,8 +948,7 @@ func (f openCodeFold) version(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	first, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
-	v, ok := adapters.ParseOpenCodeVersion(first)
+	v, ok := adapters.OpenCodeVersionFromOutput(out)
 	if !ok {
 		return "", fmt.Errorf("printed no version")
 	}

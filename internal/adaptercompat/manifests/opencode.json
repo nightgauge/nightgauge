@@ -1,13 +1,12 @@
 {
   "adapter": "opencode",
   "binary": "opencode",
-  "min_version": "1.18.30",
-  "min_version_reason": "Every OpenCode behaviour ADR-022 relies on was observed on 1.18.30 (ADR-022 section 20).",
+  "min_version": "2.2.7",
+  "min_version_reason": "OpenCode 2.x replaced the 1.x run contract (no run --dir, a new config schema, a new install channel); the 2.x behaviour the adapter relies on was observed on 2.2.7 (spike #3197 section 5). 1.x is no longer supported.",
   "floor_policy": "fail_closed",
-  "max_tested": "1.18.30",
+  "max_tested": "2.2.7",
   "max_tested_reason": "The newest version observed: Nightgauge is tested up to it. A newer version is never refused, degraded or warned about (ADR-022 section 20, 2026-09-25 amendment).",
   "feeds": [
-    { "kind": "npm", "ref": "opencode-ai" },
     {
       "kind": "github",
       "ref": "anomalyco/opencode",
@@ -18,16 +17,19 @@
     { "kind": "github", "ref": "lmstudio-ai/lms" },
     { "kind": "github", "ref": "ollama/ollama" }
   ],
-  "install": { "npm": "opencode-ai" },
+  "install": {
+    "installer": "https://opencode.ai/v2/install",
+    "installer_sha256": "bbc4584fd6a888bcd14623b8a63afa0f1b4075a2e84a2c3518cd509b446b3135"
+  },
   "managed_install": "",
-  "required_flags": ["--dir", "--format", "--log-level", "--print-logs", "-m", "-s"],
+  "required_flags": ["--format", "--log-level", "--print-logs", "-m", "-s"],
   "catalog": { "command": "opencode models" },
   "fixtures": [
     "internal/execution/adapters/testdata/opencode-cli/run-help.txt",
     "internal/execution/adapters/testdata/opencode-cli/version.txt",
     "internal/adaptercompat/testdata/opencode-feed/releases.txt",
     "internal/adaptercompat/testdata/opencode-feed/tags.txt",
-    "internal/execution/adapters/testdata/cli-help/opencode-run-1.18.30.txt",
+    "internal/execution/adapters/testdata/cli-help/opencode-run-2.2.7.txt",
     "internal/doctor/testdata/opencode-1.18.30-debug-config-invalid.txt",
     "internal/doctor/testdata/opencode-1.18.30-models-configured.txt",
     "internal/doctor/testdata/opencode-1.18.30-models-other.txt",

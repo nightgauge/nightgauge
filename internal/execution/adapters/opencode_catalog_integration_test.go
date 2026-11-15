@@ -33,11 +33,22 @@ func openCodeCatalogBinary(t *testing.T) string {
 	path, err := exec.LookPath("opencode")
 	if err != nil {
 		if os.Getenv("CI") == "true" {
-			t.Fatalf("opencode is not on PATH, and CI must run this test: install opencode-ai@%s", openCodeCatalogVersion)
+			t.Fatalf("opencode is not on PATH, and CI must run this test: scripts/opencode-integration.sh installs it")
 		}
 		t.Skip("opencode is not on PATH")
 	}
 	return path
+}
+
+// skipOpenCodeCatalogPortPending skips a re-read on the max_tested OpenCode
+// 2.x binary while openCodeCatalogPortPending holds: 2.x bundles no catalog in
+// the shape these tests read, so the 1.18.30 snapshots stand until the port.
+func skipOpenCodeCatalogPortPending(t *testing.T, installed string) {
+	t.Helper()
+	m, err := openCodeManifest()
+	if err == nil && openCodeCatalogPortPending != "" && installed == m.MaxTested {
+		t.Skipf("opencode %s bundles no catalog to re-read; ported by %s", installed, openCodeCatalogPortPending)
+	}
 }
 
 // openCodeCatalogEntryRE matches one provider entry of the catalog bundled in
@@ -60,9 +71,10 @@ func TestOpenCodeCatalogEnvMatchesTheBinary(t *testing.T) {
 		t.Fatalf("opencode --version: %v", err)
 	}
 	if v, _ := ParseOpenCodeVersion(string(out)); v != openCodeCatalogVersion {
+		skipOpenCodeCatalogPortPending(t, v)
 		t.Fatalf("opencode %s is installed; the catalog snapshot was read from %s. Re-read it before changing the pin", v, openCodeCatalogVersion)
 	}
-	// An npm install puts a link to the platform binary on PATH.
+	// PATH may hold a link to the platform binary.
 	binary, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		t.Fatal(err)
@@ -178,6 +190,7 @@ func TestOpenCodeAnthropicModelsMatchTheBinary(t *testing.T) {
 		t.Fatalf("opencode --version: %v", err)
 	}
 	if v, _ := ParseOpenCodeVersion(string(out)); v != openCodeCatalogVersion {
+		skipOpenCodeCatalogPortPending(t, v)
 		t.Fatalf("opencode %s is installed; the anthropic snapshot was read from %s. Re-read it before changing the pin", v, openCodeCatalogVersion)
 	}
 

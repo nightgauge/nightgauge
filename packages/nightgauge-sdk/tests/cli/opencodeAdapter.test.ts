@@ -22,9 +22,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   OPENCODE_FORBIDDEN_FLAGS,
+  OPENCODE_MANAGED_INSTALL,
   OPENCODE_MIN_KNOWN_VERSION,
   OpenCodeAdapter,
   buildOpenCodeArgv,
+  parseOpenCodeVersion,
   type OpenCodeRunConfig,
   type OpenCodeRunConfigProvider,
 } from "../../src/cli/adapters/OpenCodeAdapter.js";
@@ -175,6 +177,7 @@ function writeStub(dir: string, runBody: string): string {
 case "$1" in
 run)
   printf '%s\\n' "$@" > '${dir}/argv'
+  pwd > '${dir}/run-cwd'
   env > '${dir}/env'
   cat > '${dir}/stdin'
   if [ -z "$NO_SENTINEL" ] && [ -n "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL" ]; then
@@ -265,16 +268,27 @@ describe("OpenCodeAdapter argv (#1637)", () => {
     const body = goTest.slice(goTest.indexOf("func TestOpenCodeBuildCommandArgv("));
     const fn = body.slice(0, body.indexOf("\n}\n"));
     const model = /Model:\s+"([^"]+)"/.exec(fn)?.[1];
-    const worktree = /WorktreeDir:\s+"([^"]+)"/.exec(fn)?.[1];
     const wantBlock = /want := \[\]string\{([\s\S]*?)\n\t\}/.exec(fn)?.[1];
-    expect(model && worktree && wantBlock, "the Go golden moved").toBeTruthy();
+    expect(model && wantBlock, "the Go golden moved").toBeTruthy();
     const want = [...wantBlock!.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
-    expect(buildOpenCodeArgv(model!, worktree!)).toEqual(want);
+    expect(buildOpenCodeArgv(model!)).toEqual(want);
+  });
+
+  it("carries no --dir and no positional: OpenCode 2.x rejects one and prompts on the other (#3300)", () => {
+    const argv = buildOpenCodeArgv(LOCAL_MODEL);
+    expect(argv).not.toContain("--dir");
+    // Every element after `run` is a flag or the value of the flag before it.
+    const valued = new Set(["--format", "--log-level", "-m"]);
+    for (let i = 1; i < argv.length; i++) {
+      const isFlag = argv[i].startsWith("-");
+      const isValue = valued.has(argv[i - 1]);
+      expect(isFlag || isValue, `argv[${i}] = ${argv[i]} is a positional`).toBe(true);
+    }
   });
 
   it("never carries a forbidden flag in any spelling", () => {
     for (const model of [LOCAL_MODEL, "anthropic/claude-sonnet-5", "openai/gpt-5.5"]) {
-      const argv = buildOpenCodeArgv(model, "/work/nightgauge-issue-1637");
+      const argv = buildOpenCodeArgv(model);
       expect(argv.map(forbiddenFlagIn).filter(Boolean)).toEqual([]);
     }
     // The guard itself catches the spellings opencode accepts.
@@ -498,6 +512,46 @@ describe("OpenCodeAdapter.validateAuth (#1637)", () => {
     ).resolves.toBe("passed");
   });
 
+  it("reads every shape opencode --version prints, as Go's ParseOpenCodeVersion does", async () => {
+    expect(parseOpenCodeVersion("opencode v2.2.7\n")).toBe("2.2.7");
+    expect(parseOpenCodeVersion("v1.18.30")).toBe("1.18.30");
+    expect(parseOpenCodeVersion("2.2.7-beta.1\nextra")).toBe("2.2.7-beta.1");
+    expect(parseOpenCodeVersion("opencode")).toBeUndefined();
+    const fixture = readFileSync(
+      join(REPO_ROOT, "internal/execution/adapters/testdata/opencode-cli/version.txt"),
+      "utf-8"
+    );
+    await expect(
+      new OpenCodeAdapter({ env: {} }).validateAuth({ runner: runner(fixture.trim()), cwd: "/tmp" })
+    ).resolves.toBe("passed");
+  });
+
+  it("remediates with a download, a pinned sha256 check, then a run: never a pipe into a shell", async () => {
+    const manifest = JSON.parse(
+      readFileSync(join(REPO_ROOT, "internal/adaptercompat/manifests/opencode.json"), "utf-8")
+    ) as { max_tested: string; install: { installer: string; installer_sha256: string } };
+    expect(OPENCODE_MANAGED_INSTALL).toContain(`-o "$f" ${manifest.install.installer}`);
+    expect(OPENCODE_MANAGED_INSTALL).toContain(
+      `echo "${manifest.install.installer_sha256}  $f" | shasum -a 256 -c -`
+    );
+    expect(OPENCODE_MANAGED_INSTALL).toContain(
+      `bash "$f" --no-modify-path --version ${manifest.max_tested}`
+    );
+    expect(OPENCODE_MANAGED_INSTALL).not.toMatch(/\|\s*(ba)?sh\b/);
+    const goPreflight = readFileSync(
+      join(REPO_ROOT, "internal/execution/adapters/opencode_preflight.go"),
+      "utf-8"
+    );
+    expect(goPreflight, "the Go remediation must word the same steps").toContain(
+      "shasum -a 256 -c -"
+    );
+    const err = await new OpenCodeAdapter({ env: {} })
+      .validateAuth({ runner: runner("opencode"), cwd: "/tmp" })
+      .catch((e: unknown) => e);
+    expect((err as AdapterError).message).toContain(OPENCODE_MANAGED_INSTALL);
+    expect((err as AdapterError).message).toContain("opencode.binary: ~/.opencode/bin/opencode");
+  });
+
   it("fails closed when no version can be read", async () => {
     await expect(
       new OpenCodeAdapter({ env: {} }).validateAuth({ runner: runner("opencode"), cwd: "/tmp" })
@@ -595,7 +649,12 @@ describe("OpenCodeAdapter spawn (#1637)", () => {
     const messages = await drain(query({ prompt, options: { cwd: worktree } }));
 
     const argv = readFileSync(join(dir, "argv"), "utf-8").trimEnd().split("\n");
-    expect(argv).toEqual(buildOpenCodeArgv(LOCAL_MODEL, worktree));
+    expect(argv).toEqual(buildOpenCodeArgv(LOCAL_MODEL));
+    // The worktree reaches opencode as the spawn's cwd, never on argv (#3300).
+    expect(argv).not.toContain(worktree);
+    expect(realpathSync(readFileSync(join(dir, "run-cwd"), "utf-8").trim())).toBe(
+      realpathSync(worktree)
+    );
     expect(readFileSync(join(dir, "stdin"), "utf-8")).toBe(prompt);
 
     const result = messages.find((m) => m.type === "result")!;

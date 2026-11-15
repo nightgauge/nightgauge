@@ -292,11 +292,11 @@ jobs:
       # The opencode_integration tag against the real OpenCode binary (#1632):
       # the adversarial config-merge and plugin-loading suite, the catalog
       # snapshots, and run isolation (#1616). scripts/opencode-integration.sh
-      # installs the manifest's max_tested pin into a temp prefix and runs the
-      # suite; ci-local.sh calls the same script. With CI=true a missing
+      # installs the manifest's max_tested with the OpenCode 2.x installer into a
+      # temp prefix and runs the suite; ci-local.sh calls the same script. With CI=true a missing
       # binary fails every test rather than skipping it, and -v lists every
       # test that ran.
-      - name: OpenCode integration (opencode-ai@1.18.30)
+      - name: OpenCode integration (opencode 2.2.7)
         id: opencode
         if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
         run: bash scripts/opencode-integration.sh "$RUNNER_TEMP/opencode-cli"

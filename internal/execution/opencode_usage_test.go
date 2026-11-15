@@ -115,7 +115,7 @@ func TestOpenCodeServedModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := writeFakeOpenCode(t, fmt.Sprintf(`case "$1" in
---version) echo 1.18.30 ;;
+--version) echo 2.2.7 ;;
 db) echo '[]' ;;
 export) cat %q ;;
 esac
@@ -141,7 +141,7 @@ esac
 	}
 
 	// No export to read: the dispatched -m, and a marker saying why.
-	broken := writeFakeOpenCode(t, `case "$1" in --version) echo 1.18.30 ;; db) echo '[]' ;; *) exit 1 ;; esac
+	broken := writeFakeOpenCode(t, `case "$1" in --version) echo 2.2.7 ;; db) echo '[]' ;; *) exit 1 ;; esac
 `)
 	stream = &OpenCodeStream{SessionID: "ses_fixture0000000000000000001"}
 	res = testFold(broken, dir).run(context.Background(), stream, "ollama/qwen3-coder:30b")
@@ -181,7 +181,7 @@ func TestOpenCodeChildUsageFold(t *testing.T) {
 	log := filepath.Join(fakeDir, "calls.log")
 	bin := writeFakeOpenCode(t, fmt.Sprintf(`echo "$*" >> %[1]q
 case "$1" in
---version) echo 1.18.30 ;;
+--version) echo 2.2.7 ;;
 db) printf '%%s' %[2]q ;;
 export) cat %[3]q/"$2".json ;;
 esac
@@ -339,7 +339,7 @@ func TestOpenCodeFoldBoundedProcesses(t *testing.T) {
 		calls := filepath.Join(dir, "calls.log")
 		bin := writeFakeOpenCode(t, fmt.Sprintf(`echo "$1 $2" >> %[3]q
 case "$1" in
---version) echo 1.18.30 ;;
+--version) echo 2.2.7 ;;
 db) echo '[{"id":"ses_slowChild","parent_id":"%[1]s"}]' ;;
 export)
   [ "$2" = %[1]s ] && { echo '{"messages":[]}'; exit 0; }
@@ -495,7 +495,7 @@ wait
 		}
 		log := filepath.Join(dir, "exports.log")
 		bin := writeFakeOpenCode(t, fmt.Sprintf(`case "$1" in
---version) echo 1.18.30 ;;
+--version) echo 2.2.7 ;;
 db) cat %[1]q ;;
 export)
   [ "$2" = %[3]s ] && { echo '{"messages":[]}'; exit 0; }
@@ -570,7 +570,7 @@ func killSleepers(t *testing.T, file string) {
 func TestOpenCodeVersionStampCached(t *testing.T) {
 	counter := filepath.Join(t.TempDir(), "version-calls")
 	bin := writeFakeOpenCode(t, fmt.Sprintf(`echo x >> %q
-echo 1.18.30
+echo 2.2.7
 `, counter))
 	calls := func() int {
 		raw, err := os.ReadFile(counter)
@@ -585,8 +585,8 @@ echo 1.18.30
 	fold := testFold(bin, t.TempDir())
 	for i := 0; i < 2; i++ {
 		v, err := fold.version(context.Background())
-		if err != nil || v != "1.18.30" {
-			t.Fatalf("version = %q, %v; want 1.18.30", v, err)
+		if err != nil || v != "2.2.7" {
+			t.Fatalf("version = %q, %v; want 2.2.7", v, err)
 		}
 	}
 	if n := calls(); n != 1 {
@@ -743,7 +743,7 @@ case "$1" in
     env | sed 's/^/ENV	/'; echo END; } >> %[6]q ;;
 esac
 case "$1" in
---version) echo 1.18.30; exit 0 ;;
+--version) echo 2.2.7; exit 0 ;;
 db) echo '[]'; exit 0 ;;
 export)
   pure=0
@@ -1790,7 +1790,7 @@ func TestOpenCodeStopOutlivedByItsOutputIsAStop(t *testing.T) {
 func TestOpenCodeCancelledStageStartsNoProcess(t *testing.T) {
 	isolateOpenCodeHome(t)
 	calls := filepath.Join(t.TempDir(), "calls")
-	bin := writeFakeOpenCode(t, fmt.Sprintf("echo \"$*\" >> %q\necho 1.18.30\n", calls))
+	bin := writeFakeOpenCode(t, fmt.Sprintf("echo \"$*\" >> %q\necho 2.2.7\n", calls))
 	t.Setenv("PATH", filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
 	opts := openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", nil)

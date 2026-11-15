@@ -41,6 +41,9 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/adapter-canary.sh"
 CLI_HELP="$REPO_ROOT/internal/execution/adapters/testdata/cli-help"
+# The opencode capture is named for the manifest's max_tested.
+OPENCODE_V="$(jq -r '.max_tested' "$REPO_ROOT/internal/adaptercompat/manifests/opencode.json")"
+OPENCODE_HELP="opencode-run-$OPENCODE_V.txt"
 SCHEMA="$REPO_ROOT/internal/execution/adapters/testdata/opencode-config-schema/opencode-config.schema.json"
 WORKFLOW="$REPO_ROOT/.github/workflows/adapter-canary.yml"
 
@@ -321,7 +324,7 @@ check "every row is pass" sh -c "! echo '$OUT' | jq -r '.result' | grep -qx fail
 BROKEN="$TMP/broken-help"
 mkdir -p "$BROKEN"
 cp "$CLI_HELP"/*.txt "$CLI_HELP"/*.txt.hidden "$BROKEN/" 2>/dev/null
-grep -v -- '-m, --model' "$CLI_HELP/opencode-run-1.18.30.txt" >"$BROKEN/opencode-run-1.18.30.txt"
+grep -v -- '--model, -m' "$CLI_HELP/$OPENCODE_HELP" >"$BROKEN/$OPENCODE_HELP"
 OUT="$(bash "$SCRIPT" flag-contract "$BROKEN")"
 RC=$?
 check "flag-contract exits non-zero when a flag is missing" [ "$RC" -ne 0 ]
@@ -415,7 +418,7 @@ FAKE
   ADAPTER_CANARY_VERSION="$ver" bash "$SCRIPT" capture-help "$adapter" "$fake" "$NEWER" >/dev/null
 done
 cp "$CLI_HELP/codex-exec-0.145.0.txt" "$CLI_HELP/codex-0.145.0.txt" "$NEWER/"
-cp "$CLI_HELP/opencode-run-1.18.30.txt" "$NEWER/"
+cp "$CLI_HELP/$OPENCODE_HELP" "$NEWER/"
 check "capture-help carries claude-headless's sidecar to a version newer than committed" \
   [ -f "$NEWER/claude-headless-2.1.999.txt.hidden" ]
 check "capture-help carries grok's sidecar to a version newer than committed" \
@@ -439,12 +442,12 @@ check "grok passes at a version newer than the committed probe (not auto-failed 
 TRUNCATED="$TMP/truncated-help"
 mkdir -p "$TRUNCATED"
 cp "$CLI_HELP"/*.txt "$CLI_HELP"/*.txt.hidden "$TRUNCATED/" 2>/dev/null
-head -n 3 "$CLI_HELP/opencode-run-1.18.30.txt" >"$TRUNCATED/opencode-run-1.18.30.txt"
+head -n 3 "$CLI_HELP/$OPENCODE_HELP" >"$TRUNCATED/$OPENCODE_HELP"
 OUT="$(bash "$SCRIPT" flag-contract "$TRUNCATED")"
 RC=$?
 check "flag-contract exits non-zero on a malformed capture" [ "$RC" -ne 0 ]
 check "the opencode row itself fails, naming the malformed capture" \
-  sh -c "row=\$(echo '$OUT' | jq -c 'select(.adapter==\"opencode\")'); echo \"\$row\" | jq -e '.result == \"fail\" and .version == \"1.18.30\"' >/dev/null && echo \"\$row\" | jq -r '.detail' | grep -qF 'parsed only'"
+  sh -c "row=\$(echo '$OUT' | jq -c 'select(.adapter==\"opencode\")'); echo \"\$row\" | jq -e '.result == \"fail\" and .version == \"$OPENCODE_V\"' >/dev/null && echo \"\$row\" | jq -r '.detail' | grep -qF 'parsed only'"
 check "no pseudo flag-contract row is filed when the real adapter+version already carries it" \
   sh -c "! echo '$OUT' | jq -c 'select(.adapter==\"flag-contract\")' | grep -q ."
 check "claude-headless, grok and codex are not mis-attributed the opencode failure" \
@@ -662,6 +665,74 @@ check "the report job still requires changed to say a manifest changed" \
 CONCURRENCY_GROUP="$(yq -r '.concurrency.group' "$WORKFLOW")"
 check "the concurrency group is per-ref, so schedule/dispatch share one group on main and never a stray PR ref" \
   str_contains "$CONCURRENCY_GROUP" 'github.ref'
+
+echo ""
+echo "=== 6c. installer pins come from the compat manifests (#3300) ==="
+# --- installer pins (#3300): adapter-canary reads each vendor installer's
+# sha256 from its compat manifest, the one pin Go and the SDK also read, and
+# an ADAPTER_CANARY_<ADAPTER>_INSTALLER_SHA256 override still wins.
+for adapter in grok opencode; do
+  want_pin="$(jq -r '.install.installer_sha256' "$REPO_ROOT/internal/adaptercompat/manifests/$adapter.json")"
+  got_pin="$(bash -c 'source "$1"; expected_installer_sha256 "$2"' _ "$SCRIPT" "$adapter")"
+  check "$adapter: the canary's installer pin is the manifest's install.installer_sha256" \
+    [ "${#want_pin}" -eq 64 ] && check "$adapter: canary pin = manifest pin" [ "$got_pin" = "$want_pin" ]
+done
+OVERRIDE_PIN="$(printf '%064d' 0)"
+got_pin="$(ADAPTER_CANARY_OPENCODE_INSTALLER_SHA256="$OVERRIDE_PIN" \
+  bash -c 'source "$1"; expected_installer_sha256 opencode' _ "$SCRIPT")"
+check "ADAPTER_CANARY_OPENCODE_INSTALLER_SHA256 overrides the manifest pin" [ "$got_pin" = "$OVERRIDE_PIN" ]
+check "adapter-canary.sh holds no hardcoded installer sha256" \
+  sh -c "! grep -qE '[0-9a-f]{64}' '$SCRIPT'"
+
+# cmd_install's installer path, against a stub curl and a stub OpenCode 2.x
+# installer: a matching pin installs into <prefix>/.opencode/bin with HOME at
+# the prefix and the installer's own flags; a mismatched pin is refused before
+# the installer runs.
+INSTALL_STUBS="$TMP/install-stubs"
+INSTALL_LOG="$TMP/install-log"
+mkdir -p "$INSTALL_STUBS" "$INSTALL_LOG" "$TMP/install-scratch"
+cat >"$INSTALL_STUBS/curl" <<EOF
+#!/bin/bash
+out=""
+while [ "\$#" -gt 0 ]; do
+  [ "\$1" = -o ] && { out="\$2"; shift; }
+  shift
+done
+cp "$INSTALL_STUBS/fake-opencode-installer" "\$out"
+EOF
+cat >"$INSTALL_STUBS/fake-opencode-installer" <<EOF
+#!/bin/bash
+printf '%s\n' "\$@" >"$INSTALL_LOG/installer.argv"
+printf '%s\n' "\$HOME" >"$INSTALL_LOG/installer.home"
+mkdir -p "\$HOME/.opencode/bin"
+printf '#!/bin/sh\necho opencode v$OPENCODE_V\n' >"\$HOME/.opencode/bin/opencode"
+chmod +x "\$HOME/.opencode/bin/opencode"
+EOF
+chmod +x "$INSTALL_STUBS/curl" "$INSTALL_STUBS/fake-opencode-installer"
+STUB_PIN="$(bash -c 'source "$1"; sha256_of "$2"' _ "$SCRIPT" "$INSTALL_STUBS/fake-opencode-installer")"
+
+INSTALL_OUT="$(PATH="$INSTALL_STUBS:$PATH" TMPDIR="$TMP/install-scratch" \
+  ADAPTER_CANARY_OPENCODE_INSTALLER_SHA256="$STUB_PIN" \
+  bash "$SCRIPT" install opencode "$OPENCODE_V" 2>"$TMP/install.err")"
+check "install opencode: a matching pin installs (exit 0)" [ $? -eq 0 ]
+INSTALLED_BIN="$(printf '%s\n' "$INSTALL_OUT" | sed -n 's/^bin=//p')"
+check "install opencode: the binary is <prefix>/.opencode/bin/opencode" \
+  str_contains "$INSTALLED_BIN" "/.opencode/bin/opencode"
+check "install opencode: the installer ran with HOME at the prefix" \
+  [ "$(cat "$INSTALL_LOG/installer.home" 2>/dev/null)/.opencode/bin/opencode" = "$INSTALLED_BIN" ]
+check "install opencode: the installer got --no-modify-path --version $OPENCODE_V" \
+  [ "$(tr '\n' ' ' <"$INSTALL_LOG/installer.argv" 2>/dev/null)" = "--no-modify-path --version $OPENCODE_V " ]
+check "install opencode: the installed version is reported" \
+  str_contains "$INSTALL_OUT" "version=$OPENCODE_V"
+
+find "$INSTALL_LOG" -name 'installer.*' -delete
+PATH="$INSTALL_STUBS:$PATH" TMPDIR="$TMP/install-scratch" \
+  ADAPTER_CANARY_OPENCODE_INSTALLER_SHA256="$OVERRIDE_PIN" \
+  bash "$SCRIPT" install opencode "$OPENCODE_V" >/dev/null 2>"$TMP/install.err"
+check "install opencode: a mismatched pin exits non-zero" [ $? -ne 0 ]
+check "install opencode: the refusal names both hashes" \
+  sh -c "grep -qF '$STUB_PIN' '$TMP/install.err' && grep -qF '$OVERRIDE_PIN' '$TMP/install.err'"
+check "install opencode: the installer never ran on a mismatch" [ ! -e "$INSTALL_LOG/installer.argv" ]
 
 echo ""
 echo "=== 7. process hygiene: this suite leaves nothing running under its own \$TMP ==="
