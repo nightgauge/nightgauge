@@ -140,6 +140,26 @@ export function curateChildEnv(
   return curated;
 }
 
+/**
+ * The environment of a spawned agent: the query's own `overlay` variables plus
+ * the curated allowlist of `parentEnv`. A curated variable keeps its value over
+ * the overlay's (#3329), so a query can add variables but cannot replace
+ * PATH, HOME or a provider credential. Pure: mutates neither input.
+ *
+ * @param overlay - The query's own variables (for example a workflow agent's env).
+ * @param parentEnv - Source environment (defaults to `process.env`).
+ */
+export function childEnvWithOverlay(
+  overlay: Readonly<Record<string, string>> | undefined,
+  parentEnv: NodeJS.ProcessEnv = process.env
+): Record<string, string> {
+  const env: Record<string, string> = { ...overlay };
+  for (const [name, value] of Object.entries(curateChildEnv(parentEnv))) {
+    if (value !== undefined) env[name] = value;
+  }
+  return env;
+}
+
 // ---------------------------------------------------------------------------
 // OpenCode (#1637, ADR-022 § 8, § 17)
 // ---------------------------------------------------------------------------
