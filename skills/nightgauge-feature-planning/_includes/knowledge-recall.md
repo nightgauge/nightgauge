@@ -126,7 +126,7 @@ else
   RECALL_THRESHOLD=$(jq -r '.knowledge.recall.planning_threshold // 0' .nightgauge/config.yaml 2>/dev/null || echo 0)
 
   # Step 3.7.4: Invoke recall
-  RECALL_RESULT=$("$BINARY" knowledge recall "$RECALL_QUERY" \
+  RECALL_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" knowledge recall "$RECALL_QUERY" \
     --json \
     --limit "$RECALL_LIMIT" \
     --scopes "local,cross-repo,workspace" \
@@ -148,7 +148,7 @@ else
     echo "Phase 3.7: Recall found $RECALL_HIT_COUNT prior decisions above threshold"
 
     # Step 3.7.6: Emit telemetry (fire-and-forget)
-    "$BINARY" knowledge telemetry record \
+    "${NIGHTGAUGE_BIN:-nightgauge}" knowledge telemetry record \
       --type recall \
       --recall-id "$RECALL_QUERY_ID" \
       --result-count "$RECALL_HIT_COUNT" \
@@ -158,7 +158,7 @@ else
     printf '%s\n' "$RECALL_HITS" | jq -c '.[]' | while IFS= read -r hit; do
       HIT_RANK=$(printf '%s\n' "$hit" | jq -r '.rank')
       HIT_PATH=$(printf '%s\n' "$hit" | jq -r '.path')
-      "$BINARY" knowledge telemetry record \
+      "${NIGHTGAUGE_BIN:-nightgauge}" knowledge telemetry record \
         --type recall_hit \
         --path "$HIT_PATH" \
         --recall-id "$RECALL_QUERY_ID" \

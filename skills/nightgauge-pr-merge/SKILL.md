@@ -255,7 +255,7 @@ printf '<!-- phase:start name="categorize-issues" index=5 total=13 stage="pr-mer
 #### Step 4.2: Determine Merge Readiness
 
 ```bash
-REVIEW_DECISION=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.reviewStatus // "REVIEW_REQUIRED"')
+REVIEW_DECISION=$("${NIGHTGAUGE_BIN:-nightgauge}" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.reviewStatus // "REVIEW_REQUIRED"')
 ```
 
 Ready if `APPROVED` and no critical issues. Not ready if `REVIEW_REQUIRED` or

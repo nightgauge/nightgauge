@@ -355,7 +355,7 @@ for ISSUE_NUM in $ISSUE_NUMBERS; do
   ISSUE_TITLE=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.title')
 
   # Binary auto-detects type:epic and expands sub-issues; plain issues are queued directly
-  "$BINARY" queue add "$ISSUE_NUM"
+  "${NIGHTGAUGE_BIN:-nightgauge}" queue add "$ISSUE_NUM"
   echo "ADDED: #$ISSUE_NUM - $ISSUE_TITLE"
 done
 ```
@@ -365,25 +365,8 @@ done
 When `OPERATION="list"`:
 
 ```bash
-QUEUE_STATE=$("$BINARY" queue list --json 2>/dev/null)
-
-ITEM_COUNT=$(printf '%s\n' "$QUEUE_STATE" | jq '.items | length' 2>/dev/null || echo "0")
-QUEUE_STATUS=$(printf '%s\n' "$QUEUE_STATE" | jq -r '.status // "idle"' 2>/dev/null)
-
-echo ""
-echo "QUEUE STATUS"
-echo "============"
-echo ""
-echo "Status: $QUEUE_STATUS"
-echo "Items: $ITEM_COUNT"
-echo ""
-
-if [ "$ITEM_COUNT" -gt 0 ]; then
-  echo "Position  Issue  Title"
-  echo "───────────────────────────────────────────────────"
-  printf '%s\n' "$QUEUE_STATE" | jq -r '.items[] |
-    "   \(.position)      #\(.issueNumber)    \(.title)"'
-fi
+# `queue list` prints the queue as text: "Queue is empty." or one row per issue.
+"${NIGHTGAUGE_BIN:-nightgauge}" queue list
 ```
 
 #### Step 2.4: Remove Issue
@@ -391,7 +374,7 @@ fi
 When `OPERATION="remove"`:
 
 ```bash
-"$BINARY" queue remove "$REMOVE_NUMBER"
+"${NIGHTGAUGE_BIN:-nightgauge}" queue remove "$REMOVE_NUMBER"
 
 echo "Removed #$REMOVE_NUMBER from queue"
 ```
@@ -401,7 +384,7 @@ echo "Removed #$REMOVE_NUMBER from queue"
 When `OPERATION="clear"`:
 
 ```bash
-"$BINARY" queue clear
+"${NIGHTGAUGE_BIN:-nightgauge}" queue clear
 
 echo "Queue cleared"
 ```
@@ -435,7 +418,7 @@ echo "Found $MATCH_COUNT issues with label '$LABEL'"
 printf '%s\n' "$MATCHING_ISSUES" | jq -r '.[] |
   select(.labels | map(.name) | index("type:epic") | not) |
   "\(.number) \(.title)"' | while read -r NUM TITLE; do
-  "$BINARY" queue add "$NUM" "$TITLE" ""
+  "${NIGHTGAUGE_BIN:-nightgauge}" queue add "$NUM" "$TITLE" ""
   echo "ADDED: #$NUM - $TITLE"
 done
 ```
@@ -450,20 +433,9 @@ After any mutating operation (add, remove, clear), display the updated queue
 state:
 
 ```bash
-# Fetch updated queue state
 if [ "$OPERATION" != "list" ]; then
-  UPDATED_STATE=$("$BINARY" queue list --json 2>/dev/null)
-
-  FINAL_COUNT=$(printf '%s\n' "$UPDATED_STATE" | jq '.items | length' 2>/dev/null || echo "0")
-  AUTO_START=$(printf '%s\n' "$UPDATED_STATE" | jq -r '.autoStart // true' 2>/dev/null)
-
   echo ""
-  echo "Queue: $FINAL_COUNT items | Auto-start: $AUTO_START"
-
-  if [ "$FINAL_COUNT" -gt 0 ] && [ "$AUTO_START" = "true" ]; then
-    NEXT_ISSUE=$(printf '%s\n' "$UPDATED_STATE" | jq -r '.items[0].issueNumber' 2>/dev/null)
-    echo "Next: #$NEXT_ISSUE will start when pipeline is idle"
-  fi
+  "${NIGHTGAUGE_BIN:-nightgauge}" queue list
 fi
 ```
 

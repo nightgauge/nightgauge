@@ -642,10 +642,10 @@ printf '%s\n' "$SUB_ISSUES_JSON" | jq -r '.subIssues[] |
 
 ### Phase 2: Assess with Go Binary (Deterministic)
 
-`$BINARY` is the binary Step 1.3 resolved.
+This block runs in a fresh shell, so it calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"` (#3334).
 
 ```bash
-ASSESS_JSON=$("$BINARY" epic assess "$EPIC_NUMBER" \
+ASSESS_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" epic assess "$EPIC_NUMBER" \
   --owner "$OWNER" --repo "$REPO" --json 2>/dev/null)
 
 if [ $? -ne 0 ] || [ -z "$ASSESS_JSON" ]; then

@@ -22,7 +22,7 @@ func TestSkillPortability_FlagsBareBinaryInvocation(t *testing.T) {
 		"X=$(nightgauge config show --key repo --raw)\n"+ // 7: flagged
 		"true && nightgauge project sync-status 1 done\n"+ // 8: flagged
 		"\"${NIGHTGAUGE_BIN:-nightgauge}\" layout path pipeline\n"+ // 9
-		"\"$BINARY\" forge auth token\n"+ // 10
+		"BINARY=x \"$BINARY\" forge auth token\n"+ // 10
 		"# nightgauge layout path pipeline\n"+ // 11
 		"echo \"run \\`nightgauge doctor\\`\"\n"+ // 12
 		"```\n"+
@@ -136,5 +136,50 @@ func TestSkillPortability_BareBinaryInTildeShFence(t *testing.T) {
 	}
 	if len(res.Findings) != 2 {
 		t.Fatalf("expected 2 findings, got %+v", res.Findings)
+	}
+}
+
+// TestSkillPortability_FlagsUnsetBinaryRead pins the #3334 check: a block that
+// reads $BINARY without assigning it is a finding; a block that assigns it is
+// not, and NIGHTGAUGE_BINARY=, $BINARY_DIR and comments do not count.
+func TestSkillPortability_FlagsUnsetBinaryRead(t *testing.T) {
+	root := t.TempDir()
+	writeSkillFile(t, root, "nightgauge-queue/SKILL.md", "---\nname: queue\n---\n"+
+		"```bash\n"+ // 4
+		"BINARY=/usr/local/bin/nightgauge\n"+ // 5
+		"\"$BINARY\" queue list\n"+ // 6: assigned in block
+		"```\n"+ // 7
+		"```bash\n"+ // 8
+		"\"$BINARY\" queue add 1\n"+ // 9: flagged
+		"```\n"+ // 10
+		"```bash\n"+ // 11
+		"[ -n \"${BINARY:-}\" ] || exit 1\n"+ // 12: flagged
+		"NIGHTGAUGE_BINARY=1 echo \"$BINARY_DIR\"\n"+ // 13: neither
+		"# BINARY=x\n"+ // 14: comment, not an assignment
+		"```\n"+ // 15
+		"```bash\n"+ // 16
+		"[ -x /a ] && BINARY=\"$cand\"\n"+ // 17
+		"\"$BINARY\" queue clear\n"+ // 18: assigned after &&
+		"```\n")
+	writeSkillFile(t, root, "nightgauge-queue/CHANGELOG.md",
+		"```bash\n\"$BINARY\" queue add 1\n```\n")
+
+	res, err := RunSkillPortabilityCheck(context.Background(), SkillPortabilityOptions{Root: root})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var lines []int
+	for _, f := range res.Findings {
+		if f.Check != CheckUnsetBinaryRead {
+			t.Errorf("unexpected check %q: %+v", f.Check, f)
+			continue
+		}
+		if strings.HasSuffix(f.SkillFile, "CHANGELOG.md") {
+			t.Errorf("history file flagged: %+v", f)
+		}
+		lines = append(lines, f.Line)
+	}
+	if got, want := lines, []int{9, 12}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("finding lines = %v, want %v", got, want)
 	}
 }

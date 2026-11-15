@@ -196,10 +196,10 @@ if [ "$VERIFY_UI_ACTIVE" = "true" ]; then
   [ "$VERIFY_UI_STATUS" = "passed" ] && VERIFY_UI_PASSED=true || VERIFY_UI_PASSED=false
 
   if [ "$VERIFY_UI_PASSED" = "true" ]; then
-    "$BINARY" gate record-metric --issue "$ISSUE_NUMBER" --gate verify-ui --result pass
+    "${NIGHTGAUGE_BIN:-nightgauge}" gate record-metric --issue "$ISSUE_NUMBER" --gate verify-ui --result pass
   else
     FIRST_FAIL=$(printf '%s\n' "$VERIFY_UI_REPORT_JSON" | jq -r '([.steps[]? | select(.status != "passed")] | .[0].name) // .error // "unknown"')
-    "$BINARY" gate record-metric --issue "$ISSUE_NUMBER" --gate verify-ui \
+    "${NIGHTGAUGE_BIN:-nightgauge}" gate record-metric --issue "$ISSUE_NUMBER" --gate verify-ui \
       --result catch --error-summary "verify-ui flow '$VERIFY_UI_FLOW' failed: $FIRST_FAIL"
     if [ "$VERIFY_UI_MODE" = "strict" ]; then
       VALIDATION_STATUS="failed"

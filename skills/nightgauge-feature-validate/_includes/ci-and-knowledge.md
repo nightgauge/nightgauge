@@ -441,12 +441,12 @@ When PRD.md and decisions.md are loaded:
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ -n "$KNOWLEDGE_PATH" ] && [ -f "$PRD_FILE" ]; then
-  "$BINARY" telemetry emit \
+  "${NIGHTGAUGE_BIN:-nightgauge}" telemetry emit \
     --type knowledge.read \
     --scope "issue:${ISSUE_NUMBER}" \
     --path "$PRD_FILE" \
     --stage "feature-validate" 2>/dev/null || true
-  "$BINARY" telemetry emit \
+  "${NIGHTGAUGE_BIN:-nightgauge}" telemetry emit \
     --type knowledge.read \
     --scope "issue:${ISSUE_NUMBER}" \
     --path "$DECISIONS_FILE" \
@@ -476,42 +476,11 @@ if [ -n "$KNOWLEDGE_PATH" ] && [ -f "$PRD_FILE" ]; then
 fi
 ```
 
-### Step 2.6.4: Compute Coverage Map via Go Binary
+### Step 2.6.4: Coverage Map
 
-```bash
-ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
-: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-if [ -n "$KNOWLEDGE_PATH" ] && [ -f "$PRD_FILE" ]; then
-  COVERAGE_MAP_PATH="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline coverage-map-${ISSUE_NUMBER}.json)"
-
-  # Get list of changed file paths for code evidence scanning
-  CHANGED_FILES=$(git diff HEAD~1 --name-only 2>/dev/null | head -50 || true)
-  CHANGED_FILES_JSON=$(printf '%s\n' "$CHANGED_FILES" | grep -v '^$' | jq -R . | jq -s . 2>/dev/null || echo "[]")
-
-  # Invoke the Go binary coverage check subcommand
-  COVERAGE_RESULT=$("$BINARY" knowledge coverage-check \
-    --issue "$ISSUE_NUMBER" \
-    --prd "$PRD_FILE" \
-    --decisions "$DECISIONS_FILE" \
-    --changed-files "$CHANGED_FILES_JSON" \
-    --test-names "$TEST_NAMES_JSON" \
-    --output "$COVERAGE_MAP_PATH" \
-    --json 2>/dev/null || echo '{"error":"coverage-check not available"}')
-
-  COVERAGE_ERROR=$(printf '%s\n' "$COVERAGE_RESULT" | jq -r '.error // empty' 2>/dev/null)
-  if [ -n "$COVERAGE_ERROR" ]; then
-    echo "WARNING: Coverage check unavailable ($COVERAGE_ERROR) — skipping"
-    COVERAGE_MAP_PATH=""
-  else
-    echo "Coverage map written: $COVERAGE_MAP_PATH"
-    COVERED=$(printf '%s\n' "$COVERAGE_RESULT" | jq -r '.covered_count // 0')
-    TOTAL=$(printf '%s\n' "$COVERAGE_RESULT" | jq -r '.total_count // 0')
-    NO_EVIDENCE=$(printf '%s\n' "$COVERAGE_RESULT" | jq -r '.no_evidence_count // 0')
-    VIOLATIONS=$(printf '%s\n' "$COVERAGE_RESULT" | jq -r '.violation_count // 0')
-    echo "Coverage: ${COVERED}/${TOTAL} ACs covered, ${NO_EVIDENCE} no-evidence, ${VIOLATIONS} violation(s)"
-  fi
-fi
-```
+No binary verb computes the coverage map: `nightgauge knowledge` has no
+`coverage-check` subcommand. Leave `COVERAGE_MAP_PATH` empty, so Steps 2.6.5 and
+2.6.6 do nothing, and record no coverage figures.
 
 ### Step 2.6.5: Evaluate Strict Mode
 
@@ -541,7 +510,7 @@ If the coverage check called the Recall API for any AC:
 if [ -n "$COVERAGE_MAP_PATH" ] && [ -f "$COVERAGE_MAP_PATH" ]; then
   RECALL_HITS=$(jq '[.criteria[] | .evidence[] | select(startswith("recall:"))] | length' "$COVERAGE_MAP_PATH" 2>/dev/null || echo "0")
   if [ "$RECALL_HITS" -gt 0 ]; then
-    "$BINARY" telemetry emit \
+    "${NIGHTGAUGE_BIN:-nightgauge}" telemetry emit \
       --type knowledge.recall_hit \
       --stage "feature-validate" \
       --result-count "$RECALL_HITS" 2>/dev/null || true
@@ -680,7 +649,7 @@ the progress monitor from reading the fix-and-re-review loop as churn (#3168).
 printf '<!-- phase:start name="ci-parity-check" index=12 total=22 stage="feature-validate" -->\n'
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-"$BINARY" review prepare --issue "$ISSUE_NUMBER" --json
+"${NIGHTGAUGE_BIN:-nightgauge}" review prepare --issue "$ISSUE_NUMBER" --json
 ```
 
 Act on the JSON:
@@ -701,7 +670,7 @@ Act on the JSON:
   ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
   : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
   TREE="<tree>" FINDINGS_PATH="<findings_path>" STARTED_AT="<started_at>"
-  "$BINARY" review record --issue "$ISSUE_NUMBER" --tree "$TREE" \
+  "${NIGHTGAUGE_BIN:-nightgauge}" review record --issue "$ISSUE_NUMBER" --tree "$TREE" \
     --findings "$FINDINGS_PATH" --started-at "$STARTED_AT"
   ```
 
@@ -714,7 +683,7 @@ Act on the JSON:
   printf '<!-- phase:start name="ci-parity-check" index=12 total=22 stage="feature-validate" -->\n'
   ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
   : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-  "$BINARY" review run --issue "$ISSUE_NUMBER"
+  "${NIGHTGAUGE_BIN:-nightgauge}" review run --issue "$ISSUE_NUMBER"
   ```
 
 Never edit the findings file. The verdict is the binary's, and it writes the one

@@ -875,7 +875,7 @@ if [ "$AUTO_FIX" = true ]; then
     if [ "$STAGED" = true ]; then
       BRANCH_NAME="chore/dep-modernize-group-${GROUP_NUM}"
       export GITHUB_TOKEN=$("${NIGHTGAUGE_BIN:-nightgauge}" forge auth token 2>/dev/null || echo "")
-      BRANCH_RESULT=$("$BINARY" git branch-create "$BRANCH_NAME" --json 2>/dev/null || \
+      BRANCH_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" git branch-create "$BRANCH_NAME" --json 2>/dev/null || \
         echo '{"success":false,"error":"binary not found"}')
       if [ "$(printf '%s\n' "$BRANCH_RESULT" | jq -r '.success')" != "true" ]; then
         echo "ERROR: Branch creation failed: $(printf '%s\n' "$BRANCH_RESULT" | jq -r '.error')" >&2
@@ -912,7 +912,7 @@ if [ "$AUTO_FIX" = true ]; then
         # Commit and create PR via deterministic binary
         git add -A
         git commit -m "chore(deps): update group ${GROUP_NUM} dependencies"
-        PR_RESULT=$("$BINARY" pr create \
+        PR_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" pr create \
           --title "chore(deps): dependency modernization group ${GROUP_NUM}" \
           --body "Automated dependency update group ${GROUP_NUM} from /nightgauge:dep-modernize" \
           --head "$BRANCH_NAME" \

@@ -85,6 +85,13 @@ const (
 	// host's NIGHTGAUGE_BIN is not on PATH the bare call is `command not
 	// found`. Blocks call "${NIGHTGAUGE_BIN:-nightgauge}" instead (#2933).
 	CheckBareBinaryInvocation = "bare_binary_invocation"
+
+	// CheckUnsetBinaryRead flags a read of $BINARY inside a bash fence that
+	// never assigns BINARY. Each block runs in a fresh shell, so PREFLIGHT's
+	// cascade value is gone: a call runs "" and a `[ -n "$BINARY" ]` guard
+	// silently skips its step. Blocks call "${NIGHTGAUGE_BIN:-nightgauge}"
+	// instead (#3334).
+	CheckUnsetBinaryRead = "unset_binary_read"
 )
 
 // SkillPortabilityOptions controls a single linter run.
@@ -134,6 +141,13 @@ var (
 // start, after `$(`, a pipe, `&&`, `||`, `;`, `!`, `(`, or a shell keyword. A
 // backtick-quoted `nightgauge` in an echo string is prose and does not match.
 var bareBinaryInvocationRE = regexp.MustCompile(`(^|[;&|(!]|\$\(|\b(?:if|then|do|else|elif|while|until)\s)\s*nightgauge\s+[a-z]`)
+
+// binaryReadRE matches a read of the BINARY variable; binaryAssignRE matches an
+// assignment to it (not NIGHTGAUGE_BINARY= or $BINARY_DIR) (#3334).
+var (
+	binaryReadRE   = regexp.MustCompile(`\$\{?BINARY\b`)
+	binaryAssignRE = regexp.MustCompile(`(^|[^A-Za-z0-9_$])BINARY=`)
+)
 
 // hooksDirRefRE captures the file a `$HOOKS_DIR/...` or `${HOOKS_DIR}/...`
 // reference names. A trailing `.` is sentence punctuation, trimmed by the caller.
@@ -265,6 +279,7 @@ func RunSkillPortabilityCheck(_ context.Context, opts SkillPortabilityOptions) (
 		for _, block := range fencedBashBlocks(lines) {
 			if !history {
 				result.Findings = append(result.Findings, bareBinaryFindings(rel, block)...)
+				result.Findings = append(result.Findings, unsetBinaryReadFindings(rel, block)...)
 			}
 			body := strings.Join(block.lines, "\n")
 			startOffset := firstMatchingLine(block.lines, cascadeStartRE)
@@ -299,6 +314,26 @@ func bareBinaryFindings(rel string, block fencedBashBlock) []SkillPortabilityFin
 		}
 		if bareBinaryInvocationRE.MatchString(line) {
 			out = append(out, finding(rel, block.openLine+offset+1, CheckBareBinaryInvocation, line))
+		}
+	}
+	return out
+}
+
+// unsetBinaryReadFindings reports each non-comment line of one bash block that
+// reads $BINARY when no line of the block assigns it (#3334).
+func unsetBinaryReadFindings(rel string, block fencedBashBlock) []SkillPortabilityFinding {
+	for _, line := range block.lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") && binaryAssignRE.MatchString(line) {
+			return nil
+		}
+	}
+	var out []SkillPortabilityFinding
+	for offset, line := range block.lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if binaryReadRE.MatchString(line) {
+			out = append(out, finding(rel, block.openLine+offset+1, CheckUnsetBinaryRead, line))
 		}
 	}
 	return out

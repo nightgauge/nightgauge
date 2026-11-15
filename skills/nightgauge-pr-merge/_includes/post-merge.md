@@ -22,7 +22,7 @@ checkout the correct branch for build verification.
 
 ```bash
 # Detect actual merge target
-MERGED_INTO=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.baseRef // empty')
+MERGED_INTO=$("${NIGHTGAUGE_BIN:-nightgauge}" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.baseRef // empty')
 MERGED_INTO="${MERGED_INTO:-${BASE_BRANCH:-main}}"
 
 # The origin ref is authoritative. Do not checkout a same-named local branch:

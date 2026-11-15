@@ -210,7 +210,7 @@ AC_SUBSTANTIATED=""
 AC_EVIDENCE_JSON="[]"
 AC_ITEMS_JSON="[]"
 if [ "${AC_STATUS:-}" = "failed" ]; then
-  AC_ITEMS_JSON=$("$BINARY" issue ac-mark "$ISSUE_NUMBER" --list --json 2>/dev/null | jq -c '.items // []' 2>/dev/null || echo "[]")
+  AC_ITEMS_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" issue ac-mark "$ISSUE_NUMBER" --list --json 2>/dev/null | jq -c '.items // []' 2>/dev/null || echo "[]")
   echo "Unchecked criteria to substantiate:"
   printf '%s\n' "$AC_ITEMS_JSON" | jq -r '.[] | select(.checked | not) | "  \(.index): \(.text)"'
   # The change under validation. Both trees: the skill leaves work uncommitted
@@ -245,7 +245,7 @@ if [ "${AC_STATUS:-}" = "failed" ] && [ -n "$AC_SUBSTANTIATED" ]; then
   AC_MARK_ARGS=""
   for i in $AC_SUBSTANTIATED; do AC_MARK_ARGS="$AC_MARK_ARGS --check $i"; done
   # shellcheck disable=SC2086
-  AC_MARK_OUT=$("$BINARY" issue ac-mark "$ISSUE_NUMBER" $AC_MARK_ARGS --json 2>&1)
+  AC_MARK_OUT=$("${NIGHTGAUGE_BIN:-nightgauge}" issue ac-mark "$ISSUE_NUMBER" $AC_MARK_ARGS --json 2>&1)
   AC_MARK_EXIT=$?
   if [ "$AC_MARK_EXIT" -ne 0 ]; then
     # A failed write must not be read as a pass. Leave AC_STATUS alone so the
@@ -255,7 +255,7 @@ if [ "${AC_STATUS:-}" = "failed" ] && [ -n "$AC_SUBSTANTIATED" ]; then
     echo "Marked substantiated criteria: $AC_SUBSTANTIATED"
     # Re-read the verdict from the verb rather than assuming the write cleared
     # it — criteria left unsubstantiated must still fail the gate.
-    AC_RESULT=$("$BINARY" issue ac-check "$ISSUE_NUMBER" --json 2>/dev/null)
+    AC_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" issue ac-check "$ISSUE_NUMBER" --json 2>/dev/null)
     if [ -n "$AC_RESULT" ]; then
       AC_STATUS=$(printf '%s\n' "$AC_RESULT" | jq -r '.status // empty' 2>/dev/null || echo "")
       CHECKED=$(printf '%s\n' "$AC_RESULT" | jq -r '.checked_count // 0')

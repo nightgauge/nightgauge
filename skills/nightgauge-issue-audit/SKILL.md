@@ -481,7 +481,7 @@ if [ "$MODE" = "epic" ] && [ -n "$EPIC_NUMBER" ]; then
   # some sub-issues could not be checked (.failures). Non-zero with no result:
   # the epic itself could not be read, and the audit cannot run.
   EPIC_VALIDATE_RC=0
-  EPIC_VALIDATE=$("$BINARY" epic validate "$EPIC_NUMBER" --json) || EPIC_VALIDATE_RC=$?
+  EPIC_VALIDATE=$("${NIGHTGAUGE_BIN:-nightgauge}" epic validate "$EPIC_NUMBER" --json) || EPIC_VALIDATE_RC=$?
   if ! printf '%s\n' "$EPIC_VALIDATE" | jq -e 'type == "object" and has("failedSubIssues")' >/dev/null 2>&1; then
     echo "ERROR: epic validate #$EPIC_NUMBER could not run (exit $EPIC_VALIDATE_RC)" >&2
     exit 2
@@ -534,7 +534,7 @@ When the audit set spans multiple repos (manifest entries with different
 `repo`, or cross-repo body annotations):
 
 ```bash
-"$BINARY" audit lifecycle --json 2>/dev/null > /tmp/lifecycle.json
+"${NIGHTGAUGE_BIN:-nightgauge}" audit lifecycle --json 2>/dev/null > /tmp/lifecycle.json
 ```
 
 Parse the lifecycle output for cross-repo references and emit:

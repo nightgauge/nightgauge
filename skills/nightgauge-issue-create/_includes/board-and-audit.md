@@ -24,19 +24,6 @@ in this phase MUST pass BOTH `--repo` and `--project` derived from the Phase
 Defaults exist on the binary, but defaults caused the #3232 silent-misroute
 incident — calling without explicit flags is forbidden by this skill.
 
-#### Pre-flight: Check Binary Availability
-
-The binary must already be verified in Phase 1. If it is unavailable, the skill
-has already exited with a clear error. There is no fallback.
-
-```bash
-if [ -z "${BINARY:-}" ]; then
-  echo "ERROR: nightgauge binary required for project board sync."
-  echo "Cannot proceed without it — there is no fallback."
-  exit 1
-fi
-```
-
 #### Standalone issues
 
 ```bash

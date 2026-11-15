@@ -84,8 +84,8 @@ print `signal=deferred`, and exit **0** so the orchestrator records a deferral
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-# $BINARY was resolved in the "Fetch Dependencies" block above.
-GATE_OUTPUT=$("$BINARY" deps-gate check --issue "$ISSUE_NUMBER" --json 2>&1)
+# Each block runs in a fresh shell; call the binary via NIGHTGAUGE_BIN (#3334).
+GATE_OUTPUT=$("${NIGHTGAUGE_BIN:-nightgauge}" deps-gate check --issue "$ISSUE_NUMBER" --json 2>&1)
 GATE_EXIT=$?
 
 if [ $GATE_EXIT -eq 1 ]; then
@@ -111,12 +111,6 @@ operator action required."
     | jq -r '.nodeId // empty')
   "${NIGHTGAUGE_BIN:-nightgauge}" forge issue comment --subject-id "$ISSUE_NODE_ID" --body "$COMMENT_BODY" 2>/dev/null || \
     echo "warning: failed to post deferral comment to #$ISSUE_NUMBER"
-
-  "$BINARY" outcome record \
-    --issue "$ISSUE_NUMBER" \
-    --stage "issue-pickup" \
-    --outcome "deferred" \
-    --reason "[blocked-dependency] $REASON" 2>/dev/null || true
 
   echo "Dependency gate: DEFERRED"
   echo "signal=deferred"

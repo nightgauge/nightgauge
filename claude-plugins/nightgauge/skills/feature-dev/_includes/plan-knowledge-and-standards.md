@@ -233,7 +233,7 @@ else
     DEV_LIMIT=$(jq -r '.knowledge.recall.dev_limit // 5' .nightgauge/config.yaml 2>/dev/null || echo 5)
     DEV_THRESHOLD=$(jq -r '.knowledge.recall.dev_threshold // 1.5' .nightgauge/config.yaml 2>/dev/null || echo 1.5)
 
-    RECALL_RESULT=$("$BINARY" knowledge recall "$RECALL_QUERY" \
+    RECALL_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" knowledge recall "$RECALL_QUERY" \
       --json \
       --limit "$DEV_LIMIT" \
       --scopes "local,cross-repo,workspace" \
@@ -257,7 +257,7 @@ else
       echo "Phase 1.6: Recall found $ARCH_CONSTRAINT_COUNT architectural constraints above threshold ($DEV_THRESHOLD)"
 
       # Emit knowledge.recall telemetry event
-      "$BINARY" telemetry emit \
+      "${NIGHTGAUGE_BIN:-nightgauge}" telemetry emit \
         --type knowledge.recall \
         --recall-id "$RECALL_QUERY_ID" \
         --result-count "$ARCH_CONSTRAINT_COUNT" \
@@ -266,7 +266,7 @@ else
       # Emit knowledge.recall_hit per constraint
       printf '%s\n' "$ARCH_CONSTRAINTS" | jq -c '.[]' | while IFS= read -r hit; do
         HIT_PATH=$(printf '%s\n' "$hit" | jq -r '.path // ""')
-        "$BINARY" telemetry emit \
+        "${NIGHTGAUGE_BIN:-nightgauge}" telemetry emit \
           --type knowledge.recall_hit \
           --path "$HIT_PATH" \
           --recall-id "$RECALL_QUERY_ID" \
@@ -276,7 +276,7 @@ else
       # Truncate if total snippet content exceeds ~2000 chars to stay within budget
       TOTAL_SNIPPET_LEN=$(printf '%s\n' "$ARCH_CONSTRAINTS" | jq '[.[].snippet | length] | add // 0')
       if [ "$TOTAL_SNIPPET_LEN" -gt 2000 ]; then
-        "$BINARY" telemetry emit \
+        "${NIGHTGAUGE_BIN:-nightgauge}" telemetry emit \
           --type knowledge.recall_truncated \
           --stage "feature-dev" 2>/dev/null || true
         # Keep highest-ranked hits that fit; drop lowest
@@ -411,7 +411,7 @@ it. Run this **after** the implementation phase, not here:
 if [ -n "$KB_DECISIONS_FILE" ] && [ -f "$KB_DECISIONS_FILE" ]; then
   KB_DECISIONS_SUM_AFTER=$(shasum -a 256 "$KB_DECISIONS_FILE" 2>/dev/null | cut -d" " -f1)
   if [ "$KB_DECISIONS_SUM_AFTER" != "$KB_DECISIONS_SUM_BEFORE" ]; then
-    "$BINARY" knowledge stamp "$KB_DECISIONS_FILE" \
+    "${NIGHTGAUGE_BIN:-nightgauge}" knowledge stamp "$KB_DECISIONS_FILE" \
       --stage "${NIGHTGAUGE_STAGE:-feature-dev}" \
       >/dev/null 2>&1 \
       || echo "WARNING: could not stamp provenance on $KB_DECISIONS_FILE" >&2

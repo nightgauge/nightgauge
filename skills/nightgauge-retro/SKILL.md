@@ -291,7 +291,7 @@ ISSUE_FLAG=""
 SINCE_FLAG=""
 [ -n "${SINCE_DATE}" ] && SINCE_FLAG="--since ${SINCE_DATE}"
 
-"$BINARY" pipeline batch-failures \
+"${NIGHTGAUGE_BIN:-nightgauge}" pipeline batch-failures \
   ${SINCE_FLAG} ${ISSUE_FLAG} ${ALL_FAILURES_FLAG} \
   --json > /tmp/retro_pipeline_failures.json
 
@@ -324,7 +324,7 @@ as the single Go source of truth. Lines are bounded to 300 bytes and per-file
 matches capped at 50 — same as the old Python parser.
 
 ```bash
-"$BINARY" logs scan-failures \
+"${NIGHTGAUGE_BIN:-nightgauge}" logs scan-failures \
   ${SINCE_FLAG} ${ISSUE_FLAG} \
   --json > /tmp/retro_logs.json
 
@@ -394,7 +394,7 @@ Use the deterministic `nightgauge failure classify` binary verb to categorize ea
 **Invocation:**
 
 ```bash
-CLASSIFICATION=$("$BINARY" failure classify \
+CLASSIFICATION=$("${NIGHTGAUGE_BIN:-nightgauge}" failure classify \
   --stage <stage-name> \
   --stderr "<error-output-text>" 2>&1)
 ```
