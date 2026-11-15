@@ -999,7 +999,7 @@ func TestAdapterFindings_OpenCodeCauseIsNotMasked(t *testing.T) {
 		remedyHas string
 	}{
 		{"binary missing from PATH", func(f *openCodeFixture) { f.probe.lookPath = notOnPath },
-			codeAdapterNotInstalled, "not on PATH", true, "npm i --prefix"},
+			codeAdapterNotInstalled, "not on PATH", true, "opencode.ai/v2/install"},
 		{"relative pin refused", func(f *openCodeFixture) {
 			s := openCodeLMStudio()
 			s.Binary = "bin/opencode"

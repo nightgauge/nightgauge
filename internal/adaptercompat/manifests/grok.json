@@ -7,7 +7,10 @@
   "max_tested_reason": "The version every grok capture in the tree was taken on (internal/doctor/testdata/grok-catalog, internal/execution/testdata).",
   "feeds": [{ "kind": "installer", "ref": "https://x.ai/cli/install.sh" }],
   "companion_feeds": [],
-  "install": { "installer": "https://x.ai/cli/install.sh" },
+  "install": {
+    "installer": "https://x.ai/cli/install.sh",
+    "installer_sha256": "bdd23859b10bd0c1492ffc3443e8413b73a9b09966d48d4d3fa32121043956fc"
+  },
   "managed_install": "",
   "required_flags": [
     "--always-approve",

@@ -31,6 +31,7 @@ package opencodeplugin
 import (
 	"context"
 	"encoding/json"
+	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,7 +47,7 @@ func realOpenCodeForPluginTest(t *testing.T) string {
 	path, err := exec.LookPath("opencode")
 	if err != nil {
 		if os.Getenv("CI") == "true" {
-			t.Fatalf("opencode is not on PATH, and CI must run this case: install opencode-ai@%s", pluginIntegrationOpenCodeVersion)
+			t.Fatalf("opencode is not on PATH, and CI must run this case: scripts/opencode-integration.sh installs it")
 		}
 		t.Skip("opencode is not on PATH")
 	}
@@ -57,6 +58,11 @@ func realOpenCodeForPluginTest(t *testing.T) string {
 		t.Fatalf("opencode --version: %v", err)
 	}
 	if v := strings.TrimSpace(string(out)); v != pluginIntegrationOpenCodeVersion {
+		// Only the manifest's max_tested 2.x skips: any other version still
+		// fails the pin, so a stray binary on PATH cannot skip these cases.
+		if m, ok := adaptercompat.Get("opencode"); ok && v == "opencode v"+m.MaxTested {
+			t.Skipf("%s is installed; this case was observed on %s and the 2.x plugin is ported by #3302 and #3306", v, pluginIntegrationOpenCodeVersion)
+		}
 		t.Fatalf("opencode %s is installed; this case was observed on %s", v, pluginIntegrationOpenCodeVersion)
 	}
 	return path

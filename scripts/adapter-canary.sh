@@ -197,6 +197,22 @@ resolve_npm_version() {
   bounded "$HELP_TIMEOUT" npm view "$pkg" version 2>/dev/null || die "npm view $pkg version failed"
 }
 
+# expected_installer_sha256 <adapter>: the pinned sha256 of that adapter's
+# vendor installer, read from its compat manifest's install.installer_sha256,
+# the one pin Go, the SDK and scripts/capture-cli-help.sh also read. Update it
+# there, only after confirming a new installer by hand. An empty pin is
+# refused, never treated as "no check". ADAPTER_CANARY_<ADAPTER>_INSTALLER_SHA256 (upper case, '-' as '_')
+# overrides it for tests.
+expected_installer_sha256() {
+  local override_var
+  override_var="ADAPTER_CANARY_$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')_INSTALLER_SHA256"
+  if [ -n "${!override_var:-}" ]; then
+    echo "${!override_var}"
+    return
+  fi
+  manifest_field "$1" '.install.installer_sha256 // ""'
+}
+
 cmd_install() {
   local adapter="${1:?usage: install <adapter> <version|latest>}"
   local requested="${2:?usage: install <adapter> <version|latest>}"
@@ -222,8 +238,34 @@ cmd_install() {
     local script="$prefix/installer.sh"
     bounded "$INSTALL_TIMEOUT" curl -fsSL --proto '=https' -o "$script" "$installer" >&2 \
       || die "$adapter: downloading $installer failed"
-    local bindir="$prefix/bin"
-    bounded "$INSTALL_TIMEOUT" env "GROK_BIN_DIR=$bindir" /bin/bash "$script" "$requested" >&2 \
+    local got_sha want_sha
+    got_sha="$(sha256_of "$script")"
+    want_sha="$(expected_installer_sha256 "$adapter")"
+    [ -n "$want_sha" ] \
+      || die "$adapter: internal/adaptercompat/manifests/$adapter.json pins no install.installer_sha256; refusing to run an unverified installer"
+    if [ "$got_sha" != "$want_sha" ]; then
+      die "$adapter: installer $installer sha256 is $got_sha, not the pinned $want_sha; refusing to run it." \
+        "Confirm the new installer by hand, then update install.installer_sha256 in" \
+        "internal/adaptercompat/manifests/$adapter.json"
+    fi
+    # Each vendor installer takes the version and its destination its own
+    # way. The OpenCode 2.x installer has no destination option: it writes
+    # $HOME/.opencode/bin, so HOME points inside the prefix, and
+    # --no-modify-path keeps it out of shell rc files.
+    local bindir
+    local -a install_cmd
+    case "$adapter" in
+      opencode)
+        bindir="$prefix/.opencode/bin"
+        install_cmd=(env "HOME=$prefix" /bin/bash "$script" --no-modify-path)
+        [ -n "$requested" ] && install_cmd+=(--version "$requested")
+        ;;
+      *)
+        bindir="$prefix/bin"
+        install_cmd=(env "GROK_BIN_DIR=$bindir" /bin/bash "$script" "$requested")
+        ;;
+    esac
+    bounded "$INSTALL_TIMEOUT" "${install_cmd[@]}" >&2 \
       || die "$adapter: the installer failed for '${requested:-latest}'"
     bin="$bindir/$binary"
     version="$(bounded "$HELP_TIMEOUT" "$bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sed -n 1p)"

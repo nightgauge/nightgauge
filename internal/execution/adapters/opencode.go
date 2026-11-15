@@ -403,9 +403,12 @@ func openCodeVariantsForModel(settings config.OpenCodeConfig, model string) []st
 // Every flag here is load-bearing, and so is every flag that is absent. The
 // argv is exactly
 //
-//	opencode run --format json --print-logs --log-level ERROR -m <provider/model> --dir <worktree>
+//	opencode run --format json --print-logs --log-level error -m <provider/model>
 //
-// and the prompt goes on stdin (UsesStdin). The adapter never emits --auto,
+// and the prompt goes on stdin (UsesStdin). The worktree is the process's
+// working directory, which the manager sets as cmd.Dir for every adapter:
+// OpenCode 2.x has no `run --dir`, and a positional path would become prompt
+// text (spike #3197), so the worktree is never on argv. The adapter never emits --auto,
 // --yolo, --dangerously-skip-permissions, --share or --mdns: approval comes
 // from a permission map that only allows or denies (ADR-022 § 9), sessions are
 // never shared, and nothing binds a discoverable listener. MaxTurns,
@@ -429,16 +432,13 @@ func (a *OpenCodeAdapter) BuildCommand(opts RunOptions) (string, []string, map[s
 			name = pin.(string)
 		}
 	}
-	args := []string{"run", "--format", "json", "--print-logs", "--log-level", "ERROR"}
+	args := []string{"run", "--format", "json", "--print-logs", "--log-level", "error"}
 	// The manager's ValidateModel call has already rejected a model this
 	// cannot express, so -m is always present on a real dispatch. Omitting it
 	// here, rather than guessing, keeps BuildCommand total for callers that
 	// skip validation.
 	if model, err := OpenCodeModelArg(opts.Model); err == nil {
 		args = append(args, "-m", model)
-	}
-	if opts.WorktreeDir != "" {
-		args = append(args, "--dir", opts.WorktreeDir)
 	}
 	// Effort → --variant (#1643 AC 4): only for a model that DECLARES the
 	// dispatched effort rung as one of its variants — never guessed, never

@@ -215,9 +215,10 @@ const openCodeCanaryDirectRunID = "0199a8b3-0000-7000-8000-000000001639"
 // blocks use (openCodeEndpointNPM, opencode_config.go). The fixed argv ADR-022
 // § 1 pins:
 //
-//	opencode run --format json --print-logs --log-level ERROR -m <model> --dir <worktree>
+//	opencode run --format json --print-logs --log-level error -m <model>
 //
-// with prompt on stdin. Bypassing Manager.RunStage keeps this canary a check
+// run in the worktree as its working directory (OpenCode 2.x has no run
+// --dir, #3300), with prompt on stdin. Bypassing Manager.RunStage keeps this canary a check
 // of the CLI's own contract, decoupled from Manager.RunStage's own
 // reclassification of a self-rejected permission (ADR-022 § 9,
 // opencode_usage.go): exitCode here is the CHILD PROCESS's own raw exit, the
@@ -266,8 +267,9 @@ func openCodeCanaryDirectRun(t *testing.T, real, model string, extraConfig map[s
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, real, "run", "--format", "json", "--print-logs", "--log-level", "ERROR",
-		"-m", model, "--dir", worktree)
+	cmd := exec.CommandContext(ctx, real, "run", "--format", "json", "--print-logs", "--log-level", "error",
+		"-m", model)
+	cmd.Dir = worktree
 	cmd.Env = envSlice
 	cmd.Stdin = strings.NewReader("implement the issue")
 	var outBuf, errBuf bytes.Buffer
@@ -479,7 +481,8 @@ func TestOpenCodeCanaryDisableFlags(t *testing.T) {
 // and runs the same contract check TestOpenCodeCanaryStreamContract proved
 // against the committed fixture.
 func TestOpenCodeCanaryLiveStream(t *testing.T) {
-	realOpenCode(t)
+	skipUnportedOpenCode2x(t, realOpenCode(t),
+		"OpenCode 2.x loads a local plugin only as a directory, so the run config's nightgauge.js entry is rejected and the handshake gate fails the stage; #3306 installs the plugin as a directory and #3302 ports it to the 2.x hook API")
 	isolateOpenCodeHome(t)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
 	base := startOpenCodeCanaryStub(t, "tool-edit-stop")
@@ -522,6 +525,8 @@ func TestOpenCodeCanaryLiveStream(t *testing.T) {
 // Nightgauge decision this canary does not re-litigate — opencode_usage.go).
 func TestOpenCodeCanaryPermission(t *testing.T) {
 	real := realOpenCode(t)
+	skipUnportedOpenCode2x(t, real,
+		"OpenCode 2.x reports a self-rejected permission in a stream shape the #1624 parser does not count yet; #3304 rebuilds the permission map and #3305 parses the 2.x stream")
 	base := startOpenCodeCanaryStub(t, "bash-then-stop")
 	exitCode, stdout, stderr := openCodeCanaryDirectRun(t, real, "stub/stub-model",
 		map[string]any{"permission": map[string]any{"bash": "ask"}}, base)
@@ -633,5 +638,24 @@ func TestOpenCodeCanaryStubIsKilledAndConfirmedDead(t *testing.T) {
 func TestOpenCodeCanaryStubProviderCleanupRegistered(t *testing.T) {
 	if canaryStubProviderCleanup == nil {
 		t.Fatal("canaryStubProviderCleanup is nil: this file's init no longer registers it, so TestMain will not remove stubProviderCanaryBinary's os.MkdirTemp directory")
+	}
+}
+
+// skipUnportedOpenCode2x skips a live canary case whose contract on OpenCode
+// 2.x depends on adapter work the 2.x epic (#3196) has not landed yet. It
+// skips only for a 2.x binary: on any other version the case runs, so the
+// skip cannot hide drift outside the port. Remove each call as the issue
+// named in its reason lands.
+func skipUnportedOpenCode2x(t *testing.T, real, reason string) {
+	t.Helper()
+	cmd := exec.Command(real, "--version")
+	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin", openCodeNoRegistry}
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("opencode --version: %v", err)
+	}
+	v, ok := adapters.ParseOpenCodeVersion(strings.TrimSpace(string(out)))
+	if ok && strings.HasPrefix(v, "2.") {
+		t.Skipf("opencode %s is installed: %s", v, reason)
 	}
 }

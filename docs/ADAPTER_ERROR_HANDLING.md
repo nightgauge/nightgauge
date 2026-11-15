@@ -192,8 +192,12 @@ exactly as `GET /v1/models` lists it.
   dispatch runs and a paid model fails provider authentication after spawn
   (a 401 classifies as `adapter_auth_failed`, below).
 
-**Fix:** `npm install -g opencode-ai`, or pin `opencode.binary` to an
-absolute path; for `anthropic/*`, `export ANTHROPIC_API_KEY=<key>`
+**Fix:** run the install the refusal prints: it downloads OpenCode's 2.x
+installer, checks it against the manifest's pinned sha256 with
+`shasum -a 256 -c -`, and only then runs it for 2.2.7 (see
+[ADAPTER_GUIDE.md](ADAPTER_GUIDE.md) Prerequisites). Then pin
+`opencode.binary` to an absolute path (`~/.opencode/bin/opencode`); for
+`anthropic/*`, `export ANTHROPIC_API_KEY=<key>`
 **Docs:** https://opencode.ai/docs/cli/
 
 **Terminal failure kinds (#1631).** Once a dispatch is running, a stage's

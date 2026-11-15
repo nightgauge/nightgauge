@@ -251,8 +251,8 @@ const guardRunID = "0199a8b3-0000-7000-8000-000000001638"
 // (OpenCodeIsolationEnv), a throwaway HOME and a config declaring the
 // "guard" provider pointed at stub, with permission as its `permission` key
 // — the exact map openCodePermissionMap would build for the dispatch under
-// probe. dir is the project directory opencode resolves paths against
-// (--dir); it need not hold the files a scripted tool call reads, since
+// probe. dir is the project directory opencode resolves paths against, its
+// working directory as on a real dispatch (2.x has no run --dir); it need not hold the files a scripted tool call reads, since
 // those are outside it by construction here.
 func guardDirectRun(t *testing.T, permission *openCodePermissionJSON, stub *guardStubServer, dir string) (exitCode int, stdout, stderr string) {
 	t.Helper()
@@ -297,8 +297,9 @@ func guardDirectRun(t *testing.T, permission *openCodePermissionJSON, stub *guar
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "run", "--format", "json", "--print-logs", "--log-level", "ERROR",
-		"-m", guardStubModel, "--dir", dir)
+	cmd := exec.CommandContext(ctx, bin, "run", "--format", "json", "--print-logs", "--log-level", "error",
+		"-m", guardStubModel)
+	cmd.Dir = dir
 	cmd.Env = envSlice
 	cmd.Stdin = strings.NewReader("probe prompt")
 	var outBuf, errBuf strings.Builder

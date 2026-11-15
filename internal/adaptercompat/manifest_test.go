@@ -58,8 +58,8 @@ func TestGet_OpenCodeIsPinnedAndFailsClosed(t *testing.T) {
 	if !ok {
 		t.Fatal(`Get("opencode") found no manifest`)
 	}
-	if m.MinVersion != "1.18.30" || m.MaxTested != "1.18.30" {
-		t.Errorf("opencode min_version=%q max_tested=%q, want both 1.18.30", m.MinVersion, m.MaxTested)
+	if m.MinVersion != "2.2.7" || m.MaxTested != "2.2.7" {
+		t.Errorf("opencode min_version=%q max_tested=%q, want both 2.2.7", m.MinVersion, m.MaxTested)
 	}
 	if m.FloorPolicy != FloorFailClosed {
 		t.Errorf("opencode floor_policy=%q, want %q", m.FloorPolicy, FloorFailClosed)
@@ -78,7 +78,7 @@ func TestManifests_ExistingFloorsAndStartingValues(t *testing.T) {
 		"gemini":          {"0.29.0", "", FloorWarn},
 		"copilot":         {"", "", FloorWarn},
 		"grok":            {"1.0.0", "1.0.4", FloorWarn},
-		"opencode":        {"1.18.30", "1.18.30", FloorFailClosed},
+		"opencode":        {"2.2.7", "2.2.7", FloorFailClosed},
 	}
 	for adapter, w := range want {
 		m, ok := Get(adapter)
@@ -171,8 +171,20 @@ func TestLoadDir_RefusesWithAdapterAndField(t *testing.T) {
 		{"shell text as installer", func(m map[string]any) {
 			m["install"] = map[string]any{"installer": "https://example.com/i.sh | sh"}
 		}, "install.installer"},
+		{"installer without a pinned sha256", func(m map[string]any) {
+			m["install"] = map[string]any{"installer": "https://example.com/i.sh"}
+		}, "install.installer_sha256"},
+		{"installer sha256 not lowercase hex", func(m map[string]any) {
+			m["install"] = map[string]any{"installer": "https://example.com/i.sh", "installer_sha256": strings.Repeat("A", 64)}
+		}, "install.installer_sha256"},
+		{"installer sha256 too short", func(m map[string]any) {
+			m["install"] = map[string]any{"installer": "https://example.com/i.sh", "installer_sha256": strings.Repeat("a", 63)}
+		}, "install.installer_sha256"},
+		{"installer sha256 without an installer", func(m map[string]any) {
+			m["install"] = map[string]any{"npm": "@openai/codex", "installer_sha256": strings.Repeat("a", 64)}
+		}, "install.installer_sha256"},
 		{"both install kinds", func(m map[string]any) {
-			m["install"] = map[string]any{"npm": "@openai/codex", "installer": "https://example.com/i.sh"}
+			m["install"] = map[string]any{"npm": "@openai/codex", "installer": "https://example.com/i.sh", "installer_sha256": strings.Repeat("a", 64)}
 		}, "install"},
 		{"catalog with neither", func(m map[string]any) { m["catalog"] = map[string]any{} }, "catalog"},
 		{"adapter not the file name", func(m map[string]any) { m["adapter"] = "gemini" }, "adapter"},
@@ -359,14 +371,24 @@ func TestOpenCodeTagPatternAgainstCapturedTags(t *testing.T) {
 			t.Errorf("captured tag %q is not among the v-prefixed tags the pattern rejects", want)
 		}
 	}
-	newest := ""
+	// max_tested rises only with observed evidence, not with the vendor's
+	// release cadence, so a newer upstream release (2.3.0 when 2.2.7 was
+	// tested) is expected. What must hold is that max_tested is a real
+	// release the feed matches, and that the capture is no older than it.
+	newest, found := "", false
 	for _, r := range releases {
-		if re.MatchString(r) && (newest == "" || compareSemver(r[1:], newest[1:]) > 0) {
+		if !re.MatchString(r) {
+			continue
+		}
+		if r == "v"+m.MaxTested {
+			found = true
+		}
+		if newest == "" || compareSemver(r[1:], newest[1:]) > 0 {
 			newest = r
 		}
 	}
-	if newest != "v"+m.MaxTested {
-		t.Errorf("newest captured release is %q; max_tested %q was captured alongside it", newest, m.MaxTested)
+	if !found {
+		t.Errorf("max_tested %q is not among the captured releases (newest %q): re-capture testdata/opencode-feed", m.MaxTested, newest)
 	}
 }
 
@@ -435,5 +457,33 @@ func TestCacheFor_ShippedManifestsAndUnknownAdapter(t *testing.T) {
 	}
 	if got := CacheFor("no-such-adapter"); got.ImplicitPrefixCache {
 		t.Errorf("unknown adapter: CacheFor = %+v, want no cache (fail closed)", got)
+	}
+}
+
+// TestShippedInstallersCarryTheirPin (#3300): every manifest that names a
+// vendor installer pins its sha256, and the pin is the one the canary and
+// capture scripts check, because they read it from the manifest.
+func TestShippedInstallersCarryTheirPin(t *testing.T) {
+	want := map[string]string{
+		"grok":     "bdd23859b10bd0c1492ffc3443e8413b73a9b09966d48d4d3fa32121043956fc",
+		"opencode": "bbc4584fd6a888bcd14623b8a63afa0f1b4075a2e84a2c3518cd509b446b3135",
+	}
+	ms, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range ms {
+		if _, pinned := want[m.Adapter]; pinned && m.Install.Installer == "" {
+			t.Errorf("%s: names no install.installer; its managed install is the vendor installer", m.Adapter)
+		}
+		if m.Install.Installer == "" {
+			if m.Install.InstallerSHA256 != "" {
+				t.Errorf("%s: installer_sha256 without an installer", m.Adapter)
+			}
+			continue
+		}
+		if got := m.Install.InstallerSHA256; got != want[m.Adapter] {
+			t.Errorf("%s: installer_sha256 = %q, want %q", m.Adapter, got, want[m.Adapter])
+		}
 	}
 }

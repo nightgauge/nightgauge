@@ -1370,7 +1370,7 @@ func replayOpenCodeFold(t *testing.T, name, dispatched string, sessions []openCo
 	log := filepath.Join(dir, "calls.log")
 	bin := writeFakeOpenCode(t, fmt.Sprintf(`echo "$*" >> %[1]q
 case "$1" in
---version) echo 1.18.30 ;;
+--version) echo 2.2.7 ;;
 db) cat %[2]q ;;
 export) cat %[3]q/"$2".json ;;
 esac
@@ -1392,8 +1392,8 @@ esac
 	if result.UsagePartial || len(result.DriftMarkers) != 0 {
 		t.Errorf("%s: partial = %v, drift = %q; want a complete fold", name, result.UsagePartial, result.DriftMarkers)
 	}
-	if result.AdapterVersion != "1.18.30" {
-		t.Errorf("%s: adapter version = %q, want 1.18.30", name, result.AdapterVersion)
+	if result.AdapterVersion != "2.2.7" {
+		t.Errorf("%s: adapter version = %q, want 2.2.7", name, result.AdapterVersion)
 	}
 	return acc, result, string(calls)
 }

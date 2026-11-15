@@ -16,11 +16,12 @@
 # answers part of that hazard:
 #   - Every CLI is installed fresh, at the pinned version, into one `mktemp -d`
 #     prefix, never globally, and the prefix is removed on every exit (trap).
-#     npm packages use scripts/install-npm-cli.sh --prefix; the grok CLI uses its vendor
-#     installer, with HOME and GROK_BIN_DIR inside the prefix. A vendor
-#     installer's sha256 is checked against `expected_installer_sha256`
-#     before it runs, refusing an installer that does not match the recorded
-#     provenance rather than running it blind (#1721).
+#     npm packages use scripts/install-npm-cli.sh --prefix; the grok and
+#     opencode CLIs use their vendor installers, with HOME (and grok's
+#     GROK_BIN_DIR) inside the prefix. A vendor installer's sha256 is
+#     checked against its manifest's install.installer_sha256 before it runs,
+#     refusing an installer that does not match the recorded provenance, or
+#     has none, rather than running it blind (#1721).
 #   - Installs and CLIs run under `env -i` with a minimal environment. PATH
 #     holds only node, npm, curl and the system directories. HOME, TMPDIR and
 #     the XDG directories point inside the prefix, and the working directory is
@@ -29,8 +30,8 @@
 #   - The script runs each CLI with `--help` only, after the subcommand the
 #     adapter dispatches where it uses one, with stdin from /dev/null. Vendor
 #     install steps run the binary themselves: install-npm-cli.sh and
-#     opencode's npm postinstall run `--version`, and the grok installer runs `--version` and generates shell
-#     completions. Nothing else runs it.
+#     the opencode installer run `--version`, and the grok installer runs
+#     `--version` and generates shell completions. Nothing else runs it.
 #   - Every download, install and CLI call is bounded by a timeout. macOS has no
 #     timeout(1), so a perl wrapper runs the command in a process group of its
 #     own and kills the whole group when the time runs out. It also kills the
@@ -117,22 +118,27 @@ help_top_level() {
 # installer script must match before this script runs it, so a compromised
 # or silently changed installer refuses rather than being executed blind and
 # its (possibly tampered) help text recorded as if it were the real thing
-# (#1721). Pinned by hand after downloading and inspecting the installer;
-# update it, and the provenance row in testdata/cli-help/README.md, together,
-# only after confirming the new installer by hand. Echoes empty for an
-# adapter with no pin yet, which this script does not refuse: a first pin
-# still has to come from somewhere, and the sha256 this run computed is
-# already recorded in the summary line for that purpose.
+# (#1721). The pin is the compat manifest's install.installer_sha256, the one
+# value Go, the SDK and scripts/adapter-canary.sh also read (#3300); manifest
+# validation refuses an installer without one. Update it, and the provenance
+# row in testdata/cli-help/README.md, together, only after confirming the new
+# installer by hand.
 #
-# CAPTURE_CLI_HELP_GROK_INSTALLER_SHA256 overrides grok's pin so
-# scripts/test-capture-cli-help.sh can point it at its own stubbed
-# installer's real hash instead of the production one; unset in every real
-# run.
+# CAPTURE_CLI_HELP_<ADAPTER>_INSTALLER_SHA256 (upper case, '-' as '_')
+# overrides the pin so scripts/test-capture-cli-help.sh can point it at its
+# own stubbed installer's real hash instead of the production one; unset in
+# every real run.
 expected_installer_sha256() {
-  case "$1" in
-    grok) echo "${CAPTURE_CLI_HELP_GROK_INSTALLER_SHA256:-7fd6fdc75d9418b2e58356726fcbf1ae849416f773925da07d0ccc7a60d3e791}" ;;
-    *) echo "" ;;
-  esac
+  local override_var
+  override_var="CAPTURE_CLI_HELP_$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')_INSTALLER_SHA256"
+  if [ -n "${!override_var:-}" ]; then
+    echo "${!override_var}"
+    return
+  fi
+  python3 - "$MANIFESTS/$1.json" <<'PY'
+import json, sys
+print((json.load(open(sys.argv[1])).get("install") or {}).get("installer_sha256", ""))
+PY
 }
 
 # bounded <seconds> <command> [args...]: run the command in a process group of
@@ -406,8 +412,9 @@ refuse_foreign_ipv4() {
 capture_help() {
   local adapter="$1" binary="$2" bin="$3" version="$4" sub="$5" source_note="$6"
   local command_text raw rc stem name body
-  # stdout and stderr together: opencode 1.18.30 prints `run --help` on
-  # stderr, and a CLI's warning on either stream belongs in the reviewed diff.
+  # stdout and stderr together: opencode 1.x printed `run --help` on stderr
+  # (2.x prints it on stdout), and a CLI's warning on either stream belongs in
+  # the reviewed diff.
   command_text="$binary${sub:+ $sub} --help"
   stem="$adapter${sub:+-$sub}"
   raw="$PREFIX/$stem.out"
@@ -483,14 +490,31 @@ for adapter in "${ADAPTERS[@]}"; do
     }
     got_sha="$(sha256 "$script")"
     want_sha="$(expected_installer_sha256 "$adapter")"
-    if [ -n "$want_sha" ] && [ "$got_sha" != "$want_sha" ]; then
+    [ -n "$want_sha" ] \
+      || die "$adapter: internal/adaptercompat/manifests/$adapter.json pins no" \
+        "install.installer_sha256; refusing to run an unverified installer"
+    if [ "$got_sha" != "$want_sha" ]; then
       die "$adapter: installer $installer sha256 is $got_sha, not the pinned $want_sha in" \
-        "expected_installer_sha256; refusing to run an installer that does not match the" \
-        "recorded provenance. If this is a deliberate, verified update, confirm the new" \
-        "installer by hand, then update expected_installer_sha256 and testdata/cli-help/README.md together"
+        "internal/adaptercompat/manifests/$adapter.json install.installer_sha256; refusing" \
+        "to run an installer that does not match the recorded provenance. If this is a" \
+        "deliberate, verified update, confirm the new installer by hand, then update" \
+        "install.installer_sha256 and testdata/cli-help/README.md together"
     fi
-    bindir="$PREFIX/$adapter-bin"
-    if ! in_clean_env "$INSTALL_TIMEOUT" "GROK_BIN_DIR=$bindir" /bin/bash "$script" "$version" \
+    # Each vendor installer takes the version and its destination its own
+    # way. The OpenCode 2.x installer has no destination option: it always
+    # writes $HOME/.opencode/bin, which is inside the prefix here, and
+    # --no-modify-path keeps it out of the child HOME's shell rc files.
+    case "$adapter" in
+      opencode)
+        bindir="$CHILD_HOME/.opencode/bin"
+        install_cmd=(/bin/bash "$script" --version "$version" --no-modify-path)
+        ;;
+      *)
+        bindir="$PREFIX/$adapter-bin"
+        install_cmd=("GROK_BIN_DIR=$bindir" /bin/bash "$script" "$version")
+        ;;
+    esac
+    if ! in_clean_env "$INSTALL_TIMEOUT" "${install_cmd[@]}" \
       >"$LOGS/$adapter-install.log" 2>&1; then
       sed 's/^/    /' "$LOGS/$adapter-install.log" >&2
       die "$adapter: the installer failed for $version"

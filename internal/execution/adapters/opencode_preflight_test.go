@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -198,8 +199,9 @@ func TestOpenCodeDispatchBelowMinTestedIsIncompatible(t *testing.T) {
 			t.Errorf("the refusal does not name %q: %v", want, err)
 		}
 	}
-	if !strings.Contains(command, "npm i --prefix ~/.nightgauge/tools/opencode opencode-ai@"+m.MaxTested) {
-		t.Errorf("the managed install is %q, want the npm install of max-tested %s", command, m.MaxTested)
+	assertOpenCodeManagedInstallVerified(t, m, command)
+	if want := filepath.Join(home, ".opencode", "bin", "opencode"); !strings.Contains(err.Error(), want) {
+		t.Errorf("the refusal does not pin the installer's binary %s: %v", want, err)
 	}
 	if got := fake.invocations(t); len(got) != 1 || got[0] != "--version" {
 		t.Errorf("the binary ran %q; a refused dispatch runs only `--version`", got)
@@ -333,13 +335,34 @@ func TestOpenCodeRejectsARelativeOrUnrunnablePin(t *testing.T) {
 // (opencode_catalog_env.go, opencode_catalog_anthropic.go) to the version the
 // adapter is tested against: raising max_tested without re-reading them from
 // the new binary turns this red.
+//
+// openCodeCatalogPortPending is the one exception, and it is checked both
+// ways. OpenCode 2.x bundles no catalog to re-read: it binds each provider's
+// variables in code and fetches its models at run time (OPENCODE_MODELS_URL,
+// OPENCODE_MODELS_PATH), so the 1.18.30 snapshots stay labelled 1.18.30 until
+// the credential policy is ported to that source (discovered work
+// dw-f9d499709c0e, recorded by #3300). The entry fails the test once the
+// versions agree.
 func TestOpenCodeCatalogSnapshotIsTheMaxTestedVersion(t *testing.T) {
 	m := openCodeManifestForTest(t)
+	if pending := openCodeCatalogPortPending; pending != "" {
+		if openCodeCatalogVersion == m.MaxTested {
+			t.Fatalf("openCodeCatalogPortPending is %q, but the catalog snapshots are at max_tested %s: remove the entry", pending, m.MaxTested)
+		}
+		if openCodeCatalogVersion != "1.18.30" {
+			t.Fatalf("openCodeCatalogPortPending holds only the 1.18.30 snapshots, and openCodeCatalogVersion is %s", openCodeCatalogVersion)
+		}
+		return
+	}
 	if openCodeCatalogVersion != m.MaxTested {
 		t.Fatalf("the catalog snapshots were read from opencode %s, and the compat manifest's max_tested is %s: re-read openCodeCatalogEnv and openCodeAnthropicModels from %s (build tag opencode_integration), then set openCodeCatalogVersion",
 			openCodeCatalogVersion, m.MaxTested, m.MaxTested)
 	}
 }
+
+// openCodeCatalogPortPending names the pending port of the catalog snapshots
+// to OpenCode 2.x; "" once openCodeCatalogVersion equals max_tested again.
+const openCodeCatalogPortPending = "OpenCode 2.x runtime models catalog (dw-f9d499709c0e, #3300)"
 
 // TestOpenCodeProbeRunsInItsOwnDirectory: a probe spawn gets HOME, TMPDIR and
 // the four XDG directories inside its own directory, the switches every spawn
@@ -709,6 +732,40 @@ func TestParseOpenCodeVersion(t *testing.T) {
 	}
 }
 
+// TestOpenCodeVersionFromOutput: the whole `opencode --version` stdout is read
+// by one function, so the floor check and the usage fold pick the same line and
+// accept the same shapes.
+func TestOpenCodeVersionFromOutput(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"1.18.30\n", "1.18.30"},
+		{"v2.2.6", "2.2.6"},
+		{"opencode v2.2.7\n", "2.2.7"},
+		{"\n  opencode v2.2.7\nextra line\n", "2.2.7"},
+		{"Usage: opencode [command]\nopencode v2.2.7\n", ""},
+		{"", ""},
+	} {
+		got, ok := OpenCodeVersionFromOutput([]byte(tc.in))
+		if got != tc.want || ok != (tc.want != "") {
+			t.Errorf("OpenCodeVersionFromOutput(%q) = %q, %v; want %q", tc.in, got, ok, tc.want)
+		}
+	}
+}
+
+// TestOpenCodeOneXIsBelowTheTwoXFloor: OpenCode 1.x is no longer supported, so
+// a 1.x binary is refused as adapter_incompatible with the 2.x installer remedy.
+func TestOpenCodeOneXIsBelowTheTwoXFloor(t *testing.T) {
+	home := preflightEnv(t)
+	fake := installFakeOpenCode(t, fakeOpenCodeBehavior{version: "1.18.30"})
+	err := pinnedAdapter(lmStudioSettings(), fake.path).PreDispatch(context.Background(), RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b"})
+	var incompatible *OpenCodeIncompatibleError
+	if !errors.As(err, &incompatible) {
+		t.Fatalf("PreDispatch = %v, want an adapter_incompatible refusal for 1.18.30", err)
+	}
+	if !strings.Contains(err.Error(), "opencode.ai/v2/install") || !strings.Contains(err.Error(), filepath.Join(home, ".opencode", "bin", "opencode")) {
+		t.Errorf("the refusal does not carry the 2.x installer remedy: %v", err)
+	}
+}
+
 // TestOpenCodeDispatchesThePrefixedTwoXVersion: a binary that prints the 2.x
 // `opencode v<max_tested>` form passes the floor and records the bare version.
 func TestOpenCodeDispatchesThePrefixedTwoXVersion(t *testing.T) {
@@ -721,5 +778,48 @@ func TestOpenCodeDispatchesThePrefixedTwoXVersion(t *testing.T) {
 	}
 	if rec, ok, _ := ReadOpenCodeDispatchRecord(testStateHome(home)); !ok || rec.Version != m.MaxTested {
 		t.Errorf("dispatch record = %+v, %v; want version %s", rec, ok, m.MaxTested)
+	}
+}
+
+// assertOpenCodeManagedInstallVerified: the printed install downloads the
+// manifest's installer, verifies it against the manifest's pinned sha256, and
+// runs the verified file for max_tested. Nothing in it pipes into a shell, so
+// an installer that changed upstream stops at the check (#3300).
+func assertOpenCodeManagedInstallVerified(t *testing.T, m adaptercompat.Manifest, command string) {
+	t.Helper()
+	if m.Install.Installer != "https://opencode.ai/v2/install" {
+		t.Errorf("the manifest installer is %q, want the OpenCode 2.x installer", m.Install.Installer)
+	}
+	for _, want := range []string{
+		"curl -fsSL --proto '=https' -o \"$f\" " + m.Install.Installer,
+		"echo \"" + m.Install.InstallerSHA256 + "  $f\" | shasum -a 256 -c -",
+		"bash \"$f\" --no-modify-path --version " + m.MaxTested,
+	} {
+		if !strings.Contains(command, want) {
+			t.Errorf("the managed install %q does not contain %q", command, want)
+		}
+	}
+	if pipedShell := regexp.MustCompile(`\|\s*(ba)?sh\b`); pipedShell.MatchString(command) {
+		t.Errorf("the managed install %q pipes into a shell; it must download, verify, then run", command)
+	}
+	download := strings.Index(command, "curl ")
+	verify := strings.Index(command, "shasum -a 256 -c -")
+	run := strings.Index(command, `bash "$f"`)
+	if download < 0 || verify < download || run < verify {
+		t.Errorf("the managed install %q does not download, verify, then run, in that order", command)
+	}
+}
+
+// TestOpenCodeManagedInstallVerifiesThePinnedInstaller (#3300): the managed
+// install carries the manifest's pin and never pipes into a shell.
+func TestOpenCodeManagedInstallVerifiesThePinnedInstaller(t *testing.T) {
+	m := openCodeManifestForTest(t)
+	command, pin := OpenCodeManagedInstall(m, "/home/op")
+	assertOpenCodeManagedInstallVerified(t, m, command)
+	if pin != "/home/op/.opencode/bin/opencode" {
+		t.Errorf("pin = %q, want the installer's binary under home", pin)
+	}
+	if _, pin := OpenCodeManagedInstall(m, ""); pin != "~/.opencode/bin/opencode" {
+		t.Errorf("pin without a home = %q, want ~/.opencode/bin/opencode", pin)
 	}
 }

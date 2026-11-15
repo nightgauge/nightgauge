@@ -89,7 +89,7 @@ func runCostStage(t *testing.T, stage costStage) costStageOutcome {
 	pidFile := filepath.Join(dir, "stage.pid")
 	script := fmt.Sprintf(`#!/bin/sh
 case "$1" in
---version) echo 1.18.30; exit 0 ;;
+--version) echo 2.2.7; exit 0 ;;
 db) echo '%s'; exit 0 ;;
 export) %s ;;
 esac

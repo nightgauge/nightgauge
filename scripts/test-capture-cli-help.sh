@@ -176,7 +176,6 @@ pkg="\${spec%@*}"; version="\${spec##*@}"
 case "\$pkg" in
   @anthropic-ai/claude-code) bin=claude ;;
   @openai/codex) bin=codex ;;
-  opencode-ai) bin=opencode ;;
   *) echo "stub npm: unexpected package \$pkg" >&2; exit 1 ;;
 esac
 mkdir -p "\$prefix/node_modules/\$pkg" "\$prefix/node_modules/.bin"
@@ -186,18 +185,21 @@ printf '%s\n' "\$version" >"\$prefix/node_modules/.bin/\$bin.version"
 EOF
 chmod +x "$STUBS/npm"
 
-# curl stub: writes the fake grok installer to the -o path.
+# curl stub: writes the fake vendor installer the URL names to the -o path.
 cat >"$STUBS/curl" <<EOF
 #!/bin/bash
 log="$LOG/curl.\$\$"
 printf '%s\n' "\$*" >"\$log.argv"
 env >"\$log.env"
-out=""
+out=""; installer="$STUBS/fake-grok-installer"
 while [ "\$#" -gt 0 ]; do
-  case "\$1" in -o) out="\$2"; shift ;; esac
+  case "\$1" in
+    -o) out="\$2"; shift ;;
+    https://opencode.ai/*) installer="$STUBS/fake-opencode-installer" ;;
+  esac
   shift
 done
-cp "$STUBS/fake-grok-installer" "\$out"
+cp "\$installer" "\$out"
 EOF
 chmod +x "$STUBS/curl"
 
@@ -210,6 +212,17 @@ mkdir -p "\$GROK_BIN_DIR"
 cp "$STUBS/fake-cli-grok" "\$GROK_BIN_DIR/grok"
 EOF
 
+# The OpenCode 2.x installer: `--version <v>` and an install into
+# \$HOME/.opencode/bin, the only destination it has.
+cat >"$STUBS/fake-opencode-installer" <<EOF
+#!/bin/bash
+log="$LOG/oc-installer.\$\$"
+printf '%s\n' "\$*" >"\$log.argv"
+env >"\$log.env"
+mkdir -p "\$HOME/.opencode/bin"
+cp "$STUBS/fake-cli-opencode" "\$HOME/.opencode/bin/opencode"
+EOF
+
 for name in claude codex opencode grok; do
   write_fake_cli "$STUBS/fake-cli-$name" "$name"
 done
@@ -219,8 +232,10 @@ done
 # the pin test below overrides it with a wrong value instead.
 if command -v shasum >/dev/null 2>&1; then
   FAKE_GROK_INSTALLER_SHA256="$(shasum -a 256 "$STUBS/fake-grok-installer" | awk '{print $1}')"
+  FAKE_OPENCODE_INSTALLER_SHA256="$(shasum -a 256 "$STUBS/fake-opencode-installer" | awk '{print $1}')"
 else
   FAKE_GROK_INSTALLER_SHA256="$(sha256sum "$STUBS/fake-grok-installer" | awk '{print $1}')"
+  FAKE_OPENCODE_INSTALLER_SHA256="$(sha256sum "$STUBS/fake-opencode-installer" | awk '{print $1}')"
 fi
 
 # WORDSTUBS holds fake `id`/`hostname` commands so a dedicated run (below,
@@ -278,6 +293,7 @@ run_capture() {
     COPILOT_GITHUB_TOKEN="$SENTINEL" NPM_TOKEN="$SENTINEL" GROK_DEPLOYMENT_KEY="$SENTINEL" \
     OPENCODE_AUTH_CONTENT="$SENTINEL" AWS_SECRET_ACCESS_KEY="$SENTINEL" \
     CAPTURE_CLI_HELP_GROK_INSTALLER_SHA256="$FAKE_GROK_INSTALLER_SHA256" \
+    CAPTURE_CLI_HELP_OPENCODE_INSTALLER_SHA256="$FAKE_OPENCODE_INSTALLER_SHA256" \
     ${extra[@]+"${extra[@]}"} \
     bash "$SCRIPT" "$@" >"$TMP/run.out" 2>&1
   RC=$?
@@ -331,18 +347,21 @@ check "four CLIs ran, codex twice" [ "$(ls "$LOG"/cli-*.argv 2>/dev/null | wc -l
 check "codex ran its top-level --help" grep -qx -- '--help' "$LOG"/cli-codex.*.argv
 
 home_ok=0
-for f in "$LOG"/cli-*.env "$LOG"/npm.*.env "$LOG"/curl.*.env "$LOG"/installer.*.env; do
+for f in "$LOG"/cli-*.env "$LOG"/npm.*.env "$LOG"/curl.*.env "$LOG"/installer.*.env "$LOG"/oc-installer.*.env; do
   h="$(sed -n 's/^HOME=//p' "$f")"
   case "$h" in "$SCRATCH"/capture-cli-help.*/home) ;; *) home_ok=1 ;; esac
 done
 check "every child's HOME is inside the prefix" [ "$home_ok" -eq 0 ]
 
 pins_ok=0
-for spec in "@anthropic-ai/claude-code@$CLAUDE_V" "@openai/codex@$CODEX_V" "opencode-ai@$OPENCODE_V"; do
+for spec in "@anthropic-ai/claude-code@$CLAUDE_V" "@openai/codex@$CODEX_V"; do
   grep -qxF -- "$spec" <(cat "$LOG"/npm.*.argv | tr ' ' '\n') || pins_ok=1
 done
 check "npm installed each package at its manifest's max_tested" [ "$pins_ok" -eq 0 ]
 check "the grok installer was asked for max_tested $GROK_V" grep -qx "$GROK_V" "$LOG"/installer.*.argv
+check "the opencode installer was asked for max_tested $OPENCODE_V, leaving PATH alone" \
+  grep -qxF -- "--version $OPENCODE_V --no-modify-path" "$LOG"/oc-installer.*.argv
+check "npm never installed opencode" sh -c "! grep -q opencode '$LOG'/npm.*.argv 2>/dev/null"
 check "the grok installer's GROK_BIN_DIR is inside the prefix" \
   grep -qE "^GROK_BIN_DIR=$SCRATCH/capture-cli-help\." "$LOG"/installer.*.env
 
@@ -451,6 +470,24 @@ check "the mismatch names both hashes" sh -c "
 check "the installer never ran on a sha256 mismatch" sh -c "! grep -q . '$LOG'/installer.*.argv 2>/dev/null"
 check "the refused capture left the committed file as it was" \
   [ "$(cat "$OUT/grok-$GROK_V.txt")" = "previous capture" ]
+
+# --- 8. The pin comes from the manifest (#3300) -------------------------
+# With no override, capture-cli-help.sh reads the opencode pin from
+# install.installer_sha256. The stub installer does not match that pin, so the
+# capture is refused, naming both hashes; a read that came back empty is
+# refused too, without naming the manifest's pin, so this goes red on either.
+OPENCODE_MANIFEST_PIN="$(jq -r '.install.installer_sha256' "$REPO_ROOT/internal/adaptercompat/manifests/opencode.json")"
+printf 'previous capture\n' >"$OUT/opencode-run-$OPENCODE_V.txt"
+run_capture ok "CAPTURE_CLI_HELP_OPENCODE_INSTALLER_SHA256=" -- opencode
+check "opencode: with no override, the stub installer fails the manifest's pin" [ "$RC" -ne 0 ]
+check "opencode: the refusal names the manifest's pin and the stub's hash" sh -c "
+  grep -qF '$OPENCODE_MANIFEST_PIN' '$TMP/run.out' &&
+  grep -qF '$FAKE_OPENCODE_INSTALLER_SHA256' '$TMP/run.out'
+"
+check "opencode: the installer never ran on a sha256 mismatch" \
+  sh -c "! grep -q . '$LOG'/oc-installer.*.argv 2>/dev/null"
+check "opencode: the refused capture left the committed file as it was" \
+  [ "$(cat "$OUT/opencode-run-$OPENCODE_V.txt")" = "previous capture" ]
 
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="

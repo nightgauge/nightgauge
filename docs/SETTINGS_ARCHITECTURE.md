@@ -301,7 +301,7 @@ the file as resolved on that machine. An unknown key in the block is an error.
 
 ```yaml
 opencode:
-  binary: /home/you/.nightgauge/tools/opencode/node_modules/.bin/opencode # optional pin; see below
+  binary: /home/you/.opencode/bin/opencode # optional pin; see below
   inherit_user_config: false # true layers your own OpenCode config into runs
   model: lmstudio/qwen/qwen3.8-27b # used when a caller or a pipeline stage names no provider
   provider: lm-studio # lm-studio | ollama; the endpoint id is lmstudio | ollama
@@ -321,10 +321,11 @@ opencode:
   checks. It must be the absolute path of an executable file: a relative path,
   a bare command name such as `opencode` included, is refused and never
   looked up on PATH. Leave it unset to run the `opencode` on PATH. The managed
-  install,
-  `npm i --prefix ~/.nightgauge/tools/opencode opencode-ai@<max-tested>`,
-  puts the binary at `.nightgauge/tools/opencode/node_modules/.bin/opencode`
-  in your home directory; pin the absolute form of that path.
+  install downloads OpenCode's 2.x installer, verifies it against the sha256
+  the compat manifest pins, and runs it for the max-tested version (the
+  command `nightgauge doctor` prints; see
+  [ADAPTER_GUIDE.md](ADAPTER_GUIDE.md) Prerequisites). It puts the binary at
+  `~/.opencode/bin/opencode`; pin the absolute form of that path.
 - `limit` is optional. A dispatch discovers the model's window from the
   server, once per process: the context LM Studio has loaded it with, or the
   `num_ctx` its Ollama Modelfile sets. `limit.context` and `limit.output`

@@ -47,6 +47,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/gittest"
@@ -100,7 +101,7 @@ func realOpenCode(t *testing.T) string {
 	path, err := exec.LookPath("opencode")
 	if err != nil {
 		if os.Getenv("CI") == "true" {
-			t.Fatalf("opencode is not on PATH, and CI must run these cases: install opencode-ai@%s", openCodeIntegrationVersion)
+			t.Fatalf("opencode is not on PATH, and CI must run these cases: scripts/opencode-integration.sh installs it")
 		}
 		t.Skip("opencode is not on PATH")
 	}
@@ -122,6 +123,12 @@ func realOpenCode(t *testing.T) string {
 		return path
 	}
 	if v != openCodeIntegrationVersion {
+		if m, ok := adaptercompat.Get("opencode"); ok && v == m.MaxTested && strings.HasPrefix(v, "2.") {
+			// Observed on 2.2.7 once dispatch dropped run --dir (#3300): without
+			// --standalone, `run` starts OpenCode's managed service on a fixed
+			// loopback port and fails when one is already listening.
+			t.Skipf("opencode %s is installed; these cases were observed on %s, and a 2.x run needs --standalone to stay off the managed service port, which #3303 adds", v, openCodeIntegrationVersion)
+		}
 		t.Fatalf("opencode %s is installed; these cases were observed on %s. Re-verify ADR-022's observations before changing the pin", v, openCodeIntegrationVersion)
 	}
 	return path
