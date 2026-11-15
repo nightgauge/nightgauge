@@ -37,7 +37,7 @@ about the underlying GitHub state from this skill.
 ```bash
 # Delegate to the deterministic Go verb (detects blockers + auto-satisfies Copilot review).
 # Pass a 5-minute context so Copilot review polling has time to complete.
-RULESET_RESULT=$("$BINARY" pr ruleset-precheck "$PR_NUMBER" --auto-satisfy --json 2>/dev/null) || true
+RULESET_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" pr ruleset-precheck "$PR_NUMBER" --auto-satisfy --json 2>/dev/null) || true
 
 RULESET_BLOCKERS=()
 if [ -n "$RULESET_RESULT" ]; then
@@ -86,7 +86,7 @@ fi
 ```bash
 # Retry loop for UNKNOWN mergeable status (GitHub may need time to compute)
 for i in 1 2 3; do
-  MERGEABLE=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.mergeable // "UNKNOWN"')
+  MERGEABLE=$("${NIGHTGAUGE_BIN:-nightgauge}" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.mergeable // "UNKNOWN"')
   [ "$MERGEABLE" != "UNKNOWN" ] && break
   sleep 5
 done
@@ -106,8 +106,8 @@ an unrelated issue must never block this merge.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-if [ -n "$BINARY" ] && [ -d ".nightgauge/knowledge" ]; then
-  KNOWLEDGE_CONF=$("$BINARY" knowledge validate "$ISSUE_NUMBER" --json 2>/dev/null) || true
+if [ -d ".nightgauge/knowledge" ]; then
+  KNOWLEDGE_CONF=$("${NIGHTGAUGE_BIN:-nightgauge}" knowledge validate "$ISSUE_NUMBER" --json 2>/dev/null) || true
   if [ -n "$KNOWLEDGE_CONF" ]; then
     CONF_VIOLATIONS=$(printf '%s\n' "$KNOWLEDGE_CONF" | jq -r '.conformance.violations[]? | "\(.path): \(.reason)"')
     if [ -n "$CONF_VIOLATIONS" ]; then
@@ -698,7 +698,7 @@ fi
 # Guard: check if PR was already merged before attempting merge (e.g., race
 # condition where another process merged it while UNKNOWN mergeable status was
 # being retried in Step 6.1). Exit 0 gracefully — merge is complete.
-CURRENT_STATE=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.state // "UNKNOWN"')
+CURRENT_STATE=$("${NIGHTGAUGE_BIN:-nightgauge}" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.state // "UNKNOWN"')
 if [ "$CURRENT_STATE" = "MERGED" ]; then
   echo "PR #$PR_NUMBER is already merged. Proceeding to post-merge cleanup."
 else
@@ -723,7 +723,7 @@ else
 
   MERGE_EXIT=0
   MERGE_STDERR=$(mktemp)
-  MERGE_RESULT=$("$BINARY" pr merge "$PR_NUMBER" \
+  MERGE_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" pr merge "$PR_NUMBER" \
     --issue "$ISSUE_NUMBER" \
     --strategy "$BINARY_STRATEGY" \
     $BINARY_DELETE_FLAG \
@@ -734,7 +734,7 @@ else
 
   if [ "$MERGE_EXIT" -ne 0 ] && [ "$MERGED" != "true" ]; then
     # Verify merge actually landed before treating as failure (handles race conditions)
-    POST_MERGE_STATE=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.state // "UNKNOWN"')
+    POST_MERGE_STATE=$("${NIGHTGAUGE_BIN:-nightgauge}" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.state // "UNKNOWN"')
     if [ "$POST_MERGE_STATE" = "MERGED" ]; then
       echo "⚠ Go binary pr merge exited with code $MERGE_EXIT but PR is MERGED on GitHub. Continuing."
     else
@@ -777,7 +777,7 @@ Use `--force` only for emergency bypasses.
 #### Step 6.4: Verify Merge Success
 
 ```bash
-PR_STATE=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.state // "UNKNOWN"')
+PR_STATE=$("${NIGHTGAUGE_BIN:-nightgauge}" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.state // "UNKNOWN"')
 if [ "$PR_STATE" != "MERGED" ]; then
   echo "ERROR: PR #$PR_NUMBER was not merged (state: $PR_STATE)"
   echo "The merge command may have failed silently, or CI checks are blocking."

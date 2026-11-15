@@ -95,7 +95,7 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 OUTPUT_TMP=$(mktemp)
 
-if ! "$BINARY" spike materialize "$ISSUE_NUMBER" --json > "$OUTPUT_TMP"; then
+if ! "${NIGHTGAUGE_BIN:-nightgauge}" spike materialize "$ISSUE_NUMBER" --json > "$OUTPUT_TMP"; then
   echo "ERROR: spike materialize failed — see output above"
   cat "$OUTPUT_TMP" 2>/dev/null
   rm -f "$OUTPUT_TMP"
@@ -162,7 +162,7 @@ fi
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-"$BINARY" project move-status "$ISSUE_NUMBER" "Done" 2>/dev/null || true
+"${NIGHTGAUGE_BIN:-nightgauge}" project move-status "$ISSUE_NUMBER" "Done" 2>/dev/null || true
 ```
 
 ## Output Contract

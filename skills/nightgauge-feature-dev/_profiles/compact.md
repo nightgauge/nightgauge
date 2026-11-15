@@ -167,15 +167,13 @@ it holds even under `auto_accept_stages: true`.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-if [ -n "$BINARY" ]; then
-  "$BINARY" approval-gate "$ISSUE_NUMBER" || {
-    echo "ARCHITECTURE APPROVAL REQUIRED — do NOT implement. A human must review the"
-    echo "decision (the plan / decisions.md ADR) and add the approval label, or write"
-    echo "{\"approved\": true} to approval-${ISSUE_NUMBER}.json with"
-    echo "'nightgauge layout write pipeline approval-${ISSUE_NUMBER}.json'."
-    exit 1
-  }
-fi
+"${NIGHTGAUGE_BIN:-nightgauge}" approval-gate "$ISSUE_NUMBER" || {
+  echo "ARCHITECTURE APPROVAL REQUIRED — do NOT implement. A human must review the"
+  echo "decision (the plan / decisions.md ADR) and add the approval label, or write"
+  echo "{\"approved\": true} to approval-${ISSUE_NUMBER}.json with"
+  echo "'nightgauge layout write pipeline approval-${ISSUE_NUMBER}.json'."
+  exit 1
+}
 ```
 
 ---

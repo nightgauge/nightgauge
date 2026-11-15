@@ -220,7 +220,7 @@ REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 BRANCH=$(git branch --show-current)
 : "${BRANCH:?detached HEAD: check out the issue branch}"
-PR_CHECK=$("$BINARY" forge pr list --repo "$REPO" \
+PR_CHECK=$("${NIGHTGAUGE_BIN:-nightgauge}" forge pr list --repo "$REPO" \
   --head "$BRANCH" \
   --state all \
   --json number,state,url \

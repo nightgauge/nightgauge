@@ -585,7 +585,7 @@ if [ "$MODE" = "full" ] || [ "$MODE" = "dates-only" ]; then
     if [ "$DRY_RUN" = "true" ]; then
       echo "  [dry-run] Would set target-date=$due_date on #$issue_number"
     else
-      "$BINARY" project set-field "$issue_number" --target-date "$due_date" 2>/dev/null || true
+      "${NIGHTGAUGE_BIN:-nightgauge}" project set-field "$issue_number" --target-date "$due_date" 2>/dev/null || true
     fi
   done <<< "$ISSUES_WITH_MILESTONES"
 fi

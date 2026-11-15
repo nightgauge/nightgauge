@@ -272,7 +272,8 @@ The deterministic gate is the regression guard: it fails the moment any skill
 reintroduces a VSCode-extension path, a Claude-only `hooks:` completion gate,
 a fenced resolver block that drifted from PREFLIGHT.md, or a bare
 `nightgauge <verb>` at command position in a bash block
-(`bare_binary_invocation`, #2933). Cascade checks are
+(`bare_binary_invocation`, #2933), or a bash block that reads `$BINARY`
+without assigning it (`unset_binary_read`, #3334). Cascade checks are
 block-scoped: a complete block elsewhere in the same file cannot hide a
 truncated sibling. The live multi-adapter eval (running the
 skills against real Codex/Gemini binaries) cannot run in CI because it needs

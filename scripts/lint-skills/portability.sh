@@ -149,8 +149,45 @@ if [ -n "$bare_hits" ]; then
   printf '%s\n' "$bare_hits" >&2
 fi
 
+# A read of $BINARY in a bash fence that never assigns BINARY sees an empty
+# string: each block runs in a fresh shell, so PREFLIGHT's cascade value is gone
+# (#3334). Mirrors the Go check unset_binary_read: same fence scope, comments
+# skipped, NIGHTGAUGE_BINARY= and $BINARY_DIR are neither reads nor assignments.
+unset_hits=""
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  case "$f" in */CHANGELOG.md) continue ;; esac
+  hits=$(awk -v file="$f" '
+    function flush() { if (!assigned) for (k = 1; k <= n; k++) print reads[k]; n = 0; assigned = 0 }
+    BEGIN { in_bash = 0; fence = ""; n = 0; assigned = 0 }
+    tolower($0) ~ /^[[:space:]]*```+[[:space:]]*(bash|sh|shell)[[:space:]]*$/ && !in_bash {
+      in_bash = 1; fence = "```"; next
+    }
+    tolower($0) ~ /^[[:space:]]*~~~+[[:space:]]*(bash|sh|shell)[[:space:]]*$/ && !in_bash {
+      in_bash = 1; fence = "~~~"; next
+    }
+    in_bash && /^[[:space:]]*```+[[:space:]]*$/ && fence == "```" { in_bash = 0; flush(); next }
+    in_bash && /^[[:space:]]*~~~+[[:space:]]*$/ && fence == "~~~" { in_bash = 0; flush(); next }
+    in_bash && $0 !~ /^[[:space:]]*#/ {
+      if ($0 ~ /(^|[^A-Za-z0-9_$])BINARY=/) assigned = 1
+      if ($0 ~ /\$\{?BINARY([^A-Za-z0-9_]|$)/) reads[++n] = sprintf("%s:%d: %s", file, NR, $0)
+    }
+    END { if (in_bash) flush() }
+  ' "$f")
+  if [ -n "$hits" ]; then
+    unset_hits="${unset_hits}${unset_hits:+
+}${hits}"
+  fi
+done < <(find skills -type f -name '*.md' ! -path '*/.claude/*' 2>/dev/null)
+
+if [ -n "$unset_hits" ]; then
+  fail=1
+  echo "lint-skills: ERROR — \$BINARY read in a bash block that never sets it; use \"\${NIGHTGAUGE_BIN:-nightgauge}\" (#3334):" >&2
+  printf '%s\n' "$unset_hits" >&2
+fi
+
 if [ "$fail" -eq 0 ]; then
-  echo "lint-skills: all skills pass portability checks (paths, hooks, cascade, bare binary) ✓"
+  echo "lint-skills: all skills pass portability checks (paths, hooks, cascade, bare binary, unset binary) ✓"
   exit 0
 fi
 exit 1

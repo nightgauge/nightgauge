@@ -1128,7 +1128,9 @@ hook), and `truncated_binary_cascade` (a fenced bash resolver block missing any
 of the six PREFLIGHT rungs, the `NIGHTGAUGE_DEV_REPO_BIN` gate included),
 `hooks_dir_reference`, `source_repo_path`, `claude_skill_flag` (#2764), and
 `bare_binary_invocation` (a bare `nightgauge <verb>` at command position in a
-bash block, where `"${NIGHTGAUGE_BIN:-nightgauge}"` is required, #2933). The cascade check is per block, not per file: one
+bash block, where `"${NIGHTGAUGE_BIN:-nightgauge}"` is required, #2933), and
+`unset_binary_read` (a bash block that reads `$BINARY` without assigning it,
+#3334). The cascade check is per block, not per file: one
 complete resolver cannot hide a truncated sibling (#365). Scans every `*.md`
 under `skills/`; skills must resolve the binary provider-neutrally
 (`$NIGHTGAUGE_BIN` → PATH → gated repo bin → gated canonical-repo bin → `~/go/bin`). See

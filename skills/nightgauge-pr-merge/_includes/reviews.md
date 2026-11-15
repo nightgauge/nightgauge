@@ -59,11 +59,11 @@ fi
 # by the tool budget. Exit 2 = still pending: re-run this block in a NEW Bash
 # call while the cumulative budget (NIGHTGAUGE_PR_CI_CHECK_TIMEOUT minutes,
 # default 10) remains.
-CI_RESULT=$("$BINARY" ci wait "$PR_NUMBER" --timeout-secs 90 --json 2>/dev/null) || true
+CI_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" ci wait "$PR_NUMBER" --timeout-secs 90 --json 2>/dev/null) || true
 
 # Re-check PR state after CI wait: the PR may have been merged out-of-band
 # while we were waiting. If so, exit cleanly instead of looping.
-CURRENT_STATE=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.state // "UNKNOWN"')
+CURRENT_STATE=$("${NIGHTGAUGE_BIN:-nightgauge}" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.state // "UNKNOWN"')
 if [ "$CURRENT_STATE" = "MERGED" ]; then
   echo "PR #$PR_NUMBER was merged (detected after CI wait). Exiting cleanly."
   exit 0

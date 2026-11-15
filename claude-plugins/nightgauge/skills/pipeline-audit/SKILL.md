@@ -1075,7 +1075,7 @@ itself and fails before creating anything if a name is unknown. The raw
 **Step 6.3c**: Sync the epic to the project board:
 
 ```bash
-"$BINARY" project add <EPIC_NUMBER>
+"${NIGHTGAUGE_BIN:-nightgauge}" project add <EPIC_NUMBER>
 ```
 
 Each sub-issue created via `issue create-sub` is automatically synced to the

@@ -1001,7 +1001,7 @@ if [ "$ALL_TRANSIENT" = "true" ]; then
   echo "[transient-rerun-gate] Re-running failed checks deterministically before engaging RALPH."
 
   # Find the most recent failed run for this PR and rerun its failed jobs.
-  FAILED_RUN=$("$BINARY" pr ci-wait "$PR_NUMBER" --timeout 1 --json 2>/dev/null \
+  FAILED_RUN=$("${NIGHTGAUGE_BIN:-nightgauge}" pr ci-wait "$PR_NUMBER" --timeout 1 --json 2>/dev/null \
     | jq -r '.checks[] | select(.conclusion == "FAILURE") | .detailsUrl' \
     | grep -oE '[0-9]+' | head -1)
   if [ -z "$FAILED_RUN" ]; then
@@ -1044,10 +1044,10 @@ Find the failed workflow run for the PR, then fetch its logs with the binary.
 `ci logs` takes a run ID, not a PR number:
 
 ```bash
-FAILED_RUN=$("$BINARY" pr ci-wait "$PR_NUMBER" --timeout 1 --json 2>/dev/null \
+FAILED_RUN=$("${NIGHTGAUGE_BIN:-nightgauge}" pr ci-wait "$PR_NUMBER" --timeout 1 --json 2>/dev/null \
   | jq -r '[.checks[] | select(.conclusion == "FAILURE")][0].detailsUrl // empty' \
   | grep -oE '/runs/[0-9]+' | grep -oE '[0-9]+')
-[ -n "$FAILED_RUN" ] && CI_LOGS=$("$BINARY" ci logs "$FAILED_RUN" --json)
+[ -n "$FAILED_RUN" ] && CI_LOGS=$("${NIGHTGAUGE_BIN:-nightgauge}" ci logs "$FAILED_RUN" --json)
 ```
 
 The JSON carries `runId`, `status`, `url` and `content` (the failure log text).
@@ -1335,7 +1335,7 @@ printf '<!-- phase:start name="categorize-issues" index=5 total=13 stage="pr-mer
 #### Step 4.2: Determine Merge Readiness
 
 ```bash
-REVIEW_DECISION=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.reviewStatus // "REVIEW_REQUIRED"')
+REVIEW_DECISION=$("${NIGHTGAUGE_BIN:-nightgauge}" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.reviewStatus // "REVIEW_REQUIRED"')
 ```
 
 Ready if `APPROVED` and no critical issues. Not ready if `REVIEW_REQUIRED` or

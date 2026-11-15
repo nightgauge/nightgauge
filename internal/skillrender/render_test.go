@@ -1336,6 +1336,8 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 // error-table row saying Step 6.1.5 merges the base instead of rebasing.
 // The three feature-dev captures were re-pinned for #3163: the six added lines
 // are the rule that an operator-revised plan binds feature-dev.
+// All four captures were re-pinned for #3334: every changed line replaces a
+// read of $BINARY, unset in that block, with "${NIGHTGAUGE_BIN:-nightgauge}".
 func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	root := realSkillsRoot(t)
 	// Render resolves _includes paths to their absolute filesystem form, which

@@ -65,7 +65,7 @@ row. Then, and only then, check blockers on the survivors:
 # (#1700): that candidate is skipped, and the next one is tried.
 ISSUE=$(printf '%s\n' "$TIER_CANDIDATES" | jq -r '.[].number' | while read -r n; do
   CHECK_EXIT=0
-  RESULT=$("$BINARY" hook check-deps "$n" --check-only 2>/dev/null) || CHECK_EXIT=$?
+  RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" hook check-deps "$n" --check-only 2>/dev/null) || CHECK_EXIT=$?
   OPEN=$(printf '%s\n' "$RESULT" | jq -r '.has_open_dependencies' 2>/dev/null)
   if [ "$CHECK_EXIT" -eq 0 ] && [ "$OPEN" = "false" ]; then
     printf '%s\n' "$TIER_CANDIDATES" | jq -c ".[] | select(.number == $n)" | head -1

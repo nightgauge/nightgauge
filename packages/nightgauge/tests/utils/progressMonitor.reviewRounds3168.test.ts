@@ -26,8 +26,8 @@ function blockContaining(needle: string): string {
   return INCLUDE.slice(start, end);
 }
 
-const PREPARE_BLOCK = blockContaining('"$BINARY" review prepare');
-const RUN_BLOCK = blockContaining('"$BINARY" review run');
+const PREPARE_BLOCK = blockContaining('"${NIGHTGAUGE_BIN:-nightgauge}" review prepare');
+const RUN_BLOCK = blockContaining('"${NIGHTGAUGE_BIN:-nightgauge}" review run');
 
 function makeConfig(): ProgressMonitorConfig {
   return {
