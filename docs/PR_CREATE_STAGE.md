@@ -269,9 +269,17 @@ outcome as `closes_issue`. The ac-reconcile parser ignores criteria inside
 
 The post-merge hook reads the merged PR body. When it has no closing keyword
 for the issue, the hook skips the close, the Done sync, the epic rollup, the
-survival record and the validation marker. It returns the board row to Ready
-and comments the bullets under `## ⚠️ Unmet acceptance criteria` on the issue
-(`reason: partial_delivery`). An unreadable body keeps the close.
+survival record and the validation marker (`reason: partial_delivery`). It
+joins the issue's criteria (checkboxes, plus numbered and plain items under an
+`Acceptance criteria` heading) with the PR's verdicts: it ticks each issue
+checkbox the PR reported `✅ met`, keeps every criterion the PR left open even
+if ticked, and comments the remainder on the issue. The row returns to Ready,
+unless every remaining criterion is not verifiable or reserved to the
+supervisor or owner, which keeps it In review. A re-run over an
+already-merged PR does not tick. The comment lists the criteria the PR met
+under `Met by this PR:`, numbered items included, and later remainders on the
+issue leave those out unless a later PR reports them unmet again. An
+unreadable body keeps the close.
 
 ### Unit-test label
 

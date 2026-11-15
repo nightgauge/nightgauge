@@ -359,12 +359,12 @@ func TestRunPostMerge_WiresTheRemainderComment(t *testing.T) {
 	var wired bool
 	s.evaluatePostMergeFn = func(_ context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser,
 		_ hooks.EpicAutoCloser, _ hooks.PRVerifier, _ hooks.BoardSyncer, in hooks.PostMergeInput) hooks.PostMergeResult {
-		wired = in.Remainder != nil
+		wired = in.Remainder != nil && in.BodyEditor != nil
 		return hooks.PostMergeResult{}
 	}
 	item := types.BoardItem{Number: breadcrumbIssue, Repo: breadcrumbTargetRepo}
 	s.runPostMerge(context.Background(), item, nil, 931)
 	if !wired {
-		t.Error("the scheduler left PostMergeInput.Remainder nil, so a partial delivery posts no comment")
+		t.Error("the scheduler left PostMergeInput.Remainder or BodyEditor nil, so a partial delivery posts no comment or ticks nothing")
 	}
 }

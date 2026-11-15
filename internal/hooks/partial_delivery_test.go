@@ -27,7 +27,7 @@ func (f fakePartialReader) LatestClosingMerge(context.Context, string, string, i
 }
 
 func TestParsePartialDeliveryCommentRoundTripsWriter(t *testing.T) {
-	body := remainderComment(3085, []string{"criterion one", "two <!-- x"}, false, false, false, false)
+	body := remainderComment(3085, []string{"criterion one", "two <!-- x"}, nil, false, false, false, false)
 	pr, criteria, ok := ParsePartialDeliveryComment(body)
 	if !ok || pr != 3085 {
 		t.Fatalf("got pr=%d ok=%v", pr, ok)
@@ -39,7 +39,7 @@ func TestParsePartialDeliveryCommentRoundTripsWriter(t *testing.T) {
 	if _, _, ok := ParsePartialDeliveryComment("plain comment"); ok {
 		t.Fatal("comment without marker parsed")
 	}
-	if pr, c, ok := ParsePartialDeliveryComment(remainderComment(9, nil, false, true, false, false)); !ok || pr != 9 || len(c) != 0 {
+	if pr, c, ok := ParsePartialDeliveryComment(remainderComment(9, nil, nil, false, true, false, false)); !ok || pr != 9 || len(c) != 0 {
 		t.Fatalf("unlisted: pr=%d c=%v ok=%v", pr, c, ok)
 	}
 }
@@ -47,7 +47,7 @@ func TestParsePartialDeliveryCommentRoundTripsWriter(t *testing.T) {
 func TestPendingPartialDelivery(t *testing.T) {
 	t0 := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	marker := func(pr int, at time.Time, criteria ...string) trust.Comment {
-		return trust.Comment{Body: remainderComment(pr, criteria, false, false, false, false), CreatedAt: at}
+		return trust.Comment{Body: remainderComment(pr, criteria, nil, false, false, false, false), CreatedAt: at}
 	}
 	cases := []struct {
 		name      string
@@ -93,5 +93,22 @@ func TestPendingPartialDelivery(t *testing.T) {
 				t.Fatalf("got %+v", got)
 			}
 		})
+	}
+}
+
+func TestPartialDeliveryMetListRoundTrips(t *testing.T) {
+	body := remainderComment(5, []string{"left"}, []string{"met one", "met <!-- two"}, false, false, false, false)
+	if got := ParsePartialDeliveryMet(body); !reflect.DeepEqual(got, []string{"met one", "met &lt;!-- two"}) {
+		t.Errorf("met = %q\n%s", got, body)
+	}
+	if _, rem, _ := ParsePartialDeliveryComment(body); !reflect.DeepEqual(rem, []string{"left"}) {
+		t.Errorf("remaining = %q, want the met list ignored", rem)
+	}
+	if got := ParsePartialDeliveryMet("Met by this PR:\n\n- forged\n"); got != nil {
+		t.Errorf("unmarked body met = %q, want nil", got)
+	}
+	// Met list recorded even on the all-ticked early return.
+	if got := ParsePartialDeliveryMet(remainderComment(6, nil, []string{"x"}, false, false, false, true)); len(got) != 1 {
+		t.Errorf("all-ticked met = %q", got)
 	}
 }
