@@ -40,6 +40,9 @@ type PostMergeInput struct {
 	// (#2878): a trusted comment already carrying the PR's marker stops it.
 	// Nil skips the comment; the issue is still left open.
 	Remainder ValidationMarkWriter
+	// BodyEditor ticks the issue checkboxes the merged PR reported met on a
+	// partial delivery (#3318). Nil skips the tick.
+	BodyEditor IssueBodyEditor
 	// AlreadyMerged is set when the caller's run found the PR merged and merged
 	// nothing itself (#2878). The run did no work, so it must not return the
 	// issue to Ready, or the same run dispatches again.
@@ -48,6 +51,11 @@ type PostMergeInput struct {
 	// partial delivery on an issue carrying one stays out of Ready, so a merge
 	// cannot undo an operator's park (#2878).
 	ExcludeLabels []string
+}
+
+// IssueBodyEditor rewrites an issue body; gh.IssueService satisfies it.
+type IssueBodyEditor interface {
+	EditIssue(ctx context.Context, nodeID, body string) (*types.Issue, error)
 }
 
 // ValidationMarkWriter reads an issue's comments through the trust filter and
@@ -197,13 +205,22 @@ type PostMergeResult struct {
 	// the run merged nothing, or the issue carries an excluded label (#2878).
 	ReadyWithheld bool `json:"readyWithheld,omitempty"`
 	// OwnerOnlyRemainder is set on a partial delivery whose every remaining
-	// criterion is marked for the supervisor or owner (#3269). No pipeline
+	// criterion is marked for the supervisor or owner (#3269), or reported
+	// not verifiable by the merged PR, such as a post-merge measurement
+	// (#3318). No pipeline
 	// run can deliver it, so the row stays In review instead of Ready.
 	OwnerOnlyRemainder bool `json:"ownerOnlyRemainder,omitempty"`
-	// AllCriteriaTicked is set on a partial delivery whose issue body ticks
-	// every criterion (#3269): nothing is left to re-dispatch, so the row
+	// AllCriteriaTicked is set on a partial delivery that leaves no criterion:
+	// every one is ticked in the issue body or met by the merged PR (#3269,
+	// #3318): nothing is left to re-dispatch, so the row
 	// stays In review for the supervisor to close instead of Ready.
 	AllCriteriaTicked bool `json:"allCriteriaTicked,omitempty"`
+	// TickedCriteria lists the issue checkboxes (acparse indices) this hook
+	// ticked because the merged PR reported them met (#3318).
+	TickedCriteria []int `json:"tickedCriteria,omitempty"`
+	// MetCriteria lists the issue criteria the merged PR met, boxed or not;
+	// the remainder comment records them for later Refs PRs (#3318).
+	MetCriteria []string `json:"metCriteria,omitempty"`
 	// EmptyDelivery is set on a partial delivery whose merged PR is known to
 	// have changed no files (#3012). Ready is withheld and the row parks in
 	// Backlog: re-running an issue whose last PR delivered nothing loops.
@@ -710,24 +727,6 @@ func UnmetCriteria(body string) []string {
 	return out
 }
 
-// issueUnmetCriteria returns the unticked criteria in the issue's current
-// body, parsed the way `issue ac-check` and `ac-mark --list` parse it (#3269).
-// ok is false when the body has no checkbox criteria at all, so the caller
-// can fall back to the list the PR body names.
-func issueUnmetCriteria(body string) (unmet []string, ok bool) {
-	items := acparse.List(body)
-	if len(items) == 0 {
-		return nil, false
-	}
-	unmet = []string{}
-	for _, it := range items {
-		if !it.Checked {
-			unmet = append(unmet, it.Text)
-		}
-	}
-	return unmet, true
-}
-
 // ownerOnlyPrefixes open a criterion reserved to the supervisor or owner.
 var ownerOnlyPrefixes = []string{"**supervisor", "**owner"}
 
@@ -770,16 +769,54 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 		ReadyWithheld:   readyWithheld(input, issue.Labels),
 		EmptyDelivery:   merge.ChangedFilesKnown && merge.ChangedFiles == 0,
 	}
-	// (#3269) The remainder is what the issue body leaves unticked now, not
-	// what the PR body listed when it was written: the supervisor may have
-	// ticked criteria since.
-	if unmet, ok := issueUnmetCriteria(issue.Body); ok {
-		out.UnmetCriteria = unmet
-		out.AllCriteriaTicked = len(unmet) == 0
+	// The remainder joins the issue body's current criteria (checkboxes, and
+	// numbered or plain items under an Acceptance criteria heading) with the
+	// PR's per-criterion verdicts (#3269, #3318): a criterion the PR met is
+	// dropped and its box ticked, one it left open stays whatever its box
+	// says, and one it did not mention stays unless ticked. Ticking is skipped
+	// on a re-run over an already-merged PR, whose body may have been edited
+	// since the pipeline wrote it.
+	// Read the trusted comments once: earlier partial-delivery markers record
+	// the criteria earlier PRs met (#3318), and this PR's own marker stops a
+	// duplicate comment. A failed read posts anyway with no prior-met list: a
+	// duplicate comment or a longer remainder is cheaper than a lost one.
+	var comments []trust.Comment
+	commentsRead := false
+	if input.Remainder != nil {
+		var err error
+		comments, err = input.Remainder.TrustedComments(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber)
+		if err != nil {
+			comments = nil
+			fmt.Fprintf(os.Stderr, "Warning: post-merge: could not read #%d's comments for the remainder marker: %v — posting anyway\n", input.IssueNumber, err)
+		} else {
+			commentsRead = true
+		}
+	}
+	var priorMet []string
+	for _, c := range comments {
+		priorMet = append(priorMet, ParsePartialDeliveryMet(c.Body)...)
+	}
+	plan := computeRemainder(issue.Body, merge.Body, priorMet)
+	out.MetCriteria = plan.Met
+	if plan.Found {
+		out.UnmetCriteria = plan.Remaining
+		out.AllCriteriaTicked = len(plan.Remaining) == 0
 	} else {
 		out.UnmetCriteria = UnmetCriteria(merge.Body)
 	}
-	out.OwnerOnlyRemainder = isOwnerOnlyRemainder(out.UnmetCriteria)
+	out.OwnerOnlyRemainder = isOwnerOnlyRemainder(out.UnmetCriteria) || plan.NotVerifiableOnly
+	if len(plan.TickIndices) > 0 && input.BodyEditor != nil && !input.AlreadyMerged {
+		newBody, marked := acparse.Mark(issue.Body, plan.TickIndices)
+		if len(marked.Changed) == 0 {
+			// Nothing to write.
+		} else if _, err := input.BodyEditor.EditIssue(ctx, issue.NodeID, newBody); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: post-merge could not tick the criteria PR #%d met on #%d: %v\n", input.PRNumber, input.IssueNumber, err)
+			out.Failed = true
+			out.Error = err.Error()
+		} else {
+			out.TickedCriteria = marked.Changed
+		}
+	}
 	if out.EmptyDelivery || out.OwnerOnlyRemainder || out.AllCriteriaTicked {
 		out.ReadyWithheld = true
 	}
@@ -797,7 +834,7 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 		}
 	}
 	if boardSvc != nil && input.ProjectNumber > 0 && (out.OwnerOnlyRemainder || out.AllCriteriaTicked) && !out.EmptyDelivery {
-		fmt.Fprintf(os.Stderr, "Post-merge: every criterion left on #%d is for the supervisor or owner — keeping it In review instead of Ready\n", input.IssueNumber)
+		fmt.Fprintf(os.Stderr, "Post-merge: every criterion left on #%d is for the supervisor or owner, or not verifiable by the pipeline — keeping it In review instead of Ready\n", input.IssueNumber)
 		if err := boardSvc.SyncStatus(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber, "In review"); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: post-merge board sync to In review failed for #%d: %v\n", input.IssueNumber, err)
 			out.Failed = true
@@ -814,12 +851,12 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 	}
 
 	if input.Remainder != nil {
-		if remainderCommentPosted(ctx, input) {
+		if commentsRead && remainderCommentIn(comments, input.PRNumber) {
 			fmt.Fprintf(os.Stderr, "Post-merge: #%d already names the remainder of PR #%d\n", input.IssueNumber, input.PRNumber)
 			out.RemainderComment = "present"
 			return out
 		}
-		if err := input.Remainder.AddComment(ctx, issue.NodeID, remainderComment(input.PRNumber, out.UnmetCriteria, !out.ReadyWithheld, out.EmptyDelivery, out.OwnerOnlyRemainder, out.AllCriteriaTicked)); err != nil {
+		if err := input.Remainder.AddComment(ctx, issue.NodeID, remainderComment(input.PRNumber, out.UnmetCriteria, plan.Met, !out.ReadyWithheld, out.EmptyDelivery, out.OwnerOnlyRemainder, out.AllCriteriaTicked)); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: post-merge remainder comment failed for #%d: %v\n", input.IssueNumber, err)
 			out.RemainderComment = "failed"
 			out.Failed = true
@@ -854,16 +891,10 @@ func remainderMarker(prNumber int) string {
 	return fmt.Sprintf(partialDeliveryMarkerFormat, prNumber)
 }
 
-// remainderCommentPosted reports whether a trusted comment already names this
-// PR's remainder. A failed read answers false: a duplicate comment is cheaper
-// than a lost remainder.
-func remainderCommentPosted(ctx context.Context, input PostMergeInput) bool {
-	comments, err := input.Remainder.TrustedComments(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: post-merge: could not read #%d's comments for the remainder marker: %v — posting anyway\n", input.IssueNumber, err)
-		return false
-	}
-	marker := remainderMarker(input.PRNumber)
+// remainderCommentIn reports whether a trusted comment already names this PR's
+// remainder.
+func remainderCommentIn(comments []trust.Comment, prNumber int) bool {
+	marker := remainderMarker(prNumber)
 	for _, c := range comments {
 		if strings.Contains(c.Body, marker) {
 			return true
@@ -872,7 +903,7 @@ func remainderCommentPosted(ctx context.Context, input PostMergeInput) bool {
 	return false
 }
 
-func remainderComment(prNumber int, unmet []string, backInReady, empty, ownerOnly, allTicked bool) string {
+func remainderComment(prNumber int, unmet, met []string, backInReady, empty, ownerOnly, allTicked bool) string {
 	var b strings.Builder
 	b.WriteString(remainderMarker(prNumber) + "\n")
 	if empty {
@@ -884,8 +915,17 @@ func remainderComment(prNumber int, unmet []string, backInReady, empty, ownerOnl
 		b.WriteString(" and is back in Ready")
 	}
 	b.WriteString(".\n\n")
+	// Recorded on every non-empty path, before the early returns, so a
+	// numbered criterion this PR met stays out of later remainders (#3318).
+	if len(met) > 0 && !empty {
+		b.WriteString(MetCriteriaHeading + "\n\n")
+		for _, c := range met {
+			b.WriteString("- " + strings.ReplaceAll(c, "<!--", "&lt;!--") + "\n")
+		}
+		b.WriteString("\n")
+	}
 	if ownerOnly && !empty {
-		b.WriteString("Every remaining criterion is for the supervisor or owner, so the pipeline cannot deliver it: the issue stays In review and is not re-queued.\n\n")
+		b.WriteString("Every remaining criterion is for the supervisor or owner, or not verifiable by the pipeline, so the pipeline cannot deliver it: the issue stays In review and is not re-queued.\n\n")
 	}
 	if allTicked && !empty {
 		b.WriteString("Every acceptance criterion in the issue body is ticked, so nothing is left to re-dispatch: the issue stays In review for the supervisor to verify and close.\n")

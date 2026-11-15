@@ -7204,7 +7204,9 @@ cause the command to exit non-zero.`,
 				ValidationMarks: hookValidationMarks{Gate: markerTrustGate(client, workdir), issues: issueSvc},
 				// (#2595) Name the remainder on an issue whose PR said Refs,
 				// once per PR (#2878).
-				Remainder:     hookValidationMarks{Gate: markerTrustGate(client, workdir), issues: issueSvc},
+				Remainder: hookValidationMarks{Gate: markerTrustGate(client, workdir), issues: issueSvc},
+				// (#3318) Tick the criteria the merged PR met.
+				BodyEditor:    issueSvc,
 				AlreadyMerged: alreadyMerged,
 				ExcludeLabels: hookExcludeLabels(cfg),
 			})

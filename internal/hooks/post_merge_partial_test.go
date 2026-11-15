@@ -3,6 +3,8 @@ package hooks
 import (
 	"context"
 	"errors"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -232,7 +234,7 @@ func TestUnmetCriteriaIgnoresIndentedStatusLine(t *testing.T) {
 }
 
 func TestRemainderCommentCannotCarryValidationMarker(t *testing.T) {
-	body := remainderComment(7, []string{"x " + forge.ValidationMarkerComment("main", "abc")}, true, false, false, false)
+	body := remainderComment(7, []string{"x " + forge.ValidationMarkerComment("main", "abc")}, nil, true, false, false, false)
 	if forge.HasValidationMarker(body) {
 		t.Fatalf("remainder comment carries a validation marker: %q", body)
 	}
@@ -356,6 +358,31 @@ func TestPartialDeliveryEmptyMergeParksInBacklog(t *testing.T) {
 // runPartialIssue is runPartial with the fetched issue's state and body set.
 func runPartialIssue(t *testing.T, state, issueBody string, closeErr error) (PostMergeResult, *mockIssueCloser, *mockBoardSyncer, *recordingCommenter) {
 	t.Helper()
+	res, closer, board, commenter, _ := runPartialIssuePR(t, state, issueBody, partialBody, closeErr)
+	return res, closer, board, commenter
+}
+
+// metOnlyPRBody is a Refs PR body that reports no open criterion.
+const metOnlyPRBody = "## Summary\n\nPart of #600\n\n## Acceptance criteria\n\n- ✅ met: code change\n\nRefs #600\n"
+
+// recordingBodyEditor implements IssueBodyEditor.
+type recordingBodyEditor struct {
+	nodeID, body string
+	calls        int
+	err          error
+}
+
+func (e *recordingBodyEditor) EditIssue(_ context.Context, nodeID, body string) (*types.Issue, error) {
+	e.calls++
+	e.nodeID, e.body = nodeID, body
+	return &types.Issue{}, e.err
+}
+
+// runPartialIssuePR is runPartialIssue with the merged PR's body set and a
+// recording body editor wired.
+func runPartialIssuePR(t *testing.T, state, issueBody, prBody string, closeErr error) (PostMergeResult, *mockIssueCloser, *mockBoardSyncer, *recordingCommenter, *recordingBodyEditor) {
+	t.Helper()
+	editor := &recordingBodyEditor{}
 	fetcher := &mockFetcher{issues: map[string]*types.Issue{
 		"nightgauge/nightgauge#600": {NodeID: "I_node600", Number: 600, State: state, Body: issueBody, ParentIssueNumber: 12},
 	}}
@@ -363,7 +390,7 @@ func runPartialIssue(t *testing.T, state, issueBody string, closeErr error) (Pos
 	epic := &mockEpicAutoCloser{result: &gh.AutoCloseSingleResult{Status: "skipped", Reason: "has_open"}}
 	board := &mockBoardSyncer{}
 	commenter := &recordingCommenter{}
-	verifier := &mockPRVerifierWithMerge{state: "MERGED", sha: "abc", mergedAt: "2026-10-26T00:00:00Z", body: partialBody}
+	verifier := &mockPRVerifierWithMerge{state: "MERGED", sha: "abc", mergedAt: "2026-10-26T00:00:00Z", body: prBody}
 	res := EvaluatePostMerge(context.Background(), fetcher, closer, epic, verifier, board, PostMergeInput{
 		IssueNumber:     600,
 		RepositoryOwner: "nightgauge",
@@ -371,8 +398,9 @@ func runPartialIssue(t *testing.T, state, issueBody string, closeErr error) (Pos
 		ProjectNumber:   6,
 		PRNumber:        77,
 		Remainder:       commenter,
+		BodyEditor:      editor,
 	})
-	return res, closer, board, commenter
+	return res, closer, board, commenter, editor
 }
 
 // #3269 part D: an issue the supervisor already closed with every criterion
@@ -405,10 +433,10 @@ func TestPostMergeRefsPROpenIssueCountsCurrentBody(t *testing.T) {
 	if !res.PartialDelivery || board.calledWith.status != "Ready" {
 		t.Errorf("PartialDelivery=%v board=%q, want true/Ready", res.PartialDelivery, board.calledWith.status)
 	}
-	if got := strings.Join(res.UnmetCriteria, "|"); got != "third" {
-		t.Errorf("UnmetCriteria = %q, want the issue body's one unticked criterion (the PR listed second|third)", got)
+	if got := strings.Join(res.UnmetCriteria, "|"); got != "second|third" {
+		t.Errorf("UnmetCriteria = %q, want second|third: a criterion the PR lists unmet stays even when ticked (#3318)", got)
 	}
-	if !strings.Contains(commenter.body, "- third") || strings.Contains(commenter.body, "- second") {
+	if !strings.Contains(commenter.body, "- third") || !strings.Contains(commenter.body, "- second") {
 		t.Errorf("remainder comment names the stale list:\n%s", commenter.body)
 	}
 }
@@ -419,7 +447,7 @@ func TestPostMergeOwnerOnlyRemainderStaysInReview(t *testing.T) {
 	body := "## Acceptance criteria\n\n- [x] code change\n" +
 		"- [ ] **Supervisor:** run the failure drill after merge\n" +
 		"- [ ] **Owner** signs off the rollout\n"
-	res, _, board, commenter := runPartialIssue(t, "OPEN", body, nil)
+	res, _, board, commenter, _ := runPartialIssuePR(t, "OPEN", body, metOnlyPRBody, nil)
 	if !res.PartialDelivery || !res.OwnerOnlyRemainder || !res.ReadyWithheld {
 		t.Errorf("PartialDelivery=%v OwnerOnlyRemainder=%v ReadyWithheld=%v, want all true", res.PartialDelivery, res.OwnerOnlyRemainder, res.ReadyWithheld)
 	}
@@ -445,7 +473,7 @@ func TestPostMergeMixedRemainderReturnsToReady(t *testing.T) {
 // re-queued — nothing is left to deliver, so it stays In review.
 func TestPostMergeAllTickedOpenIssueStaysInReview(t *testing.T) {
 	body := "## Acceptance criteria\n\n- [x] first\n- [x] second\n"
-	res, closer, board, commenter := runPartialIssue(t, "OPEN", body, nil)
+	res, closer, board, commenter, _ := runPartialIssuePR(t, "OPEN", body, metOnlyPRBody, nil)
 	if closer.called {
 		t.Error("CloseIssue must not run for an open issue with a Refs PR")
 	}
@@ -464,14 +492,183 @@ func TestPostMergeAllTickedOpenIssueStaysInReview(t *testing.T) {
 // comment and round-trips through ParsePartialDeliveryComment.
 func TestRemainderQuotesWrappedCriterionWhole(t *testing.T) {
 	body := "## Acceptance Criteria\n- [x] done\n- [ ] Unmet criterion that\n  wraps onto a second line.\n"
-	unmet, ok := issueUnmetCriteria(body)
+	unmet := computeRemainder(body, "", nil).Remaining
 	want := "Unmet criterion that wraps onto a second line."
-	if !ok || len(unmet) != 1 || unmet[0] != want {
-		t.Fatalf("issueUnmetCriteria = %q, want [%q]", unmet, want)
+	if len(unmet) != 1 || unmet[0] != want {
+		t.Fatalf("Remaining = %q, want [%q]", unmet, want)
 	}
-	comment := remainderComment(3294, unmet, false, false, false, false)
+	comment := remainderComment(3294, unmet, nil, false, false, false, false)
 	pr, criteria, ok := ParsePartialDeliveryComment(comment)
 	if !ok || pr != 3294 || len(criteria) != 1 || criteria[0] != want {
 		t.Errorf("round-trip = %d %q %v, want 3294 [%q]\n%s", pr, criteria, ok, want, comment)
+	}
+}
+
+// #3318: #2847's body after PR #3317 merged. Numbered criteria 1–4, the
+// criterion-3 checkbox and three Part B boxes, all unticked, with the
+// original list repeated inside <details>. The PR met five criteria and
+// reported two post-merge measurements not verifiable.
+const issue2847Body = "## Problem\n\nThe gate burns time.\n\n" +
+	"## Acceptance criteria\n\n" +
+	"1. ci-local records every failing gate step in the run summary.\n" +
+	"2. Fast static checks run before the full gate and stop it on failure.\n" +
+	"3. Median gate wall clock falls by a third, measured over 8 runs after merge.\n" +
+	"4. Fewer than 1 in 10 pushes fail CI after a green local gate, measured over 20 merges.\n\n" +
+	"- [ ] Median gate wall clock falls by a third, measured over 8 runs after merge. (criterion 3 as a checkbox, for ac-mark)\n\n" +
+	"### Acceptance criteria (Part B)\n\n" +
+	"- [ ] ci-local --fast typechecks touched TypeScript packages.\n" +
+	"- [ ] gate-summary scopes whole runs to a build.\n" +
+	"- [ ] Fewer than 1 in 10 pushes fail CI after a green local gate, measured over 20 merges.\n\n" +
+	"<details><summary>Original list</summary>\n\n" +
+	"1. ci-local records every failing gate step in the run summary.\n" +
+	"2. A stale criterion nobody tracks any more.\n\n" +
+	"</details>\n"
+
+const pr3317Body = "## Summary\n\nci-local --fast typechecks touched packages.\n\n" +
+	"## Acceptance criteria\n\n" +
+	"- ✅ met: ci-local records every failing gate step in the run summary. (diff: scripts/ci-local.sh)\n" +
+	"- ✅ met: Fast static checks run before the full gate and stop it on failure. (diff: scripts/ci-local.sh)\n" +
+	"- ✅ met: ci-local --fast typechecks touched TypeScript packages. (test: TestFastTypecheck (scoped))\n" +
+	"- ✅ met: gate-summary scopes whole runs to a build. (test: TestGateSummaryScope)\n" +
+	"- ✅ met: Fast static checks run before the full gate and stop it on failure (duplicate wording). (diff: x)\n\n" +
+	"## ⚠️ Unmet acceptance criteria\n\nThis PR leaves #2847 open. These criteria are unmet or could not be verified:\n\n" +
+	"- Median gate wall clock falls by a third, measured over 8 runs after merge.\n" +
+	"  _❔ not verifiable — needs: 8 gate runs after merge_\n" +
+	"- Fewer than 1 in 10 pushes fail CI after a green local gate, measured over 20 merges.\n" +
+	"  _❔ not verifiable — needs: 20 merges_\n\nRefs #2847\n"
+
+func TestPostMergeIssue2847PR3317Remainder(t *testing.T) {
+	res, _, board, commenter, editor := runPartialIssuePR(t, "OPEN", issue2847Body, pr3317Body, nil)
+	want := []string{
+		"Median gate wall clock falls by a third, measured over 8 runs after merge.",
+		"Fewer than 1 in 10 pushes fail CI after a green local gate, measured over 20 merges.",
+	}
+	if strings.Join(res.UnmetCriteria, "|") != strings.Join(want, "|") {
+		t.Errorf("UnmetCriteria = %q, want %q", res.UnmetCriteria, want)
+	}
+	if !strings.Contains(editor.body, "- [x] ci-local --fast typechecks") || !strings.Contains(editor.body, "- [x] gate-summary scopes") {
+		t.Errorf("met Part B boxes not ticked:\n%s", editor.body)
+	}
+	if !strings.Contains(editor.body, "- [ ] Median gate wall clock") || !strings.Contains(editor.body, "- [ ] Fewer than 1 in 10") {
+		t.Errorf("unmet boxes were ticked:\n%s", editor.body)
+	}
+	if strings.Join(intsToStrings(res.TickedCriteria), ",") != "2,3" {
+		t.Errorf("TickedCriteria = %v, want [2 3]", res.TickedCriteria)
+	}
+	if !res.OwnerOnlyRemainder || board.calledWith.status != "In review" || board.syncs != 1 {
+		t.Errorf("OwnerOnlyRemainder=%v board %d sync(s) to %q, want true and once to In review", res.OwnerOnlyRemainder, board.syncs, board.calledWith.status)
+	}
+	for _, c := range want {
+		if !strings.Contains(commenter.body, "- "+c) {
+			t.Errorf("comment does not list %q:\n%s", c, commenter.body)
+		}
+	}
+	if strings.Contains(commenter.body, "back in Ready") {
+		t.Errorf("comment claims Ready:\n%s", commenter.body)
+	}
+}
+
+// #3318 AC2: a numbered criterion the PR lists unmet is in the remainder and
+// the issue returns to Ready.
+func TestPostMergeNumberedUnmetCriterionReturnsToReady(t *testing.T) {
+	issue := "## Acceptance criteria\n\n1. The hook ticks every met checkbox in the issue body.\n2. The flag is documented.\n"
+	pr := "## Acceptance criteria\n\n- ✅ met: The flag is documented. (diff: docs)\n\n" +
+		"## ⚠️ Unmet acceptance criteria\n\n- The hook ticks every met checkbox in the issue body.\n  _❌ unmet — test: missing_\n\nRefs #600\n"
+	res, _, board, _, editor := runPartialIssuePR(t, "OPEN", issue, pr, nil)
+	if got := strings.Join(res.UnmetCriteria, "|"); got != "The hook ticks every met checkbox in the issue body." {
+		t.Errorf("UnmetCriteria = %q", got)
+	}
+	if res.OwnerOnlyRemainder || board.calledWith.status != "Ready" {
+		t.Errorf("OwnerOnlyRemainder=%v board=%q, want false/Ready", res.OwnerOnlyRemainder, board.calledWith.status)
+	}
+	if editor.calls != 0 {
+		t.Errorf("numbered items have no box; EditIssue called %d time(s)", editor.calls)
+	}
+}
+
+// A failed tick fails the hook but keeps the remainder right.
+func TestPostMergeTickFailureKeepsRemainder(t *testing.T) {
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#600": {NodeID: "I_node600", Number: 600, State: "OPEN", Body: issue2847Body},
+	}}
+	editor := &recordingBodyEditor{err: errors.New("boom")}
+	verifier := &mockPRVerifierWithMerge{state: "MERGED", sha: "abc", body: pr3317Body}
+	res := EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{}, &mockEpicAutoCloser{result: &gh.AutoCloseSingleResult{Status: "skipped"}}, verifier, &mockBoardSyncer{}, PostMergeInput{
+		IssueNumber: 600, RepositoryOwner: "nightgauge", RepositoryName: "nightgauge", ProjectNumber: 6, PRNumber: 77, BodyEditor: editor,
+	})
+	if !res.Failed || res.TickedCriteria != nil || len(res.UnmetCriteria) != 2 {
+		t.Errorf("Failed=%v Ticked=%v Unmet=%q, want true/nil/2", res.Failed, res.TickedCriteria, res.UnmetCriteria)
+	}
+	if editor.calls != 1 || editor.nodeID != "I_node600" || res.Error != "boom" {
+		t.Errorf("EditIssue calls=%d node=%q Error=%q", editor.calls, editor.nodeID, res.Error)
+	}
+}
+
+func intsToStrings(in []int) []string {
+	out := make([]string, len(in))
+	for i, n := range in {
+		out[i] = strconv.Itoa(n)
+	}
+	return out
+}
+
+// A re-run over an already-merged PR does not tick: the body may have been
+// edited after merge.
+func TestPostMergeAlreadyMergedDoesNotTick(t *testing.T) {
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#600": {NodeID: "I_node600", Number: 600, State: "OPEN", Body: issue2847Body},
+	}}
+	editor := &recordingBodyEditor{}
+	verifier := &mockPRVerifierWithMerge{state: "MERGED", sha: "abc", body: pr3317Body}
+	res := EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{}, &mockEpicAutoCloser{result: &gh.AutoCloseSingleResult{Status: "skipped"}}, verifier, &mockBoardSyncer{}, PostMergeInput{
+		IssueNumber: 600, RepositoryOwner: "nightgauge", RepositoryName: "nightgauge", ProjectNumber: 6, PRNumber: 77, BodyEditor: editor, AlreadyMerged: true,
+	})
+	if editor.calls != 0 || res.TickedCriteria != nil || len(res.UnmetCriteria) != 2 {
+		t.Errorf("calls=%d Ticked=%v Unmet=%q", editor.calls, res.TickedCriteria, res.UnmetCriteria)
+	}
+}
+
+// #3318 round 3: a numbered criterion PR A met has no box to tick, so PR A's
+// marker comment records it; PR B, which does not restate it, must not put it
+// back in the remainder.
+func TestPostMergeNumberedMetCriterionPersistsAcrossRefsPRs(t *testing.T) {
+	issue := "## Acceptance criteria\n\n1. The first criterion holds.\n2. The second criterion holds.\n3. The third criterion holds.\n"
+	run := func(prNumber int, prBody string, trusted []trust.Comment) (PostMergeResult, *recordingCommenter, *recordingBodyEditor) {
+		t.Helper()
+		editor := &recordingBodyEditor{}
+		commenter := &recordingCommenter{trusted: trusted}
+		fetcher := &mockFetcher{issues: map[string]*types.Issue{
+			"nightgauge/nightgauge#600": {NodeID: "I_node600", Number: 600, State: "OPEN", Body: issue},
+		}}
+		verifier := &mockPRVerifierWithMerge{state: "MERGED", sha: "abc", body: prBody}
+		res := EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{}, &mockEpicAutoCloser{result: &gh.AutoCloseSingleResult{Status: "skipped"}}, verifier, &mockBoardSyncer{}, PostMergeInput{
+			IssueNumber: 600, RepositoryOwner: "nightgauge", RepositoryName: "nightgauge", ProjectNumber: 6,
+			PRNumber: prNumber, Remainder: commenter, BodyEditor: editor,
+		})
+		return res, commenter, editor
+	}
+	unmet3 := "## ⚠️ Unmet acceptance criteria\n\n- The third criterion holds.\n  _❌ unmet — x_\n\n"
+	prA := "## Acceptance criteria\n\n- ✅ met: The first criterion holds. (diff: a)\n- ✅ met: The second criterion holds. (diff: b)\n\n" + unmet3 + "Refs #600\n"
+	resA, commA, edA := run(77, prA, nil)
+	if got := strings.Join(resA.UnmetCriteria, "|"); got != "The third criterion holds." {
+		t.Fatalf("after A UnmetCriteria = %q", got)
+	}
+	if got := ParsePartialDeliveryMet(commA.body); !reflect.DeepEqual(got, []string{"The first criterion holds.", "The second criterion holds."}) {
+		t.Fatalf("A's marker met list = %q\n%s", got, commA.body)
+	}
+	if _, rem, _ := ParsePartialDeliveryComment(commA.body); !reflect.DeepEqual(rem, []string{"The third criterion holds."}) {
+		t.Errorf("A's marker remaining list = %q", rem)
+	}
+
+	prB := "## Acceptance criteria\n\n- ✅ met: The first criterion holds. (diff: c)\n\n" + unmet3 + "Refs #600\n"
+	resB, commB, edB := run(78, prB, []trust.Comment{{Body: commA.body}})
+	if !reflect.DeepEqual(resB.UnmetCriteria, []string{"The third criterion holds."}) {
+		t.Errorf("after B UnmetCriteria = %q, want exactly criterion 3", resB.UnmetCriteria)
+	}
+	if commB.calls != 1 {
+		t.Errorf("B posted %d comment(s), want 1", commB.calls)
+	}
+	if edA.calls+edB.calls != 0 {
+		t.Errorf("numbered items have no box; EditIssue called %d time(s)", edA.calls+edB.calls)
 	}
 }
