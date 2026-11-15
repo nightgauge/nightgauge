@@ -16,6 +16,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `scripts/ci-local.sh --fast` now typechecks each TypeScript workspace package the change touches (`tsc --noEmit -p`, or the package's `typecheck` script), so a type error like #3312's fails feature-validate's pre-gate in seconds instead of the full gate (#2847). A package that depends on another workspace package is left out, since that dependency's types are build output; today that is `packages/nightgauge`, which the full gate still typechecks. `scripts/test-ci-local-fast-typecheck.sh` reproduces #3312 from a fixture of its `grep-for-symbol.ts`. `exit-records gate-summary --since` also accepts an RFC 3339 instant, to count only the runs of one build.
+
 - Pre-flight `grep-for-symbol` now also searches shell, YAML, JSON, TOML and SQL files, and a backticked span it cannot find leaves the criterion undecided instead of unmet, so a PR that meets it keeps `Closes`. A declared symbol (`function X`) that is absent is still unmet (#3312).
 
 ### Changed

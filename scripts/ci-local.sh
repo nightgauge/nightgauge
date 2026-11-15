@@ -161,6 +161,10 @@ LEDGER_PROBE=""
 # skips the machine-state backstop. With `--list-steps` it lists that subset.
 # The subset is read from the calls themselves, so there is no second list.
 FAST_MODE=0
+# `--ts-scope-probe` prints the fast TypeScript typecheck decision for each
+# workspace package and exits, so scripts/test-ci-local-fast-typecheck.sh asserts
+# the derivation without running a gate (#2847).
+TS_SCOPE_PROBE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --list-steps) LIST_STEPS=1; shift ;;
@@ -171,6 +175,7 @@ while [ "$#" -gt 0 ]; do
     --no-reuse) NO_REUSE=1; shift ;;
     --ledger-probe) LEDGER_PROBE="${2:-pass}"; shift; [ "$#" -gt 0 ] && shift ;;
     --scope-probe) SCOPE_PROBE=1; shift ;;
+    --ts-scope-probe) TS_SCOPE_PROBE=1; shift ;;
     --summary-probe)
       SUMMARY_PROBE=1
       shift
@@ -404,6 +409,129 @@ EOF
   return 0
 }
 
+# ── The fast TypeScript typecheck (#2847) ────────────────────────────────────
+#
+# `--fast` typechecks each TypeScript workspace package the change touches, so a
+# type error like #3312's fails the pre-gate in seconds instead of the full gate
+# twenty minutes later. The packages come from the root package.json
+# `workspaces`, so a new package is picked up without editing this script.
+#
+# A package is ELIGIBLE only when its typecheck reads tracked files and installed
+# dependencies alone. One that depends on another workspace package is left out:
+# a workspace dependency resolves through that package's `types`, which is build
+# output a fresh worktree lacks. Today that leaves out packages/nightgauge, which
+# imports @nightgauge/sdk through packages/nightgauge-sdk/dist/index.d.ts; the
+# full gate typechecks it after "Build SDK types". An eligible package runs its
+# own `typecheck` script when it has one, and `tsc --noEmit -p <dir>` otherwise.
+#
+# TOUCHED, under `--fast`, is decided over changed_paths and FAILS CLOSED like
+# decide_go_scope: no origin/main or an empty derivation typechecks every
+# eligible package. A root package.json, package-lock.json or tsconfig*.json
+# touches every package. The full gate typechecks every eligible package.
+
+# One line per workspace package: <dir> TAB <script|tsc|excluded> TAB <reason>.
+ts_workspace_plan() {
+  node -e '
+const fs = require("fs"), path = require("path");
+const root = JSON.parse(fs.readFileSync("package.json", "utf8"));
+let globs = root.workspaces || [];
+if (!Array.isArray(globs)) globs = globs.packages || [];
+const dirs = [];
+for (const g of globs) {
+  if (g.endsWith("/*")) {
+    const base = g.slice(0, -2);
+    for (const e of fs.readdirSync(base).sort()) {
+      const d = base + "/" + e;
+      if (fs.existsSync(path.join(d, "package.json"))) dirs.push(d);
+    }
+  } else if (g.includes("*")) {
+    throw new Error("unsupported workspaces pattern: " + g);
+  } else {
+    dirs.push(g);
+  }
+}
+const pkgs = dirs.map((d) => ({ d, j: JSON.parse(fs.readFileSync(path.join(d, "package.json"), "utf8")) }));
+const names = new Set(pkgs.map((p) => p.j.name));
+for (const { d, j } of pkgs) {
+  const deps = Object.assign({}, j.dependencies, j.devDependencies, j.peerDependencies, j.optionalDependencies);
+  const ws = Object.keys(deps).filter((n) => names.has(n) && n !== j.name).sort();
+  const script = Boolean(j.scripts && j.scripts.typecheck);
+  if (ws.length) {
+    console.log(d + "\texcluded\tdepends on workspace package " + ws.join(", ") +
+      ", whose types resolve through its build output");
+  } else if (!script && !fs.existsSync(path.join(d, "tsconfig.json"))) {
+    console.log(d + "\texcluded\thas neither a typecheck script nor a tsconfig.json");
+  } else {
+    console.log(d + "\t" + (script ? "script" : "tsc") + "\t");
+  }
+}'
+}
+
+ts_typecheck_label() { # ts_typecheck_label <dir> <script|tsc>
+  if [ "$2" = script ]; then
+    printf 'TypeScript typecheck %s (npm run typecheck)\n' "$1"
+  else
+    printf 'TypeScript typecheck %s (tsc --noEmit -p)\n' "$1"
+  fi
+}
+
+TS_CHANGED_DERIVED=0
+TS_CHANGED=""
+TS_CHANGED_REASON=""
+
+# ts_package_touched <dir> — status 0 when `--fast` must typecheck <dir>.
+# Sets TS_TOUCH_REASON either way.
+ts_package_touched() {
+  local dir="$1" p
+  if [ "$TS_CHANGED_DERIVED" -eq 0 ]; then
+    TS_CHANGED_DERIVED=1
+    if ! git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+      TS_CHANGED_REASON="origin/main is not available, so the changed set cannot be derived"
+    else
+      TS_CHANGED="$(changed_paths)"
+      [ -n "$TS_CHANGED" ] ||
+        TS_CHANGED_REASON="the changed set came back EMPTY, which is indistinguishable from a broken derivation"
+    fi
+  fi
+  if [ -n "$TS_CHANGED_REASON" ]; then
+    TS_TOUCH_REASON="$TS_CHANGED_REASON — typechecking every eligible package"
+    return 0
+  fi
+  while IFS= read -r p; do
+    case "$p" in
+      "$dir"/*)
+        TS_TOUCH_REASON="$p changed"
+        return 0
+        ;;
+      package.json|package-lock.json|tsconfig*.json)
+        TS_TOUCH_REASON="$p changed, and it is an input to every package"
+        return 0
+        ;;
+    esac
+  done <<EOF
+$TS_CHANGED
+EOF
+  TS_TOUCH_REASON="none of the changed paths is under $dir or a root package.json, package-lock.json or tsconfig*.json"
+  return 1
+}
+
+if [ "$TS_SCOPE_PROBE" -eq 1 ]; then
+  ts_probe_plan="$(ts_workspace_plan)" || exit 2
+  while IFS="$(printf '\t')" read -r ts_dir ts_kind ts_reason; do
+    [ -n "$ts_dir" ] || continue
+    if [ "$ts_kind" = excluded ]; then
+      echo "$ts_dir: EXCLUDED — $ts_reason"
+    elif ts_package_touched "$ts_dir"; then
+      echo "$ts_dir: RUN ($(ts_typecheck_label "$ts_dir" "$ts_kind")) — $TS_TOUCH_REASON"
+    else
+      echo "$ts_dir: SKIP — $TS_TOUCH_REASON"
+    fi
+  done <<EOF
+$ts_probe_plan
+EOF
+  exit 0
+fi
+
 if [ "$SCOPE_PROBE" -eq 1 ]; then
   decide_go_scope
   scope_probe_paths="$(changed_paths)"
@@ -577,6 +705,8 @@ REQUIRED_FILES=(
   scripts/test-go-test-shard.sh
   scripts/test-ci-local-go-pass-stamp.sh
   scripts/test-ci-local-gate-reuse.sh
+  scripts/test-ci-local-fast-typecheck.sh
+  tests/fixtures/ci-local-fast-3312/grep-for-symbol.ts.fixture
   scripts/state-backstop.sh
   scripts/test-state-backstop.sh
   scripts/doctor-app-permission-walkthrough.sh
@@ -1779,6 +1909,13 @@ run_step "go test shard partitioner" bash scripts/test-go-test-shard.sh
 run_step "ci-local.sh gate ledger reuse" \
   bash scripts/test-ci-local-gate-reuse.sh
 
+# 0c5. The fast TypeScript typecheck and the #3312 reproduction (#2847): runs
+#      `--fast` once, in a throwaway worktree with #3312's grep-for-symbol.ts
+#      overlaid, and asserts the type error fails it in under 120 s, then stops
+#      the nested run at the SDK step's verdict. Seconds.
+run_step "ci-local.sh fast TypeScript typecheck (#3312 reproduction)" \
+  bash scripts/test-ci-local-fast-typecheck.sh
+
 # 0d. The machine-state backstop's own regression suite (#2311), before the
 #     steps it watches: the last step trusts it to go red when a run removes or
 #     changes the developer's ~/.nightgauge data. Seconds, against a fake HOME.
@@ -1899,6 +2036,45 @@ skip_go_test_steps() {
     skip_step "$(go_shard_label $step)" "$1"
   done
 }
+
+# 0e. TypeScript workspace typecheck (#2847), before the Go build so that under
+#     `--fast` a type error is the first thing reported. Reads tracked files and
+#     installed dependencies only, never build output; see ts_workspace_plan.
+#     LEFT OUT: a package that depends on another workspace package, because
+#     that dependency's types are its build output. packages/nightgauge is left
+#     out for that reason (it imports @nightgauge/sdk via dist/index.d.ts) and
+#     is typechecked by the full gate after "Build SDK types".
+if ! TS_PLAN="$(ts_workspace_plan)"; then
+  echo "! cannot read the TypeScript workspace packages from package.json [INFRASTRUCTURE — the checks could not run]" >&2
+  exit 2
+fi
+while IFS="$(printf '\t')" read -r _ts_dir _ts_kind _ts_reason; do
+  [ -n "$_ts_dir" ] || continue
+  if [ "$_ts_kind" = excluded ]; then
+    if [ "$FAST_MODE" -eq 1 ] && [ "$LIST_STEPS" -eq 0 ]; then
+      echo ""
+      echo "⊘ TypeScript typecheck $_ts_dir is not in the fast subset: it $_ts_reason."
+      echo "  The full gate typechecks it after the build."
+    fi
+    continue
+  fi
+  _ts_label="$(ts_typecheck_label "$_ts_dir" "$_ts_kind")"
+  if [ "$FAST_MODE" -eq 1 ] && [ "$LIST_STEPS" -eq 0 ] && ! ts_package_touched "$_ts_dir"; then
+    echo ""
+    echo "⊘ $_ts_label"
+    echo "  not touched — $TS_TOUCH_REASON. Not run by --fast; the full gate runs it."
+    continue
+  fi
+  if [ "$_ts_kind" = script ]; then
+    run_step --fast "$_ts_label" npm run typecheck --workspace="$_ts_dir"
+  else
+    # The package's own compiler, not the root one: a workspace package can pin a
+    # different TypeScript (the SDK does), and the build uses that one.
+    run_step --fast "$_ts_label" npm exec --no --workspace="$_ts_dir" -- tsc --noEmit -p .
+  fi
+done <<EOF
+$TS_PLAN
+EOF
 
 decide_go_scope
 run_step "go build ./..." go build ./...
