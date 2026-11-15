@@ -127,8 +127,9 @@ var openCodeForgeEnv = []string{"GITHUB_TOKEN", "GITLAB_TOKEN"}
 // GOOGLE_CLOUD_PROJECT (read from the 1.18.30 bundled source).
 //
 // OpenCode would therefore load these providers in any run that holds their
-// variables. The per-run config's enabled_providers, narrowed to the
-// dispatched provider key, is what keeps them out (BuildOpenCodeConfig):
+// variables. The per-run config's provider allow-list (2.x: the provider.use
+// policies, deny "*" then allow the dispatched provider key; 1.x's
+// enabled_providers) is what keeps them out (BuildOpenCodeConfig):
 // observed on 1.18.30, with AWS_REGION, GITHUB_TOKEN, GITLAB_TOKEN and
 // GOOGLE_CLOUD_PROJECT set, a run loads amazon-bedrock, github-copilot, gitlab
 // and google-vertex without it and only the dispatched provider with it. A
@@ -222,8 +223,8 @@ func openCodeDispatchProvider(model string) string {
 // a run can reach: OpenCode could load a platform provider on the credentials
 // the stage keeps, a provider's own loader can find credentials the catalog
 // does not name, such as an AWS profile, and OpenCode's own hosted provider
-// serves its free models with no key. The per-run config's enabled_providers
-// decides it (BuildOpenCodeConfig).
+// serves its free models with no key. The per-run config's provider.use
+// policies decide it (BuildOpenCodeConfig).
 //
 // The stage's tools share the environment, so they lose the withheld
 // variables too. A tool that needs one fails without it, or uses a login of

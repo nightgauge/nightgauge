@@ -206,18 +206,22 @@ func TestOpenCodeConfigVerbResolvesStageTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	var config struct {
-		Permission struct {
-			Read map[string]string `json:"read"`
-			Edit map[string]string `json:"edit"`
-			Bash map[string]string `json:"bash"`
-		} `json:"permission"`
+		Permissions []struct {
+			Action, Resource, Effect string
+		} `json:"permissions"`
 	}
 	if err := json.Unmarshal([]byte(run.ConfigContent), &config); err != nil {
 		t.Fatalf("config_content is not the expected shape: %v\n%s", err, run.ConfigContent)
 	}
-	for key, m := range map[string]map[string]string{"read": config.Permission.Read, "edit": config.Permission.Edit, "bash": config.Permission.Bash} {
-		if m["*"] != "allow" {
-			t.Errorf("permission.%s[\"*\"] = %q, want \"allow\": the fixture SKILL.md grants Read/Write/Edit/Bash, so the verb should resolve them, not print the deny-everything default", key, m["*"])
+	for _, action := range []string{"read", "edit", "shell"} {
+		var effect string
+		for _, r := range config.Permissions {
+			if r.Action == action && r.Resource == "*" {
+				effect = r.Effect
+			}
+		}
+		if effect != "allow" {
+			t.Errorf("permissions %s \"*\" = %q, want \"allow\": the fixture SKILL.md grants Read/Write/Edit/Bash, so the verb should resolve them, not print the deny-everything default", action, effect)
 		}
 	}
 	skillDirPattern := filepath.Clean(skillDir) + "/**"
@@ -501,8 +505,10 @@ func TestOpenCodeConfigVerbCarriesTheRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cfg struct {
-		Instructions []string                  `json:"instructions"`
-		MCP          map[string]map[string]any `json:"mcp"`
+		Instructions []string `json:"instructions"`
+		MCP          struct {
+			Servers map[string]map[string]any `json:"servers"`
+		} `json:"mcp"`
 	}
 	if err := json.Unmarshal([]byte(run.ConfigContent), &cfg); err != nil {
 		t.Fatal(err)
@@ -514,8 +520,8 @@ func TestOpenCodeConfigVerbCarriesTheRepository(t *testing.T) {
 	if len(cfg.Instructions) != 2 || cfg.Instructions[0] != filepath.Join(resolved, "CLAUDE.md") || cfg.Instructions[1] != filepath.Join(run.RunDir, "nightgauge", "steering.md") {
 		t.Errorf("instructions = %q; want the worktree's CLAUDE.md, then the run's steering file", cfg.Instructions)
 	}
-	if len(cfg.MCP) != 1 || cfg.MCP["r"]["headers"].(map[string]any)["Authorization"] != "Bearer {env:MCP_FIXTURE_TOKEN}" {
-		t.Errorf("mcp = %v; want r alone, its credential a {env:MCP_FIXTURE_TOKEN} reference", cfg.MCP)
+	if len(cfg.MCP.Servers) != 1 || cfg.MCP.Servers["r"]["headers"].(map[string]any)["Authorization"] != "Bearer {env:MCP_FIXTURE_TOKEN}" {
+		t.Errorf("mcp.servers = %v; want r alone, its credential a {env:MCP_FIXTURE_TOKEN} reference", cfg.MCP.Servers)
 	}
 	if !strings.Contains(stderr, "not started: evil") {
 		t.Errorf("stderr does not name the server left out:\n%s", stderr)
@@ -528,12 +534,12 @@ func TestOpenCodeConfigVerbCarriesTheRepository(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &run); err != nil {
 		t.Fatal(err)
 	}
-	cfg.MCP = nil
+	cfg.MCP.Servers = nil
 	if err := json.Unmarshal([]byte(run.ConfigContent), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.MCP) != 0 || !strings.Contains(stderr, "records no repository") {
-		t.Errorf("without --repo, mcp = %v and stderr:\n%s", cfg.MCP, stderr)
+	if len(cfg.MCP.Servers) != 0 || !strings.Contains(stderr, "records no repository") {
+		t.Errorf("without --repo, mcp.servers = %v and stderr:\n%s", cfg.MCP.Servers, stderr)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -238,9 +239,9 @@ func endpointModelLimit(t *testing.T, built OpenCodeRunConfig) (context, input, 
 	t.Helper()
 	doc := decodeOpenCodeConfig(t, built.Content)
 	limit := func(key string) any {
-		return jsonPath(doc, "provider", "lmstudio", "models", "qwen/qwen3.8-27b", "limit", key)
+		return jsonPath(doc, "providers", "lmstudio", "models", "qwen/qwen3.8-27b", "limit", key)
 	}
-	return limit("context"), limit("input"), limit("output"), jsonPath(doc, "compaction", "reserved")
+	return limit("context"), limit("input"), limit("output"), jsonPath(doc, "compaction", "buffer")
 }
 
 // TestOpenCodeConfigLimitsFromTheDescriptor: with no machine-tier override,
@@ -371,7 +372,7 @@ func TestPrepareOpenCodeRunDiscoversFromTheMachineTierEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := decodeOpenCodeConfig(t, run.ConfigContent)
-	if got := jsonPath(doc, "provider", "lmstudio", "models", model, "limit", "context"); got != float64(65536) {
+	if got := jsonPath(doc, "providers", "lmstudio", "models", model, "limit", "context"); got != float64(65536) {
 		t.Errorf("limit.context = %v; want 65536, the window the machine-tier endpoint has loaded", got)
 	}
 	mu.Lock()
@@ -405,14 +406,11 @@ func TestOpenCodeConfigStepsCap(t *testing.T) {
 		}
 		doc := decodeOpenCodeConfig(t, built.Content)
 		for _, path := range [][]string{
-			{"agent", "build"}, {"agent", "plan"}, {"agent", "general"}, {"agent", "explore"}, {"mode", "build"}, {"mode", "plan"},
+			{"agents", "build"}, {"agents", "plan"}, {"agents", "general"}, {"agents", "explore"},
 		} {
 			if got := jsonPath(doc, append(path, "steps")...); got != float64(tc.want) {
 				t.Errorf("MaxTurns %d: %s.steps = %v, want %d", tc.maxTurns, strings.Join(path, "."), got, tc.want)
 			}
-		}
-		if got := jsonPath(doc, "subagent_depth"); got != float64(openCodeSubagentDepth) {
-			t.Errorf("subagent_depth = %v, want %d", got, openCodeSubagentDepth)
 		}
 	}
 	if openCodeDefaultSteps <= 0 {
@@ -420,57 +418,58 @@ func TestOpenCodeConfigStepsCap(t *testing.T) {
 	}
 }
 
-// TestOpenCodeConfigPinsEveryModel (ADR-022 § 15): small_model and every
-// built-in agent's model are the dispatched model, the title agent is off so
-// no title request is sent, the stage runs on the build agent, no agent can be
-// disabled from below, and OpenCode loads the dispatched provider alone.
-// Observed on 1.18.30, without enabled_providers a run holding the forge
-// tokens and cloud credentials a stage keeps loads amazon-bedrock,
-// github-copilot, gitlab, google-vertex and OpenCode's own free provider.
+// TestOpenCodeConfigPinsEveryModel (ADR-022 § 15): the model and every
+// built-in agent's model (the title agent's is 1.x's small_model) are the
+// dispatched model, the title agent is off so no title request is sent, the
+// stage runs on the build agent, no agent can be disabled from below, and
+// OpenCode loads the dispatched provider alone. Observed on 1.18.30, without
+// a provider allow-list a run holding the forge tokens and cloud credentials
+// a stage keeps loads amazon-bedrock, github-copilot, gitlab, google-vertex
+// and OpenCode's own free provider; on 2.x that list is the provider.use
+// policies.
 func TestOpenCodeConfigPinsEveryModel(t *testing.T) {
 	for _, tc := range []struct {
-		model, key string
-		env        map[string]string
+		model, key, id string
+		env            map[string]string
 	}{
-		{"lmstudio/qwen/qwen3.8-27b", "lmstudio", nil},
-		{"anthropic/claude-sonnet-5", "anthropic", map[string]string{"ANTHROPIC_API_KEY": "fake-anthropic-credential-1625"}},
-		{"openai/gpt-5.5", "openai", nil},
+		{"lmstudio/qwen/qwen3.8-27b", "lmstudio", "qwen/qwen3.8-27b", nil},
+		{"anthropic/claude-sonnet-5", "anthropic", "claude-sonnet-5", map[string]string{"ANTHROPIC_API_KEY": "fake-anthropic-credential-1625"}},
+		{"openai/gpt-5.5", "openai", "gpt-5.5", nil},
 	} {
 		built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: tc.model}, tc.env)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.model, err)
 		}
 		doc := decodeOpenCodeConfig(t, built.Content)
-		for _, key := range []string{"model", "small_model"} {
-			if doc[key] != tc.model {
-				t.Errorf("%s: %s = %v, want the dispatched model", tc.model, key, doc[key])
-			}
+		want := map[string]any{"providerID": tc.key, "model": tc.id}
+		if got, _ := doc["model"].(map[string]any); !maps.Equal(got, want) {
+			t.Errorf("%s: model = %v, want %v", tc.model, doc["model"], want)
 		}
-		agents, _ := doc["agent"].(map[string]any)
+		agents, _ := doc["agents"].(map[string]any)
 		for _, name := range []string{"build", "plan", "general", "explore", "title", "summary", "compaction"} {
 			agent, _ := agents[name].(map[string]any)
-			if agent["model"] != tc.model {
-				t.Errorf("%s: agent.%s.model = %v, want the dispatched model", tc.model, name, agent["model"])
+			if got, _ := agent["model"].(map[string]any); !maps.Equal(got, want) {
+				t.Errorf("%s: agents.%s.model = %v, want the dispatched model", tc.model, name, agent["model"])
 			}
 			wantDisabled := name == "title"
-			if agent["disable"] != wantDisabled {
-				t.Errorf("%s: agent.%s.disable = %v, want %v", tc.model, name, agent["disable"], wantDisabled)
+			if agent["disabled"] != wantDisabled {
+				t.Errorf("%s: agents.%s.disabled = %v, want %v", tc.model, name, agent["disabled"], wantDisabled)
 			}
 		}
 		if doc["default_agent"] != "build" {
 			t.Errorf("%s: default_agent = %v, want build", tc.model, doc["default_agent"])
 		}
-		enabled, _ := doc["enabled_providers"].([]any)
-		if len(enabled) != 1 || enabled[0] != tc.key {
-			t.Errorf("%s: enabled_providers = %v, want [%s] alone", tc.model, enabled, tc.key)
+		policies, _ := json.Marshal(doc["policies"])
+		if wantP := `[{"action":"provider.use","effect":"deny","resource":"*"},{"action":"provider.use","effect":"allow","resource":"` + tc.key + `"}]`; string(policies) != wantP {
+			t.Errorf("%s: policies = %s, want %s", tc.model, policies, wantP)
 		}
-		providers, _ := doc["provider"].(map[string]any)
+		providers, _ := doc["providers"].(map[string]any)
 		for key := range providers {
 			if key != tc.key {
 				t.Errorf("%s: the config injects a block for %s, which the stage does not dispatch to", tc.model, key)
 			}
 		}
-		for key, want := range map[string]any{"share": "disabled", "autoupdate": false, "snapshot": false, "lsp": true, "formatter": true} {
+		for key, want := range map[string]any{"share": "disabled", "update": "disable", "snapshots": false, "lsp": true, "formatter": true} {
 			if doc[key] != want {
 				t.Errorf("%s: %s = %v, want %v", tc.model, key, doc[key], want)
 			}
@@ -478,40 +477,39 @@ func TestOpenCodeConfigPinsEveryModel(t *testing.T) {
 		if got, _ := doc["instructions"].([]any); got == nil || len(got) != 0 {
 			t.Errorf("%s: instructions = %v, want []", tc.model, doc["instructions"])
 		}
-		if got, _ := jsonPath(doc, "skills", "urls").([]any); got == nil || len(got) != 0 {
-			t.Errorf("%s: skills.urls = %v, want []", tc.model, jsonPath(doc, "skills", "urls"))
+		if got, _ := doc["skills"].([]any); got == nil || len(got) != 0 {
+			t.Errorf("%s: skills = %v, want []", tc.model, doc["skills"])
+		}
+		for _, key := range openCodeLegacyKeys {
+			if _, ok := doc[key]; ok {
+				t.Errorf("%s: the document carries the 1.x key %q", tc.model, key)
+			}
 		}
 	}
 }
 
-// TestOpenCodeConfigPinsTheModeEntries: observed on opencode 1.18.30, every
-// mode.<name> of the merged config is merged over agent.<name> after all
-// layers, so a repository's mode.title could turn session titles back on and
-// its mode.compaction could move the transcript to another model. The content
-// sets the mode entry of every built-in primary agent to its agent entry, so
-// its own values win. The general and explore subagents get none: a mode
-// entry would make them primary agents.
-func TestOpenCodeConfigPinsTheModeEntries(t *testing.T) {
-	built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", MaxTurns: 40}, nil)
+// TestOpenCodeConfigDeniesNestedSubagents: 2.x drops 1.x's subagent_depth
+// without a word, and its general and explore subagents were then offered the
+// subagent tool again (spike #3197 § 2). Each carries a subagent deny of its
+// own, which 2.x appends after the document's rules, so it is the last match
+// whatever the document grants (today it denies subagent to every agent,
+// ADR-022 AC9; which actions the document emits is #3304's). The primary
+// agents carry none.
+func TestOpenCodeConfigDeniesNestedSubagents(t *testing.T) {
+	built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", MaxTurns: 40, AllowedTools: []string{"Task", "Read"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	doc := decodeOpenCodeConfig(t, built.Content)
-	for _, name := range []string{"build", "plan", "title", "summary", "compaction"} {
-		agent, mode := jsonPath(doc, "agent", name), jsonPath(doc, "mode", name)
-		if mode == nil {
-			t.Errorf("mode.%s is not set, so a lower layer's mode.%s would win over agent.%s", name, name, name)
-			continue
-		}
-		a, _ := json.Marshal(agent)
-		m, _ := json.Marshal(mode)
-		if string(a) != string(m) {
-			t.Errorf("mode.%s = %s, want agent.%s's %s", name, m, name, a)
+	for _, name := range []string{"general", "explore"} {
+		got, _ := json.Marshal(jsonPath(doc, "agents", name, "permissions"))
+		if want := `[{"action":"subagent","effect":"deny","resource":"*"}]`; string(got) != want {
+			t.Errorf("agents.%s.permissions = %s, want %s", name, got, want)
 		}
 	}
-	for _, name := range []string{"general", "explore"} {
-		if mode := jsonPath(doc, "mode", name); mode != nil {
-			t.Errorf("mode.%s = %v; a mode entry turns the %s subagent into a primary agent", name, mode, name)
+	for _, name := range []string{"build", "plan", "title", "summary", "compaction"} {
+		if p := jsonPath(doc, "agents", name, "permissions"); p != nil {
+			t.Errorf("agents.%s.permissions = %v; only the subagent-mode agents carry the deny", name, p)
 		}
 	}
 }
@@ -541,7 +539,7 @@ func TestOpenCodeConfigLimitInputHoldsTheCompactionThreshold(t *testing.T) {
 		}
 		doc := decodeOpenCodeConfig(t, built.Content)
 		limit := func(key string) any {
-			return jsonPath(doc, "provider", "lmstudio", "models", "qwen/qwen3.8-27b", "limit", key)
+			return jsonPath(doc, "providers", "lmstudio", "models", "qwen/qwen3.8-27b", "limit", key)
 		}
 		if limit("input") != float64(tc.limit.Context) {
 			t.Errorf("%+v: limit.input = %v, want limit.context %d", tc.limit, limit("input"), tc.limit.Context)
@@ -549,7 +547,7 @@ func TestOpenCodeConfigLimitInputHoldsTheCompactionThreshold(t *testing.T) {
 		if limit("output") != float64(tc.output) {
 			t.Errorf("%+v: limit.output = %v, want %d", tc.limit, limit("output"), tc.output)
 		}
-		reserved, _ := jsonPath(doc, "compaction", "reserved").(float64)
+		reserved, _ := jsonPath(doc, "compaction", "buffer").(float64)
 		if threshold := tc.limit.Context - int(reserved); threshold != tc.limit.Context-tc.output {
 			t.Errorf("%+v, max tokens %d: compaction.reserved = %v puts the threshold at %d, want limit.context less limit.output, %d",
 				tc.limit, tc.maxTokens, reserved, threshold, tc.limit.Context-tc.output)
@@ -569,19 +567,19 @@ func TestOpenCodeConfigAnthropicBlockPinsItsServer(t *testing.T) {
 	}
 	doc := decodeOpenCodeConfig(t, built.Content)
 	for path, want := range map[string]string{
-		"npm":             "@ai-sdk/anthropic",
-		"options.baseURL": "https://api.anthropic.com/v1",
-		"options.apiKey":  "{env:ANTHROPIC_API_KEY}",
+		"package":          "aisdk:@ai-sdk/anthropic",
+		"settings.baseURL": "https://api.anthropic.com/v1",
+		"settings.apiKey":  "{env:ANTHROPIC_API_KEY}",
 	} {
-		if got := jsonPath(doc, append([]string{"provider", "anthropic"}, strings.Split(path, ".")...)...); got != want {
-			t.Errorf("provider.anthropic.%s = %v, want %q", path, got, want)
+		if got := jsonPath(doc, append([]string{"providers", "anthropic"}, strings.Split(path, ".")...)...); got != want {
+			t.Errorf("providers.anthropic.%s = %v, want %q", path, got, want)
 		}
 	}
 }
 
-// TestOpenCodeConfigPinsTheServedModel: on opencode 1.18.30 a config model
-// entry's id is the model name OpenCode sends, and its provider.npm is the SDK
-// package that receives the key, whatever the provider block says. The
+// TestOpenCodeConfigPinsTheServedModel: a config model entry's modelID is the
+// model name OpenCode sends, and its package is the SDK package that receives
+// the key, whatever the provider block says (1.x's id and provider.npm). The
 // content's own entry for the dispatched model sets both, so a lower layer's
 // entry cannot send the stage to another model or package. The model is sent
 // under the id the stage names. The anthropic entry sets nothing else, so the
@@ -592,29 +590,29 @@ func TestOpenCodeConfigPinsTheServedModel(t *testing.T) {
 		model, key, modelID, servedID, npm string
 		keys                               []string
 	}{
-		{"lmstudio/qwen/qwen3.8-27b", "lmstudio", "qwen/qwen3.8-27b", "qwen/qwen3.8-27b", "@ai-sdk/openai-compatible", []string{"id", "limit", "provider", "tool_call"}},
-		{"anthropic/claude-sonnet-5", "anthropic", "claude-sonnet-5", "claude-sonnet-5", "@ai-sdk/anthropic", []string{"id", "provider"}},
-		{"anthropic/claude-haiku-4-5-20251001", "anthropic", "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001", "@ai-sdk/anthropic", []string{"id", "provider"}},
+		{"lmstudio/qwen/qwen3.8-27b", "lmstudio", "qwen/qwen3.8-27b", "qwen/qwen3.8-27b", "aisdk:@ai-sdk/openai-compatible", []string{"capabilities", "limit", "modelID", "package"}},
+		{"anthropic/claude-sonnet-5", "anthropic", "claude-sonnet-5", "claude-sonnet-5", "aisdk:@ai-sdk/anthropic", []string{"modelID", "package"}},
+		{"anthropic/claude-haiku-4-5-20251001", "anthropic", "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001", "aisdk:@ai-sdk/anthropic", []string{"modelID", "package"}},
 	} {
 		built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: tc.model}, anthropicKey)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.model, err)
 		}
 		doc := decodeOpenCodeConfig(t, built.Content)
-		models, _ := jsonPath(doc, "provider", tc.key, "models").(map[string]any)
+		models, _ := jsonPath(doc, "providers", tc.key, "models").(map[string]any)
 		if len(models) != 1 || models[tc.modelID] == nil {
 			t.Errorf("%s: provider.%s.models = %v, want the dispatched model's entry alone", tc.model, tc.key, keysOf(models))
 			continue
 		}
 		entry, _ := models[tc.modelID].(map[string]any)
-		if got := entry["id"]; got != tc.servedID {
-			t.Errorf("%s: models.%s.id = %v, want %q, so a lower layer cannot send another model", tc.model, tc.modelID, got, tc.servedID)
+		if got := entry["modelID"]; got != tc.servedID {
+			t.Errorf("%s: models.%s.modelID = %v, want %q, so a lower layer cannot send another model", tc.model, tc.modelID, got, tc.servedID)
 		}
-		if got := jsonPath(entry, "provider", "npm"); got != tc.npm {
-			t.Errorf("%s: models.%s.provider.npm = %v, want %q, the provider block's own package", tc.model, tc.modelID, got, tc.npm)
+		if got := entry["package"]; got != tc.npm {
+			t.Errorf("%s: models.%s.package = %v, want %q, the provider block's own package", tc.model, tc.modelID, got, tc.npm)
 		}
-		if got := jsonPath(doc, "provider", tc.key, "npm"); got != tc.npm {
-			t.Errorf("%s: provider.%s.npm = %v, want %q", tc.model, tc.key, got, tc.npm)
+		if got := jsonPath(doc, "providers", tc.key, "package"); got != tc.npm {
+			t.Errorf("%s: providers.%s.package = %v, want %q", tc.model, tc.key, got, tc.npm)
 		}
 		if got := keysOf(entry); !slices.Equal(got, tc.keys) {
 			t.Errorf("%s: models.%s sets %v, want %v", tc.model, tc.modelID, got, tc.keys)
@@ -758,8 +756,8 @@ func TestOpenCodeConfigCredentialsAreReferences(t *testing.T) {
 		}
 	}
 	doc := decodeOpenCodeConfig(t, built.Content)
-	if got := jsonPath(doc, "provider", "anthropic", "options", "apiKey"); got != "{env:ANTHROPIC_API_KEY}" {
-		t.Errorf("provider.anthropic.options.apiKey = %v, want the reference {env:ANTHROPIC_API_KEY}", got)
+	if got := jsonPath(doc, "providers", "anthropic", "settings", "apiKey"); got != "{env:ANTHROPIC_API_KEY}" {
+		t.Errorf("providers.anthropic.settings.apiKey = %v, want the reference {env:ANTHROPIC_API_KEY}", got)
 	}
 }
 
@@ -832,8 +830,8 @@ func TestOpenCodeConfigRefusesAnMcpServerItCannotWriteSafely(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a server with {env:VAR} references was refused: %v", err)
 	}
-	if got := jsonPath(decodeOpenCodeConfig(t, built.Content), "mcp", "s", "type"); got != "local" {
-		t.Errorf("mcp.s.type = %v", got)
+	if got := jsonPath(decodeOpenCodeConfig(t, built.Content), "mcp", "servers", "s", "type"); got != "local" {
+		t.Errorf("mcp.servers.s.type = %v", got)
 	}
 }
 
@@ -924,22 +922,22 @@ func TestOpenCodeConfigProviderKeyedByEndpoint(t *testing.T) {
 			t.Fatalf("id %s: %v", id, err)
 		}
 		doc := decodeOpenCodeConfig(t, built.Content)
-		providers, _ := doc["provider"].(map[string]any)
+		providers, _ := doc["providers"].(map[string]any)
 		if len(providers) != 1 || providers[id] == nil {
 			t.Errorf("id %s: provider keys = %v, want [%s]", id, keysOf(providers), id)
 		}
-		if got := jsonPath(doc, "provider", id, "options", "baseURL"); got != "{file:"+filepath.Join(goldenRunRoot, "nightgauge", id+".base-url")+"}" {
+		if got := jsonPath(doc, "providers", id, "settings", "baseURL"); got != "{file:"+filepath.Join(goldenRunRoot, "nightgauge", id+".base-url")+"}" {
 			t.Errorf("id %s: baseURL = %v, want a reference to the endpoint's own file", id, got)
 		}
-		if got := jsonPath(doc, "provider", id, "models", "qwen/qwen3.8-27b", "limit", "context"); got != float64(131072) {
+		if got := jsonPath(doc, "providers", id, "models", "qwen/qwen3.8-27b", "limit", "context"); got != float64(131072) {
 			t.Errorf("id %s: the model's limit.context = %v, want 131072", id, got)
 		}
-		for _, key := range []string{"npm", "env"} {
-			if jsonPath(doc, "provider", id, key) == nil {
+		for _, key := range []string{"package", "env"} {
+			if jsonPath(doc, "providers", id, key) == nil {
 				t.Errorf("id %s: the endpoint block has no %s", id, key)
 			}
 		}
-		if got := jsonPath(doc, "provider", id, "options", "apiKey"); got != "" {
+		if got := jsonPath(doc, "providers", id, "settings", "apiKey"); got != "" {
 			t.Errorf("id %s: apiKey = %v, want empty so no variable binds to the endpoint", id, got)
 		}
 	}
@@ -1048,7 +1046,7 @@ func TestOpenCodeConfigMaxTokensLowersTheOutputLimit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := jsonPath(decodeOpenCodeConfig(t, built.Content), "provider", "lmstudio", "models", "qwen/qwen3.8-27b", "limit", "output")
+		got := jsonPath(decodeOpenCodeConfig(t, built.Content), "providers", "lmstudio", "models", "qwen/qwen3.8-27b", "limit", "output")
 		if got != float64(tc.want) {
 			t.Errorf("MaxTokens %d: limit.output = %v, want %d", tc.maxTokens, got, tc.want)
 		}
@@ -1094,9 +1092,9 @@ func TestOpenCodeEndpointsValidateTheFlatKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := decodeOpenCodeConfig(t, built.Content)
-	if jsonPath(doc, "provider", "lmstudio", "options", "headerTimeout") != float64(300000) ||
-		jsonPath(doc, "provider", "lmstudio", "options", "chunkTimeout") != float64(120000) {
-		t.Errorf("configured timeouts did not reach the block in milliseconds: %v", jsonPath(doc, "provider", "lmstudio", "options"))
+	if jsonPath(doc, "providers", "lmstudio", "settings", "headerTimeout") != float64(300000) ||
+		jsonPath(doc, "providers", "lmstudio", "settings", "chunkTimeout") != float64(120000) {
+		t.Errorf("configured timeouts did not reach the block in milliseconds: %v", jsonPath(doc, "providers", "lmstudio", "settings"))
 	}
 }
 
@@ -1111,8 +1109,8 @@ func TestOpenCodeConfigOperatorOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := decodeOpenCodeConfig(t, built.Content)
-	if doc["snapshot"] != true || doc["lsp"] != false || doc["formatter"] != false {
-		t.Errorf("snapshot, lsp, formatter = %v, %v, %v; want the operator's true, false, false", doc["snapshot"], doc["lsp"], doc["formatter"])
+	if doc["snapshots"] != true || doc["lsp"] != false || doc["formatter"] != false {
+		t.Errorf("snapshots, lsp, formatter = %v, %v, %v; want the operator's true, false, false", doc["snapshots"], doc["lsp"], doc["formatter"])
 	}
 }
 
@@ -1360,7 +1358,7 @@ func TestPrepareOpenCodeRunKeepsTheBaseURLOutOfTheEnvironment(t *testing.T) {
 // TestOpenCodeConfigPerEndpointProviders (#1678): two declared endpoints of
 // one kind, dispatched to one of them, produce two provider keys, each with
 // its own baseURL file and its own limit.context/limit.output. Collapsing
-// them to one key would leave one entry in doc["provider"], which the length
+// them to one key would leave one entry in doc["providers"], which the length
 // check below catches.
 func TestOpenCodeConfigPerEndpointProviders(t *testing.T) {
 	settings := config.OpenCodeConfig{
@@ -1382,12 +1380,12 @@ func TestOpenCodeConfigPerEndpointProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := decodeOpenCodeConfig(t, built.Content)
-	providers, _ := doc["provider"].(map[string]any)
+	providers, _ := doc["providers"].(map[string]any)
 	if len(providers) != 2 {
 		t.Fatalf("provider = %v, want exactly 2 keys", providers)
 	}
 	baseURL := func(id string) string {
-		opts, _ := jsonPath(providers, id, "options").(map[string]any)
+		opts, _ := jsonPath(providers, id, "settings").(map[string]any)
 		s, _ := opts["baseURL"].(string)
 		return s
 	}
@@ -1499,14 +1497,14 @@ func TestOpenCodeConfigVariantsPassthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := decodeOpenCodeConfig(t, built.Content)
-	variants, _ := jsonPath(doc, "provider", "mtplx", "models", "qwen/qwen3.8-27b", "variants").([]any)
+	variants, _ := jsonPath(doc, "providers", "mtplx", "models", "qwen/qwen3.8-27b", "variants").([]any)
 	want := []string{"low", "medium", "xhigh"}
 	if len(variants) != len(want) {
 		t.Fatalf("variants = %v, want %v", variants, want)
 	}
 	for i, w := range want {
-		if variants[i] != w {
-			t.Errorf("variants[%d] = %v, want %q", i, variants[i], w)
+		if got, _ := variants[i].(map[string]any); len(got) != 1 || got["id"] != w {
+			t.Errorf("variants[%d] = %v, want {id: %q}", i, variants[i], w)
 		}
 	}
 }

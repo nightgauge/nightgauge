@@ -1,3 +1,14 @@
 {
-  "permission": { "bash": { "*": "allow", "rm -rf *": "deny" } }
+  "permissions": [
+    {
+      "action": "shell",
+      "resource": "*",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "rm -rf *",
+      "effect": "deny"
+    }
+  ]
 }

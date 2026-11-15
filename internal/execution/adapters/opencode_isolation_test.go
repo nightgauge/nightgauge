@@ -1319,7 +1319,7 @@ func TestOpenCodePrepareRunRoot(t *testing.T) {
 	if want := filepath.Join(first.Dir, "home"); first.Env["HOME"] != want {
 		t.Errorf("Env[HOME] = %q, want %q", first.Env["HOME"], want)
 	}
-	if content := first.Env["OPENCODE_CONFIG_CONTENT"]; !strings.Contains(content, `"enabled_providers":["lmstudio"]`) {
+	if content := first.Env["OPENCODE_CONFIG_CONTENT"]; !strings.Contains(content, `{"action":"provider.use","effect":"allow","resource":"lmstudio"}`) {
 		t.Errorf("Env does not carry the run's config as OPENCODE_CONFIG_CONTENT: %q", content)
 	}
 	if _, err := os.Lstat(orphanRoot); !os.IsNotExist(err) {

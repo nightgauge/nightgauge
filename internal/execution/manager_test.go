@@ -1349,7 +1349,7 @@ func TestOpenCodeSpawnWithholdsInheritedOpenCodeVariablesAndForeignKeys(t *testi
 	if p := env["OPENCODE_SERVER_PASSWORD"]; p == "" || strings.Contains(p, sentinel) {
 		t.Error("the child did not get the adapter's own server password in place of the inherited one")
 	}
-	if c := env["OPENCODE_CONFIG_CONTENT"]; strings.Contains(c, sentinel) || !strings.Contains(c, `"small_model":"lmstudio/qwen/qwen3.8-27b"`) {
+	if c := env["OPENCODE_CONFIG_CONTENT"]; strings.Contains(c, sentinel) || !strings.Contains(c, `"model":{"model":"qwen/qwen3.8-27b","providerID":"lmstudio"}`) {
 		t.Errorf("the child did not get the per-run config in place of the inherited one: %.120q", c)
 	}
 	if env["OPENCODE_DISABLE_SHARE"] != "1" {
@@ -1610,15 +1610,17 @@ func TestOpenCodeZeroContextLimitRefusesBeforeSpawn(t *testing.T) {
 	}
 	env, entries := fake.env(t)
 	var cfg struct {
-		EnabledProviders []string `json:"enabled_providers"`
-		Agent            map[string]struct {
+		Policies []struct {
+			Action, Resource, Effect string
+		} `json:"policies"`
+		Agents map[string]struct {
 			Steps int `json:"steps"`
-		} `json:"agent"`
+		} `json:"agents"`
 	}
 	if err := json.Unmarshal([]byte(env["OPENCODE_CONFIG_CONTENT"]), &cfg); err != nil {
 		t.Fatalf("the child's OPENCODE_CONFIG_CONTENT is not the per-run config: %v", err)
 	}
-	if len(cfg.EnabledProviders) != 1 || cfg.EnabledProviders[0] != "lmstudio" || cfg.Agent["build"].Steps != 40 {
+	if len(cfg.Policies) != 2 || cfg.Policies[1].Resource != "lmstudio" || cfg.Policies[1].Effect != "allow" || cfg.Agents["build"].Steps != 40 {
 		t.Errorf("the child's config does not pin the provider and the steps cap: %+v", cfg)
 	}
 	for _, kv := range entries {

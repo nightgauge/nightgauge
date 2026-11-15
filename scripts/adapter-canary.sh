@@ -39,18 +39,6 @@
 #                                         labelled with [version] — the
 #                                         INSTALLED version, not the
 #                                         manifest's max_tested.
-#   schema-diff [--live-file F]          Compare the live OpenCode config
-#          [--version V]                 schema (fetched from
-#                                         schemaContractSchemaURL, or read from
-#                                         F) against the manifest's
-#                                         config_schema_sha256, labelling the
-#                                         row with V (the installed version;
-#                                         defaults to max_tested). Prints one
-#                                         JSON row; on a difference, re-runs
-#                                         the #1634 suite against the live
-#                                         schema, and fails (result: fail, and
-#                                         this command's own exit code) when
-#                                         that suite fails.
 #   report <summary.json>                File or update one open
 #                                         "canary: <adapter> <version> drift"
 #                                         issue per adapter+version with a
@@ -60,8 +48,8 @@
 # ADAPTER_CANARY_INSTALL_TIMEOUT, ADAPTER_CANARY_GOTEST_TIMEOUT); a
 # stub-provider this script starts is always killed and its death confirmed
 # before the function that started it returns (opencode_canary_stub_start/
-# opencode_canary_stub_stop). flag-contract, opencode-canary and schema-diff
-# all return the underlying check's own exit code, so a caller that pipes
+# opencode_canary_stub_stop). flag-contract and opencode-canary both
+# return the underlying check's own exit code, so a caller that pipes
 # their output through `tee` needs `set -o pipefail` (or `shell: bash`, which
 # implies it) to see it — see .github/workflows/adapter-canary.yml.
 set -uo pipefail
@@ -71,11 +59,10 @@ MANIFESTS="$REPO_ROOT/internal/adaptercompat/manifests"
 COMMITTED_HELP_DIR="$REPO_ROOT/internal/execution/adapters/testdata/cli-help"
 HELP_TIMEOUT="${ADAPTER_CANARY_TIMEOUT:-300}"
 INSTALL_TIMEOUT="${ADAPTER_CANARY_INSTALL_TIMEOUT:-900}"
-# ci.yml wraps its own `go test` in `timeout 10m`; the three suites this
-# script drives (flag-contract, opencode-canary, schema-diff) get the same
+# ci.yml wraps its own `go test` in `timeout 10m`; the two suites this
+# script drives (flag-contract, opencode-canary) get the same
 # backstop so a hang in the suite, not just the install, is bounded.
 GOTEST_TIMEOUT="${ADAPTER_CANARY_GOTEST_TIMEOUT:-600}"
-SCHEMA_URL="https://opencode.ai/config.json"
 
 die() {
   echo "adapter-canary.sh: $*" >&2
@@ -140,7 +127,7 @@ bounded() {
 
 # abspath <path>: an absolute path, because `go test` runs with the PACKAGE
 # directory as its working directory, not the caller's — a relative
-# NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR or NIGHTGAUGE_OPENCODE_SCHEMA_PATH would
+# NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR would
 # resolve against the wrong directory otherwise.
 abspath() {
   local p="$1"
@@ -596,133 +583,6 @@ PY
 }
 
 # ---------------------------------------------------------------------------
-# schema-diff
-# ---------------------------------------------------------------------------
-
-# schema_top_level_diff <old> <new>: added/removed/deprecated top-level
-# property names, one JSON object. A property is deprecated by either form
-# schema_contract_test.go's schemaDeprecated accepts, on the property or on
-# the definition it $refs: the draft 2020-12 `deprecated` keyword, or a
-# description starting "@deprecated". OpenCode's published schema used only
-# the second until 2026-10-15, and mostly the first since (#2465).
-schema_top_level_diff() {
-  python3 - "$1" "$2" <<'PY'
-import json, sys
-
-def top_level(path):
-    doc = json.load(open(path))
-    node = doc
-    for _ in range(8):
-        if "properties" in node:
-            return node["properties"]
-        if "$ref" in node and "$defs" in doc:
-            name = node["$ref"].split("/")[-1]
-            node = doc["$defs"].get(name, {})
-            continue
-        break
-    return {}
-
-old_props = top_level(sys.argv[1])
-new_props = top_level(sys.argv[2])
-added = sorted(set(new_props) - set(old_props))
-removed = sorted(set(old_props) - set(new_props))
-new_doc = json.load(open(sys.argv[2]))
-
-def marked(schema):
-    if not isinstance(schema, dict):
-        return False
-    if schema.get("deprecated") is True:
-        return True
-    return (schema.get("description") or "").strip().startswith("@deprecated")
-
-def deprecated_property(schema):
-    if not isinstance(schema, dict):
-        return False
-    ref = schema.get("$ref") or ""
-    target = new_doc.get("$defs", {}).get(ref[len("#/$defs/"):]) if ref.startswith("#/$defs/") else None
-    return marked(schema) or marked(target)
-
-deprecated = sorted(name for name, schema in new_props.items() if deprecated_property(schema))
-print(json.dumps({"added": added, "removed": removed, "deprecated": deprecated}))
-PY
-}
-
-cmd_schema_diff() {
-  local live_file="" opt_version=""
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --live-file) live_file="$2"; shift 2 ;;
-      --version) opt_version="$2"; shift 2 ;;
-      *) die "schema-diff: unknown argument '$1'" ;;
-    esac
-  done
-
-  local pinned="$REPO_ROOT/internal/execution/adapters/testdata/opencode-config-schema/opencode-config.schema.json"
-  local pinned_sum manifest_sum
-  pinned_sum="$(sha256_of "$pinned")"
-  manifest_sum="$(manifest_field opencode '.config_schema_sha256')"
-  if [ "$manifest_sum" != "$pinned_sum" ]; then
-    die "the manifest's config_schema_sha256 ($manifest_sum) does not match the pinned schema's own hash ($pinned_sum); TestManifestSchemaHash should already have caught this"
-  fi
-
-  local live
-  if [ -n "$live_file" ]; then
-    live="$live_file"
-  else
-    live="$(mktemp "${TMPDIR:-/tmp}/adapter-canary-live-schema.XXXXXX")"
-    bounded "$HELP_TIMEOUT" curl -fsSL --proto '=https' -o "$live" "$SCHEMA_URL" \
-      || die "fetching $SCHEMA_URL failed"
-  fi
-
-  local live_sum
-  live_sum="$(sha256_of "$live")"
-  # The INSTALLED version, passed by the caller — not the manifest's
-  # max_tested, for the same reason cmd_opencode_canary takes it (a stale
-  # label defeats the per-adapter+version dedupe in `report`). Falls back to
-  # max_tested only when the caller has no other version to hand.
-  local version="$opt_version"
-  [ -n "$version" ] || version="$(manifest_field opencode '.max_tested // ""')"
-
-  if [ "$live_sum" = "$manifest_sum" ]; then
-    json_row adapter=opencode version="$version" check=schema-diff result=unchanged detail=""
-    [ -n "$live_file" ] || rm -f "$live"
-    return 0
-  fi
-
-  local diff
-  diff="$(schema_top_level_diff "$pinned" "$live")"
-
-  local suite_out rc=0
-  suite_out="$(mktemp "${TMPDIR:-/tmp}/adapter-canary-schema-suite.XXXXXX")"
-  ( cd "$REPO_ROOT" && NIGHTGAUGE_OPENCODE_SCHEMA_PATH="$live" \
-      bounded "$GOTEST_TIMEOUT" go test ./internal/execution/adapters \
-        -run 'TestGeneratedConfigsValidate|TestValidatorRejectsUnknownKey|TestNoDeprecatedKeys|TestSecurityKeysPresentAndKnown' \
-        -count=1 ) >"$suite_out" 2>&1 || rc=$?
-
-  local suite_result="pass"
-  [ "$rc" -eq 0 ] || suite_result="fail"
-  local detail
-  detail="$(python3 - "$diff" "$suite_result" <<'PY'
-import json, sys
-d = json.loads(sys.argv[1])
-d["config_suite"] = sys.argv[2]
-print(json.dumps(d))
-PY
-)"
-  # A live schema that breaks the #1634 suite — including dropping or
-  # renaming a security key TestSecurityKeysPresentAndKnown exists to catch —
-  # is a real contract break, not mere "changed" bookkeeping: `report` only
-  # files a drift issue for a result=fail row, and this step must itself fail
-  # so the job goes red (once the tee/pipefail fix lets that status through).
-  local result="changed"
-  [ "$suite_result" = "fail" ] && result="fail"
-  json_row adapter=opencode version="$version" check=schema-diff result="$result" detail="$detail"
-  [ -n "$live_file" ] || rm -f "$live"
-  rm -f "$suite_out"
-  [ "$suite_result" = "pass" ]
-}
-
-# ---------------------------------------------------------------------------
 # stub-run: start/stop the real stub-provider BINARY (cmd/stub-provider),
 # bounded, PID captured and confirmed dead. Used only by
 # scripts/test-adapter-canary.sh to exercise the timeout/cleanup contract
@@ -845,14 +705,13 @@ PY
 
 main() {
   local cmd="${1:-}"
-  [ -n "$cmd" ] || die "usage: adapter-canary.sh <install|capture-help|flag-contract|opencode-canary|schema-diff|report> ..."
+  [ -n "$cmd" ] || die "usage: adapter-canary.sh <install|capture-help|flag-contract|opencode-canary|report> ..."
   shift
   case "$cmd" in
     install) cmd_install "$@" ;;
     capture-help) cmd_capture_help "$@" ;;
     flag-contract) cmd_flag_contract "$@" ;;
     opencode-canary) cmd_opencode_canary "$@" ;;
-    schema-diff) cmd_schema_diff "$@" ;;
     report) cmd_report "$@" ;;
     *) die "unknown subcommand '$cmd'" ;;
   esac

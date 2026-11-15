@@ -2235,7 +2235,7 @@ run_group "capture-cli-help.sh regression suite" \
 # 1b5. adapter-canary.sh regression suite (#1639) — the scheduled latest-CLI
 #      canary's implementation. Exercised against fixtures and a stubbed gh,
 #      never a live install of every manifest CLI (that is the workflow's own
-#      daily/PR run): the schema-diff leg, the report job's exact-title
+#      daily/PR run): the report job's exact-title
 #      dedupe, and the stub-provider's own bounded start/stop.
 run_group "adapter-canary.sh regression suite" \
   bash scripts/test-adapter-canary.sh

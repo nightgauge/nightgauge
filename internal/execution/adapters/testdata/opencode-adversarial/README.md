@@ -9,11 +9,11 @@ answers turns the suite red; the answers are also recorded in ADR-022 § 8.
 
 ```bash
 go test -tags opencode_integration ./internal/execution/adapters/ -count=1 -v \
-  -run 'TestOpenCode(PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess|MergeHarnessReclaimsOrphanedLocks)$'
+  -run 'TestOpenCode(PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess|MergeHarnessReclaimsOrphanedLocks|BuilderDocumentSurvives)$'
 ```
 
 The tests skip when `opencode` is not on `PATH`, except on CI (`CI=true`), where
-they fail. A binary other than 1.18.30 fails them.
+they fail. A binary other than 2.2.7 fails them.
 
 ## How a run is kept safe
 
@@ -35,7 +35,8 @@ they fail. A binary other than 1.18.30 fails them.
   60-second cap that kills the whole group. Its PID is recorded when it starts,
   and cleanup kills every recorded group and fails the test if a PID or group
   still answers `kill -0`. `TestOpenCodeMergeHarnessReapsEveryProcess` checks
-  that path against `opencode debug wait`, which never exits by itself. At the
+  that path against `opencode serve` on a kernel-picked loopback port, which
+  never exits by itself. At the
   cap, before the kill, the harness records the group's processes, their open
   sockets and files, OpenCode's lock directories, the registry stub's requests
   and the tail of OpenCode's log, and the failure prints them (#2454).
@@ -59,7 +60,31 @@ its own, and `@PROJECT_DIR@` in a JSON file becomes the copy's absolute path.
 `@REMOTE_URL@` in `q3-array-merge/remote-project/opencode.json` becomes the
 loopback model stub's URL.
 
+## Observed answers (opencode 2.2.7)
+
+2.x's `debug config --standalone` lists configuration sources (each
+directory and document, with the document's own keys) rather than the merged
+config, and `debug agents --standalone` prints each agent's resolved rules.
+The suite reads both. Every `debug` call passes `--standalone`, so it never
+reaches a shared background service.
+
+| Question                             | Answer on 2.2.7                                                                                                                                                                                                                                     |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Q1 `--pure` and plugins              | Skipped: needs a 2.x `opencode run` (#3303) and a directory plugin (#3302).                                                                                                                                                                         |
+| Q2 inline deny vs project allow      | Each layer's `permissions` list is appended after the one below, the inline document last; the last match wins. The 1.x `reordered` hole is closed.                                                                                                 |
+| Q3 array merge                       | Skipped: no merged view; needs a 2.x run (#3303).                                                                                                                                                                                                   |
+| Q4 provider `baseURL`                | Skipped: no merged view; needs a 2.x run on the stub (#3303).                                                                                                                                                                                       |
+| Q5 discovery above a worktree        | **Changed.** Discovery no longer stops at a git root: from the worktree, the checkout's `opencode.json` and `.opencode/` and the config above the checkout load. `OPENCODE_DISABLE_PROJECT_CONFIG=1`, which every dispatch sets, drops all of them. |
+| Q6 `OPENCODE_DISABLE_PROJECT_CONFIG` | Drops the project's documents, its `.opencode/` directory and every agent they define; the inline document stays.                                                                                                                                   |
+| Builder document                     | `BuildOpenCodeConfig`'s document loads key for key, and `general` and `explore` resolve `subagent` to deny.                                                                                                                                         |
+
+The fixtures under `q2-permission-precedence/` use 2.x `permissions` lists.
+The others keep 1.x keys: they are what a repository may still write, and
+2.x translates them.
+
 ## Observed answers (opencode 1.18.30)
+
+Recorded for history; the suite no longer runs against 1.18.30.
 
 Observed on 2026-09-13 on macOS 27.0 (arm64), and on Linux (arm64, Debian
 bookworm, Go 1.26.6) in a container started with `--network none`.

@@ -1070,3 +1070,38 @@ func TestAdapterFindings_OpenCodeGateAndRefusal(t *testing.T) {
 		t.Errorf("severity %q, want warning", refused.Severity)
 	}
 }
+
+// TestOpenCodeModelsProbeRunsStandalone: OpenCode 2.x connects `opencode
+// models` to its shared background service unless --standalone is passed, so
+// the catalog probe would list that service's catalog rather than the one its
+// own per-run document gives. A fake binary records the argv it receives.
+func TestOpenCodeModelsProbeRunsStandalone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake binary is a shell script")
+	}
+	dir := t.TempDir()
+	argv := filepath.Join(dir, "argv")
+	bin := filepath.Join(dir, "opencode")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argv + "\necho lmstudio/qwen/qwen3.8-27b\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settings := config.OpenCodeConfig{
+		Provider: "lm-studio", BaseURL: "http://127.0.0.1:1234/v1",
+		Limit: config.OpenCodeLimit{Context: 131072, Output: 8192},
+	}
+	out, err := runOpenCodeModels(bin, settings, "lmstudio/qwen/qwen3.8-27b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "lmstudio/qwen/qwen3.8-27b") {
+		t.Errorf("the probe's output = %q, want the fake catalog", out)
+	}
+	got, err := os.ReadFile(argv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "models\n--standalone\n"; string(got) != want {
+		t.Errorf("the probe ran opencode with argv %q, want %q", got, want)
+	}
+}

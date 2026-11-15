@@ -135,8 +135,10 @@ func TestPrepareOpenCodeRunGivesTheRepositorysSteeringAndMcp(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cfg struct {
-		Instructions []string                  `json:"instructions"`
-		MCP          map[string]map[string]any `json:"mcp"`
+		Instructions []string `json:"instructions"`
+		MCP          struct {
+			Servers map[string]map[string]any `json:"servers"`
+		} `json:"mcp"`
 	}
 	if err := json.Unmarshal([]byte(run.ConfigContent), &cfg); err != nil {
 		t.Fatal(err)
@@ -168,10 +170,10 @@ func TestPrepareOpenCodeRunGivesTheRepositorysSteeringAndMcp(t *testing.T) {
 		}
 	}
 
-	if names := slices.Sorted(maps.Keys(cfg.MCP)); !slices.Equal(names, []string{"a", "r"}) {
+	if names := slices.Sorted(maps.Keys(cfg.MCP.Servers)); !slices.Equal(names, []string{"a", "r"}) {
 		t.Errorf("mcp servers = %v, want exactly the forge's a and r", names)
 	}
-	if got := cfg.MCP["r"]["headers"].(map[string]any)["Authorization"]; got != "Bearer {env:MCP_FIXTURE_TOKEN}" {
+	if got := cfg.MCP.Servers["r"]["headers"].(map[string]any)["Authorization"]; got != "Bearer {env:MCP_FIXTURE_TOKEN}" {
 		t.Errorf("r's Authorization = %v, want the reference Bearer {env:MCP_FIXTURE_TOKEN}", got)
 	}
 	verb, err := json.Marshal(run)
@@ -251,12 +253,14 @@ func TestPrepareOpenCodeRunLeavesOutAnMcpValueOpenCodeCannotPaste(t *testing.T) 
 		t.Fatal(err)
 	}
 	var cfg struct {
-		MCP map[string]any `json:"mcp"`
+		MCP struct {
+			Servers map[string]any `json:"servers"`
+		} `json:"mcp"`
 	}
 	if err := json.Unmarshal([]byte(run.ConfigContent), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if names := slices.Sorted(maps.Keys(cfg.MCP)); !slices.Equal(names, []string{"a"}) {
+	if names := slices.Sorted(maps.Keys(cfg.MCP.Servers)); !slices.Equal(names, []string{"a"}) {
 		t.Errorf("mcp servers = %v, want a alone: r's variable holds a backslash", names)
 	}
 	if !strings.Contains(stderr, `MCP server "r" is not started: the value of MCP_FIXTURE_TOKEN holds`) {
@@ -311,12 +315,14 @@ func TestPrepareOpenCodeRunChecksMcpValuesInTheSpawnEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cfg struct {
-		MCP map[string]any `json:"mcp"`
+		MCP struct {
+			Servers map[string]any `json:"servers"`
+		} `json:"mcp"`
 	}
 	if err := json.Unmarshal([]byte(run.ConfigContent), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if names := slices.Sorted(maps.Keys(cfg.MCP)); !slices.Equal(names, []string{"withheld", "xdg"}) {
+	if names := slices.Sorted(maps.Keys(cfg.MCP.Servers)); !slices.Equal(names, []string{"withheld", "xdg"}) {
 		t.Errorf("mcp servers = %v, want withheld and xdg: gh's and content's values in the spawn hold a quote\n%s", names, stderr)
 	}
 	for server, variable := range map[string]string{"gh": "GH_CONFIG_DIR", "content": "OPENCODE_CONFIG_CONTENT"} {

@@ -625,8 +625,8 @@ func TestOpenCodeArgvHasNoBypassFlagsWithPermissionMap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(built.Content, `"permission"`) {
-		t.Fatalf("the built config carries no \"permission\" key:\n%s", built.Content)
+	if !strings.Contains(built.Content, `"permissions":[`) {
+		t.Fatalf("the built config carries no \"permissions\" list:\n%s", built.Content)
 	}
 
 	a := NewOpenCodeAdapter()

@@ -15,7 +15,6 @@
     "skip_reason": "No working standalone Copilot CLI output has been captured to build a catalog parser against; see internal/doctor/testdata/no-catalog-cli-probes."
   },
   "fixtures": ["internal/doctor/testdata/no-catalog-cli-probes/copilot-help.txt"],
-  "config_schema_sha256": "",
   "plugin_api_version": "",
   "experimental_hooks": [],
   "cache": {

@@ -92,14 +92,10 @@ type Manifest struct {
 	// the parsers reading this CLI's output.
 	Fixtures []string `json:"fixtures"`
 
-	// OpenCode-only. ConfigSchemaSHA256 is the SHA-256 of the OpenCode config
-	// schema pinned for max_tested, which every generated per-run config is
-	// validated against (internal/execution/adapters/schema_contract_test.go).
-	// PluginAPIVersion and ExperimentalHooks stay empty until the plugin
-	// scaffold and the plugin events fill them.
-	ConfigSchemaSHA256 string   `json:"config_schema_sha256"`
-	PluginAPIVersion   string   `json:"plugin_api_version"`
-	ExperimentalHooks  []string `json:"experimental_hooks"`
+	// OpenCode-only. PluginAPIVersion and ExperimentalHooks stay empty until
+	// the plugin scaffold and the plugin events fill them.
+	PluginAPIVersion  string   `json:"plugin_api_version"`
+	ExperimentalHooks []string `json:"experimental_hooks"`
 
 	// Cache declares the CLI's prompt-cache behaviour, which cache-affinity
 	// routing and session lineage read (#55). Required: a manifest that does
@@ -504,9 +500,6 @@ func (m Manifest) validate(file string, tree fs.FS) error {
 		}
 	}
 
-	if m.ConfigSchemaSHA256 != "" && !sha256Re.MatchString(m.ConfigSchemaSHA256) {
-		return fail("config_schema_sha256", "%q is not a lowercase hex SHA-256", m.ConfigSchemaSHA256)
-	}
 	return checkCache(m.Cache, fail)
 }
 

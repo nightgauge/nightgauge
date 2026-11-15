@@ -171,12 +171,20 @@ func defaultOpenCodeProbe() openCodeProbe {
 	}
 }
 
+// openCodeModelsArgs is the catalog probe's argv after the binary.
+// `opencode models --help` on 2.2.7 lists --standalone: "Run with a private
+// server instead of the background service".
+var openCodeModelsArgs = []string{"models", "--standalone"}
+
 // runOpenCodeModels runs `opencode models` as a probe, under the per-run
 // config a dispatch of model gets. The config refers to files in the run's
 // root, so it is built for the probe's own directory, which the files are
 // written to and which is removed afterwards. OpenCode lists a configured
 // endpoint's model without asking the server (observed on 1.18.30,
-// testdata/opencode-capture), so the probe needs no server.
+// testdata/opencode-capture), so the probe needs no server. It runs with
+// --standalone (openCodeModelsArgs): without it, OpenCode 2.x connects to its
+// shared background service, which loads that service's config rather than
+// the probe's own document (#3301).
 //
 // OpenCode lists a hosted provider's models only when one of the provider's
 // variables is set, and a probe inherits none. So each of the dispatched
@@ -198,7 +206,7 @@ func runOpenCodeModels(bin string, settings config.OpenCodeConfig, model string)
 		return "", err
 	}
 	set, _ := adapters.OpenCodeProviderVars(model, os.LookupEnv)
-	res, err := probe.Run(context.Background(), bin, []string{"models"}, built.Content, built.Files, set...)
+	res, err := probe.Run(context.Background(), bin, openCodeModelsArgs, built.Content, built.Files, set...)
 	if err != nil {
 		return "", err
 	}
@@ -534,14 +542,14 @@ func openCodePerRunConfig(p openCodeProbe, settings config.OpenCodeConfig, model
 func openCodeDeclaresModel(content, model string) bool {
 	key, id, _ := strings.Cut(strings.TrimSpace(model), "/")
 	var cfg struct {
-		Provider map[string]struct {
+		Providers map[string]struct {
 			Models map[string]json.RawMessage `json:"models"`
-		} `json:"provider"`
+		} `json:"providers"`
 	}
 	if json.Unmarshal([]byte(content), &cfg) != nil {
 		return false
 	}
-	_, ok := cfg.Provider[key].Models[id]
+	_, ok := cfg.Providers[key].Models[id]
 	return ok
 }
 
@@ -549,18 +557,18 @@ func openCodeDeclaresModel(content, model string) bool {
 // gives model id on the provider block key, or 0 when it gives none.
 func openCodeInjectedContext(content, key, id string) int {
 	var cfg struct {
-		Provider map[string]struct {
+		Providers map[string]struct {
 			Models map[string]struct {
 				Limit struct {
 					Context int `json:"context"`
 				} `json:"limit"`
 			} `json:"models"`
-		} `json:"provider"`
+		} `json:"providers"`
 	}
 	if json.Unmarshal([]byte(content), &cfg) != nil {
 		return 0
 	}
-	return cfg.Provider[key].Models[id].Limit.Context
+	return cfg.Providers[key].Models[id].Limit.Context
 }
 
 // checkOpenCodeEndpoints probes every model server the block declares. A

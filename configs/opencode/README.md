@@ -8,7 +8,8 @@ Starting points for running OpenCode by hand against a local model server:
 | `opencode.ollama.jsonc`   | Ollama    | `ollama`    | `http://localhost:11434/v1` |
 
 Copy one to `~/.config/opencode/opencode.jsonc`, or to a project's
-`opencode.jsonc`, and change the model id to one the server has loaded.
+`opencode.jsonc`, and change the model id to one the server has loaded. The
+templates use OpenCode 2.x's native keys and need OpenCode 2.2.7 or later.
 
 Each template sets what the stock examples leave out:
 
@@ -17,14 +18,14 @@ Each template sets what the stock examples leave out:
   context the model is _loaded_ with in LM Studio, or its `num_ctx` in Ollama.
 - **`headerTimeout` and `chunkTimeout`**, because a local model can take
   minutes to load and to produce its first token.
-- **`compaction`, `tool_output`, `share: "disabled"` and `autoupdate: false`.**
+- **`compaction`, `tool_output`, `share: "disabled"` and `update: "disable"`.**
 
 The templates hold no credentials. If a server needs a key, reference it as
 `{env:VAR}`, never as a literal.
 
 Pipeline runs do not read these files; the adapter builds a per-run config.
-Both templates are validated against the pinned OpenCode config schema by
-`internal/execution/adapters/templates_contract_test.go`.
+`internal/execution/adapters/templates_contract_test.go` checks that both
+templates carry no 1.x key, no credential and no non-loopback URL.
 
 To install the Nightgauge skills and `/nightgauge-*` commands into OpenCode,
 run `./scripts/install-agent-skills.sh --opencode-only`. Add `--with-plugin`
@@ -34,5 +35,5 @@ A plugin installed by an earlier `--with-plugin` run is not pruned by a later
 run without the flag, so that npm install keeps firing until you delete
 `plugins/nightgauge.js` and `plugins/nightgauge/` yourself.
 
-The templates carry no `permission` block: they do not restrict OpenCode's
-`bash`, `edit` or `task` tools. Add one yourself if you want those gated.
+The templates carry no `permissions` list: they do not restrict OpenCode's
+`shell`, `edit` or `subagent` tools. Add one yourself if you want those gated.

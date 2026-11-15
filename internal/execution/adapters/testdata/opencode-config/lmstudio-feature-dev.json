@@ -1,13 +1,26 @@
 {
-  "model": "lmstudio/qwen/qwen3.8-27b",
-  "small_model": "lmstudio/qwen/qwen3.8-27b",
+  "model": {
+    "providerID": "lmstudio",
+    "model": "qwen/qwen3.8-27b"
+  },
   "default_agent": "build",
-  "enabled_providers": ["lmstudio"],
-  "provider": {
+  "policies": [
+    {
+      "action": "provider.use",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "provider.use",
+      "resource": "lmstudio",
+      "effect": "allow"
+    }
+  ],
+  "providers": {
     "lmstudio": {
-      "npm": "@ai-sdk/openai-compatible",
+      "package": "aisdk:@ai-sdk/openai-compatible",
       "env": [],
-      "options": {
+      "settings": {
         "baseURL": "{file:/nightgauge-test-home/.nightgauge/opencode/runs/01890a5d-ac96-774b-bcce-b302099a8057/nightgauge/lmstudio.base-url}",
         "apiKey": "",
         "headerTimeout": 180000,
@@ -15,114 +28,126 @@
       },
       "models": {
         "qwen/qwen3.8-27b": {
-          "id": "qwen/qwen3.8-27b",
-          "provider": {
-            "npm": "@ai-sdk/openai-compatible"
-          },
+          "modelID": "qwen/qwen3.8-27b",
+          "package": "aisdk:@ai-sdk/openai-compatible",
           "limit": {
             "context": 131072,
             "input": 131072,
             "output": 8192
           },
-          "tool_call": true
+          "capabilities": {
+            "tools": true
+          }
         }
       }
     }
   },
-  "agent": {
+  "agents": {
     "build": {
-      "model": "lmstudio/qwen/qwen3.8-27b",
+      "model": {
+        "providerID": "lmstudio",
+        "model": "qwen/qwen3.8-27b"
+      },
       "steps": 40,
-      "disable": false
+      "disabled": false
     },
     "compaction": {
-      "model": "lmstudio/qwen/qwen3.8-27b",
-      "disable": false
+      "model": {
+        "providerID": "lmstudio",
+        "model": "qwen/qwen3.8-27b"
+      },
+      "disabled": false
     },
     "explore": {
-      "model": "lmstudio/qwen/qwen3.8-27b",
+      "model": {
+        "providerID": "lmstudio",
+        "model": "qwen/qwen3.8-27b"
+      },
       "steps": 40,
-      "disable": false
+      "disabled": false,
+      "permissions": [
+        {
+          "action": "subagent",
+          "resource": "*",
+          "effect": "deny"
+        }
+      ]
     },
     "general": {
-      "model": "lmstudio/qwen/qwen3.8-27b",
+      "model": {
+        "providerID": "lmstudio",
+        "model": "qwen/qwen3.8-27b"
+      },
       "steps": 40,
-      "disable": false
+      "disabled": false,
+      "permissions": [
+        {
+          "action": "subagent",
+          "resource": "*",
+          "effect": "deny"
+        }
+      ]
     },
     "plan": {
-      "model": "lmstudio/qwen/qwen3.8-27b",
+      "model": {
+        "providerID": "lmstudio",
+        "model": "qwen/qwen3.8-27b"
+      },
       "steps": 40,
-      "disable": false
+      "disabled": false
     },
     "summary": {
-      "model": "lmstudio/qwen/qwen3.8-27b",
-      "disable": false
+      "model": {
+        "providerID": "lmstudio",
+        "model": "qwen/qwen3.8-27b"
+      },
+      "disabled": false
     },
     "title": {
-      "model": "lmstudio/qwen/qwen3.8-27b",
-      "disable": true
+      "model": {
+        "providerID": "lmstudio",
+        "model": "qwen/qwen3.8-27b"
+      },
+      "disabled": true
     }
   },
-  "mode": {
-    "build": {
-      "model": "lmstudio/qwen/qwen3.8-27b",
-      "steps": 40,
-      "disable": false
-    },
-    "compaction": {
-      "model": "lmstudio/qwen/qwen3.8-27b",
-      "disable": false
-    },
-    "plan": {
-      "model": "lmstudio/qwen/qwen3.8-27b",
-      "steps": 40,
-      "disable": false
-    },
-    "summary": {
-      "model": "lmstudio/qwen/qwen3.8-27b",
-      "disable": false
-    },
-    "title": {
-      "model": "lmstudio/qwen/qwen3.8-27b",
-      "disable": true
-    }
-  },
-  "subagent_depth": 1,
   "compaction": {
     "auto": true,
-    "prune": true,
-    "reserved": 8192,
-    "tail_turns": 2,
-    "preserve_recent_tokens": 15000
+    "keep": {
+      "tokens": 15000
+    },
+    "buffer": 8192
   },
   "tool_output": {
     "max_lines": 400,
     "max_bytes": 8192
   },
   "share": "disabled",
-  "autoupdate": false,
-  "snapshot": false,
+  "update": "disable",
+  "snapshots": false,
   "lsp": true,
   "formatter": true,
   "mcp": {
-    "fs": {
-      "type": "local",
-      "command": ["npx", "-y", "srv"],
-      "environment": {
-        "LEVEL": "debug",
-        "TOKEN": "{env:FIXTURE_TOKEN}"
+    "servers": {
+      "fs": {
+        "type": "local",
+        "command": ["npx", "-y", "srv"],
+        "environment": {
+          "LEVEL": "debug",
+          "TOKEN": "{env:FIXTURE_TOKEN}"
+        },
+        "disabled": false
       },
-      "enabled": true
-    },
-    "remote": {
-      "type": "remote",
-      "url": "https://mcp.example.test/mcp",
-      "headers": {
-        "Authorization": "Bearer {env:FIXTURE_TOKEN}",
-        "X-Team": "core"
-      },
-      "oauth": false,
-      "enabled": true
+      "remote": {
+        "type": "remote",
+        "url": "https://mcp.example.test/mcp",
+        "headers": {
+          "Authorization": "Bearer {env:FIXTURE_TOKEN}",
+          "X-Team": "core"
+        },
+        "oauth": false,
+        "disabled": false
+      }
     }
   },
   "instructions": [
@@ -130,59 +155,217 @@
     "/nightgauge-test-worktree/docs/rules.md",
     "/nightgauge-test-home/.nightgauge/opencode/runs/01890a5d-ac96-774b-bcce-b302099a8057/nightgauge/steering.md"
   ],
-  "skills": {
-    "urls": []
-  },
-  "permission": {
-    "*": "deny",
-    "read": {
-      "*": "deny",
-      "*.env": "deny",
-      ".env*": "deny",
-      "**/*.env": "deny",
-      "**/.env*": "deny",
-      "*.env.*": "deny",
-      "**/*.env.*": "deny",
-      "**/.ssh/**": "deny",
-      "**/id_rsa*": "deny",
-      "**/gh/hosts.yml": "deny"
+  "skills": [],
+  "permissions": [
+    {
+      "action": "*",
+      "resource": "*",
+      "effect": "deny"
     },
-    "edit": {
-      "*": "deny",
-      "*.env": "deny",
-      ".env*": "deny",
-      "**/*.env": "deny",
-      "**/.env*": "deny",
-      "*.env.*": "deny",
-      "**/*.env.*": "deny",
-      "**/.ssh/**": "deny",
-      "**/id_rsa*": "deny",
-      "**/gh/hosts.yml": "deny",
-      "opencode.json*": "deny",
-      ".opencode/**": "deny"
+    {
+      "action": "read",
+      "resource": "*",
+      "effect": "deny"
     },
-    "glob": "deny",
-    "grep": "deny",
-    "list": "deny",
-    "bash": {
-      "*": "deny",
-      "rm -rf *": "deny",
-      "rm -fr *": "deny",
-      "git push --force*": "deny",
-      "git push -f*": "deny",
-      "git push * --force*": "deny"
+    {
+      "action": "read",
+      "resource": "*.env",
+      "effect": "deny"
     },
-    "task": "deny",
-    "webfetch": "deny",
-    "websearch": "deny",
-    "skill": "deny",
-    "todowrite": "deny",
-    "doom_loop": "deny",
-    "external_directory": {
-      "*": "deny",
-      "/nightgauge-test-worktree/**": "allow",
-      "/tmp/?": "allow",
-      "/private/tmp/?": "allow"
+    {
+      "action": "read",
+      "resource": ".env*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "**/*.env",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "**/.env*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "*.env.*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "**/*.env.*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "**/.ssh/**",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "**/id_rsa*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "**/gh/hosts.yml",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "*.env",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": ".env*",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "**/*.env",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "**/.env*",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "*.env.*",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "**/*.env.*",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "**/.ssh/**",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "**/id_rsa*",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "**/gh/hosts.yml",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "opencode.json*",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": ".opencode/**",
+      "effect": "deny"
+    },
+    {
+      "action": "glob",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "grep",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "list",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "rm -rf *",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "rm -fr *",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "git push --force*",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "git push -f*",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "git push * --force*",
+      "effect": "deny"
+    },
+    {
+      "action": "subagent",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "webfetch",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "websearch",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "todowrite",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "doom_loop",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "external_directory",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "external_directory",
+      "resource": "/nightgauge-test-worktree/**",
+      "effect": "allow"
+    },
+    {
+      "action": "external_directory",
+      "resource": "/tmp/?",
+      "effect": "allow"
+    },
+    {
+      "action": "external_directory",
+      "resource": "/private/tmp/?",
+      "effect": "allow"
     }
-  }
+  ]
 }

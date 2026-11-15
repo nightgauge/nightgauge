@@ -7352,10 +7352,10 @@ rows produce are documented in [DOCTOR.md](DOCTOR.md#adapter-health-in-detail).
 Each CLI adapter's `min_version` floor and its floor policy come from its
 compat manifest, `internal/adaptercompat/manifests/<adapter>.json`, which also
 records the newest tested version, the upstream release feeds, the install
-recipe and the captured fixtures. For OpenCode it also records
-`config_schema_sha256`, the SHA-256 of the config schema pinned for the newest
-tested version in `internal/execution/adapters/testdata/opencode-config-schema/`,
-which a contract test validates every generated per-run config against.
+recipe and the captured fixtures. OpenCode's per-run config is checked at
+dispatch instead: every document is decoded back into the native 2.x type
+with unknown keys refused (`validateOpenCodeConfigDocument`) before OpenCode
+receives it.
 A Go test holds the doctor to the manifest.
 Its `required_flags` are exactly the flags the adapter's `BuildCommand` emits,
 and the flag-contract tests (`internal/execution/adapters/flag_contract_test.go`)

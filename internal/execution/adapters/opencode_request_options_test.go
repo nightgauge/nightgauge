@@ -9,7 +9,7 @@ import (
 )
 
 // TestOpenCodeRequestOptionsPerStage pins request_options: the dispatched
-// model's entry carries them as OpenCode model options (which OpenCode
+// model's entry carries them as its body (1.x model options, which OpenCode
 // 1.18.32 merges into the request body), a stage's own entry overrides them
 // key by key, and a key that would redirect the request is dropped.
 func TestOpenCodeRequestOptionsPerStage(t *testing.T) {
@@ -43,16 +43,16 @@ func TestOpenCodeRequestOptionsPerStage(t *testing.T) {
 			t.Fatal(err)
 		}
 		var cfg struct {
-			Provider map[string]struct {
+			Providers map[string]struct {
 				Models map[string]struct {
-					Options map[string]any `json:"options"`
+					Body map[string]any `json:"body"`
 				} `json:"models"`
-			} `json:"provider"`
+			} `json:"providers"`
 		}
 		if err := json.Unmarshal([]byte(built.Content), &cfg); err != nil {
 			t.Fatal(err)
 		}
-		return cfg.Provider["omlx"].Models["Qwen3.8-27B-4bit"].Options
+		return cfg.Providers["omlx"].Models["Qwen3.8-27B-4bit"].Body
 	}
 	want := map[string]any{"thinking_budget": float64(4096), "chat_template_kwargs": map[string]any{"enable_thinking": true}}
 	if got := options("feature-planning"); !reflect.DeepEqual(got, want) {

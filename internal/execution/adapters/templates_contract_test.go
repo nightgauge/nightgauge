@@ -2,18 +2,21 @@ package adapters
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
 
-// The configs/opencode operator templates (#1666) are validated against the
-// same pinned OpenCode config schema as the per-run configs
-// (schema_contract_test.go), so a misspelled or retired key in a template is
-// a red test rather than a key OpenCode silently drops.
+// The configs/opencode operator templates (#1666) use OpenCode 2.x's native
+// keys. 2.x drops a 1.x key it does not translate, and a key of the wrong
+// type, without a word, so a template holding one is a red test rather than
+// a setting OpenCode silently ignores. Each template was read back with
+// `opencode debug config --standalone` on 2.2.7 with every key intact.
 
 // templatesDir is configs/opencode, relative to this package.
 const templatesDir = "../../../configs/opencode"
@@ -115,21 +118,30 @@ func walkStrings(v any, fn func(string)) {
 	}
 }
 
+// openCodeTemplateKeys are the top-level keys a template may set: 2.x
+// native keys only.
+var openCodeTemplateKeys = map[string]bool{
+	"$schema": true, "model": true, "agents": true, "share": true, "update": true,
+	"compaction": true, "tool_output": true, "providers": true,
+}
+
 func TestOpenCodeTemplatesContract(t *testing.T) {
-	sch := compileSchemaContract(t, readPinnedSchema(t))
 	for _, name := range templateFiles {
 		t.Run(name, func(t *testing.T) {
-			content, doc := readTemplate(t, name)
-			if err := validateContent(t, sch, content); err != nil {
-				t.Fatalf("does not validate against the pinned schema: %v", err)
+			_, doc := readTemplate(t, name)
+			if err := openCodeTemplateKeysCheck(doc); err != nil {
+				t.Fatal(err)
 			}
 			if doc["share"] != "disabled" {
 				t.Errorf(`share = %v, want "disabled"`, doc["share"])
 			}
-			if doc["autoupdate"] != false {
-				t.Errorf("autoupdate = %v, want false", doc["autoupdate"])
+			if doc["update"] != "disable" {
+				t.Errorf(`update = %v, want "disable"`, doc["update"])
 			}
-			providers, _ := doc["provider"].(map[string]any)
+			if ref, _ := doc["model"].(map[string]any); ref["providerID"] == nil || ref["model"] == nil {
+				t.Errorf("model = %v, want {providerID, model}", doc["model"])
+			}
+			providers, _ := doc["providers"].(map[string]any)
 			nModels := 0
 			for pid, p := range providers {
 				models, _ := p.(map[string]any)["models"].(map[string]any)
@@ -156,7 +168,7 @@ func TestOpenCodeTemplatesContract(t *testing.T) {
 					t.Errorf("credential-shaped value %q", s)
 				}
 				for _, raw := range templateURL.FindAllString(s, -1) {
-					if raw == schemaContractSchemaURL {
+					if raw == "https://opencode.ai/config.json" {
 						continue
 					}
 					u, err := url.Parse(raw)
@@ -169,19 +181,75 @@ func TestOpenCodeTemplatesContract(t *testing.T) {
 	}
 }
 
-// TestOpenCodeTemplatesRejectUnknownKey proves the validation above is not
-// vacuous: the same template with one unknown top-level key fails it.
-func TestOpenCodeTemplatesRejectUnknownKey(t *testing.T) {
-	sch := compileSchemaContract(t, readPinnedSchema(t))
-	for _, name := range templateFiles {
-		_, doc := readTemplate(t, name)
-		doc["nightgauge_unknown_key"] = true
-		b, err := json.Marshal(doc)
-		if err != nil {
-			t.Fatal(err)
+// openCodeTemplateProviderKeys and openCodeTemplateModelKeys are the keys a
+// template's provider block and model entry may set: 2.x names, each read
+// back intact on 2.2.7 (1.x's npm, options and tool_call are not among them).
+var (
+	openCodeTemplateProviderKeys = map[string]bool{"package": true, "name": true, "settings": true, "models": true}
+	openCodeTemplateModelKeys    = map[string]bool{"modelID": true, "name": true, "capabilities": true, "limit": true}
+)
+
+// openCodeTemplateKeysCheck refuses a top-level, provider or model key that
+// is not a 2.x key a template sets, naming a 1.x top-level key as such.
+func openCodeTemplateKeysCheck(doc map[string]any) error {
+	for key := range doc {
+		if slices.Contains(openCodeLegacyKeys, key) {
+			return fmt.Errorf("1.x key %q, which 2.x translates or drops without a word", key)
 		}
-		if validateContent(t, sch, string(b)) == nil {
-			t.Errorf("%s with an unknown top-level key still validates", name)
+		if !openCodeTemplateKeys[key] {
+			return fmt.Errorf("unknown top-level key %q", key)
+		}
+	}
+	providers, _ := doc["providers"].(map[string]any)
+	for pid, p := range providers {
+		block, _ := p.(map[string]any)
+		for key := range block {
+			if !openCodeTemplateProviderKeys[key] {
+				return fmt.Errorf("providers.%s: unknown key %q", pid, key)
+			}
+		}
+		models, _ := block["models"].(map[string]any)
+		for mid, m := range models {
+			entry, _ := m.(map[string]any)
+			for key := range entry {
+				if !openCodeTemplateModelKeys[key] {
+					return fmt.Errorf("providers.%s.models.%s: unknown key %q", pid, mid, key)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// TestOpenCodeTemplatesRejectUnknownKey proves the key check above is not
+// vacuous: the same template with an unknown or a 1.x key, at the top, in a
+// provider block or in a model entry, fails it.
+func TestOpenCodeTemplatesRejectUnknownKey(t *testing.T) {
+	for _, name := range templateFiles {
+		for _, key := range []string{"nightgauge_unknown_key", "autoupdate", "provider"} {
+			_, doc := readTemplate(t, name)
+			doc[key] = true
+			if openCodeTemplateKeysCheck(doc) == nil {
+				t.Errorf("%s with the key %q still passes", name, key)
+			}
+		}
+		for _, key := range []string{"npm", "options"} {
+			_, doc := readTemplate(t, name)
+			for _, p := range doc["providers"].(map[string]any) {
+				p.(map[string]any)[key] = true
+			}
+			if openCodeTemplateKeysCheck(doc) == nil {
+				t.Errorf("%s with the provider key %q still passes", name, key)
+			}
+		}
+		_, doc := readTemplate(t, name)
+		for _, p := range doc["providers"].(map[string]any) {
+			for _, m := range p.(map[string]any)["models"].(map[string]any) {
+				m.(map[string]any)["tool_call"] = true
+			}
+		}
+		if openCodeTemplateKeysCheck(doc) == nil {
+			t.Errorf("%s with the model key tool_call still passes", name)
 		}
 	}
 }
