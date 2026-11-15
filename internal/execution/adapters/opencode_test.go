@@ -64,7 +64,7 @@ func TestOpenCodeBuildCommandArgv(t *testing.T) {
 		t.Errorf("cmd = %q, want opencode", cmd)
 	}
 	want := []string{
-		"run", "--format", "json", "--print-logs", "--log-level", "error",
+		"run", "--standalone", "--format", "json", "--print-logs", "--log-level", "error",
 		"-m", "lmstudio/qwen/qwen3.8-27b",
 	}
 	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
@@ -862,7 +862,7 @@ func TestOpenCodeArgvMatchesCapturedHelp(t *testing.T) {
 
 // declaredVariantSettings is a machine whose one declared endpoint (an
 // openai-compatible server at id "declared") names one model with declared
-// variants — the config-declared path #1643 AC 4/AC 8's --variant mapping
+// variants — the config-declared path #1643 AC 4/AC 8's variant mapping
 // reads (see openCodeVariantsForModel's doc comment for why this is the
 // config-declared-only path, not a `models --verbose` probe).
 func declaredVariantSettings(variants []string) config.OpenCodeConfig {
@@ -879,21 +879,32 @@ func declaredVariantSettings(variants []string) config.OpenCodeConfig {
 	}
 }
 
-// TestOpenCodeBuildCommandVariantMapping is #1643 AC 4: effort maps to
-// --variant only when the dispatched model DECLARES that effort rung as one
-// of its variants; a variant-less model, or an effort the model does not
-// declare, gets no flag.
+// openCodeModelValue returns the value that follows -m in args, or "" when
+// -m is absent or has no value.
+func openCodeModelValue(args []string) string {
+	idx := slices.Index(args, "-m")
+	if idx < 0 || idx+1 >= len(args) {
+		return ""
+	}
+	return args[idx+1]
+}
+
+// TestOpenCodeBuildCommandVariantMapping is #1643 AC 4 under OpenCode 2.x
+// (#3303): effort becomes the #<variant> suffix of -m only when the
+// dispatched model DECLARES that effort rung as one of its variants; a
+// variant-less model, or an effort the model does not declare, keeps a bare
+// -m. 2.2.7 removed `run --variant`, so the flag never appears.
 func TestOpenCodeBuildCommandVariantMapping(t *testing.T) {
 	cases := []struct {
 		name     string
 		settings config.OpenCodeConfig
 		effort   string
-		want     bool
+		wantM    string
 	}{
-		{"declared effort emits the flag", declaredVariantSettings([]string{"low", "high"}), "high", true},
-		{"undeclared effort emits nothing — never guessed", declaredVariantSettings([]string{"low", "high"}), "medium", false},
-		{"variant-less model emits nothing", declaredVariantSettings(nil), "high", false},
-		{"no effort at all emits nothing", declaredVariantSettings([]string{"high"}), "", false},
+		{"declared effort becomes the -m suffix", declaredVariantSettings([]string{"low", "high"}), "high", "declared/reasoner#high"},
+		{"undeclared effort adds nothing — never guessed", declaredVariantSettings([]string{"low", "high"}), "medium", "declared/reasoner"},
+		{"variant-less model adds nothing", declaredVariantSettings(nil), "high", "declared/reasoner"},
+		{"no effort at all adds nothing", declaredVariantSettings([]string{"high"}), "", "declared/reasoner"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -903,15 +914,11 @@ func TestOpenCodeBuildCommandVariantMapping(t *testing.T) {
 				WorktreeDir: "/w",
 				Effort:      tc.effort,
 			})
-			got := slices.Contains(args, "--variant")
-			if got != tc.want {
-				t.Errorf("effort %q against declared variants: --variant present = %v, want %v (argv %q)", tc.effort, got, tc.want, args)
+			if got := openCodeModelValue(args); got != tc.wantM {
+				t.Errorf("effort %q: -m value = %q, want %q (argv %q)", tc.effort, got, tc.wantM, args)
 			}
-			if got {
-				idx := slices.Index(args, "--variant")
-				if idx+1 >= len(args) || args[idx+1] != tc.effort {
-					t.Errorf("--variant value = %v, want %q", args, tc.effort)
-				}
+			if slices.Contains(args, "--variant") {
+				t.Errorf("argv %q carries --variant; OpenCode 2.2.7 removed it, the variant is the -m #suffix", args)
 			}
 		})
 	}
@@ -966,6 +973,9 @@ func TestOpenCodeBuildCommandRejectsInjectionInVariantAndSession(t *testing.T) {
 			})
 			if slices.Contains(args, "--variant") {
 				t.Errorf("argv %q emitted --variant for rejected value %q", args, v)
+			}
+			if got := openCodeModelValue(args); got != "declared/reasoner" {
+				t.Errorf("-m value = %q for rejected variant %q, want the bare declared/reasoner", got, v)
 			}
 		})
 	}

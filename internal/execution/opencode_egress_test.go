@@ -43,8 +43,12 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -159,6 +163,15 @@ func TestOpenCodeEgressCheck(t *testing.T) {
 		t.Errorf("the egress fixture's own stream parsed to zero tokens:\n%s", result.Stdout)
 	}
 
+	// The run's private server is gone at run end (#3303). Every 2.x run
+	// spawns `serve --stdio --port 0`, holding a loopback listener (spike
+	// #3197 § 1); the strace parser asserts it binds loopback only, and this
+	// asserts nothing the run started, that server included, survives
+	// RunStage, and so neither does its listener.
+	if survivors := openCodeRunSurvivors(t, openCodeEgressRunsDir(t), 5*time.Second); len(survivors) > 0 {
+		t.Errorf("processes of the run outlived RunStage:\n%s", strings.Join(survivors, "\n"))
+	}
+
 	// AC5's Go-level half is startOpenCodeCanaryStubWithPID's own t.Cleanup
 	// (registered above, run unconditionally on this test's return): it
 	// signals the stub PID and asserts kill(pid, 0) fails afterward, matching
@@ -166,4 +179,136 @@ func TestOpenCodeEgressCheck(t *testing.T) {
 	// harness re-verifies at the process-tree level for its own spawns (the
 	// stub it starts directly, and the `go test` process itself) — nothing
 	// further is asserted here.
+}
+
+// openCodeEgressRunsDir is the directory isolateOpenCodeHome's state root
+// keeps every OpenCode run root under. Each process a run starts, the
+// dispatched `opencode run` and the `serve --stdio` it spawns among them,
+// holds an environment pointing into its run root (PrepareRunRoot); the test
+// process and the stub provider hold none.
+func openCodeEgressRunsDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(os.Getenv("NIGHTGAUGE_STATE_HOME"), "opencode", "runs") + string(filepath.Separator)
+}
+
+// openCodeRunSurvivors returns one line per live process whose environment
+// names a path under runsDir, with the TCP sockets it holds in LISTEN state,
+// waiting up to d for them to go. It reads Linux's /proc, the egress
+// harness's platform, and skips the test elsewhere. A process whose
+// environment cannot be read (a zombie, or one gone mid-scan) is not counted:
+// a zombie holds no socket and runs nothing.
+func openCodeRunSurvivors(t *testing.T, runsDir string, d time.Duration) []string {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("the run-end survivor scan reads /proc")
+	}
+	deadline := time.Now().Add(d)
+	for {
+		survivors, err := scanOpenCodeRunProcesses(runsDir)
+		if err != nil {
+			t.Fatalf("the run-end survivor scan could not read /proc, so it checked nothing: %v", err)
+		}
+		if len(survivors) == 0 || time.Now().After(deadline) {
+			return survivors
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// scanOpenCodeRunProcesses is one pass of openCodeRunSurvivors: a line per
+// process whose environment names a path under runsDir, or the error that
+// kept /proc from being listed.
+func scanOpenCodeRunProcesses(runsDir string) ([]string, error) {
+	listening := procListeningInodes()
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid == os.Getpid() {
+			continue
+		}
+		environ, err := os.ReadFile(filepath.Join("/proc", e.Name(), "environ"))
+		if err != nil || !strings.Contains(string(environ), runsDir) {
+			continue
+		}
+		cmdline, _ := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
+		var listeners []string
+		fds, _ := os.ReadDir(filepath.Join("/proc", e.Name(), "fd"))
+		for _, fd := range fds {
+			link, err := os.Readlink(filepath.Join("/proc", e.Name(), "fd", fd.Name()))
+			if err != nil {
+				continue
+			}
+			if addr, ok := listening[link]; ok {
+				listeners = append(listeners, addr)
+			}
+		}
+		out = append(out, fmt.Sprintf("pid %d %q listening on %v", pid, strings.ReplaceAll(strings.TrimRight(string(cmdline), "\x00"), "\x00", " "), listeners))
+	}
+	return out, nil
+}
+
+// procListeningInodes maps "socket:[inode]", the fd link of a TCP socket, to
+// the hex local address of each socket /proc/net/tcp and tcp6 list in LISTEN
+// state (st 0A).
+func procListeningInodes() map[string]string {
+	out := map[string]string{}
+	for _, table := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+		raw, err := os.ReadFile(table)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(raw), "\n")[1:] {
+			f := strings.Fields(line)
+			if len(f) >= 10 && f[3] == "0A" {
+				out["socket:["+f[9]+"]"] = f[1]
+			}
+		}
+	}
+	return out
+}
+
+// TestOpenCodeEgressCheckSurvivorScan holds openCodeRunSurvivors to a known
+// bad and a known good case before the egress check trusts it: a process
+// carrying a run root in its environment and holding a loopback listener is
+// reported, with that listener, and once it is killed it is not. Its name
+// matches the harness's -run TestOpenCodeEgressCheck, so it runs there.
+func TestOpenCodeEgressCheckSurvivorScan(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the run-end survivor scan reads /proc")
+	}
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 is needed to hold a listener")
+	}
+	runs := filepath.Join(t.TempDir(), "opencode", "runs") + string(filepath.Separator)
+	ready := filepath.Join(t.TempDir(), "ready")
+	cmd := exec.Command(python, "-c", `import socket,sys,time
+s=socket.socket(); s.bind(("127.0.0.1",0)); s.listen(1)
+open(sys.argv[1],"w").close(); time.sleep(300)`, ready)
+	cmd.Env = append(os.Environ(), "XDG_DATA_HOME="+filepath.Join(runs, "run-1", "data"))
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the listener never became ready")
+		}
+	}
+	survivors := openCodeRunSurvivors(t, runs, 0)
+	if len(survivors) != 1 || !strings.Contains(survivors[0], fmt.Sprintf("pid %d ", cmd.Process.Pid)) || strings.Contains(survivors[0], "listening on []") {
+		t.Fatalf("the scan reported %q, want pid %d with its listener", survivors, cmd.Process.Pid)
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+	if survivors := openCodeRunSurvivors(t, runs, 5*time.Second); len(survivors) > 0 {
+		t.Errorf("the scan reported %q after the process was killed and reaped", survivors)
+	}
 }

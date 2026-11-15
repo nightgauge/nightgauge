@@ -1030,9 +1030,10 @@ func TestOpenCodeDispatchRefusedUntilEnabled(t *testing.T) {
 			t.Fatal(err)
 		}
 		// OpenCode 2.x has no `run --dir` and reads a positional as prompt
-		// text, so the worktree is on no argv element (#3300).
+		// text, so the worktree is on no argv element (#3300); the run uses
+		// its own private server, never the background service (#3303).
 		wantArgv := strings.Join([]string{
-			"run", "--format", "json", "--print-logs", "--log-level", "error",
+			"run", "--standalone", "--format", "json", "--print-logs", "--log-level", "error",
 			"-m", "lmstudio/qwen/qwen3.8-27b",
 		}, "\n") + "\n"
 		if string(gotArgv) != wantArgv {

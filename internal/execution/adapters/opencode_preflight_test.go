@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -123,8 +124,8 @@ func installFakeOpenCode(t *testing.T, b fakeOpenCodeBehavior) fakeOpenCode {
 	f := fakeOpenCode{path: filepath.Join(dir, "opencode"), log: filepath.Join(dir, "invocations.log")}
 	script := fmt.Sprintf(`#!/bin/sh
 printf '%%s\n' "$*" >> %q
-case "$1 $2" in
-"--version ") echo %s; exit 0 ;;
+case "$*" in
+"--version --standalone") echo %s; exit 0 ;;
 esac
 exit 97
 `, f.log, b.version)
@@ -203,8 +204,8 @@ func TestOpenCodeDispatchBelowMinTestedIsIncompatible(t *testing.T) {
 	if want := filepath.Join(home, ".opencode", "bin", "opencode"); !strings.Contains(err.Error(), want) {
 		t.Errorf("the refusal does not pin the installer's binary %s: %v", want, err)
 	}
-	if got := fake.invocations(t); len(got) != 1 || got[0] != "--version" {
-		t.Errorf("the binary ran %q; a refused dispatch runs only `--version`", got)
+	if got := fake.invocations(t); len(got) != 1 || got[0] != "--version --standalone" {
+		t.Errorf("the binary ran %q; a refused dispatch runs only `--version --standalone`", got)
 	}
 	if _, ok, _ := ReadOpenCodeDispatchRecord(testStateHome(home)); ok {
 		t.Error("a refused dispatch was recorded as the last dispatch")
@@ -275,8 +276,8 @@ func TestOpenCodePinnedBinaryIsCheckedSpawnedAndRecorded(t *testing.T) {
 	if err := a.PreDispatch(context.Background(), run); err != nil {
 		t.Fatalf("PreDispatch = %v", err)
 	}
-	if got := fake.invocations(t); len(got) != 1 || got[0] != "--version" {
-		t.Errorf("the pinned binary ran %q, want its `--version` once", got)
+	if got := fake.invocations(t); len(got) != 1 || got[0] != "--version --standalone" {
+		t.Errorf("the pinned binary ran %q, want its `--version --standalone` once", got)
 	}
 	rec, ok, err := ReadOpenCodeDispatchRecord(testStateHome(home))
 	if err != nil || !ok || rec.Binary != fake.path || rec.Version != m.MaxTested {
@@ -419,6 +420,59 @@ func TestOpenCodeProbeRunsInItsOwnDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Errorf("Close left the probe directory %s", root)
+	}
+}
+
+// TestOpenCodeStandaloneArgs pins the helper every non-dispatch OpenCode
+// spawn goes through (#3303): --standalone last, once, nothing for an empty
+// argv, and the caller's backing array never written, since the fold passes
+// its variadic args straight in.
+func TestOpenCodeStandaloneArgs(t *testing.T) {
+	for _, tc := range []struct{ in, want []string }{
+		{nil, nil},
+		{[]string{}, []string{}},
+		{[]string{"--version"}, []string{"--version", "--standalone"}},
+		{[]string{"export", "ses_1", "--pure"}, []string{"export", "ses_1", "--pure", "--standalone"}},
+		{[]string{"models", "--standalone"}, []string{"models", "--standalone"}},
+	} {
+		if got := OpenCodeStandaloneArgs(tc.in); !slices.Equal(got, tc.want) {
+			t.Errorf("OpenCodeStandaloneArgs(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	backing := []string{"db", "query", "spare"}
+	caller := backing[:2]
+	_ = OpenCodeStandaloneArgs(caller)
+	if backing[2] != "spare" {
+		t.Errorf("OpenCodeStandaloneArgs wrote %q into the caller's spare capacity", backing[2])
+	}
+}
+
+// TestOpenCodeProbeRunsStandalone (#3303): every probe, the version read and
+// doctor's `models` alike, runs with --standalone last, so
+// OpenCode 2.x never reaches for the machine's background service (spike
+// #3197 § 1). The fake prints its argv one token per line.
+func TestOpenCodeProbeRunsStandalone(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	probe, err := NewOpenCodeProbe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = probe.Close() }()
+	for _, tc := range []struct{ args, want []string }{
+		{[]string{"--version"}, []string{"--version", "--standalone"}},
+		{[]string{"models", "lmstudio"}, []string{"models", "lmstudio", "--standalone"}},
+		{[]string{"models", "--standalone"}, []string{"models", "--standalone"}},
+	} {
+		res, err := probe.Run(context.Background(), bin, tc.args, "", nil)
+		if err != nil || res.ExitCode != 0 {
+			t.Fatalf("Run(%q) = %+v, %v", tc.args, res, err)
+		}
+		if got := strings.Split(strings.TrimSpace(string(res.Stdout)), "\n"); !slices.Equal(got, tc.want) {
+			t.Errorf("Run(%q) spawned opencode %q, want %q", tc.args, got, tc.want)
+		}
 	}
 }
 
@@ -681,6 +735,60 @@ func TestOpenCodeMachineConfigRefusalsAreTheDispatchs(t *testing.T) {
 				t.Errorf("the dispatch went ahead past %v", refusals[0])
 			case len(refusals) > 0 && err.Error() != refusals[0].Error():
 				t.Errorf("the dispatch's refusal is\n%v\nwant the first machine refusal\n%v", err, refusals[0])
+			}
+		})
+	}
+}
+
+// TestOpenCodeProbeReapsTheStandaloneServer: a probe runs --standalone,
+// which starts a private OpenCode server, and that server is gone when the
+// probe returns, after a zero exit and after a non-zero exit, even while it
+// holds the probe's stdout and stderr pipes (#3303). Killed only once Run had
+// reaped the leader, such a server held Run for WaitDelay and came back as a
+// leftover-process error instead of the probe's result.
+func TestOpenCodeProbeReapsTheStandaloneServer(t *testing.T) {
+	probe, err := NewOpenCodeProbe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = probe.Close() }()
+	for _, exit := range []int{0, 1} {
+		t.Run(fmt.Sprintf("exit %d", exit), func(t *testing.T) {
+			dir := t.TempDir()
+			pidFile := filepath.Join(dir, "server.pid")
+			bin := filepath.Join(dir, "opencode")
+			body := fmt.Sprintf(`#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = --standalone ]; then
+    sleep 30 &
+    echo $! > %q
+  fi
+done
+echo "opencode v2.2.7"
+exit %d
+`, pidFile, exit)
+			if err := os.WriteFile(bin, []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// A server left on the pipes past WaitDelay surfaces as an error.
+			res, err := probe.Run(context.Background(), bin, []string{"--version"}, "", nil)
+			if err != nil {
+				t.Errorf("Run = %v, want the probe's result", err)
+			}
+			if res.ExitCode != exit {
+				t.Errorf("exit code = %d, want %d", res.ExitCode, exit)
+			}
+			raw, err := os.ReadFile(pidFile)
+			if err != nil {
+				t.Fatalf("the probe started no server, so it did not run --standalone: %v", err)
+			}
+			server, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = syscall.Kill(server, syscall.SIGKILL) })
+			if !processGone(server, 3*time.Second) {
+				t.Errorf("the probe's standalone server %d outlived it", server)
 			}
 		})
 	}
