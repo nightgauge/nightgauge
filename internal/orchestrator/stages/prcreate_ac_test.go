@@ -833,6 +833,20 @@ func TestACAsksForPRBody(t *testing.T) {
 		"The PR records the cause.",
 		"the PR lists the affected files",
 		"The PR names the follow-up issue.",
+		"The command and its result are recorded in the PR body",
+		"The PR records the cause of the false negative.",
+		"The PR description must list the boundary.",
+		"The PR body should include the command output.",
+		"The PR body and the changelog name the flag.",
+		"The PR body has a Verification section.",
+		"The output is pasted into this PR description.",
+		"A table goes under the PR body.",
+		"Add the steps to the pull request description.",
+		"Fix the parser, and the PR records why.",
+		"This PR links the follow-up issue.",
+		"If the gate fails, the PR body records the cause.",
+		"Ensure the PR body includes the output.",
+		"Verify that the PR description lists the boundary.",
 	} {
 		if !acAsksForPRBody(s) {
 			t.Errorf("%q: not read as a PR-body criterion", s)
@@ -843,9 +857,38 @@ func TestACAsksForPRBody(t *testing.T) {
 		"`acSpanMatcher` names the identifier.",
 		"A PR is created for the branch.",
 		"`the PR records` appears only in a code span.",
+		issue3318AC1, issue3318AC2, issue3318AC4,
+		"If the PR body lists X, the hook ticks it.",
+		"Once the PR names the issue, the hook links it.",
+		"The PR includes a regression test.",
+		// A subject cut off from its verb by commas is not read (#3326).
+		"The PR, after review, lists the boundary.",
 	} {
 		if acAsksForPRBody(s) {
 			t.Errorf("%q: read as a PR-body criterion", s)
+		}
+	}
+}
+
+// #3318's criteria describe code that reads PR bodies (#3326).
+const (
+	issue3318AC1 = "When the merged PR's body reports a criterion met with evidence (its `✅ met:` lines), the hook ticks that criterion's checkbox in the issue body and leaves it out of the remainder. A criterion the PR lists as unmet or not verifiable stays in the remainder whatever the issue's checkboxes say."
+	issue3318AC2 = "A criterion written as a numbered or plain list item under `## Acceptance criteria` (outside `<details>`) is read as a criterion. When the PR lists it as unmet, it appears in the remainder."
+	issue3318AC4 = "A test in `internal/hooks` reproduces #2847 and PR #3317 (the issue body with numbered criteria 1–4 and Part B checkboxes, and the PR body with five met and two not verifiable). It asserts that the remainder is exactly the two measurement criteria, that the Part B boxes are ticked and that the status is In review."
+)
+
+// TestResolveACVerdicts_Issue3318MentionsPRBody pins #3326: a criterion that
+// only mentions PR bodies keeps feature-validate's met verdict without a
+// pr_note.
+func TestResolveACVerdicts_Issue3318MentionsPRBody(t *testing.T) {
+	acs := []string{issue3318AC1, issue3318AC2, issue3318AC4}
+	var verdicts []ACVerdict
+	for i, ac := range acs {
+		verdicts = append(verdicts, ACVerdict{Index: i, Text: ac, Status: ACMet, Evidence: "TestPostMerge reads the PR body"})
+	}
+	for i, got := range ResolveACVerdicts(acs, verdicts, nil, nil) {
+		if got.Status != ACMet || got.Evidence == ACNoPRNote {
+			t.Errorf("criterion %d: got %+v, want met", i, got)
 		}
 	}
 }
