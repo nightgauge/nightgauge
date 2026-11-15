@@ -633,7 +633,7 @@ recorded yet (pending #1659).
 | CLI command            | `opencode`                                                                                                                                                                                                            |
 | Auth method            | Per model, at dispatch: `ANTHROPIC_API_KEY` for `anthropic/*`; no credential for a local endpoint; a platform-provider key (`github-copilot`, `gitlab`, `amazon-bedrock`, `google-vertex*`) is refused (ADR-022 § 17) |
 | Prompt delivery        | stdin                                                                                                                                                                                                                 |
-| Default args           | `run --format json --print-logs --log-level error`                                                                                                                                                                    |
+| Default args           | `run --standalone --format json --print-logs --log-level error`                                                                                                                                                       |
 | Min version            | `2.2.7` (fail-closed below floor; tested up to `2.2.7`, and a newer version runs unchanged with no warning — ADR-022 § 20)                                                                                            |
 | `requiresDirectApiKey` | `false`                                                                                                                                                                                                               |
 
@@ -682,7 +682,7 @@ disposition; see the ADR for the reasoning behind each:
 | Import                           | non-goal                                      | ADR-022 § 15               |
 | Usage (`opencode stats`)         | non-goal                                      | ADR-022 § 15               |
 | `json_schema` output             | non-goal                                      | #1650                      |
-| Variants (`--variant`)           | supported                                     | #1643                      |
+| Variants (`-m model#variant`)    | supported                                     | #1643, #3303               |
 | Compaction                       | supported                                     | #1625, #1641               |
 | Worktrees and workspaces         | non-goal                                      | ADR-022 § 15               |
 | Snapshots                        | off by default                                | ADR-022 § 12               |

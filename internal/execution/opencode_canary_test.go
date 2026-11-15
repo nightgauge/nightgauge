@@ -267,7 +267,7 @@ func openCodeCanaryDirectRun(t *testing.T, real, model string, extraConfig map[s
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, real, "run", "--format", "json", "--print-logs", "--log-level", "error",
+	cmd := exec.CommandContext(ctx, real, "run", "--standalone", "--format", "json", "--print-logs", "--log-level", "error",
 		"-m", model)
 	cmd.Dir = worktree
 	cmd.Env = envSlice

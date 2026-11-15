@@ -297,7 +297,7 @@ func guardDirectRun(t *testing.T, permission *openCodePermissionJSON, stub *guar
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "run", "--format", "json", "--print-logs", "--log-level", "error",
+	cmd := exec.CommandContext(ctx, bin, "run", "--standalone", "--format", "json", "--print-logs", "--log-level", "error",
 		"-m", guardStubModel)
 	cmd.Dir = dir
 	cmd.Env = envSlice

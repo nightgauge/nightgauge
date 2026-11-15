@@ -102,15 +102,25 @@ export const OPENCODE_FORBIDDEN_FLAGS: readonly string[] = Object.freeze([
 ]);
 
 /**
- * The `opencode run` argv for one stage, identical to the Go adapter's
- * `BuildCommand`: `run --format json --print-logs --log-level error -m
- * <provider/model>`. The prompt is never on argv: it goes on stdin (ADR-022
+ * The `opencode run` argv for one stage, the Go adapter's `BuildCommand`
+ * without its `#<variant>` suffix: `run --standalone --format json
+ * --print-logs --log-level error -m <provider/model>`. The prompt is never on argv: it goes on stdin (ADR-022
  * § 19). The worktree is never on argv either: it is the spawn's working
  * directory, since OpenCode 2.x has no `run --dir` and reads a positional path
  * as prompt text (spike #3197).
  */
 export function buildOpenCodeArgv(model: string): string[] {
-  return ["run", "--format", "json", "--print-logs", "--log-level", "error", "-m", model];
+  return [
+    "run",
+    "--standalone",
+    "--format",
+    "json",
+    "--print-logs",
+    "--log-level",
+    "error",
+    "-m",
+    model,
+  ];
 }
 
 /**

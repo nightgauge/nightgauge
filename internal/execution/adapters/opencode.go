@@ -365,7 +365,7 @@ var openCodeSessionIDRE = regexp.MustCompile(`^ses_[A-Za-z0-9]+$`)
 // openCodeRejectsFlagValue reports whether v must never reach argv as a flag
 // value: empty, starting with '-' (so it can never be read as a flag of its
 // own), or carrying whitespace/control characters. Mirrors OpenCodeModelArg's
-// model-id check (#1643 AC 7); applied here to --variant and -s.
+// model-id check (#1643 AC 7); applied here to the #variant suffix and -s.
 func openCodeRejectsFlagValue(v string) bool {
 	return v == "" || strings.HasPrefix(v, "-") || strings.IndexFunc(v, isSpaceOrControl) >= 0
 }
@@ -398,24 +398,52 @@ func openCodeVariantsForModel(settings config.OpenCodeConfig, model string) []st
 	return openCodeDeclaredVariants(ep.Models, modelID)
 }
 
+// variantSuffix returns "#<effort>" for -m's value when the dispatched model
+// DECLARES opts.Effort as one of its variants, and "" otherwise (#1643 AC 4,
+// #3303). OpenCode 2.2.7 removed `run --variant`; the variant is the suffix of
+// `-m provider/model#variant` (testdata/opencode-cli/run-help.txt). Never
+// guessed, never added for a model with no declared variants (effort is
+// recorded "not applicable" for those), and never for a value
+// openCodeRejectsFlagValue refuses.
+func (a *OpenCodeAdapter) variantSuffix(opts RunOptions) string {
+	if openCodeRejectsFlagValue(opts.Effort) {
+		return ""
+	}
+	settings, err := a.loadSettings(opts.WorktreeDir)
+	if err != nil {
+		return ""
+	}
+	if !slices.Contains(openCodeVariantsForModel(settings, opts.Model), opts.Effort) {
+		return ""
+	}
+	return "#" + opts.Effort
+}
+
 // BuildCommand builds `opencode run` for one stage.
 //
 // Every flag here is load-bearing, and so is every flag that is absent. The
 // argv is exactly
 //
-//	opencode run --format json --print-logs --log-level error -m <provider/model>
+//	opencode run --standalone --format json --print-logs --log-level error -m <provider/model[#variant]>
 //
-// and the prompt goes on stdin (UsesStdin). The worktree is the process's
-// working directory, which the manager sets as cmd.Dir for every adapter:
-// OpenCode 2.x has no `run --dir`, and a positional path would become prompt
-// text (spike #3197), so the worktree is never on argv. The adapter never emits --auto,
-// --yolo, --dangerously-skip-permissions, --share or --mdns: approval comes
+// and the prompt goes on stdin (UsesStdin). --standalone runs the stage
+// against a private server the run spawns for itself, never the background
+// service OpenCode 2.x otherwise shares across every run on the machine,
+// which would cross the per-run root (spike #3197); the manager reaps that
+// private server with the stage's process group when the run ends.
+//
+// The worktree is the process's working directory, which the manager sets as
+// cmd.Dir for every adapter: OpenCode 2.x has no `run --dir`, and a
+// positional path would become prompt text (spike #3197), so the worktree is
+// never on argv. The adapter never emits --auto, --yolo,
+// --dangerously-skip-permissions, --share or --mdns: approval comes
 // from a permission map that only allows or denies (ADR-022 § 9), sessions are
 // never shared, and nothing binds a discoverable listener. MaxTurns,
 // MaxTokens and AllowedTools, which OpenCode has no flag for, reach it through
 // the per-run config as the steps cap, the endpoint's output limit and the
-// permission map (BuildOpenCodeConfig); Effort becomes --variant below, for a
-// model that declares that variant; CostBudget is the manager's cost
+// permission map (BuildOpenCodeConfig); Effort becomes the #variant suffix
+// of -m below, for a model that declares that variant (2.x has no
+// --variant); CostBudget is the manager's cost
 // watchdog, since OpenCode takes no cost cap (ADR-022 § The command).
 //
 // The environment includes opts.RunRoot's, which points OpenCode at the
@@ -432,24 +460,13 @@ func (a *OpenCodeAdapter) BuildCommand(opts RunOptions) (string, []string, map[s
 			name = pin.(string)
 		}
 	}
-	args := []string{"run", "--format", "json", "--print-logs", "--log-level", "error"}
+	args := []string{"run", openCodeStandaloneFlag, "--format", "json", "--print-logs", "--log-level", "error"}
 	// The manager's ValidateModel call has already rejected a model this
 	// cannot express, so -m is always present on a real dispatch. Omitting it
 	// here, rather than guessing, keeps BuildCommand total for callers that
 	// skip validation.
 	if model, err := OpenCodeModelArg(opts.Model); err == nil {
-		args = append(args, "-m", model)
-	}
-	// Effort → --variant (#1643 AC 4): only for a model that DECLARES the
-	// dispatched effort rung as one of its variants — never guessed, never
-	// emitted for a model with no declared variants (effort is recorded
-	// "not applicable" for those, by the caller emitting no flag here).
-	if opts.Effort != "" && !openCodeRejectsFlagValue(opts.Effort) {
-		if settings, err := a.loadSettings(opts.WorktreeDir); err == nil {
-			if slices.Contains(openCodeVariantsForModel(settings, opts.Model), opts.Effort) {
-				args = append(args, "--variant", opts.Effort)
-			}
-		}
+		args = append(args, "-m", model+a.variantSuffix(opts))
 	}
 	// Session resume (#1643 AC 5): only a session id this run itself
 	// recorded and only in the shape session.js's plugin observes — see

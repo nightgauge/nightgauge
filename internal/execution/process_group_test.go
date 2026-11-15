@@ -1,13 +1,17 @@
 package execution
 
 import (
+	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 )
 
 // Killing a stage must reap what the stage SPAWNED, not just the stage (#1253).
@@ -165,5 +169,113 @@ func TestSignalProcessTree_FallsBackToPidWhenGroupIsGone(t *testing.T) {
 func TestSignalProcessTree_NilProcessIsNotSignalled(t *testing.T) {
 	if signalProcessTree(nil, syscall.SIGTERM) {
 		t.Error("signalProcessTree(nil) reported it signalled something")
+	}
+}
+
+// leftBehindAdapter is an agentic adapters.SkillRunner whose stage
+// backgrounds a long-lived child with its stdio sent away from the stage's
+// pipes, records the child's pid, and exits 0: the shape of an OpenCode 2.x
+// run whose private `serve --stdio --port 0` outlives its client (spike
+// #3197). The child stays in the stage's process group.
+type leftBehindAdapter struct{ pidFile string }
+
+func (leftBehindAdapter) Name() string    { return "left-behind-fake" }
+func (leftBehindAdapter) UsesStdin() bool { return false }
+func (leftBehindAdapter) Agentic() bool   { return true }
+func (a leftBehindAdapter) BuildCommand(adapters.RunOptions) (string, []string, map[string]string) {
+	return "sh", []string{"-c", `sleep 300 </dev/null >/dev/null 2>&1 & echo $! > "$0"; exit 0`, a.pidFile}, nil
+}
+
+// TestRunStageProcessGroupReapedAfterNormalExit (#3303): a stage that exits 0
+// leaving a child in its process group does not leave it running. Before the
+// post-exit reap only a cancel, a timeout or a budget stop killed the group,
+// so the child of a stage that simply ended survived it.
+func TestRunStageProcessGroupReapedAfterNormalExit(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-3303"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	result, err := NewManager(root, leftBehindAdapter{pidFile: pidFile}).RunStage(context.Background(), StageOptions{
+		Repo:        "nightgauge/nightgauge",
+		IssueNumber: 3303,
+		Stage:       "feature-dev",
+		Timeout:     stubWaitBound(t),
+	})
+	if err != nil {
+		t.Fatalf("RunStage: %v", err)
+	}
+	if result == nil || result.ExitCode != 0 {
+		t.Fatalf("RunStage result = %+v, want exit 0", result)
+	}
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("the stage recorded no child pid: %v", err)
+	}
+	child, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || child <= 0 {
+		t.Fatalf("child pid %q: %v", raw, err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(child, syscall.SIGKILL) })
+	// The orphan reparents to PID 1, which normally reaps it at once. Where
+	// PID 1 reaps nothing (a container whose init is the test binary), the
+	// killed child stays a zombie, which runs nothing and holds nothing.
+	deadline := time.Now().Add(5 * time.Second)
+	for alive(child) && !zombie(child) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if alive(child) && !zombie(child) {
+		t.Errorf("pid %d, left in the stage's process group, is still running after RunStage returned", child)
+	}
+}
+
+// zombie reports whether pid is a zombie, read from Linux's /proc/<pid>/stat
+// (state is the field after the parenthesised command). It reports false
+// where /proc does not exist; there, launchd reaps an orphan at once.
+func zombie(pid int) bool {
+	raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return false
+	}
+	_, rest, ok := strings.Cut(string(raw), ") ")
+	return ok && strings.HasPrefix(rest, "Z")
+}
+
+// pipeHolderAdapter backgrounds a child that KEEPS the stage's stdout and
+// stderr open, then exits 0: a survivor holding the pipes the output readers
+// wait on.
+type pipeHolderAdapter struct{}
+
+func (pipeHolderAdapter) Name() string    { return "pipe-holder-fake" }
+func (pipeHolderAdapter) UsesStdin() bool { return false }
+func (pipeHolderAdapter) Agentic() bool   { return true }
+func (pipeHolderAdapter) BuildCommand(adapters.RunOptions) (string, []string, map[string]string) {
+	return "sh", []string{"-c", `sleep 300 </dev/null & exit 0`}, nil
+}
+
+// TestRunStageReturnsWhenASurvivorHoldsThePipes (#3303): the group is killed
+// the moment the leader exits, not after the output readers finish, so a
+// child holding stdout and stderr open cannot hold the stage until its
+// timeout.
+func TestRunStageReturnsWhenASurvivorHoldsThePipes(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-3303"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	result, err := NewManager(root, pipeHolderAdapter{}).RunStage(context.Background(), StageOptions{
+		Repo:        "nightgauge/nightgauge",
+		IssueNumber: 3303,
+		Stage:       "feature-dev",
+		Timeout:     2 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("RunStage: %v", err)
+	}
+	if result == nil || result.ExitCode != 0 {
+		t.Fatalf("RunStage result = %+v, want exit 0", result)
+	}
+	if took := time.Since(started); took > 30*time.Second {
+		t.Errorf("RunStage took %v: a child holding the pipes held the stage", took)
 	}
 }

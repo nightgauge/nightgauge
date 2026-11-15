@@ -30,10 +30,10 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/execution/procgroup"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -961,8 +961,10 @@ func (f openCodeFold) version(ctx context.Context) (string, error) {
 // errHelperTimedOut is a helper that outlived its timeout and was killed.
 var errHelperTimedOut = errors.New("timed out and was killed")
 
-// helper runs one opencode process: in its own process group, which is
-// killed whole when the timeout fires or the process exits leaving children;
+// helper runs one opencode process, --standalone (OpenCodeStandaloneArgs):
+// in its own process group (procgroup), killed whole when the timeout fires
+// and when the process exits, on every path, before it is reaped, so the
+// private server --standalone starts never outlives it (#3303);
 // with stdin closed; with the fold's environment (openCodeHelperEnv) and
 // directory (the run's root); its output read into memory, and capped.
 //
@@ -993,17 +995,13 @@ func (f openCodeFold) helper(ctx context.Context, args ...string) ([]byte, error
 	}
 	hctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(hctx, f.bin, args...)
+	cmd := exec.CommandContext(hctx, f.bin, adapters.OpenCodeStandaloneArgs(args)...)
 	cmd.Env = f.env
 	cmd.Dir = f.dir
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	procgroup.Prepare(cmd)
 	cmd.WaitDelay = time.Second
 	cmd.Stdout = out
-	err = cmd.Run()
-	if cmd.Process != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
+	err = procgroup.Run(cmd)
 	info, statErr := out.Stat()
 	switch {
 	case errors.Is(hctx.Err(), context.DeadlineExceeded):
