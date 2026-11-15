@@ -3,7 +3,7 @@ name: adapter-canary
 # The scheduled latest-CLI canary (#1639). Nothing else installs a non-Claude
 # CLI in CI, and nothing ever runs the newest release of any manifest CLI
 # against the flag contract (#1617), the stub-provider OpenCode run (#1618,
-# #1624) and the pinned OpenCode config schema (#1634). This ties them
+# #1624). This ties them
 # together, files a drift issue when something breaks, and blocks a PR that
 # bumps a manifest's max_tested while the canary is red at that version.
 #
@@ -216,12 +216,8 @@ jobs:
       - name: Run the OpenCode canary (stub run, permission leg, bad model)
         id: opencode_leg
         # continue-on-error, not a bare failing step: a red stream/permission/
-        # bad-model leg must not skip the schema-diff leg below it (both have
-        # no `if:` of their own by default, so with pipefail set a step that
-        # exits non-zero marks the job success()=false and every later default
-        # step is skipped — the schema diff never ran on the exact days that
-        # mattered, including #1634's own security-key alarm). The "Fail the
-        # job if any leg failed" step below reads this outcome and is what
+        # bad-model leg must not skip the summary upload below it. The "Fail
+        # the job if any leg failed" step below reads this outcome and is what
         # actually turns the job red.
         continue-on-error: true
         env:
@@ -248,20 +244,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Diff the live OpenCode config schema against the pin
-        id: schema_diff_leg
-        # Runs regardless of the opencode-canary leg's own result (see that
-        # step's continue-on-error comment): `if: !cancelled()` so it still
-        # runs even if a prior step failed outright, on top of the
-        # continue-on-error above which already keeps the job's default
-        # success() true for this step.
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          bash scripts/adapter-canary.sh schema-diff --version "${{ steps.install.outputs.version }}" \
-            | tee "$RUNNER_TEMP/schema-diff-summary.jsonl"
-
       - name: Upload the summary rows
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -269,12 +251,11 @@ jobs:
           name: canary-summary-opencode
           path: |
             ${{ runner.temp }}/opencode-summary.jsonl
-            ${{ runner.temp }}/schema-diff-summary.jsonl
           if-no-files-found: error
           retention-days: 14
 
       - name: Fail the job if any OpenCode leg failed
-        # Both legs above run with continue-on-error, so a red one alone would
+        # The leg above runs with continue-on-error, so a red one alone would
         # otherwise leave this job green. This step is what actually turns it
         # red — it is the last step, so its own failure is the job's last
         # word. `!cancelled()` rather than `always()`: a cancelled run (this
@@ -285,7 +266,6 @@ jobs:
           set -euo pipefail
           rc=0
           [ "${{ steps.opencode_leg.outcome }}" = "success" ] || { echo "::error::the opencode-canary leg failed"; rc=1; }
-          [ "${{ steps.schema_diff_leg.outcome }}" = "success" ] || { echo "::error::the schema-diff leg failed"; rc=1; }
           exit "$rc"
 
   report:

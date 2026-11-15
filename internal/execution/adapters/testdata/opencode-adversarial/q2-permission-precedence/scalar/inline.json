@@ -1,3 +1,9 @@
 {
-  "permission": { "bash": "deny" }
+  "permissions": [
+    {
+      "action": "shell",
+      "resource": "*",
+      "effect": "deny"
+    }
+  ]
 }

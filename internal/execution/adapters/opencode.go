@@ -711,24 +711,27 @@ func InstallNightgaugePlugin(ctx context.Context, run *OpenCodeRun, outputFile, 
 	return nil
 }
 
-// addNightgaugePluginToConfig sets content's top-level "plugin" key to an
-// array holding exactly entry, leaving every other key byte-identical.
-// content is decoded generically (map[string]any) rather than through
-// openCodeConfigJSON: BuildOpenCodeConfig (opencode_config.go) now also
-// extends the same builder with a "permission" key (#1638,
-// opencode_guard.go), so content already carries one when this runs, and the
-// decode-and-re-encode round-trips it unchanged, along with every other key —
-// this remains the one place the config gains a "plugin" entry, because
-// plugin identity is #1635's, not this builder's.
+// addNightgaugePluginToConfig sets content's top-level "plugins" key (2.x;
+// 1.x's "plugin") to an array holding exactly entry, leaving every other key's
+// value unchanged, and validates the result (validateOpenCodeConfigDocument),
+// so the document OpenCode receives is the validated one. content is decoded
+// generically (map[string]any) rather than through openCodeConfigJSON, so a
+// key is round-tripped even if this function is reached with a document the
+// builder did not write; the validation then refuses it. This remains the one
+// place the config gains a plugins entry, because plugin identity is #1635's,
+// not the builder's.
 func addNightgaugePluginToConfig(content, entry string) (string, error) {
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(content), &raw); err != nil {
 		return "", fmt.Errorf("decoding the per-run config: %w", err)
 	}
-	raw["plugin"] = []string{entry}
+	raw["plugins"] = []string{entry}
 	out, err := json.Marshal(raw)
 	if err != nil {
 		return "", fmt.Errorf("re-encoding the per-run config: %w", err)
+	}
+	if err := validateOpenCodeConfigDocument(string(out)); err != nil {
+		return "", err
 	}
 	return string(out), nil
 }

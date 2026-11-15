@@ -365,7 +365,7 @@ describe("SDK/Go parity through the golden (#1648)", () => {
 describe("no TypeScript builds the OpenCode config (#1648)", () => {
   it("src/cli/adapters holds no OpenCode config-key literal", () => {
     const key =
-      /(^|[^A-Za-z0-9_.$])["'`]?(permission|compaction|share|autoupdate|enabled_providers|small_model|default_agent|subagent_depth|tool_output)["'`]?\s*:\s*(["'`{[]|true\b|false\b|\d)/;
+      /(^|[^A-Za-z0-9_.$])["'`]?(permissions?|policies|snapshots|compaction|share|autoupdate|enabled_providers|small_model|default_agent|subagent_depth|tool_output)["'`]?\s*:\s*(["'`{[]|true\b|false\b|\d)/;
     const hits: string[] = [];
     for (const file of readdirSync(ADAPTERS_SRC)) {
       if (!file.endsWith(".ts")) continue;

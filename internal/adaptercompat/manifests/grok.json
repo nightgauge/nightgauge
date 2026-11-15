@@ -32,7 +32,6 @@
     "internal/execution/adapters/testdata/cli-help/grok-1.0.4.txt",
     "internal/execution/adapters/testdata/cli-help/grok-1.0.4.txt.hidden"
   ],
-  "config_schema_sha256": "",
   "plugin_api_version": "",
   "experimental_hooks": [],
   "cache": {

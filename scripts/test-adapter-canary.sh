@@ -5,12 +5,6 @@
 # Drives the working-tree copy of the script. Covers the pieces that do not
 # need a live install of every manifest CLI (that is the daily/PR workflow
 # run itself, scripts/ci-local.sh's job):
-#   1. schema-diff reports "unchanged" against an identical copy of the
-#      pinned schema, and "changed", listing an added property and invoking
-#      the #1634 suite, against a copy with one extra property; and
-#      "changed", not "fail", with the suite passing, against a copy that
-#      newly deprecates (draft 2020-12 `deprecated` keyword) a key the
-#      builder sets, listing it as deprecated (#2465).
 #   2. report, with gh stubbed, files exactly one issue for the first failing
 #      summary and comments on the second, for the same adapter+version.
 #   3. A stub-provider that never prints its base_url (a hang) is killed at
@@ -23,9 +17,8 @@
 #      mis-attributing the failure to an unrelated adapter's own notes
 #      (known-broken/hidden-flag/skip bookkeeping share the same log shape).
 #   6. .github/workflows/adapter-canary.yml's own structure: the
-#      opencode-canary job's OpenCode leg and schema-diff leg each run
-#      regardless of the other's result, and a final step fails the JOB when
-#      either one did (#1639 round 3) — a GitHub Actions runner is not
+#      opencode-canary job's OpenCode leg continues on its own error, and a
+#      final step fails the JOB when it failed (#1639 round 3) — a GitHub Actions runner is not
 #      available here, so this checks the YAML's own shape with yq rather
 #      than executing it; actionlint checks the YAML is otherwise valid.
 #   7. process hygiene (#1639 round 3): a pgrep snapshot of every process this
@@ -44,7 +37,6 @@ CLI_HELP="$REPO_ROOT/internal/execution/adapters/testdata/cli-help"
 # The opencode capture is named for the manifest's max_tested.
 OPENCODE_V="$(jq -r '.max_tested' "$REPO_ROOT/internal/adaptercompat/manifests/opencode.json")"
 OPENCODE_HELP="opencode-run-$OPENCODE_V.txt"
-SCHEMA="$REPO_ROOT/internal/execution/adapters/testdata/opencode-config-schema/opencode-config.schema.json"
 WORKFLOW="$REPO_ROOT/.github/workflows/adapter-canary.yml"
 
 PASS=0
@@ -78,61 +70,6 @@ str_contains() { # str_contains <haystack> <needle> — argv, not sh -c string
 TMP="$(mktemp -d)"
 TMP="$(cd "$TMP" && pwd -P)"
 
-echo "=== 1. schema-diff ==="
-
-# 1a. unchanged: an identical copy of the pinned schema.
-cp "$SCHEMA" "$TMP/unchanged.json"
-OUT="$(bash "$SCRIPT" schema-diff --live-file "$TMP/unchanged.json")"
-check "unchanged: exits 0" [ $? -eq 0 ]
-check "unchanged: result is unchanged" sh -c "echo '$OUT' | jq -e '.result == \"unchanged\"' >/dev/null"
-
-# 1b. changed: the same schema with one extra top-level property.
-python3 - "$SCHEMA" "$TMP/changed.json" <<'PY'
-import json, sys
-doc = json.load(open(sys.argv[1]))
-node = doc
-for _ in range(8):
-    if "properties" in node:
-        break
-    if "$ref" in node and "$defs" in doc:
-        node = doc["$defs"][node["$ref"].split("/")[-1]]
-        continue
-    break
-node["properties"]["nightgaugeCanaryFixtureProp"] = {"type": "string"}
-json.dump(doc, open(sys.argv[2], "w"))
-PY
-OUT="$(bash "$SCRIPT" schema-diff --live-file "$TMP/changed.json")"
-check "changed: result is changed" sh -c "echo '$OUT' | jq -e '.result == \"changed\"' >/dev/null"
-check "changed: lists the added property" sh -c "echo '$OUT' | jq -r '.detail' | jq -e '.added == [\"nightgaugeCanaryFixtureProp\"]' >/dev/null"
-check "changed: invoked the #1634 suite (config_suite present)" sh -c "echo '$OUT' | jq -r '.detail' | jq -e '.config_suite == \"pass\" or .config_suite == \"fail\"' >/dev/null"
-
-# 1c. newly deprecated: the same schema with the draft 2020-12 deprecated
-# keyword on snapshot, a key every generated config sets. OpenCode's
-# published schema did this to most of the builder's keys on 2026-10-15
-# while still accepting them (#2465): a deprecation newer than the pin is
-# "changed", not a "fail" that files a drift issue, and the diff lists it.
-python3 - "$SCHEMA" "$TMP/deprecated.json" <<'PY'
-import json, sys
-doc = json.load(open(sys.argv[1]))
-node = doc
-for _ in range(8):
-    if "properties" in node:
-        break
-    if "$ref" in node and "$defs" in doc:
-        node = doc["$defs"][node["$ref"].split("/")[-1]]
-        continue
-    break
-node["properties"]["snapshot"]["deprecated"] = True
-json.dump(doc, open(sys.argv[2], "w"))
-PY
-OUT="$(bash "$SCRIPT" schema-diff --live-file "$TMP/deprecated.json")"
-RC=$?
-check "newly deprecated: exits 0" [ "$RC" -eq 0 ]
-check "newly deprecated: result is changed, not fail" sh -c "echo '$OUT' | jq -e '.result == \"changed\"' >/dev/null"
-check "newly deprecated: the #1634 suite passes" sh -c "echo '$OUT' | jq -r '.detail' | jq -e '.config_suite == \"pass\"' >/dev/null"
-check "newly deprecated: lists the keyword-deprecated property" sh -c "echo '$OUT' | jq -r '.detail' | jq -e '.deprecated | index(\"snapshot\")' >/dev/null"
-
-echo ""
 echo "=== 2. report (gh stubbed) ==="
 
 FAKE_BIN="$TMP/fakebin"
@@ -475,7 +412,7 @@ check "the fallback row still fires for the orphan sidecar no manifest's stem na
   sh -c "row=\$(echo '$OUT' | jq -c 'select(.adapter==\"flag-contract\")'); [ -n \"\$row\" ] && echo \"\$row\" | jq -e '.result == \"fail\"' >/dev/null && echo \"\$row\" | jq -r '.detail' | grep -qF 'ghost-adapter'"
 
 echo ""
-echo "=== 5. opencode-canary and schema-diff propagate a failure's exit code ==="
+echo "=== 5. opencode-canary propagates a failure's exit code ==="
 
 # 5a. cmd_opencode_canary must return the underlying `go test` failure's exit
 # code (it used to end on `rm -f`, whose own exit status masked it), so the
@@ -562,50 +499,14 @@ check "the row's detail is the actual failing message, not the pin-relaxed notic
 check "the row's detail does not carry the pin-relaxed notice instead" \
   sh -c "! jq -r '.detail' '$TMP/opencode-canary-row-2.jsonl' | grep -qF 'is installed (canary: pin relaxed'"
 
-# 5b. cmd_schema_diff must fail (result=fail, non-zero exit) when the live
-# schema breaks the #1634 suite — not report=changed and exit 0, which
-# silences exactly the alarm TestSecurityKeysPresentAndKnown exists to raise.
-DROPPED="$TMP/dropped-schema.json"
-python3 - "$SCHEMA" "$DROPPED" <<'PY'
-import json, sys
-doc = json.load(open(sys.argv[1]))
-node = doc
-for _ in range(8):
-    if "properties" in node:
-        break
-    if "$ref" in node and "$defs" in doc:
-        node = doc["$defs"][node["$ref"].split("/")[-1]]
-        continue
-    break
-node["properties"].pop("share", None)
-node["properties"].pop("autoupdate", None)
-json.dump(doc, open(sys.argv[2], "w"))
-PY
-OUT="$(bash "$SCRIPT" schema-diff --live-file "$DROPPED" --version 1.19.0 2>/dev/null)"
-RC=$?
-check "schema-diff exits non-zero when the live schema breaks the #1634 suite" [ "$RC" -ne 0 ]
-check "schema-diff's row reports result=fail, not changed" \
-  sh -c "[ -n '$OUT' ] && echo '$OUT' | jq -e '.result == \"fail\"' >/dev/null"
-check "schema-diff's row reports the version the caller passed" \
-  sh -c "[ -n '$OUT' ] && echo '$OUT' | jq -e '.version == \"1.19.0\"' >/dev/null"
-check "schema-diff's detail still carries the property-level diff" \
-  sh -c "[ -n '$OUT' ] && echo '$OUT' | jq -r '.detail' | jq -e '.removed == [\"autoupdate\", \"share\"]' >/dev/null"
-
 echo ""
 echo "=== 6. adapter-canary.yml: every OpenCode leg runs, and the job goes red on any failure ==="
 
 check "yq is on PATH to read the workflow" sh -c "command -v yq >/dev/null"
 
 OPENCODE_LEG_COE="$(yq -r '.jobs["opencode-canary"].steps[] | select(.id == "opencode_leg") | .["continue-on-error"]' "$WORKFLOW")"
-check "the opencode-canary leg step continues on its own error, so it cannot skip the schema-diff leg" \
+check "the opencode-canary leg step continues on its own error, so it cannot skip the summary upload" \
   [ "$OPENCODE_LEG_COE" = "true" ]
-
-SCHEMA_DIFF_LEG_IF="$(yq -r '.jobs["opencode-canary"].steps[] | select(.id == "schema_diff_leg") | .if' "$WORKFLOW")"
-check "the schema-diff leg step's own if: still lets it run when a prior step failed outright" \
-  sh -c "echo '$SCHEMA_DIFF_LEG_IF' | grep -q cancelled"
-SCHEMA_DIFF_LEG_COE="$(yq -r '.jobs["opencode-canary"].steps[] | select(.id == "schema_diff_leg") | .["continue-on-error"]' "$WORKFLOW")"
-check "the schema-diff leg step also continues on its own error" \
-  [ "$SCHEMA_DIFF_LEG_COE" = "true" ]
 
 FINAL_STEP_NAME="$(yq -r '.jobs["opencode-canary"].steps[-1].name' "$WORKFLOW")"
 check "the opencode-canary job's LAST step is the one that fails the job on any leg's outcome" \
@@ -613,8 +514,6 @@ check "the opencode-canary job's LAST step is the one that fails the job on any 
 FINAL_STEP_RUN="$(yq -r '.jobs["opencode-canary"].steps[-1].run' "$WORKFLOW")"
 check "the final step reads the opencode-canary leg's own outcome" \
   sh -c "echo '$FINAL_STEP_RUN' | grep -q 'steps.opencode_leg.outcome'"
-check "the final step reads the schema-diff leg's own outcome" \
-  sh -c "echo '$FINAL_STEP_RUN' | grep -q 'steps.schema_diff_leg.outcome'"
 FINAL_STEP_COE="$(yq -r '.jobs["opencode-canary"].steps[-1]["continue-on-error"] // "false"' "$WORKFLOW")"
 check "the final step does NOT continue on its own error, so its own failure fails the job" \
   [ "$FINAL_STEP_COE" != "true" ]

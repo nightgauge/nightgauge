@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -32,6 +33,13 @@ import (
 // configured with: the adapter sets its output as OPENCODE_CONFIG_CONTENT, and
 // `nightgauge opencode config` prints the same bytes for the SDK path (#1648),
 // through PrepareOpenCodeRun, which both call.
+//
+// The observations below were made on opencode 1.18.30 and name its keys.
+// The document is now written in 2.x's native keys (2.2.7, #3301): a model
+// entry's id and provider.npm are its modelID and package, options are
+// settings or a model's body, agent and mode are agents, and a dispatch sets
+// OPENCODE_DISABLE_PROJECT_CONFIG, which on 2.2.7 drops every project source
+// a lower layer would come from (opencode_merge_contract_test.go, question 6).
 //
 // Everything Nightgauge sets goes in OPENCODE_CONFIG_CONTENT. Observed on
 // opencode 1.18.30, that layer is merged after the run's XDG config file, the
@@ -114,9 +122,15 @@ const openCodeConfigContentEnvVar = "OPENCODE_CONFIG_CONTENT"
 // stays because a model that heeds the nudge ends there on its own.
 const openCodeDefaultSteps = 200
 
-// openCodeSubagentDepth is set explicitly: a subagent the task tool starts
-// cannot start another, so a stage's steps cap bounds every level below it.
-const openCodeSubagentDepth = 1
+// openCodeSubagentAgents are the built-in subagent-mode agents (`opencode
+// debug agents` on 2.2.7 lists general and explore as mode "subagent"). Each
+// carries a subagent deny of its own, so a subagent cannot start another and
+// a stage's steps cap bounds every level below it. 2.x has no subagent_depth:
+// it drops the 1.x key without a word, and a subagent was then offered the
+// subagent tool again, because the document-level "*" allow is appended after
+// the agent's built-in deny (spike #3197 § 2). An agent-level rule is
+// appended after the document's, so its deny is the last match.
+var openCodeSubagentAgents = []string{"general", "explore"}
 
 // openCodeDefaultTimeout is an endpoint's header and chunk timeout when the
 // machine-tier config sets none. A cold prefill of a 131072-token window on
@@ -207,22 +221,21 @@ func openCodeExplorationBudget(settings config.OpenCodeToolOutput, stage string,
 	return openCodePlanningExplorationBudget
 }
 
-// Compaction settings. tail_turns keeps the stage prompt's turn and the one
-// after it verbatim. preserve_recent_tokens takes the bounds opencode 1.18.30
-// applies to its own default (between 2000 and 15000, and at most a quarter
-// of the usable window), computed from the limits Nightgauge knows, so the
-// value is explicit and does not move with the binary.
+// Compaction settings. keep.tokens (1.x's preserve_recent_tokens) takes the
+// bounds opencode 1.18.30 applied to its own default (between 2000 and
+// 15000, and at most a quarter of the usable window), computed from the
+// limits Nightgauge knows, so the value is explicit and does not move with
+// the binary. 2.x has no key for 1.x's tail_turns or prune (2.2.7 drops both).
 //
-// On 1.18.30 the compaction threshold of a model with a limit.input is
-// limit.input less reserved, and of any other model limit.context less its
-// output limit (read from its bundled source). A lower config layer can give
-// a model a limit.input the per-run config does not set, and so move the
-// threshold past the loaded window. The block of a declared endpoint's model
-// therefore sets limit.input to limit.context, and reserved to the output
-// limit, which keeps the threshold at limit.context less limit.output. A
-// hosted model's reserved is 20000, the most OpenCode's own default reserves.
+// The compaction threshold of a model with a limit.input is limit.input less
+// buffer (1.x's reserved), and of any other model limit.context less its
+// output limit. A lower config layer can give a model a limit.input the
+// per-run config does not set, and so move the threshold past the loaded
+// window. The block of a declared endpoint's model therefore sets limit.input
+// to limit.context, and buffer to the output limit, which keeps the
+// threshold at limit.context less limit.output. A hosted model's buffer is
+// 20000, the most OpenCode's own default reserves.
 const (
-	openCodeCompactionTailTurns     = 2
 	openCodeCompactionReservedCap   = 20000
 	openCodeCompactionPreserveCap   = 15000
 	openCodeCompactionPreserveFloor = 2000
@@ -231,6 +244,11 @@ const (
 // openCodeEndpointNPM is the AI SDK package every endpoint block uses: LM
 // Studio and Ollama both serve an OpenAI-compatible API.
 const openCodeEndpointNPM = "@ai-sdk/openai-compatible"
+
+// openCodePackagePrefix is how a 2.x provider or model entry names an AI SDK
+// npm package: package "aisdk:<npm>" (observed on 2.2.7, which writes the
+// 1.x npm key in this form).
+const openCodePackagePrefix = "aisdk:"
 
 // openCodeAnthropicKey is the provider key whose one credential is
 // ANTHROPIC_API_KEY (ADR-022 § 17).
@@ -244,16 +262,6 @@ const (
 	openCodeAnthropicNPM     = "@ai-sdk/anthropic"
 	openCodeAnthropicBaseURL = "https://api.anthropic.com/v1"
 )
-
-// openCodePinnedModeAgents are the built-in agents whose legacy mode.<name>
-// entry the config sets beside agent.<name>. Observed on 1.18.30, every
-// mode.<name> of the merged config is merged over agent.<name> after every
-// layer, forced to mode "primary", so a lower layer's mode entry would win
-// over the content's agent entry. These agents are primary already, so the
-// content's own mode entry changes nothing about them and wins over a lower
-// layer's. The general and explore subagents are not here: a mode entry
-// would turn them into primary agents (ADR-022 § 8).
-var openCodePinnedModeAgents = []string{"build", "plan", "title", "summary", "compaction"}
 
 // openCodeRunFilesDir is the directory of the run root, outside all four XDG
 // directories, where Nightgauge keeps the files the config refers to.
@@ -704,51 +712,117 @@ type OpenCodeRunConfig struct {
 	ExplorationBudget int
 }
 
-// The JSON shape of OPENCODE_CONFIG_CONTENT. Every key is one opencode
-// 1.18.30 accepts (its bundled config schema); 1.18.30 drops an unknown key
-// without a word, so a misspelled key here would silently do nothing.
+// The JSON shape of OPENCODE_CONFIG_CONTENT: OpenCode 2.x's native config
+// document. Every key is one opencode 2.2.7 keeps when it loads the document,
+// read back from `opencode debug config --standalone` (spike #3197 § 2).
+// 2.x drops an unknown key, a 1.x key it does not translate and a value of
+// the wrong type without a word and exits 0, so a misspelled key here would
+// silently do nothing: validateOpenCodeConfigDocument
+// (opencode_config_validate.go) decodes the final text back into this type
+// with unknown fields refused before any dispatch.
 type openCodeConfigJSON struct {
-	Model            string                       `json:"model"`
-	SmallModel       string                       `json:"small_model"`
-	DefaultAgent     string                       `json:"default_agent"`
-	EnabledProviders []string                     `json:"enabled_providers"`
-	Provider         map[string]any               `json:"provider"`
-	Agent            map[string]openCodeAgentJSON `json:"agent"`
-	Mode             map[string]openCodeAgentJSON `json:"mode"`
-	SubagentDepth    int                          `json:"subagent_depth"`
-	Compaction       openCodeCompactionJSON       `json:"compaction"`
-	ToolOutput       openCodeToolOutputJSON       `json:"tool_output"`
-	Share            string                       `json:"share"`
-	Autoupdate       bool                         `json:"autoupdate"`
-	Snapshot         bool                         `json:"snapshot"`
-	LSP              bool                         `json:"lsp"`
-	Formatter        bool                         `json:"formatter"`
-	// MCP is keyed by server name. OPENCODE_CONFIG_CONTENT wins over a lower
-	// layer for the servers it names; a lower layer can still add a server of
-	// its own, which the project-config tamper gate closes (#1638).
-	MCP          map[string]codexprovision.OpenCodeMcpServer `json:"mcp"`
-	Instructions []string                                    `json:"instructions"`
-	Skills       openCodeSkillsJSON                          `json:"skills"`
-	// Permission is the ADR-022 § 9 map derived from in.Run.AllowedTools
-	// (openCodePermissionMap, opencode_guard.go, #1638): every key explicit,
-	// never "ask". addNightgaugePluginToConfig (opencode.go) decodes this
-	// builder's output generically to add the top-level "plugin" key #1635
-	// needs, and round-trips this key unchanged.
-	Permission *openCodePermissionJSON `json:"permission"`
+	Model        openCodeModelRefJSON            `json:"model"`
+	DefaultAgent string                          `json:"default_agent"`
+	Policies     []openCodeRuleJSON              `json:"policies"`
+	Providers    map[string]openCodeProviderJSON `json:"providers"`
+	Agents       map[string]openCodeAgentJSON    `json:"agents"`
+	Compaction   openCodeCompactionJSON          `json:"compaction"`
+	ToolOutput   openCodeToolOutputJSON          `json:"tool_output"`
+	Share        string                          `json:"share"`
+	Update       string                          `json:"update"`
+	Snapshots    bool                            `json:"snapshots"`
+	LSP          bool                            `json:"lsp"`
+	Formatter    bool                            `json:"formatter"`
+	// MCP's servers are keyed by server name. OPENCODE_CONFIG_CONTENT wins
+	// over a lower layer for the servers it names; a lower layer can still
+	// add a server of its own, which the project-config tamper gate closes
+	// (#1638).
+	MCP          openCodeMcpJSON `json:"mcp"`
+	Instructions []string        `json:"instructions"`
+	// Skills is the list of remote skill sources: always empty.
+	Skills []string `json:"skills"`
+	// Permissions is the ADR-022 § 9 rule list derived from
+	// in.Run.AllowedTools (openCodePermissionRules over openCodePermissionMap,
+	// opencode_guard.go, #1638): every action explicit, never "ask".
+	Permissions []openCodeRuleJSON `json:"permissions"`
+	// Plugins is set by addNightgaugePluginToConfig (opencode.go), never by
+	// the builder: plugin identity is #1635's.
+	Plugins []string `json:"plugins,omitempty"`
+}
+
+// openCodeMcpJSON is 2.x's mcp block: the servers sit under servers, where
+// 1.x keyed them at the top of mcp (2.2.7 writes the 1.x form this way).
+type openCodeMcpJSON struct {
+	Servers map[string]openCodeMcpServerJSON `json:"servers,omitempty"`
+}
+
+// openCodeMcpServerJSON is one 2.x MCP server: codexprovision's
+// OpenCodeMcpServer with 1.x's enabled written as 2.x's disabled.
+type openCodeMcpServerJSON struct {
+	Type        string            `json:"type"`
+	Command     []string          `json:"command,omitempty"`
+	Cwd         string            `json:"cwd,omitempty"`
+	Environment map[string]string `json:"environment,omitempty"`
+	URL         string            `json:"url,omitempty"`
+	Headers     map[string]string `json:"headers,omitempty"`
+	// OAuth is false for every remote server and nil for a local one (see
+	// codexprovision.OpenCodeMcpServer.OAuth).
+	OAuth    *bool `json:"oauth,omitempty"`
+	Disabled bool  `json:"disabled"`
+}
+
+// openCodeMcp writes the checked servers in 2.x's shape.
+func openCodeMcp(servers map[string]codexprovision.OpenCodeMcpServer) openCodeMcpJSON {
+	out := openCodeMcpJSON{Servers: make(map[string]openCodeMcpServerJSON, len(servers))}
+	for name, s := range servers {
+		out.Servers[name] = openCodeMcpServerJSON{
+			Type: s.Type, Command: s.Command, Cwd: s.Cwd, Environment: s.Environment,
+			URL: s.URL, Headers: s.Headers, OAuth: s.OAuth, Disabled: !s.Enabled,
+		}
+	}
+	return out
+}
+
+// openCodeModelRefJSON names a model: 2.x takes {providerID, model} where
+// 1.x took "provider/model".
+type openCodeModelRefJSON struct {
+	ProviderID string `json:"providerID"`
+	Model      string `json:"model"`
+}
+
+// openCodeRuleJSON is one 2.x permission or policy rule. 2.x applies the
+// LAST rule whose action and resource match, so order carries meaning.
+type openCodeRuleJSON struct {
+	Action   string `json:"action"`
+	Resource string `json:"resource"`
+	Effect   string `json:"effect"`
 }
 
 type openCodeAgentJSON struct {
-	Model   string `json:"model"`
-	Steps   int    `json:"steps,omitempty"`
-	Disable bool   `json:"disable"`
+	Model openCodeModelRefJSON `json:"model"`
+	Steps int                  `json:"steps,omitempty"`
+	// Disabled is written on every agent, false included, so a lower layer
+	// cannot disable or enable a built-in agent the content names.
+	Disabled bool `json:"disabled"`
+	// Permissions is appended after the document's own list for this agent:
+	// the subagent deny on every agent in openCodeSubagentAgents.
+	Permissions []openCodeRuleJSON `json:"permissions,omitempty"`
 }
 
+// openCodeCompactionJSON is 2.x's compaction policy. 1.x's prune and
+// tail_turns have no 2.x key: 2.2.7 drops both, so they are not written.
 type openCodeCompactionJSON struct {
-	Auto                 bool `json:"auto"`
-	Prune                bool `json:"prune"`
-	Reserved             int  `json:"reserved"`
-	TailTurns            int  `json:"tail_turns"`
-	PreserveRecentTokens int  `json:"preserve_recent_tokens"`
+	Auto bool                       `json:"auto"`
+	Keep openCodeCompactionKeepJSON `json:"keep"`
+	// Buffer is what 1.x called reserved: the tokens kept free below the
+	// model's input limit.
+	Buffer int `json:"buffer"`
+}
+
+// openCodeCompactionKeepJSON is what compaction keeps verbatim: 1.x's
+// preserve_recent_tokens.
+type openCodeCompactionKeepJSON struct {
+	Tokens int `json:"tokens"`
 }
 
 type openCodeToolOutputJSON struct {
@@ -756,59 +830,59 @@ type openCodeToolOutputJSON struct {
 	MaxBytes int `json:"max_bytes"`
 }
 
-type openCodeSkillsJSON struct {
-	URLs []string `json:"urls"`
+// openCodeProviderJSON is a provider block. A declared endpoint's block is
+// complete (ADR-022 § Endpoints): env [] and an apiKey that is "" or a
+// {env:...} reference to its api_key_env, so no other environment variable
+// binds to the endpoint, whatever the catalog says about its key. The
+// anthropic block pins the SDK package, the API root and the key reference,
+// and leaves env unset.
+type openCodeProviderJSON struct {
+	Package  string                       `json:"package"`
+	Env      *[]string                    `json:"env,omitempty"`
+	Settings openCodeProviderSettingsJSON `json:"settings"`
+	Models   map[string]openCodeModelJSON `json:"models"`
 }
 
-// openCodeEndpointBlockJSON is a complete endpoint block (ADR-022
-// § Endpoints): env [] and an empty apiKey, so no environment variable binds
-// to the endpoint, whatever the catalog says about its key.
-type openCodeEndpointBlockJSON struct {
-	NPM     string                       `json:"npm"`
-	Env     []string                     `json:"env"`
-	Options openCodeEndpointOptionsJSON  `json:"options"`
-	Models  map[string]openCodeModelJSON `json:"models"`
-}
-
-type openCodeEndpointOptionsJSON struct {
+// openCodeProviderSettingsJSON is what 1.x called a provider's options. The
+// timeouts are an endpoint's alone.
+type openCodeProviderSettingsJSON struct {
 	BaseURL       string `json:"baseURL"`
 	APIKey        string `json:"apiKey"`
-	HeaderTimeout int64  `json:"headerTimeout"`
-	ChunkTimeout  int64  `json:"chunkTimeout"`
+	HeaderTimeout int64  `json:"headerTimeout,omitempty"`
+	ChunkTimeout  int64  `json:"chunkTimeout,omitempty"`
 }
 
-// openCodeModelJSON is a declared endpoint's model entry. On 1.18.30 a model
-// entry's id is the model name OpenCode sends, and its provider.npm is the SDK
-// package it loads for the model, both in place of the provider block's, so
-// the entry pins both: a lower layer's own id or provider.npm for the model
-// loses to this one. That does not close the entry's own options.model (see
-// the file header comment and #1638): a lower layer can still add that key
-// without touching id or provider.npm.
+// openCodeModelJSON is a model entry. Its modelID is the model name OpenCode
+// sends, and its package the SDK package it loads for the model, both in
+// place of the provider block's, so the entry pins both: a lower layer's own
+// modelID or package for the model loses to this one. An anthropic entry
+// carries those two pins and nothing else, so the catalog's limits, options
+// and headers for the model still apply. That does not close a lower layer's
+// own body or settings on the entry (see the file header comment and #1638).
 type openCodeModelJSON struct {
-	ID       string                    `json:"id"`
-	Provider openCodeModelProviderJSON `json:"provider"`
-	Limit    openCodeLimitJSON         `json:"limit"`
-	ToolCall bool                      `json:"tool_call"`
-	// Variants is an operator-declared endpoint model's opaque passthrough
-	// (config.OpenCodeEndpointModel.Variants, #1678): this builder never
-	// inspects its contents, including which entries are disabled. #1643's
-	// --variant mapping reads it.
-	Variants []string `json:"variants,omitempty"`
-	// Options is merged into every request body for the model: the
-	// operator's request_options for the dispatched stage.
-	Options map[string]any `json:"options,omitempty"`
+	ModelID      string                    `json:"modelID"`
+	Package      string                    `json:"package"`
+	Limit        *openCodeLimitJSON        `json:"limit,omitempty"`
+	Capabilities *openCodeCapabilitiesJSON `json:"capabilities,omitempty"`
+	// Variants carries an operator-declared endpoint model's variant ids
+	// (config.OpenCodeEndpointModel.Variants, #1678), each as {id}: 2.x
+	// takes a list of objects, and a list of strings makes 2.2.7 drop the
+	// whole provider block. #1643's --variant mapping reads it.
+	Variants []openCodeVariantJSON `json:"variants,omitempty"`
+	// Body is merged into every request body for the model: the operator's
+	// request_options for the dispatched stage (1.x's model options).
+	Body map[string]any `json:"body,omitempty"`
 }
 
-type openCodeModelProviderJSON struct {
-	NPM string `json:"npm"`
+// openCodeCapabilitiesJSON is a model's capabilities: 1.x's tool_call is
+// capabilities.tools.
+type openCodeCapabilitiesJSON struct {
+	Tools bool `json:"tools"`
 }
 
-// openCodeHostedModelJSON is the anthropic model entry: the same two pins and
-// nothing else, so the catalog's limits, options and headers for the model
-// still apply.
-type openCodeHostedModelJSON struct {
-	ID       string                    `json:"id"`
-	Provider openCodeModelProviderJSON `json:"provider"`
+// openCodeVariantJSON is one model variant.
+type openCodeVariantJSON struct {
+	ID string `json:"id"`
 }
 
 // openCodeLimitJSON is a model's limits. Input is always set, to Context:
@@ -819,21 +893,89 @@ type openCodeLimitJSON struct {
 	Output  int `json:"output"`
 }
 
-// openCodeAnthropicBlockJSON is the anthropic provider block: the SDK package,
-// the API root, the reference the API key is read from, and the dispatched
-// model's entry, so a lower layer's own npm, baseURL or model id/provider.npm
-// for anthropic loses to these. It does not close the model entry's own
-// options (speed, fallbacks) or an agent's options.mcpServers; see the file
-// header comment and #1638.
-type openCodeAnthropicBlockJSON struct {
-	NPM     string                             `json:"npm"`
-	Options openCodeAnthropicOptionsJSON       `json:"options"`
-	Models  map[string]openCodeHostedModelJSON `json:"models"`
+// openCodeModelRef splits a "provider/model" dispatch into a 2.x model ref.
+func openCodeModelRef(model string) openCodeModelRefJSON {
+	key, modelID, _ := strings.Cut(model, "/")
+	return openCodeModelRefJSON{ProviderID: key, Model: modelID}
 }
 
-type openCodeAnthropicOptionsJSON struct {
-	BaseURL string `json:"baseURL"`
-	APIKey  string `json:"apiKey"`
+// openCodeVariants writes declared variant ids as 2.x variant objects.
+func openCodeVariants(ids []string) []openCodeVariantJSON {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]openCodeVariantJSON, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, openCodeVariantJSON{ID: id})
+	}
+	return out
+}
+
+// openCodeActionNames are the 1.x permission keys 2.x renamed (spike #3197
+// § 3): 2.2.7 applies the same renames when it translates a 1.x map.
+var openCodeActionNames = map[string]string{"task": openCodeSubagentAction, "bash": "shell"}
+
+// openCodePermissionRules translates the ADR-022 § 9 permission map into a
+// 2.x rule list, mechanically and in order: one rule per top-level key in
+// field order, a string value as the rule for resource "*", an object as one
+// rule per pattern in insertion order, task and bash renamed. That is the
+// translation 2.2.7 applies to the 1.x map itself, so no rule changes
+// meaning; which actions are emitted is #3304's.
+func openCodePermissionRules(p *openCodePermissionJSON) ([]openCodeRuleJSON, error) {
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if _, err := dec.Token(); err != nil { // {
+		return nil, err
+	}
+	var rules []openCodeRuleJSON
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, _ := tok.(string)
+		action := key
+		if renamed, ok := openCodeActionNames[key]; ok {
+			action = renamed
+		}
+		next, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		switch v := next.(type) {
+		case string:
+			rules = append(rules, openCodeRuleJSON{Action: action, Resource: openCodeAnyResource, Effect: v})
+		case json.Delim:
+			if v != '{' {
+				return nil, fmt.Errorf("permission %q: unexpected %v", key, v)
+			}
+			for dec.More() {
+				pat, err := dec.Token()
+				if err != nil {
+					return nil, err
+				}
+				eff, err := dec.Token()
+				if err != nil {
+					return nil, err
+				}
+				pattern, _ := pat.(string)
+				effect, ok := eff.(string)
+				if !ok {
+					return nil, fmt.Errorf("permission %q pattern %q: effect is not a string", key, pattern)
+				}
+				rules = append(rules, openCodeRuleJSON{Action: action, Resource: pattern, Effect: effect})
+			}
+			if _, err := dec.Token(); err != nil { // }
+				return nil, err
+			}
+		default:
+			return nil, fmt.Errorf("permission %q: unexpected value %v", key, next)
+		}
+	}
+	return rules, nil
 }
 
 // BuildOpenCodeConfig builds the per-run config for in.Run. It reads no file
@@ -845,33 +987,37 @@ type openCodeAnthropicOptionsJSON struct {
 //
 // It sets:
 //
-//   - model and small_model, and every agent's model, to the dispatched model,
-//     and default_agent to build, so no request carrying the stage's prompt or
+//   - model, and every agent's model (the title agent's is 1.x's
+//     small_model), to the dispatched model as {providerID, model}, and
+//     default_agent to build, so no request carrying the stage's prompt or
 //     transcript names another model (ADR-022 § 15). That pins the model
 //     string OpenCode looks up; it does not pin what is sent over the wire
 //     for it (see the file header comment and #1638);
-//   - enabled_providers to the dispatched provider key alone, so OpenCode
-//     loads no other provider from credentials the stage keeps for its tools
-//     (the forge tokens, AWS and Google Cloud) and not its own free one;
+//   - policies: provider.use denied for "*", then allowed for the dispatched
+//     provider key alone, so OpenCode loads no other provider from
+//     credentials the stage keeps for its tools (the forge tokens, AWS and
+//     Google Cloud) and not its own free one;
 //   - the dispatched provider's block: a complete block for a declared
 //     endpoint, keyed by the endpoint's id, with its limits
 //     (resolveLimit: the machine-tier override, else the
 //     descriptor in.Discover discovers from the server), timeouts and tool
 //     calls, or the anthropic block, with its SDK package, API root and key
-//     reference; in either, the dispatched model's entry pins the model id
-//     OpenCode sends and the SDK package that sends it;
-//   - steps on the build, plan, general and explore agents; the legacy
-//     mode.<name> entry of every agent in openCodePinnedModeAgents, the same
-//     as its agent entry; subagent_depth; the title agent disabled;
-//   - compaction, tool_output, share "disabled", autoupdate false, snapshot,
-//     lsp and formatter, and empty skills.urls;
+//     reference; in either, the dispatched model's entry pins the modelID
+//     OpenCode sends and the package that sends it;
+//   - steps on the build, plan, general and explore agents; a subagent deny
+//     on every agent in openCodeSubagentAgents, in place of 1.x's
+//     subagent_depth; the title agent disabled;
+//   - compaction, tool_output, share "disabled", update "disable",
+//     snapshots, lsp and formatter, and empty skills;
 //   - instructions: the repository's steering files, then the file in the run
 //     root the baseline steering is written to (openCodeInstructionEntries),
 //     never a URL; and mcp, the pipeline's MCP servers
 //     (openCodeCheckMcpServers);
-//   - permission: the ADR-022 § 9 map derived from in.Run.AllowedTools and
-//     in.BinDir (openCodePermissionMap, opencode_guard.go, #1638) — every key
-//     explicit, never "ask".
+//   - permissions: the ADR-022 § 9 map derived from in.Run.AllowedTools and
+//     in.BinDir (openCodePermissionMap, opencode_guard.go, #1638), as a rule
+//     list (openCodePermissionRules) — every action explicit, never "ask".
+//
+// The document passes validateOpenCodeConfigDocument before it is returned.
 //
 // It refuses a model the adapter cannot dispatch; an anthropic/ model while
 // ANTHROPIC_API_KEY is unset and a platform provider's model
@@ -909,7 +1055,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	// A hosted provider's model runs on its servers; only a declared endpoint
 	// on this machine keeps the stage here.
 	built := OpenCodeRunConfig{NonLoopback: true}
-	providers := map[string]any{}
+	providers := map[string]openCodeProviderJSON{}
 	var known *config.OpenCodeLimit // the dispatched model's limits, when Nightgauge knows them
 	onEndpoint := false             // the stage runs on a declared (operator-run) endpoint
 	_, catalogKey := openCodeCatalogEnv[key]
@@ -921,26 +1067,9 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 		}
 		built.Warnings = warnings
 		file := openCodeEndpointURLFile(in.RunRoot, ep.ID)
-		providers[ep.ID] = openCodeEndpointBlockJSON{
-			NPM: openCodeEndpointNPM,
-			Env: []string{},
-			Options: openCodeEndpointOptionsJSON{
-				BaseURL:       "{file:" + file + "}",
-				APIKey:        openCodeAPIKeyRef(ep.APIKeyEnv),
-				HeaderTimeout: ep.HeaderTimeout.Milliseconds(),
-				ChunkTimeout:  ep.ChunkTimeout.Milliseconds(),
-			},
-			Models: map[string]openCodeModelJSON{
-				modelID: {
-					ID:       modelID,
-					Provider: openCodeModelProviderJSON{NPM: openCodeEndpointNPM},
-					Limit:    openCodeLimitJSON{Context: limit.Context, Input: limit.Context, Output: limit.Output},
-					ToolCall: true,
-					Variants: openCodeDeclaredVariants(ep.Models, modelID),
-					Options:  openCodeRequestOptions(ep.Models, modelID, in.Run.Stage),
-				},
-			},
-		}
+		entry := openCodeEndpointModel(modelID, limit, openCodeDeclaredVariants(ep.Models, modelID))
+		entry.Body = openCodeRequestOptions(ep.Models, modelID, in.Run.Stage)
+		providers[ep.ID] = openCodeEndpointProvider(ep, file, map[string]openCodeModelJSON{modelID: entry})
 		built.Files = map[string]string{file: ep.BaseURL}
 		built.NonLoopback = ep.NonLoopback
 		known = &limit
@@ -953,7 +1082,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 		// only when the dispatch itself lands on a declared local endpoint:
 		// a dispatch to a hosted provider (anthropic, or any other catalog
 		// key) injects that provider's block alone (TestOpenCodeConfigPins
-		// EveryModel) — enabled_providers already narrows OpenCode to the
+		// EveryModel) — policies already narrow OpenCode to the
 		// dispatched key regardless, but the config text itself carries no
 		// other provider while the stage's tools hold the forge and cloud
 		// credentials a hosted dispatch runs with.
@@ -964,25 +1093,9 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 			file := openCodeEndpointURLFile(in.RunRoot, other.ID)
 			otherModels := map[string]openCodeModelJSON{}
 			for _, m := range other.Models {
-				otherModels[m.ID] = openCodeModelJSON{
-					ID:       m.ID,
-					Provider: openCodeModelProviderJSON{NPM: openCodeEndpointNPM},
-					Limit:    openCodeLimitJSON{Context: other.Limit.Context, Input: other.Limit.Context, Output: other.Limit.Output},
-					ToolCall: true,
-					Variants: m.Variants,
-				}
+				otherModels[m.ID] = openCodeEndpointModel(m.ID, other.Limit, m.Variants)
 			}
-			providers[other.ID] = openCodeEndpointBlockJSON{
-				NPM: openCodeEndpointNPM,
-				Env: []string{},
-				Options: openCodeEndpointOptionsJSON{
-					BaseURL:       "{file:" + file + "}",
-					APIKey:        openCodeAPIKeyRef(other.APIKeyEnv),
-					HeaderTimeout: other.HeaderTimeout.Milliseconds(),
-					ChunkTimeout:  other.ChunkTimeout.Milliseconds(),
-				},
-				Models: otherModels,
-			}
+			providers[other.ID] = openCodeEndpointProvider(other, file, otherModels)
 			built.Files[file] = other.BaseURL
 		}
 	case openCodeIsLocalKey(model):
@@ -999,14 +1112,14 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 		if err := openCodeAnthropicModelRefusal(model, modelID); err != nil {
 			return OpenCodeRunConfig{}, err
 		}
-		providers[key] = openCodeAnthropicBlockJSON{
-			NPM: openCodeAnthropicNPM,
-			Options: openCodeAnthropicOptionsJSON{
+		providers[key] = openCodeProviderJSON{
+			Package: openCodePackagePrefix + openCodeAnthropicNPM,
+			Settings: openCodeProviderSettingsJSON{
 				BaseURL: openCodeAnthropicBaseURL,
 				APIKey:  "{env:ANTHROPIC_API_KEY}",
 			},
-			Models: map[string]openCodeHostedModelJSON{
-				modelID: {ID: modelID, Provider: openCodeModelProviderJSON{NPM: openCodeAnthropicNPM}},
+			Models: map[string]openCodeModelJSON{
+				modelID: {ModelID: modelID, Package: openCodePackagePrefix + openCodeAnthropicNPM},
 			},
 		}
 	}
@@ -1030,43 +1143,46 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	if steps <= 0 {
 		steps = openCodeDefaultSteps
 	}
+	ref := openCodeModelRef(model)
 	agents := map[string]openCodeAgentJSON{
-		"build":      {Model: model, Steps: steps},
-		"plan":       {Model: model, Steps: steps},
-		"general":    {Model: model, Steps: steps},
-		"explore":    {Model: model, Steps: steps},
-		"title":      {Model: model, Disable: true},
-		"summary":    {Model: model},
-		"compaction": {Model: model},
+		"build":      {Model: ref, Steps: steps},
+		"plan":       {Model: ref, Steps: steps},
+		"general":    {Model: ref, Steps: steps},
+		"explore":    {Model: ref, Steps: steps},
+		"title":      {Model: ref, Disabled: true},
+		"summary":    {Model: ref},
+		"compaction": {Model: ref},
 	}
-	modes := map[string]openCodeAgentJSON{}
-	for _, name := range openCodePinnedModeAgents {
-		modes[name] = agents[name]
+	for _, name := range openCodeSubagentAgents {
+		a := agents[name]
+		a.Permissions = []openCodeRuleJSON{openCodeSubagentDeny}
+		agents[name] = a
+	}
+	permissions, err := openCodePermissionRules(openCodePermissionMap(in.Run, in.BinDir))
+	if err != nil {
+		return OpenCodeRunConfig{}, fmt.Errorf("opencode config: permissions: %w", err)
 	}
 	bounds := openCodeToolOutputBounds(in.ToolOutput, in.Run.Stage, onEndpoint)
 	built.ReadMaxLines = bounds.ReadMaxLines
 	built.ExplorationBudget = openCodeExplorationBudget(in.ToolOutput, in.Run.Stage,
 		onEndpoint || models.IsLocalModel("opencode", model, nil))
 	cfg := openCodeConfigJSON{
-		Model:            model,
-		SmallModel:       model,
-		DefaultAgent:     "build",
-		EnabledProviders: []string{key},
-		Provider:         providers,
-		Agent:            agents,
-		Mode:             modes,
-		SubagentDepth:    openCodeSubagentDepth,
-		Compaction:       openCodeCompaction(known),
-		ToolOutput:       openCodeToolOutputJSON{MaxLines: bounds.MaxLines, MaxBytes: bounds.MaxBytes},
-		Share:            "disabled",
-		Autoupdate:       false,
-		Snapshot:         in.Snapshot,
-		LSP:              in.LSP,
-		Formatter:        in.Formatter,
-		MCP:              mcp,
-		Instructions:     instructions,
-		Skills:           openCodeSkillsJSON{URLs: []string{}},
-		Permission:       openCodePermissionMap(in.Run, in.BinDir),
+		Model:        ref,
+		DefaultAgent: openCodeDefaultAgent,
+		Policies:     openCodeProviderPolicies(key),
+		Providers:    providers,
+		Agents:       agents,
+		Compaction:   openCodeCompaction(known),
+		ToolOutput:   openCodeToolOutputJSON{MaxLines: bounds.MaxLines, MaxBytes: bounds.MaxBytes},
+		Share:        openCodeShareDisabled,
+		Update:       openCodeUpdateDisable,
+		Snapshots:    in.Snapshot,
+		LSP:          in.LSP,
+		Formatter:    in.Formatter,
+		MCP:          openCodeMcp(mcp),
+		Instructions: instructions,
+		Skills:       []string{},
+		Permissions:  permissions,
 	}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
@@ -1078,8 +1194,72 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 				"Correct the value; one read from a file with CRLF line endings ends in a carriage return",
 			strings.Join(names, ", "))
 	}
+	if err := validateOpenCodeConfigDocument(string(raw)); err != nil {
+		return OpenCodeRunConfig{}, err
+	}
 	built.Content = string(raw)
 	return built, nil
+}
+
+// openCodeShareDisabled and openCodeUpdateDisable are the values of share and
+// update every document carries: no session is shared, and OpenCode never
+// updates itself mid-run.
+const (
+	openCodeShareDisabled = "disabled"
+	openCodeUpdateDisable = "disable"
+)
+
+// openCodeSubagentDeny is the rule every agent in openCodeSubagentAgents
+// carries.
+var openCodeSubagentDeny = openCodeRuleJSON{Action: openCodeSubagentAction, Resource: openCodeAnyResource, Effect: openCodeDeny}
+
+// openCodeSubagentAction is 2.x's action for starting a subagent (1.x's
+// task), openCodeAnyResource the resource every rule for a whole action
+// names, and openCodeDefaultAgent the agent a stage runs on.
+const (
+	openCodeSubagentAction = "subagent"
+	openCodeAnyResource    = "*"
+	openCodeDefaultAgent   = "build"
+)
+
+// openCodeProviderPolicies denies provider.use for every provider, then
+// allows the dispatched key alone (1.x's enabled_providers: [key]).
+func openCodeProviderPolicies(key string) []openCodeRuleJSON {
+	return []openCodeRuleJSON{
+		{Action: openCodeProviderUse, Resource: openCodeAnyResource, Effect: openCodeDeny},
+		{Action: openCodeProviderUse, Resource: key, Effect: openCodeAllow},
+	}
+}
+
+// openCodeProviderUse is the policy action that gates loading a provider.
+const openCodeProviderUse = "provider.use"
+
+// openCodeEndpointProvider is a declared endpoint's complete provider block.
+func openCodeEndpointProvider(ep OpenCodeEndpoint, urlFile string, entries map[string]openCodeModelJSON) openCodeProviderJSON {
+	env := []string{}
+	return openCodeProviderJSON{
+		Package: openCodePackagePrefix + openCodeEndpointNPM,
+		Env:     &env,
+		Settings: openCodeProviderSettingsJSON{
+			BaseURL:       "{file:" + urlFile + "}",
+			APIKey:        openCodeAPIKeyRef(ep.APIKeyEnv),
+			HeaderTimeout: ep.HeaderTimeout.Milliseconds(),
+			ChunkTimeout:  ep.ChunkTimeout.Milliseconds(),
+		},
+		Models: entries,
+	}
+}
+
+// openCodeEndpointModel is a declared endpoint model's entry: the modelID and
+// package pins, its limits, tool calls, and its declared variants.
+func openCodeEndpointModel(modelID string, limit config.OpenCodeLimit, variants []string) openCodeModelJSON {
+	return openCodeModelJSON{
+		ModelID:      modelID,
+		Package:      openCodePackagePrefix + openCodeEndpointNPM,
+		Limit:        &openCodeLimitJSON{Context: limit.Context, Input: limit.Context, Output: limit.Output},
+		Capabilities: &openCodeCapabilitiesJSON{Tools: true},
+		Variants:     openCodeVariants(variants),
+	}
 }
 
 // openCodeEnvSubstitutionRE is the reference OpenCode 1.18.30 replaces with a
@@ -1147,19 +1327,18 @@ func openCodeAnthropicModelRefusal(model, modelID string) error {
 // known, or OpenCode's own bounds when they are not (a hosted model, whose
 // limits come from OpenCode's catalog). For a known model, reserved is the
 // output limit, so with the block's limit.input at limit.context the
-// threshold is limit.context less limit.output.
+// threshold is limit.context less limit.output. buffer is 1.x's reserved and
+// keep.tokens its preserve_recent_tokens.
 func openCodeCompaction(known *config.OpenCodeLimit) openCodeCompactionJSON {
 	c := openCodeCompactionJSON{
-		Auto:                 true,
-		Prune:                true,
-		Reserved:             openCodeCompactionReservedCap,
-		TailTurns:            openCodeCompactionTailTurns,
-		PreserveRecentTokens: openCodeCompactionPreserveCap,
+		Auto:   true,
+		Keep:   openCodeCompactionKeepJSON{Tokens: openCodeCompactionPreserveCap},
+		Buffer: openCodeCompactionReservedCap,
 	}
 	if known != nil {
-		c.Reserved = known.Output
+		c.Buffer = known.Output
 		usable := known.Context - known.Output
-		c.PreserveRecentTokens = min(openCodeCompactionPreserveCap, max(openCodeCompactionPreserveFloor, usable/4))
+		c.Keep.Tokens = min(openCodeCompactionPreserveCap, max(openCodeCompactionPreserveFloor, usable/4))
 	}
 	return c
 }

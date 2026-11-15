@@ -54,12 +54,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // mcVersion is the opencode version every answer here was observed on. A
 // different binary fails rather than skips: its behaviour is unverified.
-const mcVersion = "1.18.30"
+const mcVersion = "2.2.7"
 
 // mcTimeout caps every opencode process the suite starts.
 const mcTimeout = 60 * time.Second
@@ -164,9 +165,6 @@ func newMCHarness(t *testing.T, packages map[string]string) *mcHarness {
 		t.Fatalf("opencode --version exited %d:\n%s", res.exit, res.stderr)
 	}
 	if v, _ := ParseOpenCodeVersion(res.stdout); v != mcVersion {
-		if m, err := openCodeManifest(); err == nil && v == m.MaxTested && strings.HasPrefix(v, "2.") {
-			t.Skipf("opencode %s is installed; this suite's results were observed on %s and the 2.x config schema is ported by #3301", v, mcVersion)
-		}
 		t.Fatalf("opencode %s is installed; this suite was observed on %s. Re-run it against the new version and re-record ADR-022's results table before changing the pin", v, mcVersion)
 	}
 	return h
@@ -947,7 +945,7 @@ func withInline(inline string, extra map[string]string) map[string]string {
 // debugJSON runs an `opencode debug` subcommand in dir and decodes its JSON.
 func (h *mcHarness) debugJSON(dir string, extra map[string]string, out any, args ...string) {
 	h.t.Helper()
-	res := h.run(dir, extra, "", append([]string{"debug"}, args...)...)
+	res := h.run(dir, extra, "", append(append([]string{"debug"}, args...), "--standalone")...)
 	if res.exit != 0 {
 		h.t.Fatalf("opencode debug %s exited %d:\n%s\n%s", strings.Join(args, " "), res.exit, res.stdout, res.stderr)
 	}
@@ -956,12 +954,112 @@ func (h *mcHarness) debugJSON(dir string, extra map[string]string, out any, args
 	}
 }
 
-// debugConfig is `opencode debug config` in dir: the merged config.
-func (h *mcHarness) debugConfig(dir, inline string, extra map[string]string) map[string]any {
+// mcSource is one configuration source `opencode debug config --standalone`
+// lists on 2.x: a config directory (info null) or a document, with the path
+// it was read from (null for OPENCODE_CONFIG_CONTENT) and its own keys as
+// 2.x reads them, 1.x keys already translated. 2.x prints no merged config.
+type mcSource struct {
+	Type string         `json:"type"`
+	Path *string        `json:"path"`
+	Info map[string]any `json:"info"`
+}
+
+// debugConfig is `opencode debug config --standalone` in dir: the sources.
+func (h *mcHarness) debugConfig(dir, inline string, extra map[string]string) []mcSource {
 	h.t.Helper()
-	cfg := map[string]any{}
-	h.debugJSON(dir, withInline(inline, extra), &cfg, "config")
-	return cfg
+	var sources []mcSource
+	h.debugJSON(dir, withInline(inline, extra), &sources, "config")
+	return sources
+}
+
+// mcSourcePaths is the path of every source with one, in order, under root
+// (relative to it) when root is set; sources outside root are left out.
+func mcSourcePaths(sources []mcSource, root string) []string {
+	var out []string
+	for _, src := range sources {
+		if src.Path == nil {
+			continue
+		}
+		p := *src.Path
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			p = resolved
+		}
+		if root != "" {
+			rel, err := filepath.Rel(root, p)
+			if err != nil || strings.HasPrefix(rel, "..") {
+				continue
+			}
+			p = rel
+		}
+		out = append(out, src.Type+":"+p)
+	}
+	return out
+}
+
+// mcInlineDocument is the OPENCODE_CONFIG_CONTENT source's keys: the document
+// with no path. nil when there is none.
+func mcInlineDocument(sources []mcSource) map[string]any {
+	for _, src := range sources {
+		if src.Type == "document" && src.Path == nil {
+			return src.Info
+		}
+	}
+	return nil
+}
+
+// mcAgents is `opencode debug agents --standalone` in dir: every resolved
+// agent, by id.
+func (h *mcHarness) mcAgents(dir, inline string, extra map[string]string) map[string]map[string]any {
+	h.t.Helper()
+	var list []map[string]any
+	h.debugJSON(dir, withInline(inline, extra), &list, "agents")
+	out := map[string]map[string]any{}
+	for _, a := range list {
+		out[fmt.Sprint(a["id"])] = a
+	}
+	return out
+}
+
+// mcBuiltinAgents are the agents 2.2.7 defines itself (`debug agents` with no
+// config).
+var mcBuiltinAgents = []string{"build", "compaction", "explore", "general", "plan", "summary", "title"}
+
+// mcFixtureAgents is the id of every resolved agent that is not built in,
+// sorted.
+func (h *mcHarness) mcFixtureAgents(dir, inline string, extra map[string]string) []string {
+	h.t.Helper()
+	var ids []string
+	for id := range h.mcAgents(dir, inline, extra) {
+		if !slices.Contains(mcBuiltinAgents, id) {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// mcAgentRules returns an agent's resolved rules for action, in order, as
+// "resource=effect".
+func mcAgentRules(agent map[string]any, action string) []string {
+	var rules []string
+	list, _ := agent["permissions"].([]any)
+	for _, r := range list {
+		rule, _ := r.(map[string]any)
+		if rule["action"] == action {
+			rules = append(rules, fmt.Sprintf("%v=%v", rule["resource"], rule["effect"]))
+		}
+	}
+	return rules
+}
+
+// mcRunNeedsDispatch skips a question whose observation needs a 2.x
+// `opencode run` that loads the per-run config and its plugin: 2.x runs a
+// prompt against its shared background service unless --standalone is
+// passed, which #3303 adds to dispatch, and loads a plugin only from a
+// directory, which #3302 provides. Each such question names what it waits on.
+func mcRunNeedsDispatch(t *testing.T, what string) {
+	t.Helper()
+	t.Skipf("on opencode %s, %s needs a 2.x `opencode run` (--standalone, #3303; a directory plugin, #3302)", mcVersion, what)
 }
 
 // runUnknownModel runs `opencode run` on a provider OpenCode does not know,
@@ -1066,88 +1164,36 @@ func mcDig(v any, keys ...string) any {
 // is why the --pure run below may or may not show that request.
 func TestOpenCodePurePluginLoading(t *testing.T) {
 	t.Parallel()
-	const npmPlugin = mcNpmPluginPackage
-	packages := map[string]string{npmPlugin: filepath.Join(mcFixtures, "q1-pure-plugins", "npm-plugin")}
-
-	control := newMCHarness(t, packages)
-	lines := control.runUnknownModel(control.project("q1-pure-plugins/project"), "", nil)
-	if want := []string{"npm-plugin", "project-dir-plugin"}; !slices.Equal(lines, want) {
-		t.Fatalf("positive control did not fire: without --pure the fixture plugins wrote %q, want %q. "+
-			"The harness is invalid, so a silent --pure run would prove nothing", lines, want)
-	}
-	for _, want := range []string{"/" + npmPlugin, mcPluginSDKPath} {
-		if !slices.Contains(control.registry.requests(), want) {
-			t.Fatalf("positive control: the npm registry stub never saw %s requested: %q", want, control.registry.requests())
-		}
-	}
-
-	pure := newMCHarness(t, packages)
-	if lines := pure.runUnknownModel(pure.project("q1-pure-plugins/project"), "", nil, "--pure"); len(lines) != 0 {
-		t.Errorf("with --pure the fixture plugins still loaded and wrote %q", lines)
-	}
-	for _, req := range pure.registry.requests() {
-		if req != mcPluginSDKPath {
-			t.Errorf("with --pure OpenCode still asked the npm registry for %s", req)
-		}
-	}
-
-	// A run with no plugin anywhere, kept alive by a model stub that answers
-	// only once the registry has been asked, or after ten seconds.
-	plain := newMCHarness(t, nil)
-	proj := filepath.Join(plain.scratch, "no-plugins")
-	mcMkdir(t, proj)
-	plain.git(proj, "init", "-q")
-	stub := newMCModelStub(t, func() bool { return len(plain.registry.requests()) > 0 })
-	if _, lines := plain.runStubModel(proj, "", stub, nil); len(lines) != 0 {
-		t.Fatalf("a run with no plugins loaded %q", lines)
-	}
-	reqs := slices.Compact(slices.Sorted(slices.Values(plain.registry.requests())))
-	if !slices.Equal(reqs, []string{mcPluginSDKPath}) {
-		t.Errorf("a run with no plugins asked the npm registry for %q, want the background install of %s alone", reqs, mcPluginSDKPath)
-	}
+	mcRunNeedsDispatch(t, "which plugins a run loads under --pure")
 }
 
-// mcBashRules returns the bash rules of an agent's resolved permission
-// ruleset, in order, as "pattern=action".
-func mcBashRules(agent map[string]any) []string {
-	var rules []string
-	list, _ := agent["permission"].([]any)
-	for _, r := range list {
-		rule, _ := r.(map[string]any)
-		if rule["permission"] == "bash" {
-			rules = append(rules, fmt.Sprintf("%v=%v", rule["pattern"], rule["action"]))
-		}
-	}
-	return rules
-}
-
-// TestOpenCodeInlineDenyBeatsProjectAllow pins question 2 with
-// `opencode debug agent build`: its resolved ruleset, and its --tool mode,
-// which runs the bash tool on `rm -rf x` in the project under that ruleset.
+// TestOpenCodeInlineDenyBeatsProjectAllow pins question 2 with `opencode
+// debug agents --standalone`: the build agent's resolved shell rules. Observed
+// on 2.2.7, a layer's permissions list is appended after the layer below it,
+// the inline document last, and the last matching rule wins, so the inline
+// list's own last word decides:
 //
-//   - scalar: the project's `bash: allow` loses to the inline `bash: deny`,
-//     and a whole-tool deny takes bash out of the agent's tools.
-//   - pattern: the project's `{"*": "allow"}` and the inline
-//     `{"rm -rf *": "deny"}` merge into one map, the inline pattern last, and
-//     the last matching rule wins, so `rm -rf x` is denied.
-//   - reordered (KNOWN hole): the merged map keeps the key order of the lowest
-//     layer that has the key, so a project that lists `rm -rf *` before `*`
-//     puts the inline deny first and the catch-all allow last, and `rm -rf x`
-//     runs. An inline value wins per key; its position does not.
+//   - scalar: the project's `* allow` is followed by the inline `* deny`.
+//   - pattern: the project's `* allow`, then the inline `* allow` and
+//     `rm -rf * deny`, so `rm -rf x` is denied.
+//   - reordered: the project lists `rm -rf * allow` before `* allow`; the
+//     inline list still ends with its own `rm -rf * deny`. 1.x merged the map
+//     in the lowest layer's key order and let `rm -rf x` run here (a KNOWN
+//     hole); 2.x's appended list closes it.
 //
-// Negative control: with scalar/inline.json flipped to `"bash": "allow"` the
-// scalar case goes red, because the tool runs and x is removed.
+// 2.x has no `debug agent --tool`, so no rule is run here: which tool calls a
+// dispatch refuses needs `opencode run` (#3303) and 2.x's permission
+// semantics (#3304).
 func TestOpenCodeInlineDenyBeatsProjectAllow(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name         string
 		projectRules []string // the project alone, the control that it loads
 		mergedRules  []string // project plus inline
-		refusal      string   // how `rm -rf x` is refused; empty when it runs
 	}{
-		{"scalar", []string{"*=allow"}, []string{"*=deny"}, "Tool bash is disabled for agent build"},
-		{"pattern", []string{"*=allow"}, []string{"*=allow", "rm -rf *=deny"}, "prevents you from using this specific tool call"},
-		{"reordered", []string{"rm -rf *=allow", "*=allow"}, []string{"rm -rf *=deny", "*=allow"}, ""},
+		{"scalar", []string{"*=allow"}, []string{"*=allow", "*=deny"}},
+		{"pattern", []string{"*=allow"}, []string{"*=allow", "*=allow", "rm -rf *=deny"}},
+		{"reordered", []string{"rm -rf *=allow", "*=allow"}, []string{"rm -rf *=allow", "*=allow", "*=allow", "rm -rf *=deny"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1156,34 +1202,12 @@ func TestOpenCodeInlineDenyBeatsProjectAllow(t *testing.T) {
 			fixture := "q2-permission-precedence/" + tc.name
 			proj := h.project(fixture + "/project")
 			inline := h.inline(fixture+"/inline.json", proj)
-			keep := filepath.Join(proj, "x", "keep.txt")
-			mcMkdir(t, filepath.Dir(keep))
-			if err := os.WriteFile(keep, []byte("keep\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
 
-			agent := map[string]any{}
-			h.debugJSON(proj, nil, &agent, "agent", "build")
-			if got := mcBashRules(agent); !slices.Equal(got, tc.projectRules) {
-				t.Fatalf("control: the project alone resolves bash to %q, want %q", got, tc.projectRules)
+			if got := mcAgentRules(h.mcAgents(proj, "", nil)["build"], "shell"); !slices.Equal(got, tc.projectRules) {
+				t.Fatalf("control: the project alone resolves shell to %q, want %q", got, tc.projectRules)
 			}
-			agent = map[string]any{}
-			h.debugJSON(proj, withInline(inline, nil), &agent, "agent", "build")
-			if got := mcBashRules(agent); !slices.Equal(got, tc.mergedRules) {
-				t.Errorf("project plus inline resolves bash to %q, want %q", got, tc.mergedRules)
-			}
-
-			params := `{"command":"rm -rf x","description":"adversarial fixture"}`
-			res := h.run(proj, withInline(inline, nil), "", "debug", "agent", "build", "--tool", "bash", "--params", params)
-			_, statErr := os.Stat(keep)
-			if tc.refusal != "" {
-				if res.exit == 0 || !strings.Contains(res.stdout+res.stderr, tc.refusal) || statErr != nil {
-					t.Errorf("`rm -rf x` was not denied with %q (exit %d, x kept: %v):\n%s\n%s", tc.refusal, res.exit, statErr == nil, res.stdout, res.stderr)
-				}
-				return
-			}
-			if res.exit != 0 || !errors.Is(statErr, fs.ErrNotExist) {
-				t.Errorf("KNOWN hole changed: `rm -rf x` was expected to run (exit %d, x kept: %v):\n%s\n%s", res.exit, statErr == nil, res.stdout, res.stderr)
+			if got := mcAgentRules(h.mcAgents(proj, inline, nil)["build"], "shell"); !slices.Equal(got, tc.mergedRules) {
+				t.Errorf("project plus inline resolves shell to %q, want %q", got, tc.mergedRules)
 			}
 		})
 	}
@@ -1197,85 +1221,10 @@ func TestOpenCodeInlineDenyBeatsProjectAllow(t *testing.T) {
 // a project's remote instructions URL is fetched.
 func TestOpenCodeArrayMerge(t *testing.T) {
 	t.Parallel()
-	h := newMCHarness(t, nil)
-	proj := h.project("q3-array-merge/project")
-	inline := h.inline("q3-array-merge/inline.json", proj)
-	projectPlugin := "file://" + proj + "/plugins/project-plugin.js"
-	inlinePlugin := "file://" + proj + "/plugins/inline-plugin.js"
-
-	cfg := h.debugConfig(proj, inline, nil)
-	if got, want := mcStrings(cfg["instructions"]), []string{"rules-one.md", "rules-two.md", proj + "/inline-rules.md"}; !slices.Equal(got, want) {
-		t.Errorf("instructions = %q, want the project's two then the inline one %q", got, want)
-	}
-	if got, want := mcStrings(cfg["plugin"]), []string{projectPlugin, inlinePlugin}; !slices.Equal(got, want) {
-		t.Errorf("plugin = %q, want %q", got, want)
-	}
-	if got, want := mcKeys(cfg["mcp"]), []string{"inline-mcp", "project-mcp", "shared-mcp"}; !slices.Equal(got, want) {
-		t.Errorf("mcp servers = %q, want %q", got, want)
-	}
-	if got := mcStrings(mcDig(cfg, "mcp", "shared-mcp", "command")); !slices.Equal(got, []string{"/usr/bin/true"}) {
-		t.Errorf("mcp.shared-mcp.command = %q, want the inline command alone, not concatenated", got)
-	}
-
-	stub := newMCModelStub(t, nil)
-	_, lines := h.runStubModel(proj, inline, stub, nil)
-	if want := []string{"inline-list-plugin", "project-list-plugin"}; !slices.Equal(lines, want) {
-		t.Errorf("plugins loaded = %q, want both %q", lines, want)
-	}
-	body := stub.bodies()
-	for _, marker := range []string{"ADVERSARIAL_RULES_ONE_MARKER", "ADVERSARIAL_RULES_TWO_MARKER", "ADVERSARIAL_INLINE_RULES_MARKER"} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("the model request does not carry %s, so that instructions entry did not load", marker)
-		}
-	}
-
-	empty := h.inline("q3-array-merge/inline-empty.json", proj)
-	cfg = h.debugConfig(proj, empty, nil)
-	if got, want := mcStrings(cfg["instructions"]), []string{"rules-one.md", "rules-two.md"}; !slices.Equal(got, want) {
-		t.Errorf("with an empty inline list, instructions = %q, want the project's %q", got, want)
-	}
-	if got := mcStrings(cfg["plugin"]); len(got) != 0 {
-		t.Errorf("KNOWN: with an empty inline list, debug config's plugin was expected to read [], got %q", got)
-	}
-	origins, _ := cfg["plugin_origins"].([]any)
-	var specs []string
-	for _, o := range origins {
-		specs = append(specs, fmt.Sprint(mcDig(o, "spec")))
-	}
-	if !slices.Equal(specs, []string{projectPlugin}) {
-		t.Errorf("KNOWN: with an empty inline list, plugin_origins = %q, want the project's plugin still listed", specs)
-	}
-	if lines := h.runUnknownModel(proj, empty, nil); !slices.Equal(lines, []string{"project-list-plugin"}) {
-		t.Errorf("KNOWN: with an empty inline plugin list the project's plugin was expected to load anyway; plugins loaded = %q", lines)
-	}
-
-	// A remote instructions entry concatenates too, and is fetched (KNOWN): a
-	// project that names a URL, here the loopback model stub's, makes the run
-	// request it before its model request, whatever the inline list says.
-	remote := newMCModelStub(t, nil)
-	remoteProj := h.project("q3-array-merge/remote-project")
-	remoteCfg := filepath.Join(remoteProj, "opencode.json")
-	raw, err := os.ReadFile(remoteCfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(remoteCfg, []byte(strings.ReplaceAll(string(raw), mcRemoteURL, remote.URL)), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	remoteURL := remote.URL + mcRemoteInstructionPath
-	remoteEmpty := h.inline("q3-array-merge/inline-empty.json", remoteProj)
-	if got := mcStrings(h.debugConfig(remoteProj, remoteEmpty, nil)["instructions"]); !slices.Equal(got, []string{remoteURL}) {
-		t.Errorf("KNOWN: with an empty inline list, instructions = %q, want the project's %q", got, remoteURL)
-	}
-	h.runStubModel(remoteProj, remoteEmpty, remote, nil)
-	var paths []string
-	for _, r := range remote.requests() {
-		paths = append(paths, r.path)
-	}
-	fetched := slices.Index(paths, mcRemoteInstructionPath)
-	if model := slices.Index(paths, "/v1/chat/completions"); fetched < 0 || (model >= 0 && model < fetched) {
-		t.Errorf("KNOWN: the project's remote instructions entry was expected to be fetched before the model request; the stub saw %q", paths)
-	}
+	// 2.x's `debug config` lists each source's own arrays and no merged one,
+	// so how instructions, plugins and mcp combine shows only in what a run
+	// sends and loads.
+	mcRunNeedsDispatch(t, "how instructions, plugins and mcp combine across layers")
 }
 
 // TestOpenCodeProviderBaseURLPrecedence pins question 4. The project's
@@ -1285,34 +1234,9 @@ func TestOpenCodeArrayMerge(t *testing.T) {
 // model stub, the request reaches the stub and carries the project's header.
 func TestOpenCodeProviderBaseURLPrecedence(t *testing.T) {
 	t.Parallel()
-	h := newMCHarness(t, nil)
-	proj := h.project("q4-provider-baseurl/project")
-	inline := h.inline("q4-provider-baseurl/inline.json", proj)
-	baseURL := func(cfg map[string]any) any {
-		return mcDig(cfg, "provider", "fixture-endpoint", "options", "baseURL")
-	}
-
-	if got := baseURL(h.debugConfig(proj, "", nil)); got != "http://192.0.2.1:9/v1" {
-		t.Fatalf("control: the project alone gives baseURL %v", got)
-	}
-	cfg := h.debugConfig(proj, inline, nil)
-	if got := baseURL(cfg); got != "http://127.0.0.1:1234/v1" {
-		t.Errorf("baseURL = %v, want the inline http://127.0.0.1:1234/v1", got)
-	}
-	if got := mcDig(cfg, "provider", "fixture-endpoint", "options", "headers", "X-Adversarial-Fixture"); got != "project" {
-		t.Errorf("the project's header = %v, want it merged in beside the inline block", got)
-	}
-
-	stub := newMCModelStub(t, nil)
-	res, _ := h.runStubModel(proj, inline, stub, nil)
-	for _, r := range stub.requests() {
-		if r.path != "/v1/chat/completions" || r.header.Get("X-Adversarial-Fixture") != "project" {
-			t.Errorf("the stub saw %s with X-Adversarial-Fixture %q, want /v1/chat/completions with the project's header", r.path, r.header.Get("X-Adversarial-Fixture"))
-		}
-	}
-	if want := stub.URL + "/v1/chat/completions"; !strings.Contains(res.stdout, want) {
-		t.Errorf("the run's error event does not name %s:\n%s", want, res.stdout)
-	}
+	// 2.x's `debug config` prints no merged provider block, so which baseURL
+	// wins shows only on the wire.
+	mcRunNeedsDispatch(t, "which provider baseURL a run sends to")
 }
 
 // mcGit runs git through internal/gittest, which disarms background gc and
@@ -1325,11 +1249,18 @@ func (h *mcHarness) git(dir string, args ...string) {
 
 // TestOpenCodeConfigDiscoveryAboveWorktree pins question 5 on the layout
 // worktree.go creates: a checkout with the worktree nested inside it at
-// .nightgauge/worktrees/<repo>-issue-<N>, and config and AGENTS.md both in the
-// checkout and in the directory above it. From the worktree, discovery stops
-// at the worktree's own root: neither the checkout's config and rules nor
-// anything above them loads. The controls show the fixtures load where they
-// are in scope.
+// .nightgauge/worktrees/<repo>-issue-<N>, and config both in the checkout and
+// in the directory above it, read through `debug config --standalone`'s
+// sources and `debug agents --standalone`.
+//
+// KNOWN, changed on 2.2.7: discovery no longer stops at a git root. 1.18.30
+// stopped at the worktree's own root; 2.2.7 walks up past the worktree and
+// the checkout, so from the worktree the checkout's opencode.json and
+// .opencode/ and the opencode.json above the checkout all load. A dispatch
+// sets OPENCODE_DISABLE_PROJECT_CONFIG=1 (InstallNightgaugePlugin), and the
+// last arm proves that switch drops every one of those sources from the
+// worktree as well. Whether the AGENTS.md files above reach a model request
+// needs a 2.x run (#3303).
 func TestOpenCodeConfigDiscoveryAboveWorktree(t *testing.T) {
 	t.Parallel()
 	h := newMCHarness(t, nil)
@@ -1344,152 +1275,113 @@ func TestOpenCodeConfigDiscoveryAboveWorktree(t *testing.T) {
 	// does not check them out as its own files.
 	h.copyFixture("q5-discovery-above-worktree/above", base, base)
 	h.copyFixture("q5-discovery-above-worktree/checkout", checkout, checkout)
-	agents := func(dir string) []string { return mcKeys(h.debugConfig(dir, "", nil)["agent"]) }
-	stub := newMCModelStub(t, nil)
-	rules := func(dir string) []string {
-		before := len(stub.requests())
-		h.runStubModel(dir, "", stub, nil)
-		var found []string
-		for _, r := range stub.requests()[before:] {
-			for _, m := range []string{"ADVERSARIAL_ABOVE_CHECKOUT_RULES_MARKER", "ADVERSARIAL_CHECKOUT_RULES_MARKER", "ADVERSARIAL_WORKTREE_RULES_MARKER"} {
-				if strings.Contains(r.body, m) && !slices.Contains(found, m) {
-					found = append(found, m)
-				}
-			}
-		}
-		slices.Sort(found)
-		return found
+	agents := func(dir string, extra map[string]string) []string { return h.mcFixtureAgents(dir, "", extra) }
+	sources := func(dir string, extra map[string]string) []string {
+		return mcSourcePaths(h.debugConfig(dir, "", extra), base)
+	}
+	above := []string{"document:opencode.json", "document:checkout/opencode.json", "directory:checkout/.opencode"}
+	aboveAgents := []string{"above-checkout-marker-agent", "checkout-dir-agent", "checkout-marker-agent"}
+
+	// Control: in the checkout itself, its config and the config above load.
+	if got := sources(checkout, nil); !slices.Equal(got, above) {
+		t.Fatalf("control: sources in the checkout = %q, want %q", got, above)
+	}
+	if got := agents(checkout, nil); !slices.Equal(got, aboveAgents) {
+		t.Fatalf("control: agents in the checkout = %q, want %q", got, aboveAgents)
 	}
 
-	// Controls: in the checkout itself, its config and rules load. Discovery
-	// stops at the checkout's git root, so the directory above stays out.
-	if got, want := agents(checkout), []string{"checkout-dir-agent", "checkout-marker-agent"}; !slices.Equal(got, want) {
-		t.Fatalf("control: agents in the checkout = %q, want %q", got, want)
+	if got := sources(worktree, nil); !slices.Equal(got, above) {
+		t.Errorf("KNOWN changed: from the worktree, sources = %q, want everything above it %q", got, above)
 	}
-	if got, want := rules(checkout), []string{"ADVERSARIAL_CHECKOUT_RULES_MARKER"}; !slices.Equal(got, want) {
-		t.Fatalf("control: rules in the checkout = %q, want %q", got, want)
-	}
-
-	if got := agents(worktree); len(got) != 0 {
-		t.Errorf("from the worktree, config above its root loaded: agents %q", got)
-	}
-	if got := rules(worktree); len(got) != 0 {
-		t.Errorf("from the worktree, rules above its root reached the model request: %q", got)
+	if got := agents(worktree, nil); !slices.Equal(got, aboveAgents) {
+		t.Errorf("KNOWN changed: from the worktree, agents = %q, want %q", got, aboveAgents)
 	}
 
 	h.copyFixture("q5-discovery-above-worktree/worktree", worktree, worktree)
-	if got, want := agents(worktree), []string{"worktree-marker-agent"}; !slices.Equal(got, want) {
+	wantOwn := []string{above[0], above[1], "document:checkout/.nightgauge/worktrees/checkout-issue-1/opencode.json", above[2]}
+	if got := sources(worktree, nil); !slices.Equal(got, wantOwn) {
+		t.Errorf("with config of its own, sources in the worktree = %q, want %q", got, wantOwn)
+	}
+	if got, want := agents(worktree, nil), append(slices.Clone(aboveAgents), "worktree-marker-agent"); !slices.Equal(got, want) {
 		t.Errorf("with config of its own, agents in the worktree = %q, want %q", got, want)
 	}
-	if got, want := rules(worktree), []string{"ADVERSARIAL_WORKTREE_RULES_MARKER"}; !slices.Equal(got, want) {
-		t.Errorf("with rules of its own, rules in the worktree = %q, want %q", got, want)
+
+	// What a dispatch sees: the switch drops the worktree's config and
+	// everything discovery found above it.
+	off := map[string]string{"OPENCODE_DISABLE_PROJECT_CONFIG": "1"}
+	if got := sources(worktree, off); len(got) != 0 {
+		t.Errorf("with OPENCODE_DISABLE_PROJECT_CONFIG=1, sources from the worktree = %q, want none", got)
+	}
+	if got := agents(worktree, off); len(got) != 0 {
+		t.Errorf("with OPENCODE_DISABLE_PROJECT_CONFIG=1, agents from the worktree = %q, want none", got)
 	}
 
-	// Outside any git repository there is no root to stop at, and discovery
-	// walks up: the config above loads from a directory beneath it.
+	// Outside any git repository discovery walks up as well.
 	loose := filepath.Join(base, "loose", "inner")
 	mcMkdir(t, loose)
-	if got := agents(loose); !slices.Contains(got, "above-checkout-marker-agent") {
-		t.Errorf("outside git, agents in a nested directory = %q, want the config above it included", got)
+	if got := agents(loose, nil); !slices.Equal(got, []string{"above-checkout-marker-agent"}) {
+		t.Errorf("outside git, agents in a nested directory = %q, want the config above it", got)
 	}
 }
 
-// TestOpenCodeDisableProjectConfig pins question 6: OPENCODE_DISABLE_PROJECT_CONFIG
-// drops every project key the fixture sets (agent, permission, instructions,
-// plugin, mcp, provider), everything under .opencode/ (its opencode.json,
-// agents, commands, skills and plugins), the project's AGENTS.md, and the
-// plugin loads with them. An inline instructions entry with an absolute path
-// into the project still loads.
+// TestOpenCodeDisableProjectConfig pins question 6, read through `debug config
+// --standalone`'s sources and `debug agents --standalone`:
+// OPENCODE_DISABLE_PROJECT_CONFIG drops the project's opencode.json with every
+// key the fixture sets (agents, permissions, instructions, plugins, mcp,
+// providers, written as 1.x keys and translated by 2.x), its .opencode/
+// directory and .opencode/opencode.json, and every agent they define. The
+// inline document, with an instructions entry pointing into the project, is
+// still a source. Whether the project's AGENTS.md and plugins reach a run
+// needs a 2.x run (#3302, #3303).
 func TestOpenCodeDisableProjectConfig(t *testing.T) {
 	t.Parallel()
 	h := newMCHarness(t, nil)
 	proj := h.project("q6-disable-project-config/project")
 	inline := h.inline("q6-disable-project-config/inline.json", proj)
 	off := map[string]string{"OPENCODE_DISABLE_PROJECT_CONFIG": "1"}
-	skills := func(extra map[string]string) []string {
-		var list []map[string]any
-		h.debugJSON(proj, extra, &list, "skill")
-		var names []string
-		for _, s := range list {
-			names = append(names, fmt.Sprint(s["name"]))
-		}
-		slices.Sort(names)
-		return names
-	}
-	stub := newMCModelStub(t, nil)
-	markers := func(extra map[string]string) ([]string, []string) {
-		before := len(stub.requests())
-		_, lines := h.runStubModel(proj, inline, stub, extra)
-		var found []string
-		for _, r := range stub.requests()[before:] {
-			for _, m := range []string{"ADVERSARIAL_INLINE_STEERING_MARKER", "ADVERSARIAL_PROJECT_AGENTS_RULES_MARKER", "ADVERSARIAL_PROJECT_INSTRUCTIONS_MARKER"} {
-				if strings.Contains(r.body, m) && !slices.Contains(found, m) {
-					found = append(found, m)
-				}
+	projectDoc := func(sources []mcSource) map[string]any {
+		for _, src := range sources {
+			if paths := mcSourcePaths([]mcSource{src}, proj); len(paths) == 1 && paths[0] == "document:opencode.json" {
+				return src.Info
 			}
 		}
-		slices.Sort(found)
-		return found, lines
+		return nil
 	}
 
-	// Control: without the switch every fixture key loads.
-	cfg := h.debugConfig(proj, "", nil)
-	control := map[string][]string{
-		"agent":      {"dot-opencode-json-agent", "project-dir-agent", "project-json-agent"},
-		"command":    {"project-dir-command"},
-		"mcp":        {"project-mcp"},
-		"permission": {"bash"},
-		"provider":   {"project-provider"},
+	// Control: without the switch every fixture source and agent loads.
+	srcs := h.debugConfig(proj, inline, nil)
+	if got, want := mcSourcePaths(srcs, proj), []string{"document:opencode.json", "document:.opencode/opencode.json", "directory:.opencode"}; !slices.Equal(got, want) {
+		t.Fatalf("control: project sources = %q, want %q", got, want)
 	}
-	for key, want := range control {
-		if got := mcKeys(cfg[key]); !slices.Equal(got, want) {
-			t.Fatalf("control: %s = %q, want %q", key, got, want)
-		}
+	if got, want := mcKeys(projectDoc(srcs)), []string{"$schema", "agents", "instructions", "mcp", "permissions", "plugins", "providers"}; !slices.Equal(got, want) {
+		t.Fatalf("control: the project document's keys = %q, want %q", got, want)
 	}
-	if got := mcStrings(cfg["instructions"]); !slices.Equal(got, []string{"project-rules.md"}) {
-		t.Fatalf("control: instructions = %q", got)
-	}
-	if got := mcStrings(cfg["plugin"]); len(got) != 2 {
-		t.Fatalf("control: plugin = %q, want the opencode.json entry and the .opencode/plugins file", got)
-	}
-	if got := skills(nil); !slices.Contains(got, "project-dir-skill") {
-		t.Fatalf("control: skills = %q, want project-dir-skill", got)
-	}
-	found, lines := markers(nil)
-	if want := []string{"ADVERSARIAL_INLINE_STEERING_MARKER", "ADVERSARIAL_PROJECT_AGENTS_RULES_MARKER", "ADVERSARIAL_PROJECT_INSTRUCTIONS_MARKER"}; !slices.Equal(found, want) {
-		t.Fatalf("control: the model request carries %q, want %q", found, want)
-	}
-	if want := []string{"project-dir-plugin", "project-json-plugin"}; !slices.Equal(lines, want) {
-		t.Fatalf("control: plugins loaded = %q, want %q", lines, want)
+	if got, want := h.mcFixtureAgents(proj, inline, nil), []string{"dot-opencode-json-agent", "project-dir-agent", "project-json-agent"}; !slices.Equal(got, want) {
+		t.Fatalf("control: agents = %q, want %q", got, want)
 	}
 
-	cfg = h.debugConfig(proj, "", off)
-	for _, key := range []string{"agent", "command", "mcp", "permission", "provider", "instructions", "plugin"} {
-		if v, ok := cfg[key]; ok && len(mcKeys(v))+len(mcStrings(v)) > 0 {
-			t.Errorf("with the switch, %s is still set: %v", key, v)
-		}
+	srcs = h.debugConfig(proj, inline, off)
+	if got := mcSourcePaths(srcs, proj); len(got) != 0 {
+		t.Errorf("with the switch, project sources still load: %q", got)
 	}
-	if got := skills(off); slices.Contains(got, "project-dir-skill") {
-		t.Errorf("with the switch, skills = %q still include the project's", got)
+	if got := h.mcFixtureAgents(proj, inline, off); len(got) != 0 {
+		t.Errorf("with the switch, project agents still load: %q", got)
 	}
-	found, lines = markers(off)
-	if want := []string{"ADVERSARIAL_INLINE_STEERING_MARKER"}; !slices.Equal(found, want) {
-		t.Errorf("with the switch, the model request carries %q, want only the inline instructions %q", found, want)
-	}
-	if len(lines) != 0 {
-		t.Errorf("with the switch, project plugins still loaded: %q", lines)
+	if got := mcStrings(mcInlineDocument(srcs)["instructions"]); len(got) != 1 || !strings.HasPrefix(got[0], proj) {
+		t.Errorf("with the switch, the inline instructions = %q, want the one entry into the project", got)
 	}
 }
 
 // TestOpenCodeMergeHarnessReapsEveryProcess proves the hygiene the suite
-// relies on with the real binary. `opencode debug wait` never exits on its
-// own: under a short cap it must be killed with its process group, and the
-// ledger's kill -0 check must see it alive before and gone after.
+// relies on with the real binary. `opencode serve` on a loopback port the
+// kernel picks never exits on its own (2.x has no `debug wait`): under a
+// short cap it must be killed with its process group, and the ledger's
+// kill -0 check must see it alive before and gone after.
 func TestOpenCodeMergeHarnessReapsEveryProcess(t *testing.T) {
 	t.Parallel()
 	h := newMCHarness(t, nil)
 	h.timeout = 3 * time.Second
-	p := h.start(h.scratch, nil, "", "debug", "wait")
+	p := h.start(h.scratch, nil, "", "serve", "--hostname", "127.0.0.1", "--port", "0")
 	pid := p.cmd.Process.Pid
 	if !mcSignalable(pid) {
 		t.Fatalf("kill -0 does not see the running opencode (pid %d), so the ledger could never report a survivor", pid)
@@ -1499,7 +1391,7 @@ func TestOpenCodeMergeHarnessReapsEveryProcess(t *testing.T) {
 	}
 	res := p.wait()
 	if !res.timedOut {
-		t.Fatalf("`opencode debug wait` ended before the cap (exit %d); the cap path is untested", res.exit)
+		t.Fatalf("`opencode serve` ended before the cap (exit %d); the cap path is untested", res.exit)
 	}
 	// The cap killed the group and Wait reaped the leader; allow the kernel a
 	// moment to finish off the rest of the group.
@@ -1517,7 +1409,7 @@ func TestOpenCodeMergeHarnessReapsEveryProcess(t *testing.T) {
 	for _, want := range []string{
 		fmt.Sprintf("after start (pid %d):\n", pid),
 		fmt.Sprintf("process group and descendants (pid ppid pgid stat elapsed cpu command):\n  %d ", pid),
-		"debug wait",
+		"serve --hostname 127.0.0.1",
 		"open sockets and files",
 		"OpenCode locks",
 		"npm registry stub requests since start",
@@ -1563,11 +1455,80 @@ func TestOpenCodeMergeHarnessReclaimsOrphanedLocks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := h.debugConfig(proj, "", nil)
-	if got := mcStrings(cfg["plugin"]); len(got) == 0 {
-		t.Fatalf("control: q3's project config names no plugin, so nothing waited on the install: %v", cfg["plugin"])
+	var plugins []string
+	for _, src := range h.debugConfig(proj, "", nil) {
+		plugins = append(plugins, mcStrings(src.Info["plugins"])...)
+	}
+	if len(plugins) == 0 {
+		t.Fatalf("control: q3's project config names no plugin, so nothing waited on the install")
 	}
 	if raw, err := os.ReadFile(filepath.Join(lock, "meta.json")); err == nil && strings.Contains(string(raw), token) {
 		t.Errorf("the planted lock is still in place after debug config: %s", raw)
+	}
+}
+
+// TestOpenCodeBuilderDocumentSurvives (#3301): 2.x drops an unknown key, an
+// untranslated 1.x key and a wrong-typed value without a word, and 1.x's
+// subagent_depth was dropped that way. The document BuildOpenCodeConfig
+// writes, with the files it refers to in place, must come back from `debug
+// config --standalone` key for key (apiKey masked, as 2.x prints it), and
+// `debug agents --standalone` must resolve the subagent action to deny on
+// every subagent-mode agent, the last matching rule.
+func TestOpenCodeBuilderDocumentSurvives(t *testing.T) {
+	t.Parallel()
+	h := newMCHarness(t, nil)
+	settings := config.OpenCodeConfig{Endpoints: []config.OpenCodeEndpointConfig{{
+		ID: "mtplx", Provider: "openai-compatible", BaseURL: "http://127.0.0.1:9/v1",
+		Limit: config.OpenCodeLimit{Context: 131072, Output: 8192},
+		Models: []config.OpenCodeEndpointModel{{ID: "qwen/qwen3.8-27b", Variants: []string{"low", "high"},
+			RequestOptions: map[string]any{"temperature": 0.2}}},
+	}}}
+	runRoot := filepath.Join(h.scratch, "per-run-root")
+	in, err := OpenCodeConfigInputFor(settings, RunOptions{
+		Stage: "feature-dev", Model: "mtplx/qwen/qwen3.8-27b", MaxTurns: 40,
+		WorktreeDir: h.scratch, AllowedTools: []string{"Read", "Edit", "Bash(git *)", "Task"},
+	}, runRoot, envLookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := BuildOpenCodeConfig(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range built.Files {
+		mcMkdir(t, filepath.Dir(path))
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var want map[string]any
+	if err := json.Unmarshal([]byte(built.Content), &want); err != nil {
+		t.Fatal(err)
+	}
+	settingsBlock := want["providers"].(map[string]any)["mtplx"].(map[string]any)["settings"].(map[string]any)
+	settingsBlock["apiKey"] = "***"
+	settingsBlock["baseURL"] = built.Files[openCodeEndpointURLFile(runRoot, "mtplx")]
+	got := mcInlineDocument(h.debugConfig(h.scratch, built.Content, nil))
+	wantJSON, _ := json.Marshal(want)
+	gotJSON, _ := json.Marshal(got)
+	if string(gotJSON) != string(wantJSON) {
+		t.Errorf("opencode %s did not load the builder's document intact.\nwrote: %s\nloaded: %s", mcVersion, wantJSON, gotJSON)
+	}
+
+	agents := h.mcAgents(h.scratch, built.Content, nil)
+	for _, name := range openCodeSubagentAgents {
+		rules := mcAgentRules(agents[name], "subagent")
+		if len(rules) == 0 || rules[len(rules)-1] != "*=deny" {
+			t.Errorf("agent %s resolves subagent to %q; the last rule must deny it, so a subagent cannot start another", name, rules)
+		}
+		if mode := agents[name]["mode"]; mode != "subagent" {
+			t.Errorf("agent %s has mode %v, want subagent: openCodeSubagentAgents no longer matches the built-in agents", name, mode)
+		}
+	}
+	// The document's own subagent rule (1.x's task, denied whatever the stage
+	// grants: ADR-022 AC9) reaches the build agent too.
+	if rules := mcAgentRules(agents["build"], "subagent"); len(rules) == 0 || rules[len(rules)-1] != "*=deny" {
+		t.Errorf("the build agent resolves subagent to %q, want the document's deny last", rules)
 	}
 }

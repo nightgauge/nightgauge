@@ -71,8 +71,7 @@ import (
 
 // openCodeCanaryModel dispatches to the stub provider through the machine
 // tier's lmstudio-shaped endpoint (ADR-022 § 1), the same addressing the flag
-// contract and schema contract suites use for a local model
-// (flagContractModel, schemaContractConfigs).
+// contract suite uses for a local model (flagContractModel).
 const openCodeCanaryModel = "lmstudio/stub/stub-model"
 
 // init registers this file's cleanup into opencode_mcp_forge_test.go's
@@ -240,15 +239,16 @@ func openCodeCanaryDirectRun(t *testing.T, real, model string, extraConfig map[s
 	}
 	_, worktree := openCodeGitWorktree(t, map[string]string{"calc.py": "def add(a, b):\n    return a + b\n"})
 
+	// OpenCode 2.x's native keys (#3301).
 	config := map[string]any{
-		"$schema":    "https://opencode.ai/config.json",
-		"share":      "disabled",
-		"autoupdate": false,
-		"provider": map[string]any{
+		"$schema": "https://opencode.ai/config.json",
+		"share":   "disabled",
+		"update":  "disable",
+		"providers": map[string]any{
 			"stub": map[string]any{
-				"npm":     "@ai-sdk/openai-compatible",
-				"options": map[string]any{"baseURL": stubBase},
-				"models":  map[string]any{"stub-model": map[string]any{}},
+				"package":  "aisdk:@ai-sdk/openai-compatible",
+				"settings": map[string]any{"baseURL": stubBase},
+				"models":   map[string]any{"stub-model": map[string]any{"modelID": "stub-model"}},
 			},
 		},
 	}
@@ -518,7 +518,7 @@ func TestOpenCodeCanaryLiveStream(t *testing.T) {
 
 // TestOpenCodeCanaryPermission drives the real, installed opencode directly
 // (openCodeCanaryDirectRun) against the stub's bash-then-stop script, with
-// permission.bash "ask" and no interactive approval, so OpenCode auto-rejects
+// a shell "ask" rule and no interactive approval, so OpenCode auto-rejects
 // the bash call by itself. The child's own raw exit code is 0 even though the
 // tool call ended in error (ADR-022 § 9; Manager.RunStage's own
 // reclassification of this outcome to 1 is a separate, already-tested
@@ -529,7 +529,7 @@ func TestOpenCodeCanaryPermission(t *testing.T) {
 		"OpenCode 2.x reports a self-rejected permission in a stream shape the #1624 parser does not count yet; #3304 rebuilds the permission map and #3305 parses the 2.x stream")
 	base := startOpenCodeCanaryStub(t, "bash-then-stop")
 	exitCode, stdout, stderr := openCodeCanaryDirectRun(t, real, "stub/stub-model",
-		map[string]any{"permission": map[string]any{"bash": "ask"}}, base)
+		map[string]any{"permissions": []any{map[string]any{"action": "shell", "resource": "*", "effect": "ask"}}}, base)
 
 	if !strings.Contains(stderr, "; auto-rejecting") {
 		t.Errorf("stderr does not contain the auto-reject notice:\n%s", stderr)

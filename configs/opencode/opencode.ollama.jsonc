@@ -4,20 +4,24 @@
 // their own per-run config. See README.md beside this file.
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "ollama/qwen3-coder:30b",
-  "small_model": "ollama/qwen3-coder:30b",
+  // OpenCode 2.x's native keys (2.2.7 or later).
+  "model": { "providerID": "ollama", "model": "qwen3-coder:30b" },
+  // Session titles use the same local model.
+  "agents": {
+    "title": { "model": { "providerID": "ollama", "model": "qwen3-coder:30b" } },
+  },
   // Never upload sessions, never self-update mid-run.
   "share": "disabled",
-  "autoupdate": false,
-  // Compact before the window fills, and prune old tool output.
-  "compaction": { "auto": true, "prune": true },
+  "update": "disable",
+  // Compact before the window fills.
+  "compaction": { "auto": true },
   // Truncate large tool output instead of flooding a small local window.
   "tool_output": { "max_lines": 1000, "max_bytes": 32768 },
-  "provider": {
+  "providers": {
     "ollama": {
-      "npm": "@ai-sdk/openai-compatible",
+      "package": "aisdk:@ai-sdk/openai-compatible",
       "name": "Ollama (local)",
-      "options": {
+      "settings": {
         // Loopback only.
         "baseURL": "http://localhost:11434/v1",
         // Local models can take minutes to load and to emit the first token.
@@ -26,8 +30,9 @@
       },
       "models": {
         "qwen3-coder:30b": {
+          "modelID": "qwen3-coder:30b",
           "name": "qwen3-coder:30b",
-          "tool_call": true,
+          "capabilities": { "tools": true },
           // Without an explicit limit OpenCode reports limit.context 0 and
           // never compacts. Keep limit.context at or below the model's num_ctx in Ollama (set it; Ollama's default is small).
           "limit": { "context": 32768, "output": 8192 },

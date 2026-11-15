@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
@@ -47,10 +48,47 @@ func stubPluginDependencySeeder(t *testing.T) {
 	t.Cleanup(func() { pluginDependencySeeder = prev })
 }
 
+// builtOpenCodeContent is a per-run document the builder wrote, which
+// addNightgaugePluginToConfig's validation accepts.
+func builtOpenCodeContent(t *testing.T) string {
+	t.Helper()
+	built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", MaxTurns: 40}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return built.Content
+}
+
+// TestInstallNightgaugePluginRefusesAnInvalidDocument: the document OpenCode
+// receives is the validated one, so a document that would lose a control on
+// 2.x is refused after the plugins key is added, not dispatched.
+func TestInstallNightgaugePluginRefusesAnInvalidDocument(t *testing.T) {
+	stubPluginDependencySeeder(t)
+	for name, content := range map[string]string{
+		"1.x document":    `{"model":"lmstudio/x","agent":{},"mcp":{}}`,
+		"empty document":  `{}`,
+		"subagent opened": strings.Replace(builtOpenCodeContent(t), `{"action":"subagent","resource":"*","effect":"deny"}]`, `{"action":"subagent","resource":"*","effect":"allow"}]`, 1),
+	} {
+		root := t.TempDir()
+		run := &OpenCodeRun{
+			ConfigContent: content,
+			Env:           map[string]string{openCodeConfigContentEnvVar: content},
+			PluginDir:     filepath.Join(root, "config", "opencode", "plugin"),
+			RunDir:        root,
+		}
+		if err := InstallNightgaugePlugin(context.Background(), run, "", ""); err == nil {
+			t.Errorf("%s: the plugin was added to a document 2.x would load with a control missing", name)
+		}
+		if run.Env[openCodeConfigContentEnvVar] != content {
+			t.Errorf("%s: the refused document still reached OPENCODE_CONFIG_CONTENT", name)
+		}
+	}
+}
+
 func TestInstallNightgaugePluginAddsOnlyThePluginKey(t *testing.T) {
 	stubPluginDependencySeeder(t)
 	root := t.TempDir()
-	before := `{"model":"lmstudio/x","agent":{},"mcp":{}}`
+	before := builtOpenCodeContent(t)
 	run := &OpenCodeRun{
 		ConfigContent: before,
 		Env:           map[string]string{openCodeConfigContentEnvVar: before},
@@ -69,9 +107,9 @@ func TestInstallNightgaugePluginAddsOnlyThePluginKey(t *testing.T) {
 	if err := json.Unmarshal([]byte(run.ConfigContent), &afterMap); err != nil {
 		t.Fatal(err)
 	}
-	delete(afterMap, "plugin")
+	delete(afterMap, "plugins")
 	if len(beforeMap) != len(afterMap) {
-		t.Fatalf("patched config gained keys beyond \"plugin\": before=%v after(-plugin)=%v", beforeMap, afterMap)
+		t.Fatalf("patched config gained keys beyond \"plugins\": before=%v after(-plugin)=%v", beforeMap, afterMap)
 	}
 	for k, v := range beforeMap {
 		bv, _ := json.Marshal(v)
@@ -85,9 +123,9 @@ func TestInstallNightgaugePluginAddsOnlyThePluginKey(t *testing.T) {
 	if err := json.Unmarshal([]byte(run.ConfigContent), &patched); err != nil {
 		t.Fatal(err)
 	}
-	plugins, ok := patched["plugin"].([]any)
+	plugins, ok := patched["plugins"].([]any)
 	if !ok || len(plugins) != 1 {
-		t.Fatalf("plugin key = %v, want a single-entry array", patched["plugin"])
+		t.Fatalf("plugins key = %v, want a single-entry array", patched["plugins"])
 	}
 	wantEntry := filepath.Join(run.PluginDir, opencodeplugin.EntryFile)
 	if plugins[0] != wantEntry {
@@ -117,7 +155,7 @@ func TestInstallNightgaugePluginWithoutRunIDSkipsHandshake(t *testing.T) {
 	stubPluginDependencySeeder(t)
 	root := t.TempDir()
 	run := &OpenCodeRun{
-		ConfigContent: `{}`,
+		ConfigContent: builtOpenCodeContent(t),
 		Env:           map[string]string{},
 		PluginDir:     filepath.Join(root, "config", "opencode", "plugin"),
 		RunDir:        root,
@@ -135,7 +173,7 @@ func TestInstallNightgaugePluginWithoutRunIDSkipsHandshake(t *testing.T) {
 	if err := json.Unmarshal([]byte(run.ConfigContent), &patched); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := patched["plugin"]; !ok {
+	if _, ok := patched["plugins"]; !ok {
 		t.Error("the plugin key must still be present without a run identity")
 	}
 }
@@ -168,7 +206,7 @@ func TestInstallNightgaugePluginSeedsEmbeddedDependencies(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("npm_config_registry", "http://192.0.2.1:1/")
 	root := t.TempDir()
-	before := `{"model":"lmstudio/x"}`
+	before := builtOpenCodeContent(t)
 	run := &OpenCodeRun{
 		ConfigContent: before,
 		Env:           map[string]string{openCodeConfigContentEnvVar: before},
@@ -207,7 +245,7 @@ func TestInstallNightgaugePluginNeverWritesOperatorHomeOpenCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	before := `{"model":"lmstudio/x"}`
+	before := builtOpenCodeContent(t)
 	run := &OpenCodeRun{
 		ConfigContent: before,
 		Env:           map[string]string{openCodeConfigContentEnvVar: before},
@@ -250,7 +288,7 @@ func TestInstallNightgaugePluginNeverCreatesOperatorHomeOpenCode(t *testing.T) {
 	stubPluginDependencySeeder(t)
 	home := t.TempDir()
 	root := t.TempDir()
-	before := `{"model":"lmstudio/x"}`
+	before := builtOpenCodeContent(t)
 	run := &OpenCodeRun{
 		ConfigContent: before,
 		Env:           map[string]string{openCodeConfigContentEnvVar: before},
@@ -283,7 +321,7 @@ func TestInstallNightgaugePluginNeverWritesInheritedConfigDir(t *testing.T) {
 	// before".
 	operatorConfig := filepath.Join(t.TempDir(), "opencode")
 	root := t.TempDir()
-	before := `{"model":"lmstudio/x"}`
+	before := builtOpenCodeContent(t)
 	run := &OpenCodeRun{
 		ConfigContent: before,
 		Env: map[string]string{
@@ -332,7 +370,7 @@ func TestInstallNightgaugePluginDoesNotRiskASatisfiedOperatorDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	before := `{"model":"lmstudio/x"}`
+	before := builtOpenCodeContent(t)
 	run := &OpenCodeRun{
 		ConfigContent: before,
 		Env:           map[string]string{openCodeConfigContentEnvVar: before},
@@ -366,7 +404,7 @@ func TestInstallNightgaugePluginStillRisksAnUnsatisfiedOperatorDir(t *testing.T)
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	before := `{"model":"lmstudio/x"}`
+	before := builtOpenCodeContent(t)
 	run := &OpenCodeRun{
 		ConfigContent: before,
 		Env:           map[string]string{openCodeConfigContentEnvVar: before},
