@@ -94,7 +94,7 @@ This skill implements features by:
 /nightgauge-feature-dev
 
 # Implement specific plan file
-/nightgauge-feature-dev --plan "$(nightgauge layout path plans 42-photo-upload.md)"
+/nightgauge-feature-dev --plan "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path plans 42-photo-upload.md)"
 
 # Force sequential implementation (disable parallel file creation)
 /nightgauge-feature-dev --sequential

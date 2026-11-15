@@ -56,7 +56,7 @@ Write a concise plan that includes:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge discovered-work record --issue "$ISSUE_NUMBER" \
+"${NIGHTGAUGE_BIN:-nightgauge}" discovered-work record --issue "$ISSUE_NUMBER" \
   --source-stage feature-planning \
   --summary "Add pagination to the discovered-work list command" \
   --evidence "Out of Scope in the #$ISSUE_NUMBER plan: list output is unbounded" \
@@ -112,7 +112,7 @@ outside the repository (or pipe it on stdin), then hand it over:
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # PLAN_DRAFT is the temp file the plan was drafted in, e.g. /tmp/plan-${ISSUE_NUMBER}.md
-PLAN_FILE=$(nightgauge layout write plans "${ISSUE_NUMBER}-<slug>.md" --from "$PLAN_DRAFT")
+PLAN_FILE=$("${NIGHTGAUGE_BIN:-nightgauge}" layout write plans "${ISSUE_NUMBER}-<slug>.md" --from "$PLAN_DRAFT")
 echo "Plan written: $PLAN_FILE" # the absolute path planning-{N}.json records as plan_file
 ```
 
@@ -191,7 +191,7 @@ entry explaining why no architectural choices were required.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
+KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
 
 # Deferred scaffolding: if issue-pickup skipped because the issue body had no
 # extractable sections, scaffold now — planning has the richest context.
@@ -212,7 +212,7 @@ except: print('true')
     # shell copy of any of the three drifts the moment the contract changes,
     # and an entry written without a `type` is blocked at merge by
     # `knowledge validate --conformance`.
-    SCAFFOLD_JSON=$(nightgauge knowledge scaffold \
+    SCAFFOLD_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" knowledge scaffold \
       --issue-number "$ISSUE_NUMBER" \
       --title "$TITLE" \
       --json 2>/dev/null) || SCAFFOLD_JSON=""
@@ -238,7 +238,7 @@ if [ -n "$KNOWLEDGE_PATH" ] && [ -d "$KNOWLEDGE_PATH" ]; then
   # scaffolding paths.
   if [ ! -f "$PRD_FILE" ] || [ ! -f "$DECISIONS_FILE" ]; then
     echo "WARNING: expected scaffolded entries at $KNOWLEDGE_PATH; re-running the scaffolder." >&2
-    nightgauge knowledge scaffold --issue-number "$ISSUE_NUMBER" --title "$TITLE" >/dev/null 2>&1 || true
+    "${NIGHTGAUGE_BIN:-nightgauge}" knowledge scaffold --issue-number "$ISSUE_NUMBER" --title "$TITLE" >/dev/null 2>&1 || true
   fi
 
   # --- Enrich PRD.md (in place) ---
@@ -338,24 +338,24 @@ DECEOF
   KNOWLEDGE_ENTRIES=$(ls "$KNOWLEDGE_PATH"/*.md 2>/dev/null | xargs -I{} basename {} | jq -R . | jq -s .)
 
   # Patch knowledge_path and knowledge_entries into planning context
-  PLANNING_FILE="$(nightgauge layout path pipeline planning-${ISSUE_NUMBER}.json)"
+  PLANNING_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline planning-${ISSUE_NUMBER}.json)"
   tmp=$(mktemp)
   jq \
     --arg kp "$KNOWLEDGE_PATH" \
     --argjson ke "${KNOWLEDGE_ENTRIES:-[]}" \
     '.knowledge_path = $kp | .knowledge_entries = $ke' \
     "$PLANNING_FILE" > "$tmp" &&
-    nightgauge layout write pipeline "planning-${ISSUE_NUMBER}.json" --from "$tmp" >/dev/null
+    "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "planning-${ISSUE_NUMBER}.json" --from "$tmp" >/dev/null
   rm -f "$tmp"
 
   # Also patch knowledge_path into issue context if it was deferred
-  ISSUE_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
+  ISSUE_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)"
   if [ -f "$ISSUE_FILE" ]; then
     EXISTING_KP=$(jq -r '.knowledge_path // empty' "$ISSUE_FILE" 2>/dev/null)
     if [ -z "$EXISTING_KP" ]; then
       tmp=$(mktemp)
       jq --arg kp "$KNOWLEDGE_PATH" '.knowledge_path = $kp' "$ISSUE_FILE" > "$tmp" &&
-        nightgauge layout write pipeline "issue-${ISSUE_NUMBER}.json" --from "$tmp" >/dev/null
+        "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "issue-${ISSUE_NUMBER}.json" --from "$tmp" >/dev/null
       rm -f "$tmp"
     fi
   fi

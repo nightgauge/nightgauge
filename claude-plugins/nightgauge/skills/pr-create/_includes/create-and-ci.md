@@ -181,7 +181,7 @@ it is omitted entirely — never include an empty section.
 Assign reviewers after PR creation (skip if reviewer is the PR author):
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$PR_AUTHOR" ]; then
   # Add reviewer via GitHub REST API (no forge CLI dependency)
@@ -216,7 +216,7 @@ command).
 **Step 3.6.1: Query GitHub for PR on this branch**
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 BRANCH=$(git branch --show-current)
 : "${BRANCH:?detached HEAD: check out the issue branch}"
@@ -236,7 +236,7 @@ NOT trust a single empty result — cross-check with `gh` directly (which querie
 the live GitHub API by head ref) before concluding the PR is missing:
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 BRANCH=$(git branch --show-current)
 : "${BRANCH:?detached HEAD: check out the issue branch}"
@@ -308,7 +308,7 @@ gracefully (sets `CI_MONITORED=false`) if it is absent.
 ### Step 3.5.1: Take the CI snapshot
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 CI_MONITORED=false
 CI_FINAL_STATUS="pending"

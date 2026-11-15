@@ -196,8 +196,8 @@ fi
 Extract owner, repo, and self_assessment config:
 
 ```bash
-OWNER=$(nightgauge config show --key owner --raw 2>/dev/null)
-REPO=$(nightgauge config show --key repo --raw 2>/dev/null)
+OWNER=$("${NIGHTGAUGE_BIN:-nightgauge}" config show --key owner --raw 2>/dev/null)
+REPO=$("${NIGHTGAUGE_BIN:-nightgauge}" config show --key repo --raw 2>/dev/null)
 ```
 
 ### Step 1.2 — Mode Detection
@@ -219,20 +219,20 @@ adapts to available data.
 
 ```bash
 DATA_SOURCES=""
-PIPELINE_DIR="$(nightgauge layout path pipeline)"
-CHECKOUT_DIR="$(nightgauge layout path checkout)"
+PIPELINE_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline)"
+CHECKOUT_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout)"
 [ -f ".nightgauge/execution-history.jsonl" ] && DATA_SOURCES="$DATA_SOURCES execution-history"
 [ -d "${PIPELINE_DIR}/assessments" ] && DATA_SOURCES="$DATA_SOURCES assessments"
 [ -f ".nightgauge/calibration.json" ] && DATA_SOURCES="$DATA_SOURCES calibration"
 [ -d "${CHECKOUT_DIR}/analysis" ] && DATA_SOURCES="$DATA_SOURCES analysis"
-[ -f "$(nightgauge layout path logs gate-metrics.jsonl)" ] && DATA_SOURCES="$DATA_SOURCES gate-metrics"
+[ -f "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path logs gate-metrics.jsonl)" ] && DATA_SOURCES="$DATA_SOURCES gate-metrics"
 [ -f ".nightgauge/skill-effectiveness.jsonl" ] && DATA_SOURCES="$DATA_SOURCES skill-effectiveness"
 [ -d "${CHECKOUT_DIR}/health" ] && DATA_SOURCES="$DATA_SOURCES health-trends"
 [ -f "${CHECKOUT_DIR}/complexity-model.yaml" ] && DATA_SOURCES="$DATA_SOURCES complexity-model"
 [ -f "${PIPELINE_DIR}/recommendation-history.jsonl" ] && DATA_SOURCES="$DATA_SOURCES recommendations"
 # Out-of-band findings (#102): only when the list is non-empty, so an absent
 # file leaves the review unchanged.
-FINDINGS_JSON=$(nightgauge finding list --json 2>/dev/null || echo "[]")
+FINDINGS_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" finding list --json 2>/dev/null || echo "[]")
 [ "$(printf '%s\n' "$FINDINGS_JSON" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ] && DATA_SOURCES="$DATA_SOURCES findings"
 ```
 
@@ -245,12 +245,12 @@ Load the active focus lens from the checkout's `focus.yaml`. This is optional
 — missing file or parse errors default to `general` (no weighting applied).
 
 ```bash
-FOCUS_FILE="$(nightgauge layout path checkout focus.yaml)"
+FOCUS_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout focus.yaml)"
 ACTIVE_LENS="general"
 FOCUS_DESCRIPTION="Balanced improvement across all dimensions — no specific bias."
 
 if [ -f "$FOCUS_FILE" ]; then
-  PARSED_LENS=$(nightgauge config show --key focus.active_lens --raw 2>/dev/null)
+  PARSED_LENS=$("${NIGHTGAUGE_BIN:-nightgauge}" config show --key focus.active_lens --raw 2>/dev/null)
   if [ -n "$PARSED_LENS" ]; then
     ACTIVE_LENS="$PARSED_LENS"
     echo "Focus lens loaded: $ACTIVE_LENS"
@@ -417,7 +417,7 @@ VERDICTS_FILE=$(mktemp /tmp/loop-verdicts-XXXXXX.json)
 USE_BINARY_VERDICTS=false
 
 if command -v nightgauge >/dev/null 2>&1; then
-  nightgauge intelligence loop-verdicts --workdir "$WORKDIR" --period "$PERIOD" \
+  "${NIGHTGAUGE_BIN:-nightgauge}" intelligence loop-verdicts --workdir "$WORKDIR" --period "$PERIOD" \
     > "$VERDICTS_FILE" 2>/dev/null && USE_BINARY_VERDICTS=true || {
     echo "WARNING: loop-verdicts binary call failed — falling back to manual analysis"
   }
@@ -438,7 +438,7 @@ if [ "$USE_BINARY_VERDICTS" = "true" ] && [ -s "$VERDICTS_FILE" ]; then
   RELIABILITY_VERDICT=$(jq -r '.loops[] | select(.loop=="reliability") | .verdict' "$VERDICTS_FILE")
 else
   # --- Prose fallback: manual analysis ---
-  echo "Running manual loop analysis (nightgauge binary not available)"
+  echo "Running manual loop analysis (the nightgauge binary is not available)"
 fi
 ```
 
@@ -609,7 +609,7 @@ prose sub-step (no phase marker) so it does not alter the phase total.
 SKILL_NAME="nightgauge-continuous-improvement"
 RUN_LOG_CLASS="pipeline"
 RUN_LOG_NAME="continuous-improvement-runs.jsonl"
-RUN_LOG="$(nightgauge layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
+RUN_LOG="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
 ```
 
 <!-- include: ../_shared/RUN_REFLECTION.md -->
@@ -747,7 +747,7 @@ printf '%s' "$PROPOSALS_JSON" > "$PROPOSALS_FILE"
 
 RANKED_FILE=$(mktemp /tmp/proposals-ranked-XXXXXX.json)
 if command -v nightgauge >/dev/null 2>&1; then
-  nightgauge focus rank \
+  "${NIGHTGAUGE_BIN:-nightgauge}" focus rank \
     --proposals "$PROPOSALS_FILE" \
     --lens "${ACTIVE_LENS:-general}" \
     > "$RANKED_FILE" 2>/dev/null || {
@@ -1010,7 +1010,7 @@ Keep the last 10 continuous improvement reports. Delete oldest when limit
 exceeded.
 
 ```bash
-REPORT_DIR="$(nightgauge layout path pipeline)"
+REPORT_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline)"
 ls -t "$REPORT_DIR"/continuous-improvement-*.json 2>/dev/null | tail -n +11 | xargs rm -f
 ```
 

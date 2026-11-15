@@ -125,7 +125,7 @@ printf '<!-- phase:start name="validate-environment" index=0 total=14 stage="iss
 ```
 
 ```bash
-nightgauge forge auth status
+"${NIGHTGAUGE_BIN:-nightgauge}" forge auth status
 ```
 
 If not authenticated: "Please run `nightgauge forge auth login` to authenticate."
@@ -135,9 +135,9 @@ git remote -v | grep -E "(github\.com|github\.)"
 ```
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
-nightgauge forge repo view --repo "$REPO" --json | jq -r .nameWithOwner
+"${NIGHTGAUGE_BIN:-nightgauge}" forge repo view --repo "$REPO" --json | jq -r .nameWithOwner
 ```
 
 #### Step 1.4: Verify Repo Identity
@@ -448,10 +448,10 @@ green again; \`nightgauge baseline-gate promote\` in the workspace releases it
 immediately."
 
     # `forge issue comment` takes the issue NODE id, not its number.
-    REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
-    ISSUE_NODE_ID=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null \
+    REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
+    ISSUE_NODE_ID=$("${NIGHTGAUGE_BIN:-nightgauge}" forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null \
       | jq -r '.nodeId // empty')
-    nightgauge forge issue comment --subject-id "$ISSUE_NODE_ID" --body "$COMMENT_BODY" 2>/dev/null || \
+    "${NIGHTGAUGE_BIN:-nightgauge}" forge issue comment --subject-id "$ISSUE_NODE_ID" --body "$COMMENT_BODY" 2>/dev/null || \
       echo "warning: failed to post deferral comment to #$ISSUE_NUMBER"
 
     "$BINARY" outcome record \
@@ -557,10 +557,10 @@ and will automatically resume dispatch when the blockers close
 (\`deps-gate promote\` sweep, or the autonomous cascade). No operator action required."
 
     # `forge issue comment` takes the issue NODE id, not its number.
-    REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
-    ISSUE_NODE_ID=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null \
+    REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
+    ISSUE_NODE_ID=$("${NIGHTGAUGE_BIN:-nightgauge}" forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null \
       | jq -r '.nodeId // empty')
-    nightgauge forge issue comment --subject-id "$ISSUE_NODE_ID" --body "$COMMENT_BODY" 2>/dev/null || \
+    "${NIGHTGAUGE_BIN:-nightgauge}" forge issue comment --subject-id "$ISSUE_NODE_ID" --body "$COMMENT_BODY" 2>/dev/null || \
       echo "warning: failed to post deferral comment to #$ISSUE_NUMBER"
 
     "$BINARY" outcome record \
@@ -705,7 +705,7 @@ Step 8.5 verifies the final context file:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)"
 jq . "$CONTEXT_FILE" > /dev/null && \
   echo "Context file written: $CONTEXT_FILE"
 ```

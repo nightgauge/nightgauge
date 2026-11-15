@@ -32,7 +32,7 @@ updates the drafts to match it. Do not rework a sound plan to fit them.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
+KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
 
 if [ -n "$KNOWLEDGE_PATH" ] && [ -d "$KNOWLEDGE_PATH" ]; then
   PRD_FILE="${KNOWLEDGE_PATH}/PRD.md"
@@ -55,7 +55,7 @@ Calls the Go binary to enumerate both cross-repo and workspace-level knowledge
 directories in a single deterministic pass. No Python required.
 
 ```bash
-KNOWLEDGE_JSON=$(nightgauge knowledge index --cross-repo --workspace --limit 20 --json 2>/dev/null || echo '{}')
+KNOWLEDGE_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" knowledge index --cross-repo --workspace --limit 20 --json 2>/dev/null || echo '{}')
 CROSS_REPO_ENTRIES_JSON=$(printf '%s\n' "$KNOWLEDGE_JSON" | jq -c '.cross_repo_knowledge // []')
 WORKSPACE_KB_ENTRIES_JSON=$(printf '%s\n' "$KNOWLEDGE_JSON" | jq -c '.workspace_kb // []')
 
@@ -113,9 +113,9 @@ if [ "$KB_ENABLED" != "true" ]; then
   echo "Phase 3.7: knowledge.enabled=false — skipping recall"
 else
   # Step 3.7.2: Build query string from issue title + body excerpt + ACs
-  ISSUE_TITLE=$(jq -r '.title // ""' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "")
-  ISSUE_BODY=$(jq -r '.body // ""' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null | head -c 1500 || echo "")
-  ISSUE_ACS=$(jq -r '.requirements.acceptance_criteria[]? // empty' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null | head -20 | tr '\n' ' ' || echo "")
+  ISSUE_TITLE=$(jq -r '.title // ""' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "")
+  ISSUE_BODY=$(jq -r '.body // ""' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null | head -c 1500 || echo "")
+  ISSUE_ACS=$(jq -r '.requirements.acceptance_criteria[]? // empty' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null | head -20 | tr '\n' ' ' || echo "")
 
   RECALL_QUERY="${ISSUE_TITLE} ${ISSUE_BODY} ${ISSUE_ACS}"
   # Truncate to 4096 chars

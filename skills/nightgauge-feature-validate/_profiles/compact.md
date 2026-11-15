@@ -26,7 +26,7 @@ Trusts the dev context handoff (no build/unit-test/security re-runs that already
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-test -s "$(nightgauge layout path pipeline validate-${ISSUE_NUMBER}.json)" || \
+test -s "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline validate-${ISSUE_NUMBER}.json)" || \
   { echo "ERROR: validate-${ISSUE_NUMBER}.json missing — Phase 6 was skipped" >&2; exit 1; }
 ```
 
@@ -242,7 +242,7 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 # Enforce the Exit Contract — fail loudly if Phase 6 was skipped (the
 # orchestrator's repo-blind fallback may misreport test status; always write
 # the file ourselves).
-CONTEXT_FILE="$(nightgauge layout path pipeline validate-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline validate-${ISSUE_NUMBER}.json)"
 if [ ! -s "$CONTEXT_FILE" ]; then
   echo "ERROR: ${CONTEXT_FILE} missing — Phase 6 (Write Validate Context) did not run." >&2
   echo "Re-run Phase 6 before exiting; do NOT rely on the orchestrator fallback." >&2

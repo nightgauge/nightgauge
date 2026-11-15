@@ -102,7 +102,7 @@ if ! "$BINARY" spike materialize "$ISSUE_NUMBER" --json > "$OUTPUT_TMP"; then
   rm -f "$OUTPUT_TMP"
   exit 1
 fi
-OUTPUT_FILE=$(nightgauge layout write pipeline "spike-materialize-${ISSUE_NUMBER}.json" \
+OUTPUT_FILE=$("${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "spike-materialize-${ISSUE_NUMBER}.json" \
   --from "$OUTPUT_TMP")
 rm -f "$OUTPUT_TMP"
 
@@ -120,7 +120,7 @@ BRANCH=$(git branch --show-current)
 : "${BRANCH:?detached HEAD: check out the spike branch}"
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-OUTPUT_FILE="$(nightgauge layout path pipeline spike-materialize-${ISSUE_NUMBER}.json)"
+OUTPUT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline spike-materialize-${ISSUE_NUMBER}.json)"
 PR_NUMBER=$(gh pr list --state merged --search "head:${BRANCH}" --json number --jq '.[0].number' 2>/dev/null)
 if [ -n "$PR_NUMBER" ] && [ "$PR_NUMBER" != "null" ]; then
   ISSUES_LIST=$(jq -r '.issues[] | select(.skipped != true and .issue_number > 0) | "- #\(.issue_number) \(.title)"' "$OUTPUT_FILE")

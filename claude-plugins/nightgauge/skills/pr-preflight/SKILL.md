@@ -55,7 +55,7 @@ covered by the binary (audit row B40 scope).
 **Check process:**
 
 ```bash
-nightgauge preflight links --root . --exclude-templates
+"${NIGHTGAUGE_BIN:-nightgauge}" preflight links --root . --exclude-templates
 ```
 
 Exit codes: `0` no broken links, `1` one or more broken links found,
@@ -74,7 +74,7 @@ Exit codes: `0` no broken links, `1` one or more broken links found,
 **Check process:**
 
 ```bash
-nightgauge preflight syntax --workdir .
+"${NIGHTGAUGE_BIN:-nightgauge}" preflight syntax --workdir .
 ```
 
 Validates every `*.json`, `*.yaml`, and `*.yml` file in one pass (Checks 2 and
@@ -142,7 +142,7 @@ credentials.
 **Check process:**
 
 ```bash
-nightgauge preflight secrets --workdir .
+"${NIGHTGAUGE_BIN:-nightgauge}" preflight secrets --workdir .
 ```
 
 Wraps the same six-pattern regex bank as `nightgauge scan secrets`
@@ -261,21 +261,21 @@ ERRORS=0
 
 # 1. JSON + YAML syntax (Check 2 + 3 — single binary call)
 echo "1️⃣ Validating JSON / YAML syntax..."
-if ! nightgauge preflight syntax --workdir "$ROOT"; then
+if ! "${NIGHTGAUGE_BIN:-nightgauge}" preflight syntax --workdir "$ROOT"; then
   ERRORS=$((ERRORS+1))
 fi
 echo ""
 
 # 2. Broken links (Check 1)
 echo "2️⃣ Checking for broken links..."
-if ! nightgauge preflight links --root "$ROOT" --exclude-templates; then
+if ! "${NIGHTGAUGE_BIN:-nightgauge}" preflight links --root "$ROOT" --exclude-templates; then
   ERRORS=$((ERRORS+1))
 fi
 echo ""
 
 # 3. Sensitive data (Check 5)
 echo "3️⃣ Checking for sensitive data..."
-if ! nightgauge preflight secrets --workdir "$ROOT"; then
+if ! "${NIGHTGAUGE_BIN:-nightgauge}" preflight secrets --workdir "$ROOT"; then
   ERRORS=$((ERRORS+1))
 fi
 echo ""
@@ -284,7 +284,7 @@ echo ""
 # Blocks a newly-added dep that 404s on its registry or is one edit from a
 # popular package. Network lookups that can't complete are warn-only.
 echo "4️⃣ Checking newly-added dependencies (slopsquat / hallucination)..."
-if ! nightgauge preflight dependency-guard --root "$ROOT" --baseline "${BASE_BRANCH:-main}"; then
+if ! "${NIGHTGAUGE_BIN:-nightgauge}" preflight dependency-guard --root "$ROOT" --baseline "${BASE_BRANCH:-main}"; then
   ERRORS=$((ERRORS+1))
 fi
 echo ""
@@ -326,7 +326,7 @@ find . -name "SOME_FILE.md"
 
 ```bash
 # Inspect the offending file with the same parser the verb uses
-nightgauge preflight syntax --workdir . --json | jq '.findings[]'
+"${NIGHTGAUGE_BIN:-nightgauge}" preflight syntax --workdir . --json | jq '.findings[]'
 ```
 
 **Prevention:** Use editor plugins for real-time validation.

@@ -98,7 +98,7 @@ if [ "$OWNER_TYPE" = "User" ]; then
 fi
 
 # Fetch all labels once and cache — avoids one API call per label
-CACHED_LABELS_JSON=$(nightgauge label list \
+CACHED_LABELS_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" label list \
   --owner "$OWNER" --repo "$REPO_NAME" \
   --owner-type "$LABEL_OWNER_TYPE_FLAG" --json 2>/dev/null || echo "[]")
 
@@ -110,7 +110,7 @@ create_label() {
   elif [ "$DRY_RUN" = "true" ]; then
     echo "  [DRY RUN] would create: $name"
   else
-    if nightgauge label create \
+    if "${NIGHTGAUGE_BIN:-nightgauge}" label create \
       --name "$name" \
       --color "$color" \
       --description "$description" \

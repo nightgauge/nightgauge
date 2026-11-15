@@ -204,8 +204,8 @@ capture_conflict_and_signal() {
   [ -z "$_CCS_ROOT" ] && _CCS_ROOT=$(pwd)
   _CCS_CTX_NAME="conflict-context-${ISSUE_NUMBER}.json"
   _CCS_FB_NAME="feedback-${ISSUE_NUMBER}.json"
-  _CCS_CTX=$(nightgauge layout path pipeline "$_CCS_CTX_NAME" --workdir "$_CCS_ROOT")
-  _CCS_FB=$(nightgauge layout path pipeline "$_CCS_FB_NAME" --workdir "$_CCS_ROOT")
+  _CCS_CTX=$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "$_CCS_CTX_NAME" --workdir "$_CCS_ROOT")
+  _CCS_FB=$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "$_CCS_FB_NAME" --workdir "$_CCS_ROOT")
   _CCS_TMP=$(mktemp -d) || return 1
   _CCS_FAILED=false
   _CCS_WHY=""
@@ -416,7 +416,7 @@ capture_conflict_and_signal() {
         conflict_operation:$op, capture_failed:$failed, conflicting_files:$files, created_at:$ts}
        + (if $why != "" then {capture_error:$why} else {} end)' \
       >"$_CCS_TMP/ctx.json" 2>/dev/null &&
-      nightgauge layout write pipeline "$_CCS_CTX_NAME" --workdir "$_CCS_ROOT" \
+      "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "$_CCS_CTX_NAME" --workdir "$_CCS_ROOT" \
         --from "$_CCS_TMP/ctx.json" >/dev/null 2>&1 || rm -f "$_CCS_CTX"
   else
     rm -f "$_CCS_CTX" 2>/dev/null || true
@@ -437,7 +437,7 @@ capture_conflict_and_signal() {
   if [ -f "$_CCS_FB" ]; then
     jq --argjson sig "$_CCS_NEW_SIGNAL" \
       '.signals = ((.signals // []) + [$sig])' "$_CCS_FB" > "$_CCS_TMP/fb.json" 2>/dev/null \
-      && nightgauge layout write pipeline "$_CCS_FB_NAME" --workdir "$_CCS_ROOT" \
+      && "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "$_CCS_FB_NAME" --workdir "$_CCS_ROOT" \
         --from "$_CCS_TMP/fb.json" >/dev/null 2>&1
   else
     jq -n \
@@ -445,7 +445,7 @@ capture_conflict_and_signal() {
       --argjson sig "$_CCS_NEW_SIGNAL" \
       --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       '{schema_version:"1.1", issue_number:$issue, signals:[$sig], created_at:$ts}' \
-      2>/dev/null | nightgauge layout write pipeline "$_CCS_FB_NAME" --workdir "$_CCS_ROOT" \
+      2>/dev/null | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "$_CCS_FB_NAME" --workdir "$_CCS_ROOT" \
         >/dev/null 2>&1 || true
   fi
   rm -rf "$_CCS_TMP" 2>/dev/null || true
@@ -558,7 +558,7 @@ if [ "$MERGEABLE" = "CONFLICTING" ]; then
 
   # Plain push: the merge only adds commits on top of origin's branch, so it
   # fast-forwards. push-branch never forces and recovers a self-inflicted fork.
-  if ! nightgauge git push-branch; then
+  if ! "${NIGHTGAUGE_BIN:-nightgauge}" git push-branch; then
     echo "ERROR: Failed to push the updated branch."
     exit 1
   fi
@@ -685,7 +685,7 @@ this stage surviving the merge. `proceed: false` means do not merge: report the
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-REVIEW_GATE=$(nightgauge pr-stage review-gate "$ISSUE_NUMBER" --json) || exit 1
+REVIEW_GATE=$("${NIGHTGAUGE_BIN:-nightgauge}" pr-stage review-gate "$ISSUE_NUMBER" --json) || exit 1
 if [ "$(printf '%s\n' "$REVIEW_GATE" | jq -r '.proceed')" != "true" ]; then
   echo "Review gate holds the merge: $(printf '%s\n' "$REVIEW_GATE" | jq -r '.reason')" >&2
   exit 1

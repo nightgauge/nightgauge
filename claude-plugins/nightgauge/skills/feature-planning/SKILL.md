@@ -228,9 +228,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -260,7 +262,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -377,7 +379,7 @@ never judged. A missing report is a stage failure, not a cue to produce one.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-AC_RECONCILE_FILE="$(nightgauge layout path pipeline ac-reconcile-${ISSUE_NUMBER}.json)"
+AC_RECONCILE_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline ac-reconcile-${ISSUE_NUMBER}.json)"
 if [ ! -f "$AC_RECONCILE_FILE" ]; then
   echo "ERROR: $AC_RECONCILE_FILE is missing — the orchestrator writes it before planning (#3228)." >&2
   exit 1
@@ -417,7 +419,7 @@ Select documentation scope via a deterministic decision tree. Extract size and p
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)"
 SIZE_LABEL=$(jq -r '[.labels[] | select(startswith("size:"))] | first // empty' "$CONTEXT_FILE" 2>/dev/null | sed 's/size://')
 PRIORITY_LABEL=$(jq -r '[.labels[] | select(startswith("priority:"))] | first // empty' "$CONTEXT_FILE" 2>/dev/null | sed 's/priority://')
 TYPE_LABEL=$(jq -r '.type // empty' "$CONTEXT_FILE" 2>/dev/null)
@@ -505,7 +507,7 @@ do not filter findings yourself.
 
 ```bash
 PLANNED_PATHS="<comma-separated files_to_create + files_to_modify>"
-KNOWN_FINDINGS=$(nightgauge finding list --match-paths "$PLANNED_PATHS" --json 2>/dev/null || echo "[]")
+KNOWN_FINDINGS=$("${NIGHTGAUGE_BIN:-nightgauge}" finding list --match-paths "$PLANNED_PATHS" --json 2>/dev/null || echo "[]")
 ```
 
 When `KNOWN_FINDINGS` is a non-empty array, the plan carries a
@@ -522,7 +524,7 @@ Before writing `planning-{N}.json`, classify every path the plan would ADD
 against the repository's publication boundary (#2562):
 
 ```bash
-nightgauge gate check-publication --paths "docs/spikes/42-x.md,internal/new.go" --json
+"${NIGHTGAUGE_BIN:-nightgauge}" gate check-publication --paths "docs/spikes/42-x.md,internal/new.go" --json
 ```
 
 - Exit `0`: every path is allowed, or the repository has no boundary
@@ -683,7 +685,7 @@ Minimal required skeleton:
   : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
   jq --argjson rd "$RECALL_HITS" '. + {"recalled_decisions": (if ($rd | length) > 0 then $rd else null end)}' \
     "$PLANNING_FILE" > /tmp/planning_tmp.json &&
-    nightgauge layout write pipeline "planning-${ISSUE_NUMBER}.json" \
+    "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "planning-${ISSUE_NUMBER}.json" \
       --from /tmp/planning_tmp.json >/dev/null
   ```
 
@@ -729,7 +731,7 @@ facts that only the plan knows. Merge a `dependency_analysis` block into
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)"
 # Replace the two values from the plan; default to 0 / false when none apply.
 DEP_MAJOR_BUMPS=0
 PROD_AREA=false
@@ -737,7 +739,7 @@ tmp=$(mktemp)
 jq --argjson mb "$DEP_MAJOR_BUMPS" --argjson pa "$PROD_AREA" \
   '.dependency_analysis = {major_bumps_count: $mb, production_area: $pa}' \
   "$CONTEXT_FILE" > "$tmp" &&
-  nightgauge layout write pipeline "issue-${ISSUE_NUMBER}.json" --from "$tmp" >/dev/null
+  "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "issue-${ISSUE_NUMBER}.json" --from "$tmp" >/dev/null
 rm -f "$tmp"
 jq . "$CONTEXT_FILE" > /dev/null || { echo "ERROR: issue context JSON invalid after dependency_analysis merge" >&2; exit 1; }
 ```
@@ -987,7 +989,7 @@ directory, through the binary (JSON on stdin; never a direct file write):
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
 { ... the record below ... }
 JSON
 ```
@@ -1042,7 +1044,7 @@ The assessment record MUST follow this schema:
 # Validate JSON if written
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
+ASSESSMENT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

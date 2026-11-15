@@ -671,7 +671,7 @@ EOF
 LABEL_LIST="type:spike,priority:high"
 
 if printf '%s\n' "$LABEL_LIST" | grep -q "type:spike"; then
-  nightgauge spike validate --body-file "$BODY_FILE" 2>&1
+  "${NIGHTGAUGE_BIN:-nightgauge}" spike validate --body-file "$BODY_FILE" 2>&1
   EXIT=$?
   [ $EXIT -ne 0 ] && echo "PASS: gate rejected" || echo "FAIL: gate should have rejected"
 fi

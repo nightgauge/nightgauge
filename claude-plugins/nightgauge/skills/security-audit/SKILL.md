@@ -359,9 +359,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -391,7 +393,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -591,7 +593,7 @@ EXCLUDE_DIRS=(
 Detect existing health-check output to cross-reference:
 
 ```bash
-HEALTH_CHECK_PATH="$(nightgauge layout path checkout reports/health-report.json)"
+HEALTH_CHECK_PATH="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout reports/health-report.json)"
 HEALTH_CHECK_AVAILABLE=false
 
 if [ -f "$HEALTH_CHECK_PATH" ]; then
@@ -753,7 +755,7 @@ for the full pattern table and JSON shape (audit row B41).
 ```bash
 echo "=== Secret Detection ==="
 
-SECRETS_JSON=$(nightgauge scan secrets --workdir "$ASSESS_PATH" --json)
+SECRETS_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" scan secrets --workdir "$ASSESS_PATH" --json)
 
 # Per-pattern line counts (always populated — schema guarantees the six keys).
 SECRET_GENERIC=$(printf '%s\n' "$SECRETS_JSON" | jq -r '.patterns.generic_kv')
@@ -1460,7 +1462,7 @@ if [ -n "$OUTPUT_FILE" ]; then
   cp "$REPORT_TMP" "$OUTPUT_FILE"
   REPORT_PATH="$OUTPUT_FILE"
 else
-  REPORT_PATH="$(nightgauge layout write checkout reports/security-audit.json --from "$REPORT_TMP")"
+  REPORT_PATH="$("${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout reports/security-audit.json --from "$REPORT_TMP")"
 fi
 rm -f "$REPORT_TMP"
 ```
@@ -1664,7 +1666,7 @@ directory, through the binary (JSON on stdin; never a direct file write):
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
 { ... the record below ... }
 JSON
 ```
@@ -1719,7 +1721,7 @@ The assessment record MUST follow this schema:
 # Validate JSON if written
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
+ASSESSMENT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

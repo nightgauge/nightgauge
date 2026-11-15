@@ -99,7 +99,7 @@ Look for dev context file from `/feature-dev`:
 
 ```bash
 # Check for dev context
-CONTEXT_FILE="$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline dev-${ISSUE_NUMBER}.json)"
 
 if [ -f "$CONTEXT_FILE" ]; then
   echo "Found dev context: $CONTEXT_FILE"

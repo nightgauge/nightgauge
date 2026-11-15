@@ -114,7 +114,7 @@ polluting with another repo's history.
 
 ```bash
 # The layout resolver refuses a symlinked entry, so a resolved path is safe to test.
-MODEL_PATH="$(nightgauge layout path checkout complexity-model.yaml)" || exit 1
+MODEL_PATH="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout complexity-model.yaml)" || exit 1
 
 if [ -e "$MODEL_PATH" ]; then
   echo "$MODEL_PATH already exists — preserving it"
@@ -171,7 +171,7 @@ PYEOF
   if [ $? -ne 0 ]; then
     echo "WARNING: Python seed transform failed. Using bootstrap defaults instead."
     SEED_FROM=""
-  elif nightgauge layout write checkout complexity-model.yaml --no-clobber --from "$SEED_TMP" > /dev/null 2>&1; then
+  elif "${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout complexity-model.yaml --no-clobber --from "$SEED_TMP" > /dev/null 2>&1; then
     echo "Seeded complexity model from $SEED_FROM"
   else
     # --no-clobber never replaces a model created while seeding ran.
@@ -181,7 +181,7 @@ PYEOF
 fi
 
 if [ ! -e "$MODEL_PATH" ]; then
-  nightgauge outcome init
+  "${NIGHTGAUGE_BIN:-nightgauge}" outcome init
 fi
 ```
 

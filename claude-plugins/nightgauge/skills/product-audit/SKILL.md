@@ -212,9 +212,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -244,7 +246,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -472,7 +474,7 @@ message. Each subagent writes its findings to
 1. Run the lifecycle audit via the Go binary:
 
    ```bash
-   nightgauge epic check-lifecycle --sweep --json > /tmp/lifecycle-raw.json
+   "${NIGHTGAUGE_BIN:-nightgauge}" epic check-lifecycle --sweep --json > /tmp/lifecycle-raw.json
    ```
 
    This detects all four lifecycle categories across all open epics and issues:
@@ -755,15 +757,15 @@ Only apply fixes to findings in the auto-fix whitelist from config:
 
 - `STALE_EPIC` — close epic:
   ```bash
-  nightgauge issue close ${EPIC_NUMBER}
+  "${NIGHTGAUGE_BIN:-nightgauge}" issue close ${EPIC_NUMBER}
   ```
 - `BOARD_STATUS_DRIFT` — move issue to "Done" on project board:
   ```bash
-  nightgauge project move-status ${ISSUE_NUMBER} done
+  "${NIGHTGAUGE_BIN:-nightgauge}" project move-status ${ISSUE_NUMBER} done
   ```
 - `STALE_BLOCKER` — remove blocking relationship:
   ```bash
-  nightgauge issue remove-blocked-by ${BLOCKED_ISSUE_NUMBER} ${BLOCKER_ISSUE_NUMBER}
+  "${NIGHTGAUGE_BIN:-nightgauge}" issue remove-blocked-by ${BLOCKED_ISSUE_NUMBER} ${BLOCKER_ISSUE_NUMBER}
   ```
 
 For each fix applied:

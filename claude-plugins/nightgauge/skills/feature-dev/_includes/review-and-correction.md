@@ -31,7 +31,7 @@ if [ "${NIGHTGAUGE_REVIEW_UNITS_PHASE:-}" = "1" ]; then
 else
   # Bounded under 9 minutes; give the shell call a 600000 ms timeout and run it
   # in the foreground.
-  QUALITY_REPORT=$(nightgauge review quality --issue "$ISSUE_NUMBER") \
+  QUALITY_REPORT=$("${NIGHTGAUGE_BIN:-nightgauge}" review quality --issue "$ISSUE_NUMBER") \
     || QUALITY_REPORT='{"result":"skipped","reason":"review quality exited non-zero","units":[]}'
 fi
 unit_status() {
@@ -113,7 +113,7 @@ Run the project's code formatter on all files. This prevents CI failures from
 formatting drift — the #1 cause of avoidable CI failures.
 
 ```bash
-nightgauge format run 2>&1 || { echo "ERROR: format run failed"; exit 1; }
+"${NIGHTGAUGE_BIN:-nightgauge}" format run 2>&1 || { echo "ERROR: format run failed"; exit 1; }
 ```
 
 If the formatter modifies files, those changes must be included in the commit.
@@ -135,7 +135,7 @@ run it here, under any name: on #2700 and #2724 repeated gates took a run past
 four hours (#2784).
 
 ```bash
-nightgauge build run --json \
+"${NIGHTGAUGE_BIN:-nightgauge}" build run --json \
   | jq -se '.[0] | .status == "passed" or (.status == "skipped" and .ran == false)' >/dev/null \
   || { echo "ERROR: build did not pass (status must be passed, or skipped with no build system). Fix it before feature-validate."; exit 1; }
 ```
@@ -169,7 +169,7 @@ Recorded work does not count toward the `SCOPE_DISCOVERED` file threshold.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge discovered-work record \
+"${NIGHTGAUGE_BIN:-nightgauge}" discovered-work record \
   --issue "$ISSUE_NUMBER" \
   --source-stage feature-dev \
   --summary "Refactor duplicated retry loop in internal/forge/client.go" \

@@ -150,9 +150,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -182,7 +184,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -290,7 +292,7 @@ Fetch issues from the project board filtered by status:
 ```bash
 # Get project number from config (prefer the deterministic Go binary; fall
 # back to the legacy grep|awk pattern so older binaries keep working).
-PROJECT_NUMBER=$(nightgauge config show --key project.number --raw 2>/dev/null \
+PROJECT_NUMBER=$("${NIGHTGAUGE_BIN:-nightgauge}" config show --key project.number --raw 2>/dev/null \
   || grep "number:" .nightgauge/config.yaml 2>/dev/null | head -1 | awk '{print $2}')
 if [ -z "$PROJECT_NUMBER" ]; then
   echo "ERROR: No project number in .nightgauge/config.yaml"
@@ -464,8 +466,8 @@ Generate the preflight report:
 DATE=$(date +%Y-%m-%d)
 REPORT_NAME="reports/preflight-${DATE}.md"
 REPORT_JSON_NAME="reports/preflight-${DATE}.json"
-REPORT="$(nightgauge layout path checkout "$REPORT_NAME")"
-REPORT_JSON="$(nightgauge layout path checkout "$REPORT_JSON_NAME")"
+REPORT="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout "$REPORT_NAME")"
+REPORT_JSON="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout "$REPORT_JSON_NAME")"
 
 # Count totals
 MISSING_TYPE_COUNT=${#MISSING_TYPE[@]}
@@ -480,7 +482,7 @@ READY_COUNT=$((ISSUE_COUNT - TOTAL_ISSUES_NEEDING_ATTENTION))
 [ "$READY_COUNT" -lt 0 ] && READY_COUNT=0
 
 # Write markdown report
-nightgauge layout write checkout "$REPORT_NAME" > /dev/null << REPORTEOF
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout "$REPORT_NAME" > /dev/null << REPORTEOF
 ## Backlog Preflight Report — ${DATE}
 
 ### Summary
@@ -580,7 +582,7 @@ jq -n \
     },
     report_md: $report_md,
     pipeline_ready: ($ready_count == $issue_count and ($cycles | length) == 0)
-  }' | nightgauge layout write checkout "$REPORT_JSON_NAME" > /dev/null
+  }' | "${NIGHTGAUGE_BIN:-nightgauge}" layout write checkout "$REPORT_JSON_NAME" > /dev/null
 
 echo "JSON report written: $REPORT_JSON"
 ```
@@ -606,7 +608,7 @@ if [ "$FIX_MODE" = "true" ]; then
   for issue in "${MISSING_TYPE[@]}"; do
     NUMBER=$(printf '%s\n' "$issue" | grep -oE '#[0-9]+' | tr -d '#')
     TITLE=$(echo "$issue" | sed 's/#[0-9]*: //')
-    RESULT=$(nightgauge issue infer-type "$NUMBER" --apply --json 2>/dev/null)
+    RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" issue infer-type "$NUMBER" --apply --json 2>/dev/null)
     if [ -z "$RESULT" ]; then
       echo "  ERROR: infer-type failed for #$NUMBER"
       continue
@@ -675,7 +677,7 @@ directory, through the binary (JSON on stdin; never a direct file write):
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
 { ... the record below ... }
 JSON
 ```
@@ -730,7 +732,7 @@ The assessment record MUST follow this schema:
 # Validate JSON if written
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
+ASSESSMENT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

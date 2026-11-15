@@ -165,9 +165,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -197,7 +199,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -298,8 +300,8 @@ COMPARE_DATE=""
 Check for execution history in priority order:
 
 ```bash
-HISTORY_DIR="$(nightgauge layout path pipeline history)"
-PIPELINE_DIR="$(nightgauge layout path pipeline)"
+HISTORY_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline history)"
+PIPELINE_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline)"
 
 DATA_SOURCE="none"
 
@@ -450,7 +452,7 @@ reference and flag list.
 
 ```bash
 # Audit row B2 — deterministic Go aggregation over the daily JSONL history.
-nightgauge pipeline aggregate \
+"${NIGHTGAUGE_BIN:-nightgauge}" pipeline aggregate \
   --runs "${RUNS_LIMIT}" \
   ${SINCE_DATE:+--since "${SINCE_DATE}"} \
   ${ISSUE_FILTER:+--issue "${ISSUE_FILTER}"} \
@@ -676,7 +678,7 @@ The inquiry scorecard is computed by the platform, not by this skill. Read it
 through the daemon, which holds the signed-in session:
 
 ```bash
-SCORECARD=$(nightgauge inquiry scorecard --json 2>/tmp/inquiry-scorecard.err)
+SCORECARD=$("${NIGHTGAUGE_BIN:-nightgauge}" inquiry scorecard --json 2>/tmp/inquiry-scorecard.err)
 SCORECARD_EXIT=$?
 ```
 
@@ -1008,17 +1010,17 @@ Before creating, search for duplicates across **both open and recently closed**
 issues. Findings may overlap with recently completed epics.
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 
 # Search open issues (`issue list --search` is scoped to open issues)
-nightgauge issue list --repo "$REPO" --search "${FINDING_KEYWORDS}" --json | jq '[(. // [])[] | {number, title}]'
+"${NIGHTGAUGE_BIN:-nightgauge}" issue list --repo "$REPO" --search "${FINDING_KEYWORDS}" --json | jq '[(. // [])[] | {number, title}]'
 
 # Search closed issues/epics (no list verb reaches closed issues: GraphQL search)
-nightgauge forge graphql -f query='query($q: String!) { search(query: $q, type: ISSUE, first: 20) { nodes { ... on Issue { number title } } } }' \
+"${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='query($q: String!) { search(query: $q, type: ISSUE, first: 20) { nodes { ... on Issue { number title } } } }' \
   -f q="repo:$REPO is:issue is:closed ${FINDING_KEYWORDS}" | jq '.data.search.nodes'
 
 # Also check open epics that may already cover this finding
-nightgauge forge issue list --repo "$REPO" --labels "type:epic" --json | jq '[.[:30][] | {number, title}]'
+"${NIGHTGAUGE_BIN:-nightgauge}" forge issue list --repo "$REPO" --labels "type:epic" --json | jq '[.[:30][] | {number, title}]'
 ```
 
 Skip creation if a matching issue exists (open or recently closed).
@@ -1032,8 +1034,8 @@ using the project's deterministic hooks. This follows the
 **Step 6.3a**: Create the epic:
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
-nightgauge issue create --repo "$REPO" \
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
+"${NIGHTGAUGE_BIN:-nightgauge}" issue create --repo "$REPO" \
   --title "epic: Pipeline audit findings — ${SUMMARY}" \
   --body "${EPIC_BODY}" \
   --labels "type:epic,priority:high,size:L"
@@ -1141,7 +1143,7 @@ directory, through the binary (JSON on stdin; never a direct file write):
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
 { ... the record below ... }
 JSON
 ```
@@ -1196,7 +1198,7 @@ The assessment record MUST follow this schema:
 # Validate JSON if written
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
+ASSESSMENT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

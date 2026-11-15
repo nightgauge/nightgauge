@@ -76,7 +76,7 @@ Sources and the host allowlist come from `blog_watch` in config. See
 ## Phase 1: Detect New Posts
 
 ```bash
-DETECT=$(nightgauge blog-watch detect --json)
+DETECT=$("${NIGHTGAUGE_BIN:-nightgauge}" blog-watch detect --json)
 printf '%s\n' "$DETECT" | jq -r '.skipped[] | "skipped \(.source): \(.reason)"'
 printf '%s\n' "$DETECT" | jq -r '.new[] | "\(.source)\t\(.url)"'
 ```
@@ -98,7 +98,7 @@ For each new URL:
 
 ```bash
 TEXT_FILE=$(mktemp)
-nightgauge blog-watch screen --url "$URL" --source "$SOURCE" --out "$TEXT_FILE"
+"${NIGHTGAUGE_BIN:-nightgauge}" blog-watch screen --url "$URL" --source "$SOURCE" --out "$TEXT_FILE"
 ```
 
 - Exit `0`: the screened text is in `$TEXT_FILE`. Read it from there.
@@ -132,14 +132,14 @@ nightgauge blog-watch screen --url "$URL" --source "$SOURCE" --out "$TEXT_FILE"
 | `Deferred`        | Relevant, but blocked on something we cannot judge yet    | `record` (reason names the reopen trigger) |
 
 ```bash
-nightgauge blog-watch record --url "$URL" --source "$SOURCE" \
+"${NIGHTGAUGE_BIN:-nightgauge}" blog-watch record --url "$URL" --source "$SOURCE" \
   --verdict "Already covered" --reason "<one line>" --ref docs/X.md
 ```
 
 For `Adopted`, write our gap, in our words, to a file, then:
 
 ```bash
-nightgauge blog-watch adopt --url "$URL" --source "$SOURCE" \
+"${NIGHTGAUGE_BIN:-nightgauge}" blog-watch adopt --url "$URL" --source "$SOURCE" \
   --title "feat(<area>): <our gap>" --gap-file "$GAP_FILE" \
   --excerpt "<at most one short quote>"
 ```
@@ -172,7 +172,7 @@ Then the skipped sources.
 SKILL_NAME="nightgauge-blog-watch"
 RUN_LOG_CLASS="checkout"
 RUN_LOG_NAME="blog-watch/runs.jsonl"
-RUN_LOG="$(nightgauge layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
+RUN_LOG="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
 ```
 
 <!-- include: ../_shared/RUN_REFLECTION.md -->

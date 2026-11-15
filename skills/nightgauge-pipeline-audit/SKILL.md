@@ -164,8 +164,8 @@ COMPARE_DATE=""
 Check for execution history in priority order:
 
 ```bash
-HISTORY_DIR="$(nightgauge layout path pipeline history)"
-PIPELINE_DIR="$(nightgauge layout path pipeline)"
+HISTORY_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline history)"
+PIPELINE_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline)"
 
 DATA_SOURCE="none"
 
@@ -316,7 +316,7 @@ reference and flag list.
 
 ```bash
 # Audit row B2 — deterministic Go aggregation over the daily JSONL history.
-nightgauge pipeline aggregate \
+"${NIGHTGAUGE_BIN:-nightgauge}" pipeline aggregate \
   --runs "${RUNS_LIMIT}" \
   ${SINCE_DATE:+--since "${SINCE_DATE}"} \
   ${ISSUE_FILTER:+--issue "${ISSUE_FILTER}"} \
@@ -542,7 +542,7 @@ The inquiry scorecard is computed by the platform, not by this skill. Read it
 through the daemon, which holds the signed-in session:
 
 ```bash
-SCORECARD=$(nightgauge inquiry scorecard --json 2>/tmp/inquiry-scorecard.err)
+SCORECARD=$("${NIGHTGAUGE_BIN:-nightgauge}" inquiry scorecard --json 2>/tmp/inquiry-scorecard.err)
 SCORECARD_EXIT=$?
 ```
 
@@ -874,17 +874,17 @@ Before creating, search for duplicates across **both open and recently closed**
 issues. Findings may overlap with recently completed epics.
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
 
 # Search open issues (`issue list --search` is scoped to open issues)
-nightgauge issue list --repo "$REPO" --search "${FINDING_KEYWORDS}" --json | jq '[(. // [])[] | {number, title}]'
+"${NIGHTGAUGE_BIN:-nightgauge}" issue list --repo "$REPO" --search "${FINDING_KEYWORDS}" --json | jq '[(. // [])[] | {number, title}]'
 
 # Search closed issues/epics (no list verb reaches closed issues: GraphQL search)
-nightgauge forge graphql -f query='query($q: String!) { search(query: $q, type: ISSUE, first: 20) { nodes { ... on Issue { number title } } } }' \
+"${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='query($q: String!) { search(query: $q, type: ISSUE, first: 20) { nodes { ... on Issue { number title } } } }' \
   -f q="repo:$REPO is:issue is:closed ${FINDING_KEYWORDS}" | jq '.data.search.nodes'
 
 # Also check open epics that may already cover this finding
-nightgauge forge issue list --repo "$REPO" --labels "type:epic" --json | jq '[.[:30][] | {number, title}]'
+"${NIGHTGAUGE_BIN:-nightgauge}" forge issue list --repo "$REPO" --labels "type:epic" --json | jq '[.[:30][] | {number, title}]'
 ```
 
 Skip creation if a matching issue exists (open or recently closed).
@@ -898,8 +898,8 @@ using the project's deterministic hooks. This follows the
 **Step 6.3a**: Create the epic:
 
 ```bash
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
-nightgauge issue create --repo "$REPO" \
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
+"${NIGHTGAUGE_BIN:-nightgauge}" issue create --repo "$REPO" \
   --title "epic: Pipeline audit findings — ${SUMMARY}" \
   --body "${EPIC_BODY}" \
   --labels "type:epic,priority:high,size:L"

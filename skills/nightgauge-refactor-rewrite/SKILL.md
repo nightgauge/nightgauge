@@ -547,9 +547,9 @@ directory inside the git directory (`nightgauge layout path checkout reports`,
 ADR-024 § 7).
 
 ```bash
-HEALTH_REPORT="$(nightgauge layout path checkout reports/health-report.json)"
-SECURITY_REPORT="$(nightgauge layout path checkout reports/security-audit.json)"
-SCAFFOLD_REPORT="$(nightgauge layout path checkout reports/test-scaffold-report.json)"
+HEALTH_REPORT="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout reports/health-report.json)"
+SECURITY_REPORT="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout reports/security-audit.json)"
+SCAFFOLD_REPORT="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path checkout reports/test-scaffold-report.json)"
 
 HEALTH_AVAILABLE=false
 SECURITY_AVAILABLE=false

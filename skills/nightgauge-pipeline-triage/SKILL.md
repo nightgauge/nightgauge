@@ -68,7 +68,7 @@ End with a SUMMARY line: counts per verdict, and the recommended next step
 Read failure records from exit-records, newest first:
 
 ```bash
-EXIT_DIR="$(nightgauge layout path pipeline exit-records)" \
+EXIT_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline exit-records)" \
   python3 - "$ARGUMENTS" <<'PY'
 import json, glob, sys, os, datetime
 args = " ".join(sys.argv[1:])
@@ -117,15 +117,15 @@ merges, so issue state is the strongest single signal.
 
 ```bash
 # 1) Issue state — CLOSED almost always means the PR merged and the work landed.
-nightgauge forge issue view N --repo OWNER/REPO --json \
+"${NIGHTGAUGE_BIN:-nightgauge}" forge issue view N --repo OWNER/REPO --json \
   | python3 -c "import json,sys;print(json.load(sys.stdin).get('state',''))"
 
 # 2) PR evidence — the pr-create stage records the PR it opened in context.
 python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('pr_number'),d.get('pr_url'))" \
-  "$(nightgauge layout path pipeline pr-N.json)" 2>/dev/null
+  "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline pr-N.json)" 2>/dev/null
 
 # 3) Confirm the merge via the feature branch (branch is in the exit-record / dev context).
-nightgauge forge pr list --head <branch> --state all --repo OWNER/REPO --json \
+"${NIGHTGAUGE_BIN:-nightgauge}" forge pr list --head <branch> --state all --repo OWNER/REPO --json \
   | python3 -c "import json,sys;[print(p.get('number'),p.get('state')) for p in json.load(sys.stdin)]"
 ```
 
@@ -142,7 +142,7 @@ Read the session log and match against the known-failure taxonomy. Read in this
 order; stop at the first match:
 
 ```bash
-LOG=$(ls -t "$(nightgauge layout path logs)"/*_<N>_session.log 2>/dev/null | head -1)
+LOG=$(ls -t "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path logs)"/*_<N>_session.log 2>/dev/null | head -1)
 grep -niE 'api_error_status|cannot be modified|rate.?limit|429|Force push blocked|Destructive git|"result":"|I asked but|push.failed|Cannot find module|node_modules|stale_sdk_dist' "$LOG" | tail -25
 ```
 

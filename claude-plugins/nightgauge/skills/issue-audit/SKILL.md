@@ -100,9 +100,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
-`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
-invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (issue 3262).
+`dirname($BINARY)` to `PATH`. That export reaches only the rest of the same
+block: an agent runs each fenced block in a fresh shell, so it dies with the
+block. Every later block calls the binary as `"${NIGHTGAUGE_BIN:-nightgauge}"`,
+never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
+a bare call at command position (#2933).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
@@ -132,7 +134,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+# PATH export reaches only this block; later blocks call "${NIGHTGAUGE_BIN:-nightgauge}" (#2933).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -267,7 +269,7 @@ manifest as the source of truth.
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 # Read-only paths for display; every write goes through
 # `nightgauge layout write|append pipeline <name>`.
-REPORT_DIR="$(nightgauge layout path pipeline)"
+REPORT_DIR="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline)"
 REPORT_MD="$REPORT_DIR/issue-audit-${TS}.md"
 REPORT_JSON="$REPORT_DIR/issue-audit-${TS}.json"
 TRAIL_JSONL="$REPORT_DIR/issue-audit-${TS}.audit.jsonl"
@@ -281,7 +283,7 @@ FINDINGS=()  # populated as JSON-line strings throughout the run
 For each target `(owner/repo, number)`:
 
 ```bash
-ISSUE_JSON=$(nightgauge forge issue view "$NUM" --repo "$OWNER_REPO" --json 2>/dev/null) || {
+ISSUE_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" forge issue view "$NUM" --repo "$OWNER_REPO" --json 2>/dev/null) || {
   FINDINGS+=("$(jq -nc --arg r "$OWNER_REPO" --arg n "$NUM" '
     {phase:1,type:"MISSING_ISSUE",severity:"CRITICAL",
      issue:{repo:$r,number:($n|tonumber)},
@@ -322,7 +324,7 @@ Priority and Size are project board fields; Phase 4 checks them.
 ### Phase 4: Project Board Membership and Fields
 
 ```bash
-PROJECT_QUERY=$(nightgauge forge graphql -f query='query($owner:String!,$name:String!,$num:Int!){
+PROJECT_QUERY=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='query($owner:String!,$name:String!,$num:Int!){
   repository(owner:$owner,name:$name){
     issue(number:$num){
       projectItems(first:10){
@@ -505,11 +507,11 @@ the `issue-create` Phase 2.85 oversized-scope gate so manually-created issues
 # destinations are citations and never count; an explicit `file_ownership`
 # list in the `nightgauge:dependency-metadata` block replaces prose inference.
 DISTINCT_TARGETS=$(printf '%s' "$BODY" \
-  | nightgauge issue extract-targets --json 2>/dev/null \
+  | "${NIGHTGAUGE_BIN:-nightgauge}" issue extract-targets --json 2>/dev/null \
   | jq -r '.count' 2>/dev/null || echo 0)
 
 # Signal 2: predicted size == XL (objective estimate via the Go binary)
-PREDICTED_SIZE=$(nightgauge size predict "$NUM" --json 2>/dev/null \
+PREDICTED_SIZE=$("${NIGHTGAUGE_BIN:-nightgauge}" size predict "$NUM" --json 2>/dev/null \
   | jq -r '.SizeLabel // empty')
 
 # Signal 3: independent acceptance-criteria groups (refactor/migrate/... bullets)
@@ -527,7 +529,7 @@ fi
 # subIssues connection, so no page of it needs reading.
 IS_DECOMPOSED_EPIC=false
 if printf '%s\n' "$ISSUE_JSON" | jq -e '.labels[]? | select(.name == "type:epic")' >/dev/null 2>&1; then
-  SUB_ISSUE_COUNT=$(nightgauge forge graphql -f query='query($owner:String!,$name:String!,$num:Int!){
+  SUB_ISSUE_COUNT=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='query($owner:String!,$name:String!,$num:Int!){
     repository(owner:$owner,name:$name){issue(number:$num){subIssues{totalCount}}}
   }' -f owner="$OWNER" -f name="$NAME" -F num="$NUM" \
     -q '.data.repository.issue.subIssues.totalCount' 2>/dev/null || echo 0)
@@ -565,7 +567,7 @@ When the body carries a `nightgauge:dependency-metadata` block with a
 (no block means no-op):
 
 ```bash
-OWNERSHIP_JSON=$(printf '%s' "$BODY" | nightgauge issue check-ownership --json 2>/dev/null \
+OWNERSHIP_JSON=$(printf '%s' "$BODY" | "${NIGHTGAUGE_BIN:-nightgauge}" issue check-ownership --json 2>/dev/null \
   || echo '{"findings":[],"count":0}')
 # One FILE_OWNERSHIP_UNSUBSTANTIATED (WARNING) per entry in .findings[]
 ```
@@ -586,7 +588,7 @@ past it as `MISSING_SUB_ISSUE_LINK`. Do not pipe the binary into `jq`: the
 pipe would take `jq`'s exit status and hide a failed read.
 
 ```bash
-SUB_ISSUES_JSON=$(nightgauge issue list --epic "$NUM" --repo "$OWNER/$NAME" --json) || {
+SUB_ISSUES_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" issue list --epic "$NUM" --repo "$OWNER/$NAME" --json) || {
   echo "ERROR: could not read every sub-issue of $OWNER/$NAME#$NUM" >&2
   exit 2
 }
@@ -728,7 +730,7 @@ appends one JSON line to the audit trail:
 
 ```bash
 echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","issue":"'$ISSUE'","finding":"'$TYPE'","action":"'$ACTION'","before":'$BEFORE',"after":'$AFTER',"actor":"nightgauge-issue-audit"}' \
-  | nightgauge layout append pipeline "issue-audit-${TS}.audit.jsonl" >/dev/null
+  | "${NIGHTGAUGE_BIN:-nightgauge}" layout append pipeline "issue-audit-${TS}.audit.jsonl" >/dev/null
 ```
 
 #### Hard rules (encoded; pinned by negative test fixture)
@@ -795,7 +797,7 @@ jq -n \
   '{schema_version:"1.0",verdict:$verdict,summary:$summary,
     audited:$audited,findings:$findings,
     started_at:$started,completed_at:$completed}' \
-  | nightgauge layout write pipeline "issue-audit-${TS}.json" >/dev/null
+  | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "issue-audit-${TS}.json" >/dev/null
 
 # Markdown — assembled line-by-line, then piped into
 # `nightgauge layout write pipeline "issue-audit-${TS}.md"` (omitted for brevity)
@@ -917,7 +919,7 @@ directory, through the binary (JSON on stdin; never a direct file write):
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
 { ... the record below ... }
 JSON
 ```
@@ -972,7 +974,7 @@ The assessment record MUST follow this schema:
 # Validate JSON if written
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
+ASSESSMENT_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

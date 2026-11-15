@@ -39,7 +39,7 @@ round. With the review off, skip this step: Steps 2.5.0 to 2.5.3 below are the
 run's one full gate, as written.
 
 ```bash
-REVIEW_ENABLED=$(nightgauge config show --key pipeline.adversarial_review.enabled --raw 2>/dev/null || echo true)
+REVIEW_ENABLED=$("${NIGHTGAUGE_BIN:-nightgauge}" config show --key pipeline.adversarial_review.enabled --raw 2>/dev/null || echo true)
 SCOPED_CHECKS_ONLY=false
 [ "$REVIEW_ENABLED" = "false" ] || SCOPED_CHECKS_ONLY=true
 if [ "$SCOPED_CHECKS_ONLY" = "true" ]; then
@@ -48,7 +48,7 @@ if [ "$SCOPED_CHECKS_ONLY" = "true" ]; then
   CHANGED_FILES=$( { git diff --name-only "$(git merge-base HEAD "$BASE_REF")"; \
     git ls-files --others --exclude-standard; } | sort -u)
   # The gate's fast static subset first (#2847): seconds, not a gate run.
-  nightgauge ci gate-run --fast || CI_PARITY_PASSED=false
+  "${NIGHTGAUGE_BIN:-nightgauge}" ci gate-run --fast || CI_PARITY_PASSED=false
   if [ -f go.mod ]; then
     # Build, vet, and the tests of the changed packages only: never ./...
     CHANGED_PKGS=$(printf '%s\n' "$CHANGED_FILES" | grep '\.go$' | xargs -n1 dirname 2>/dev/null \
@@ -86,7 +86,7 @@ before every full gate this stage starts (Step 2.5.0 with the review off, and
 Step 2.7.4), run the gate's fast static subset:
 
 ```bash
-nightgauge ci gate-run --fast || CI_PARITY_PASSED=false
+"${NIGHTGAUGE_BIN:-nightgauge}" ci gate-run --fast || CI_PARITY_PASSED=false
 ```
 
 It runs the steps `scripts/ci-local.sh` marks `--fast`, unguarded and
@@ -108,7 +108,7 @@ step as an argv. A declared gate that fails validation also goes to `gate-run`,
 which fails with the reason instead of falling back to the discovered commands.
 
 ```bash
-CI_GATE_STATUS=$(nightgauge ci gate-status --kind parity --json 2>/dev/null || \
+CI_GATE_STATUS=$("${NIGHTGAUGE_BIN:-nightgauge}" ci gate-status --kind parity --json 2>/dev/null || \
   echo '{"reusable":false,"reason":"this binary has no ci gate-status","tree":"","gate_command":"","gate_records_itself":false}')
 CI_GATE_REUSABLE=$(printf '%s\n' "$CI_GATE_STATUS" | jq -r '.reusable')
 CI_GATE_REASON=$(printf '%s\n' "$CI_GATE_STATUS" | jq -r '.reason')
@@ -127,7 +127,7 @@ config) and returns a multi-line `run:` block whole. Fall back to standard
 commands if no workflow is found.
 
 ```bash
-CI_DISCOVER_RESULT=$(nightgauge ci discover-commands --json 2>/dev/null || \
+CI_DISCOVER_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" ci discover-commands --json 2>/dev/null || \
   echo '{"commands":[],"checks":[],"workflow_path":"","framework":"unknown","timestamp":""}')
 CI_PARITY_COMMANDS=()
 while IFS= read -r -d '' C; do CI_PARITY_COMMANDS+=("$C"); done \
@@ -200,7 +200,7 @@ function run_ci_parity() {
     if [ "$CMD" = "nightgauge ci gate-run" ]; then
       # The gate's log outlives the step: pr-create reads its per-test lines (#2941).
       IS_GATE=true
-      CI_PARITY_LOG="$(nightgauge layout path pipeline "gate-${ISSUE_NUMBER}.log")"
+      CI_PARITY_LOG="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "gate-${ISSUE_NUMBER}.log")"
     fi
     bash -c "$CMD" >"$CI_PARITY_LOG" 2>&1 &
     CI_PARITY_PID=$!
@@ -252,7 +252,7 @@ function record_ci_parity() { # record_ci_parity <verdict>
   [ "${CI_PARITY_COMMANDS[0]:-}" = "nightgauge ci gate-run" ] && return 0
   local full_flag="--full"
   printf '%s\n' "$CI_PARITY_RESULTS_JSON" | jq -e 'any(.status == "skipped")' >/dev/null && full_flag=""
-  nightgauge ci gate-record --event finish --run-id "$CI_GATE_RUN" --kind parity \
+  "${NIGHTGAUGE_BIN:-nightgauge}" ci gate-record --event finish --run-id "$CI_GATE_RUN" --kind parity \
     --tree "$CI_GATE_TREE" --verdict "$1" --seconds "$((SECONDS - CI_GATE_STARTED))" \
     $full_flag >/dev/null 2>&1 || true
 }
@@ -261,7 +261,7 @@ if [ "$CI_GATE_REUSABLE" = "true" ]; then
   # The tree already passed, so nothing runs. A skipped check keeps `ci_parity`
   # non-null for the lifecycle handoff and says why.
   echo "⏭ Gate skipped: $CI_GATE_REASON"
-  nightgauge ci gate-record --event reused --kind parity --tree "$CI_GATE_TREE" >/dev/null 2>&1 || true
+  "${NIGHTGAUGE_BIN:-nightgauge}" ci gate-record --event reused --kind parity --tree "$CI_GATE_TREE" >/dev/null 2>&1 || true
   CI_PARITY_RAN=true
   CI_PARITY_RESULTS_JSON=$(jq -cn --arg reason "$CI_GATE_REASON" \
     '[{command: "ci gate-status", status: "skipped", reason: $reason}]')
@@ -271,7 +271,7 @@ elif [ "${#CI_PARITY_COMMANDS[@]}" -eq 0 ]; then
 else
   CI_GATE_STARTED=$SECONDS
   if [ "${CI_PARITY_COMMANDS[0]:-}" != "nightgauge ci gate-run" ]; then
-    CI_GATE_RUN=$(nightgauge ci gate-record --event start --kind parity --tree "$CI_GATE_TREE" --full 2>/dev/null || true)
+    CI_GATE_RUN=$("${NIGHTGAUGE_BIN:-nightgauge}" ci gate-record --event start --kind parity --tree "$CI_GATE_TREE" --full 2>/dev/null || true)
   fi
   if run_ci_parity; then record_ci_parity pass; else record_ci_parity fail; fi
 fi
@@ -298,7 +298,7 @@ if [ "$CI_PARITY_PASSED" = "false" ] && \
   ADDED_PATHS=$( { git diff --name-only --diff-filter=A "$BASE_REF"...HEAD; \
     git ls-files --others --exclude-standard; } 2>/dev/null | sort -u | paste -sd, -)
   if [ -n "$ADDED_PATHS" ]; then
-    PUB_RESULT=$(nightgauge gate check-publication --paths "$ADDED_PATHS" --json)
+    PUB_RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" gate check-publication --paths "$ADDED_PATHS" --json)
     if [ $? -eq 1 ]; then
       PUB_EVIDENCE=$(printf '%s\n' "$PUB_RESULT" | jq -c '[.verdicts[]
         | select(.verdict != "allow")
@@ -364,7 +364,7 @@ while [ "$CI_PARITY_PASSED" = "false" ] && \
 
   # After applying fix, re-run ALL CI parity commands (not just the failed one)
   CI_PARITY_PASSED=true
-  CI_GATE_STATUS=$(nightgauge ci gate-status --kind parity --json 2>/dev/null || echo '{"tree":""}')
+  CI_GATE_STATUS=$("${NIGHTGAUGE_BIN:-nightgauge}" ci gate-status --kind parity --json 2>/dev/null || echo '{"tree":""}')
   CI_GATE_TREE=$(printf '%s\n' "$CI_GATE_STATUS" | jq -r '.tree')
   CI_GATE_STARTED=$SECONDS
   if run_ci_parity; then record_ci_parity pass; else record_ci_parity fail; fi
@@ -414,7 +414,7 @@ decisions.md do not exist at the knowledge path.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' "$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)" 2>/dev/null)
+KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline dev-${ISSUE_NUMBER}.json)" 2>/dev/null)
 COVERAGE_MAP_PATH=""
 
 if [ -z "$KNOWLEDGE_PATH" ]; then
@@ -482,7 +482,7 @@ fi
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ -n "$KNOWLEDGE_PATH" ] && [ -f "$PRD_FILE" ]; then
-  COVERAGE_MAP_PATH="$(nightgauge layout path pipeline coverage-map-${ISSUE_NUMBER}.json)"
+  COVERAGE_MAP_PATH="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline coverage-map-${ISSUE_NUMBER}.json)"
 
   # Get list of changed file paths for code evidence scanning
   CHANGED_FILES=$(git diff HEAD~1 --name-only 2>/dev/null | head -50 || true)
@@ -606,7 +606,7 @@ PREPUSH_STATUS="skipped"
 
 if [ -n "$BINARY" ]; then
   echo "=== Pre-Push Merge Validation Gate ==="
-  TARGET_BRANCH=$(jq -r '.base_branch // "main"' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
+  TARGET_BRANCH=$(jq -r '.base_branch // "main"' "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
   [ -z "$TARGET_BRANCH" ] && TARGET_BRANCH="main"
 
   PREPUSH_EXIT=0
@@ -627,7 +627,7 @@ if [ -n "$BINARY" ]; then
       ;;
   esac
   if [ "$PREPUSH_EXIT" -ne 0 ]; then
-    echo "See $(nightgauge layout path pipeline pre-push-${ISSUE_NUMBER}.json) for details."
+    echo "See $("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline pre-push-${ISSUE_NUMBER}.json) for details."
     VALIDATION_STATUS="failed"
     SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "commit-and-push", "reason": "pre-push gate blocked"}]')
   fi
@@ -746,6 +746,6 @@ The pre-push gate then reuses this tree's ledger pass instead of running again.
 Put the run's gate count in the validate notes, so the stage record carries it:
 
 ```bash
-GATE_COUNT=$(nightgauge ci gate-count --json 2>/dev/null || echo '{}')
+GATE_COUNT=$("${NIGHTGAUGE_BIN:-nightgauge}" ci gate-count --json 2>/dev/null || echo '{}')
 echo "Full gates this run: $(printf '%s\n' "$GATE_COUNT" | jq -r '.full // "unknown"')"
 ```

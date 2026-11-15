@@ -79,7 +79,8 @@ const PLUGIN_SKILL_PATH_BY_STAGE: Record<PipelineStage, string> = {
  */
 function pipelineFile(kind: string): RegExp {
   return new RegExp(
-    `nightgauge layout (?:path|write|append) pipeline "?${kind}-` +
+    // Bash blocks call the binary through NIGHTGAUGE_BIN (#2933); prose names it bare.
+    `(?:nightgauge|"\\$\\{NIGHTGAUGE_BIN:-nightgauge\\}") layout (?:path|write|append) pipeline "?${kind}-` +
       "(?:\\{N\\}|\\$\\{?[A-Z_]+\\}?|\\{\\{issueNumber\\}\\})\\.json"
   );
 }

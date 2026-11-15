@@ -312,6 +312,7 @@ func TestFeatureDevPhase5RunsOneReviewPerPath(t *testing.T) {
 			cmd.Dir = t.TempDir()
 			cmd.Env = append(os.Environ(),
 				"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"NIGHTGAUGE_BIN="+filepath.Join(bin, "nightgauge"),
 				"NIGHTGAUGE_ISSUE_NUMBER=7",
 				"NIGHTGAUGE_REVIEW_UNITS_PHASE="+tc.marker,
 			)

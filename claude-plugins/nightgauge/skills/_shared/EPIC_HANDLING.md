@@ -140,7 +140,7 @@ fi
    ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
    : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
    # stdout only: a warning on stderr must not land in the JSON.
-   if ! RESULT=$(nightgauge issue list --epic "$ISSUE_NUMBER" --json); then
+   if ! RESULT=$("${NIGHTGAUGE_BIN:-nightgauge}" issue list --epic "$ISSUE_NUMBER" --json); then
      echo "ERROR: could not read the sub-issues of epic #$ISSUE_NUMBER" >&2
      exit 1
    fi
@@ -225,7 +225,7 @@ EPIC_NUMBER=$(printf '%s\n' "$EPIC_RESULT" | jq -r '.epicNumber')
 EPIC_TITLE=$(printf '%s\n' "$EPIC_RESULT" | jq -r '.title')
 # a+b. Classify the tier and generate the summary in one deterministic call
 #      (no AI tokens). Tiers: minimal, standard, detailed.
-SUMMARY_JSON=$(nightgauge epic summary "$EPIC_NUMBER" --json 2>/dev/null || echo '{}')
+SUMMARY_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" epic summary "$EPIC_NUMBER" --json 2>/dev/null || echo '{}')
 TIER=$(printf '%s\n' "$SUMMARY_JSON" | jq -r '.tier // "minimal"')
 SUMMARY=$(printf '%s\n' "$SUMMARY_JSON" | jq -r '.summary // empty')
 

@@ -157,7 +157,7 @@ project_sync:
 To get your project field IDs, run:
 
 ```bash
-nightgauge forge graphql -f query='query($owner:String!,$number:Int!){organization(login:$owner){projectV2(number:$number){fields(first:50){nodes{... on ProjectV2FieldCommon{id,name,dataType}}}}}}' -f owner=<org> -F number=<number>
+"${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='query($owner:String!,$number:Int!){organization(login:$owner){projectV2(number:$number){fields(first:50){nodes{... on ProjectV2FieldCommon{id,name,dataType}}}}}}' -f owner=<org> -F number=<number>
 ```
 
 **Defaults**: If `.nightgauge/config.yaml` is missing or incomplete, the
@@ -190,7 +190,7 @@ if ! command -v nightgauge &> /dev/null; then
   exit 1
 fi
 
-if ! nightgauge forge auth status &> /dev/null; then
+if ! "${NIGHTGAUGE_BIN:-nightgauge}" forge auth status &> /dev/null; then
   echo "ERROR: forge auth not configured"
   echo "Run: nightgauge forge auth login (or set GITHUB_TOKEN env var)"
   exit 1
@@ -313,8 +313,8 @@ If milestone filter selected, fetch available milestones and ask user to choose:
 
 ```bash
 # Get open milestones
-REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
-nightgauge forge graphql -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { milestones(first: 100, states: OPEN) { nodes { title } } } }' \
+REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
+"${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { milestones(first: 100, states: OPEN) { nodes { title } } } }' \
   -f owner="${REPO%%/*}" -f name="${REPO#*/}" | jq -r '.data.repository.milestones.nodes[].title'
 ```
 
@@ -437,8 +437,8 @@ project board fields using the Go binary:
 ```bash
 if [ "$MODE" = "full" ] || [ "$MODE" = "dates-only" ]; then
   # Fetch open issues with milestones (first 100; `forge issue list` carries no dueOn)
-  REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
-  ISSUES_WITH_MILESTONES=$(nightgauge forge graphql -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { issues(first: 100, states: OPEN) { nodes { number milestone { dueOn } } } } }' \
+  REPO="${NIGHTGAUGE_REPO:-$("${NIGHTGAUGE_BIN:-nightgauge}" git repo-slug)}"
+  ISSUES_WITH_MILESTONES=$("${NIGHTGAUGE_BIN:-nightgauge}" forge graphql -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { issues(first: 100, states: OPEN) { nodes { number milestone { dueOn } } } } }' \
     -f owner="${REPO%%/*}" -f name="${REPO#*/}" 2>/dev/null \
     | jq -r '.data.repository.issues.nodes[] | select(.milestone != null) | "\(.number) \(.milestone.dueOn // empty)"')
 

@@ -274,8 +274,8 @@ error). `--fix` edits only the working tree, so the removal lands in the
 migration diff:
 
 ```bash
-nightgauge preflight managed-steering          # report
-nightgauge preflight managed-steering --fix    # remove from the working tree
+"${NIGHTGAUGE_BIN:-nightgauge}" preflight managed-steering          # report
+"${NIGHTGAUGE_BIN:-nightgauge}" preflight managed-steering --fix    # remove from the working tree
 ```
 
 Without the binary, remove the markers and everything between them:
