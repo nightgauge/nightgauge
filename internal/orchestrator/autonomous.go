@@ -384,6 +384,12 @@ type AutonomousState struct {
 	// transferred/deleted/closed). Key: "repo#number".
 	QuarantinedIssues map[string]bool `json:"quarantinedIssues,omitempty"`
 
+	// ClosedStops are issues whose last run ended issue_closed (#3081), keyed
+	// "repo#number", valued with the stop's time. They stay out of the
+	// candidate set until the graph shows the close, so a closed issue the
+	// board still lists as Ready is dispatched at most once.
+	ClosedStops map[string]string `json:"closedStops,omitempty"`
+
 	// PendingPRRechecks are failed runs whose PR nobody has been able to read
 	// since the run ended (#2607): a transient kill after pr-create, or a
 	// revert that could not list the repository's open PRs. The PR may merge
@@ -1183,6 +1189,11 @@ type AutonomousScheduler struct {
 	// blockedFindingLogged de-duplicates the blocked-finding skip log (#2914):
 	// key "repo#number" -> the finding identity last logged. Guarded by mu.
 	blockedFindingLogged map[string]string
+
+	// lastCycleSignature is the dependency-cycle set last recorded for doctor
+	// (#3081); cyclesRecorded says a record was written. Guarded by mu.
+	lastCycleSignature string
+	cyclesRecorded     bool
 
 	// conflictRestartCount tracks how many times each issue hit the legacy
 	// fresh-branch conflict-restart path. As of #4072 the primary conflict path
@@ -4919,6 +4930,8 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 			humanHeldSet[fmt.Sprintf("%s#%d", f.Repo, f.Number)] = hold
 		}
 	}
+	// Issues an issue_closed stop holds out (#3081).
+	closedStopSet := as.closedStopSetLocked(g)
 	// Snapshot backoff map under the lock so we don't hold it during the loop.
 	backoffSnapshot := make(map[string]time.Time, len(as.retryBackoff))
 	for k, v := range as.retryBackoff {
@@ -5033,6 +5046,8 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	var selfRepoObserved []string
 
 	blockedFindingSeen := make(map[string]bool)
+	// Open Action Center cards, listed at most once this pass (#3081).
+	openCards := &openCardIndex{as: as}
 	defer as.forgetClearedBlockedFindings(blockedFindingSeen)
 
 	var candidates []CandidateItem
@@ -5055,6 +5070,13 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		}
 		countIn(node.Repo).open++
 
+		// Skip an issue whose last run found it closed (#3081), until the
+		// graph catches up with the close.
+		if closedStopSet[key] {
+			bump("closed-stop")
+			continue
+		}
+
 		// Skip already running or completed
 		if runningSet[key] {
 			bump("already-running")
@@ -5063,6 +5085,21 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		if completedSet[key] {
 			bump("already-completed")
 			continue
+		}
+
+		// A blocked finding whose every native blockedBy edge has closed is
+		// cleared before the holds below are read (#3081): clearing it also
+		// releases the operator hold its run left, so the issue runs now.
+		finding, hasFinding := as.blockedFindingFor(node.Repo, node.Number)
+		if hasFinding {
+			if blockers, closed := nativeBlockersAllClosed(g, key, resolvedDepStates); closed {
+				if err := as.autoClearBlockedFinding(node.Repo, node.Number, blockers, openCards); err != nil {
+					log.Printf("autonomous: %s — could not clear its blocked finding: %v", key, err)
+				} else {
+					hasFinding = false
+					delete(humanHeldSet, key)
+				}
+			}
 		}
 
 		// Skip items a run deliberately handed to a human (#1486): the
@@ -5080,10 +5117,12 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		// would defer them for zero tokens, but each lap still dispatched a run
 		// and posted a chat message. Re-read every pass, so clearing the
 		// finding re-admits the issue on the next cycle.
-		if rec, found := as.blockedFindingFor(node.Repo, node.Number); found {
+		if hasFinding {
 			blockedFindingSeen[key] = true
 			bump("blocked-finding")
-			as.noteBlockedFindingSkip(key, rec)
+			as.noteBlockedFindingSkip(key, finding)
+			// Never a silent deferral (#3081): the card that clears it is open.
+			as.raiseBlockedFindingCard(node.Repo, node.Number, finding, openCards)
 			continue
 		}
 
@@ -5290,6 +5329,14 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	// scan no longer refuses (closed, moved off Ready, override enabled)
 	// retracts itself instead of waiting out a TTL.
 	as.autoResolveAttention(producerSelfRepoRefusal, selfRepoObserved)
+
+	// Holds that would otherwise be silent (#3081): a Ready issue held only by
+	// a dependency closed without the validation marker, and a cycle of open
+	// blockedBy edges. Both read the whole graph, not just the nodes this loop
+	// reached, so their observed sets are complete and their cards retract
+	// soundly.
+	as.reconcileUnvalidatedDependencies(g, adj, resolvedDepStates, depValidation)
+	as.reconcileDependencyCycles(g, now)
 
 	// Dangling epic gate warning: when cascade is disabled, warn if an epic has
 	// an open blockedBy but one or more of its sub-issues became candidates.
@@ -6541,8 +6588,10 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			if detail == "" {
 				detail = "issue-closed (non-failure) — issue was already closed when pipeline started"
 			}
-			as.recordFailureLocked(repo, issue, title, now, detail, terminalFailureKind)
-			log.Printf("autonomous: %s#%d issue-closed (non-failure) — %s; moving board to Done (no lifetime-cap increment)",
+			// A skip, not a failure (#3081): it joins no failed list, and the
+			// issue leaves the candidate set until the graph shows the close.
+			as.recordClosedStopLocked(fmt.Sprintf("%s#%d", repo, issue), now)
+			log.Printf("autonomous: %s#%d issue-closed (skip) — %s; moving board to Done (no lifetime-cap increment)",
 				repo, issue, detail)
 			if as.safetyRails != nil {
 				as.safetyRails.RecordNonFaultOutcome(0)

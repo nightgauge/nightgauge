@@ -129,6 +129,20 @@ const (
 	// held for a human as well as deferred by the finding.
 	VerbBlockedFindingClear Verb = "blocked.clearFinding"
 
+	// VerbIssueRerunPostMerge re-runs the post-merge hook for ONE closed issue
+	// whose dependents are held because it carries no post-merge validation
+	// marker (#3081). The marker is written only by that hook once main is
+	// green after the issue's merge; a merge whose hook never ran, or ran
+	// while main was red, holds every program dependent silently. The card
+	// naming the dependency is a dead end without this verb.
+	//
+	// The argument surface is EMPTY, bounded exactly like
+	// blocked.clearFinding: the repository AND the issue both come from the
+	// persisted request's Context, so a resolving surface can name neither.
+	// The daemon finds the issue's latest merged closing pull request itself.
+	// See ExecuteRerunPostMerge, the verb's only executor.
+	VerbIssueRerunPostMerge Verb = "issue.rerunPostMerge"
+
 	// VerbPRUpdateBranch merges the base branch into ONE pull request that is
 	// green but behind its base, so the merge the pipeline already finished can
 	// actually land (#1575).
@@ -203,6 +217,7 @@ var registry = map[Verb]struct{}{
 	VerbDependabotEnableAlerts:       {},
 	VerbWorkspaceAddRepo:             {},
 	VerbBlockedFindingClear:          {},
+	VerbIssueRerunPostMerge:          {},
 	VerbPRUpdateBranch:               {},
 	VerbDoctorApplyRemedy:            {},
 	VerbDoctorRecheck:                {},
@@ -557,6 +572,48 @@ func ExecuteClearBlockedFinding(ctx context.Context, clearer BlockedFindingClear
 		return fmt.Errorf("attention: %s is not available on this surface", VerbBlockedFindingClear)
 	}
 	return clearer.ClearBlockedFinding(ctx, repo, req.Context.Issue)
+}
+
+// --- issue.rerunPostMerge (#3081) -------------------------------------------
+
+// PostMergeRerunner is the single capability issue.rerunPostMerge needs: run
+// the post-merge hook for one closed issue against its latest merged closing
+// pull request. An implementation that finds no merged closing pull request,
+// or whose hook does not leave the validation marker, returns an error so the
+// card survives to say the dependency is still held.
+type PostMergeRerunner interface {
+	RerunPostMerge(ctx context.Context, repo string, issue int) error
+}
+
+// ExecuteRerunPostMerge is the ONLY implementation of the issue.rerunPostMerge
+// verb. It refuses a mis-bound option, any argument, a request that names no
+// repository or issue, a repository outside the configured set, and a surface
+// without the capability — the same refusals as ExecuteClearBlockedFinding,
+// for the same reasons.
+func ExecuteRerunPostMerge(ctx context.Context, runner PostMergeRerunner, req *DecisionRequest, opt Option, configuredRepos []string) error {
+	if req == nil {
+		return fmt.Errorf("attention: %s requires the persisted request", VerbIssueRerunPostMerge)
+	}
+	if opt.Verb != VerbIssueRerunPostMerge {
+		return fmt.Errorf("attention: %s executor invoked for verb %q", VerbIssueRerunPostMerge, opt.Verb)
+	}
+	if len(opt.Args) > 0 {
+		return fmt.Errorf("%w: %s was given %d", ErrVerbArgsNotAccepted, VerbIssueRerunPostMerge, len(opt.Args))
+	}
+	repo := strings.TrimSpace(req.Context.Repo)
+	if repo == "" {
+		return fmt.Errorf("attention: %s: request %s names no repository", VerbIssueRerunPostMerge, req.ID)
+	}
+	if req.Context.Issue <= 0 {
+		return fmt.Errorf("attention: %s: request %s names no issue", VerbIssueRerunPostMerge, req.ID)
+	}
+	if !RepoInConfiguredSet(configuredRepos, repo) {
+		return fmt.Errorf("%w: %q", ErrVerbTargetNotConfigured, repo)
+	}
+	if runner == nil {
+		return fmt.Errorf("attention: %s is not available on this surface", VerbIssueRerunPostMerge)
+	}
+	return runner.RerunPostMerge(ctx, repo, req.Context.Issue)
 }
 
 // --- pr.updateBranch (#1575) ------------------------------------------------

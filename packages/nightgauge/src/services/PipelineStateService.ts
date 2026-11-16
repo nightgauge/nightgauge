@@ -2390,10 +2390,38 @@ export class PipelineStateService implements vscode.Disposable {
   async recordProactiveEscalation(
     _record: import("../schemas/pipelineState").ProactiveEscalationRecord
   ): Promise<void> {}
+  /**
+   * Persist one backtrack in Go's run record through `pipeline.recordBacktrack`
+   * (#3081). The TS PipelineState is rebuilt from Go snapshots, so a backtrack
+   * held only here was lost; Go appends it to the run and the history record
+   * carries it as `backtracks`. Best-effort: a refusal is logged and swallowed.
+   */
   async recordBacktrack(
-    _record: import("../schemas/pipelineState").BacktrackRecord,
+    record: import("../schemas/pipelineState").BacktrackRecord,
     _intermediateStages?: string[]
-  ): Promise<void> {}
+  ): Promise<void> {
+    const runId = this.wireIdentityOrSkip("pipeline.recordBacktrack", record.from_stage);
+    if (runId === null) return;
+    try {
+      await this.ipc.call("pipeline.recordBacktrack", {
+        repo: this.runRepo,
+        issueNumber: this.issueNumber ?? 0,
+        fromStage: record.from_stage,
+        toStage: record.to_stage,
+        signalType: record.signal_type,
+        reason: record.rationale,
+        runId,
+      });
+    } catch (err) {
+      handleIpcRejection({
+        method: "pipeline.recordBacktrack",
+        stage: record.from_stage,
+        runId,
+        err,
+        logger: this.rejectionLogger,
+      });
+    }
+  }
   async batchUpdate(_updater: (state: PipelineState) => PipelineState): Promise<void> {}
   // recordExecutionOutcome was removed in #304. It returned {success:true}
   // unconditionally — the same value a real recording would return — so its two

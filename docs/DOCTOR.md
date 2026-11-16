@@ -983,6 +983,21 @@ not covered. Manual `disable-ac-sleep`: run `sudo pmset -c sleep 0`, or keep the
 scheduler running. See
 [AUTONOMOUS_ORCHESTRATOR.md](AUTONOMOUS_ORCHESTRATOR.md#macos-hosts-must-not-idle-sleep-while-the-scheduler-runs).
 
+#### NGD114
+
+**Open issues whose blockedBy edges form a cycle.** `dependency_cycles` ·
+`warning`, one finding per cycle. A checkout where the autonomous scheduler has
+not run, so no record exists, passes.
+
+Every issue in such a cycle waits on another, so none of them can dispatch. The
+scheduler detects cycles among open native `blockedBy` edges on every prioritize
+pass, raises one `dependency-cycle` Action Center card per cycle with an option
+to remove each edge, and records the cycles in `dependency-cycles.json` in the
+pipeline state directory (`nightgauge layout path pipeline`). The check reads
+that record, so it needs no forge call and reports the cycles as of the
+scheduler's last pass. Manual `remove-edge`: choose the wrong edge on the card,
+or run `nightgauge issue remove-blocked-by <blocked> <blocker>`.
+
 #### NGD015
 
 **No usable AI coding agent.** `ai_adapter` · `warning`.

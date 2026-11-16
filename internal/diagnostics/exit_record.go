@@ -439,3 +439,15 @@ func GateReasonWhenNoGate(rec StageExitRecord) string {
 		return "gate not run: no post-condition gate result was recorded for this stage"
 	}
 }
+
+// skipTerminalKinds are the terminal kinds an exit record carries for a run
+// that stopped without failing (#3081): a stop on an issue that was already
+// closed. They mirror orchestrator.IsNonFailureTerminalKind's skip kinds,
+// which this package cannot import; orchestrator's tests hold the two equal.
+var skipTerminalKinds = map[string]bool{"issue_closed": true}
+
+// IsSkip reports whether the record is a non-failure skip rather than a
+// failed exit, so failure totals leave it out (#3081).
+func (r StageExitRecord) IsSkip() bool {
+	return !r.Success && skipTerminalKinds[r.TerminalKind]
+}

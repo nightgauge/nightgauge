@@ -39,24 +39,39 @@ const OutcomeTypeDeferred = "deferred"
 // it from the latest run record. Issue #2756.
 const OutcomeTypeAwaitingApproval = "awaiting_approval"
 
-// IsNonFailureTerminalKind reports whether a terminal kind is a deliberate
-// human hold rather than a failure, so every surface (run record, run state,
-// live pipeline_done event) books it the same way. Issue #2756.
+// OutcomeTypeIssueClosed is the run outcome_type for a run that stopped
+// because its issue was already closed (#3081). Nothing failed: the work is
+// done or was withdrawn, so the run books as a "cancelled" skip, never as a
+// failed run in the dashboard's or exit-records' failure totals.
+const OutcomeTypeIssueClosed = "issue_closed"
+
+// IsNonFailureTerminalKind reports whether a terminal kind is not a failure —
+// a deliberate human hold (#2756) or a stop on an already-closed issue (#3081)
+// — so every surface (run record, run state, live pipeline_done event) books
+// it the same way.
 func IsNonFailureTerminalKind(kind string) bool {
-	return kind == TerminalKindArchitectureApprovalRequired
+	return kind == TerminalKindArchitectureApprovalRequired || kind == TerminalKindIssueClosed
 }
 
 // ApplyNonFailureOutcome rewrites a built run record whose terminal kind is a
-// deliberate human hold into a non-failure: outcome "cancelled" with a distinct
-// outcome_type. The terminal kind and detail are retained. Every other record is
-// left untouched. Both run-record writers call it after BuildV2Record so the
-// local history and the telemetry push agree. Issue #2756.
+// non-failure into outcome "cancelled" with a distinct outcome_type:
+// awaiting_approval for a human hold (#2756), issue_closed for a skip on a
+// closed issue (#3081). The terminal kind and detail are retained. Every other
+// record is left untouched. Both run-record writers call it after
+// BuildV2Record so the local history and the telemetry push agree.
 func ApplyNonFailureOutcome(rec *state.V2RunRecord) {
-	if rec == nil || !IsNonFailureTerminalKind(rec.TerminalFailureKind) {
+	if rec == nil {
+		return
+	}
+	switch rec.TerminalFailureKind {
+	case TerminalKindArchitectureApprovalRequired:
+		rec.OutcomeType = OutcomeTypeAwaitingApproval
+	case TerminalKindIssueClosed:
+		rec.OutcomeType = OutcomeTypeIssueClosed
+	default:
 		return
 	}
 	rec.Outcome = "cancelled"
-	rec.OutcomeType = OutcomeTypeAwaitingApproval
 }
 
 // Terminal failure kinds — what aborted the pipeline run (Issue #3001).

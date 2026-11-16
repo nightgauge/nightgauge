@@ -36,6 +36,10 @@ func ComputeStats(records []StageExitRecord) []StageStats {
 	buckets := make(map[groupKey]*bucket)
 
 	for _, rec := range records {
+		// A skip is not a failed exit (#3081): leave it out of the ok rate.
+		if rec.IsSkip() {
+			continue
+		}
 		k := groupKey{Repo: rec.Repo, Stage: rec.Stage, SizeLabel: rec.SizeLabel}
 		b := buckets[k]
 		if b == nil {

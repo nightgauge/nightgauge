@@ -275,7 +275,7 @@ func buildGraphFromFetcherWithBatch(
 					From:       node.ID(),
 					To:         NodeID{Repo: blocker.Repo, Number: blocker.Number},
 					Type:       "blockedBy",
-					Source:     "graphql",
+					Source:     EdgeSourceGraphQL,
 					Resolvable: workspaceRepos[blocker.Repo],
 				}
 				eKey := edgeKey(edge)
@@ -415,7 +415,7 @@ func BuildGraphFromItems(items []types.BoardItem, bodies map[string]string, work
 				From:       node.ID(),
 				To:         NodeID{Repo: blocker.Repo, Number: blocker.Number},
 				Type:       "blockedBy",
-				Source:     "graphql",
+				Source:     EdgeSourceGraphQL,
 				Resolvable: workspaceRepos[blocker.Repo],
 			}
 			eKey := edgeKey(edge)

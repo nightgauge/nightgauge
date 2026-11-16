@@ -115,6 +115,7 @@ var contractTestedMethods = map[string]bool{
 	"pipeline.notifyPhaseTransition":        true,
 	"pipeline.notifyStageProgress":          true,
 	"pipeline.notifyStageAlive":             true,
+	"pipeline.recordBacktrack":              true, // Issue #3081
 	"pipeline.recordStageGateResult":        true, // Issue #377
 	"pipeline.notifyStageTransition":        true,
 	"pipeline.pause":                        true,

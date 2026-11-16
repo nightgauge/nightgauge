@@ -16,6 +16,30 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A pickup hold is no longer silent (#3081). While a blocked finding defers an issue, an Action
+  Center card with **Blocker resolved** is open for it, and pickup raises it again if the earlier
+  card was resolved or expired. A finding whose every native `blockedBy` edge is closed is
+  cleared automatically, and the next pickup runs the issue. A Ready issue held only by a
+  dependency closed without the `nightgauge:validated` marker raises an `unvalidated-dependency`
+  card naming the dependency, with **Run post-merge hook** (the new `issue.rerunPostMerge`
+  verb). A cycle of open `blockedBy` edges raises one `dependency-cycle` card naming every issue
+  and edge, with an option to remove each edge, and `nightgauge doctor` reports it as `NGD114`.
+- A run stopped because its issue was already closed (`issue_closed`) is booked as a skip, not a
+  failure (#3081). The run record says `outcome: cancelled`, `outcome_type: issue_closed`, the
+  live `pipeline_done` event is not red, `exit-records` shows `skip/issue_closed`, and the stop
+  joins no failed list. The scheduler then leaves the issue out of its candidates until the
+  dependency graph shows the close, so a closed issue the board still lists as Ready dispatches
+  at most once.
+- Run-state hygiene (#3081). A run adopts `run-state.json`'s run ID only when the record names
+  the same issue. The first feature-dev dispatch of a run moves an earlier attempt's
+  `dev-<N>.json` to `dev-<N>.<unix>.prior.json`, so a retry never inherits it. The run record
+  carries `planned_files` from `planning-<N>.json` and the run's `backtracks`, so plan fidelity
+  and retry analysis survive pipeline-state pruning. The extension sends its backtracks to Go
+  through the new `pipeline.recordBacktrack` IPC verb, and its plan-fidelity metric reads the
+  run record first.
+- The gate's machine-state backstop no longer fails on macOS Finder's `.DS_Store`, or on the
+  serve claims of a pipeline worktree a live daemon removed through the ledgered cleanup
+  during the gate (#3081).
 - An OpenCode 2.x stage whose provider keeps failing now stops in seconds and is named as a
   provider failure (#3305). 2.x retries a provider 500 or a refused connection forever, writing
   only `retry` events, so the stage used to wait for its stage timeout, or for the idle-stream

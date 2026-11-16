@@ -2108,7 +2108,9 @@ func BuildOutOfScopeBlocker(repo string, issue int, runID, stage string) attenti
 		// The finding is durable and the condition does not decay on its own, so
 		// a short window would retract the operator's only handle on it while it
 		// is still true. The same 72h window the blockedBy deferral uses, for
-		// the same reason.
+		// the same reason. Pickup raises it again whenever no card is open while
+		// the finding still defers (#3081), so a resolved or expired card comes
+		// back instead of the deferral going silent.
 		ExpiresAt: expiryFromNow(72 * time.Hour),
 		Steer: &attention.Steer{Enabled: true,
 			Hint: "Note which work this actually depends on, or why it should stay blocked"},

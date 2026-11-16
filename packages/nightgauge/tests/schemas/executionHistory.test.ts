@@ -365,6 +365,31 @@ describe("ExecutionHistory Schemas", () => {
       expect(result.success).toBe(true);
     });
 
+    it("accepts the skip and hold outcome types and the durable plan and backtracks (#3081)", () => {
+      for (const outcomeType of ["issue_closed", "awaiting_approval"]) {
+        const result = ExecutionHistoryRunRecordV2Schema.safeParse({
+          ...validV2RunRecord,
+          outcome: "cancelled",
+          outcome_type: outcomeType,
+          planned_files: ["a.go", "b.ts"],
+          backtracks: [
+            {
+              from_stage: "feature-validate",
+              to_stage: "feature-dev",
+              signal_type: "TEST_FAILURE",
+              reason: "unit tests red",
+              at: "2026-02-13T10:20:00Z",
+            },
+          ],
+        });
+        expect(result.success, outcomeType).toBe(true);
+        if (result.success) {
+          expect(result.data.planned_files).toEqual(["a.go", "b.ts"]);
+          expect(result.data.backtracks?.[0]?.to_stage).toBe("feature-dev");
+        }
+      }
+    });
+
     it.each([
       ["v1", ExecutionHistoryRunRecordSchema, "1"],
       ["v2", ExecutionHistoryRunRecordV2Schema, "2"],
