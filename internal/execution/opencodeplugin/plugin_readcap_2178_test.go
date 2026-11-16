@@ -105,12 +105,10 @@ func TestCapReadLimitAppliesThroughTheRegisteredHook(t *testing.T) {
 	if err := os.WriteFile(driver, []byte(readCapThroughHookDriver), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// A gate verb that reads its stdin and allows: the read gate's verb must
-	// run for the cap to be reached.
+	// A gate verb that drains its stdin (writeShFixture) and allows: the read
+	// gate's verb must run for the cap to be reached.
 	allow := filepath.Join(t.TempDir(), "allow.sh")
-	if err := os.WriteFile(allow, []byte("#!/bin/sh\nexec >/dev/null\nexit 0\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeShFixture(t, allow, "exec >/dev/null\nexit 0\n", 0o700)
 	root := t.TempDir()
 	cmd := exec.Command(node, driver)
 	cmd.Env = append(withHookBin(removeEnv(os.Environ(), EnvReadMaxLines), allow),

@@ -186,15 +186,12 @@ func writeRecordingBin(t *testing.T, logPath, sleepOnVerb string, sleepSeconds i
 	dir := t.TempDir()
 	binPath := filepath.Join(dir, "fake-nightgauge")
 	var b strings.Builder
-	b.WriteString("#!/bin/sh\n")
 	fmt.Fprintf(&b, "printf '%%s\\n' \"$2\" >> %s\n", shellQuote(logPath))
 	if sleepOnVerb != "" {
 		fmt.Fprintf(&b, "if [ \"$2\" = %s ]; then sleep %d; fi\n", shellQuote(sleepOnVerb), sleepSeconds)
 	}
 	b.WriteString("exit 0\n")
-	if err := os.WriteFile(binPath, []byte(b.String()), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeShFixture(t, binPath, b.String(), 0o700)
 	return binPath
 }
 
@@ -407,13 +404,10 @@ func TestEditHookAppendsWarningsCappedAt2KB(t *testing.T) {
 	// so this test isolates the cap itself from edit.js's real ordering.
 	dir := t.TempDir()
 	binPath := filepath.Join(dir, "fake-nightgauge")
-	script := "#!/bin/sh\n" +
-		"printf '%s\\n' \"$2\" >> " + shellQuote(logPath) + "\n" +
+	script := "printf '%s\\n' \"$2\" >> " + shellQuote(logPath) + "\n" +
 		"if [ \"$2\" = 'test-quality' ]; then head -c 5120 /dev/zero | tr '\\0' 'w' 1>&2; fi\n" +
 		"exit 0\n"
-	if err := os.WriteFile(binPath, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeShFixture(t, binPath, script, 0o700)
 
 	env := map[string]string{
 		"NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS": "1",
@@ -491,12 +485,9 @@ func TestEditHookQualityVerbDiagnostics(t *testing.T) {
 	t.Run("known-good warning producer records successful test-quality", func(t *testing.T) {
 		dir := t.TempDir()
 		binPath := filepath.Join(dir, "fake-nightgauge")
-		script := "#!/bin/sh\n" +
-			"if [ \"$2\" = 'test-quality' ]; then printf 'quality warning\\n' 1>&2; fi\n" +
+		script := "if [ \"$2\" = 'test-quality' ]; then printf 'quality warning\\n' 1>&2; fi\n" +
 			"exit 0\n"
-		if err := os.WriteFile(binPath, []byte(script), 0o700); err != nil {
-			t.Fatal(err)
-		}
+		writeShFixture(t, binPath, script, 0o700)
 		res := runEditHarness(t, node, root, "write", argsJSON, `{"output":"orig"}`, binPath, env)
 		if res.Threw {
 			t.Fatalf("want no throw, got %q", res.Message)
@@ -515,12 +506,9 @@ func TestEditHookQualityVerbDiagnostics(t *testing.T) {
 	t.Run("known-bad producer records non-zero exit and leaves output intact", func(t *testing.T) {
 		dir := t.TempDir()
 		binPath := filepath.Join(dir, "fake-nightgauge")
-		script := "#!/bin/sh\n" +
-			"if [ \"$2\" = 'test-quality' ]; then exit 23; fi\n" +
+		script := "if [ \"$2\" = 'test-quality' ]; then exit 23; fi\n" +
 			"exit 0\n"
-		if err := os.WriteFile(binPath, []byte(script), 0o700); err != nil {
-			t.Fatal(err)
-		}
+		writeShFixture(t, binPath, script, 0o700)
 		res := runEditHarness(t, node, root, "write", argsJSON, `{"output":"orig"}`, binPath, env)
 		if res.Threw {
 			t.Fatalf("want no throw, got %q", res.Message)

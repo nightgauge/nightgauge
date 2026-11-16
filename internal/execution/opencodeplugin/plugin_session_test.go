@@ -360,9 +360,7 @@ func TestEventIdleRecordsNoBinWhenTheVerbCannotRun(t *testing.T) {
 	root := t.TempDir()
 
 	notExecutable := filepath.Join(t.TempDir(), "not-a-binary")
-	if err := os.WriteFile(notExecutable, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeShFixture(t, notExecutable, "exit 0\n", 0o600)
 
 	outputFile := filepath.Join(t.TempDir(), "output", "run.json")
 	if err := os.MkdirAll(filepath.Dir(outputFile), 0o700); err != nil {
@@ -523,9 +521,7 @@ func TestSkillToolCallFailsOpen(t *testing.T) {
 	node := requireNode(t)
 	root := t.TempDir()
 	exit1 := filepath.Join(t.TempDir(), "exit1.sh")
-	if err := os.WriteFile(exit1, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShFixture(t, exit1, "exit 1\n", 0o755)
 	res := runSkillToolHarness(t, node, root, "nightgauge:some-skill", exit1)
 	if res.Threw {
 		t.Fatalf("want no throw when the skill-usage verb exits 1, got %q", res.Message)
@@ -578,10 +574,7 @@ func TestEventPermissionAskedEmitsEventAndThrottlesNotify(t *testing.T) {
 	root := t.TempDir()
 	counter := filepath.Join(t.TempDir(), "notify-calls.txt")
 	counterScript := filepath.Join(t.TempDir(), "count-notify.sh")
-	script := "#!/bin/sh\necho 1 >> " + shellQuote(counter) + "\nexit 0\n"
-	if err := os.WriteFile(counterScript, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShFixture(t, counterScript, "echo 1 >> "+shellQuote(counter)+"\nexit 0\n", 0o755)
 	outputFile := filepath.Join(t.TempDir(), "output", "run.json")
 	if err := os.MkdirAll(filepath.Dir(outputFile), 0o700); err != nil {
 		t.Fatal(err)
@@ -749,10 +742,7 @@ func TestEventIdleAndPermissionHandlersReturnQuicklyWithAHungHook(t *testing.T) 
 	shim := filepath.Join(t.TempDir(), "slow-hook.sh")
 	// $2 is the verb ("stop-verify" or "notify"), so one shim serves both
 	// paths and the marker says which child reached the finish line.
-	script := "#!/bin/sh\nsleep 3\necho \"$2\" >> " + shellQuote(marker) + "\nexit 0\n"
-	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShFixture(t, shim, "sleep 3\necho \"$2\" >> "+shellQuote(marker)+"\nexit 0\n", 0o755)
 
 	outputFile := filepath.Join(t.TempDir(), "output", "run.json")
 	if err := os.MkdirAll(filepath.Dir(outputFile), 0o700); err != nil {

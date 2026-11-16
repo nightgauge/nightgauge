@@ -315,7 +315,7 @@ func runRealOpenCode(t *testing.T, real string, opts realRunOptions) realRunResu
 func writeGateBin(t *testing.T, reason string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "gate.sh")
-	script := "#!/bin/sh\nexec 0</dev/null\n"
+	script := ""
 	if reason != "" {
 		block, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]any{
 			"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason,
@@ -323,9 +323,7 @@ func writeGateBin(t *testing.T, reason string) string {
 		script += "printf '%s\\n' " + shellQuote(string(block)) + "\n"
 	}
 	script += "exit 0\n"
-	if err := os.WriteFile(p, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeShFixture(t, p, script, 0o700)
 	return p
 }
 

@@ -189,7 +189,7 @@ export const TOOL_CLASSIFICATION = Object.freeze(
 // missing/relative, the verb failing to spawn, timing out, exiting non-zero,
 // printing non-JSON, or printing a `permissionDecision:"deny"` block. Silence
 // (or a parsed decision that is not a deny) is allow. Shared by every verb
-// this module runs (careful-gate, workflow-gate, stage-gate, sanitize-prompt)
+// this module runs (careful-gate, workflow-gate, stage-gate)
 // so the fail-closed contract can never drift between them.
 function runGateVerb(args, payload, cwd, marker) {
   const bin = process.env.NIGHTGAUGE_BIN;

@@ -3,11 +3,15 @@ package opencodeplugin
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -662,9 +666,7 @@ func TestNodeHarnessGatesJS(t *testing.T) {
 		// Must outlast gates.js's SPAWN_TIMEOUT_MS (15000ms); exec so the
 		// timeout's SIGTERM reaches sleep itself and no child holds the pipes.
 		sleeper := filepath.Join(t.TempDir(), "sleeper.sh")
-		if err := os.WriteFile(sleeper, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeShFixture(t, sleeper, "exec sleep 60\n", 0o755)
 		res := runNodeHarness(t, node, root, "echo hi", sleeper, nil)
 		if !res.Threw {
 			t.Fatal("want a throw when the gate verb hangs past its timeout")
@@ -674,9 +676,7 @@ func TestNodeHarnessGatesJS(t *testing.T) {
 	t.Run("a verb that exits non-zero blocks closed", func(t *testing.T) {
 		root := t.TempDir()
 		exit3 := filepath.Join(t.TempDir(), "exit3.sh")
-		if err := os.WriteFile(exit3, []byte("#!/bin/sh\nexit 3\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeShFixture(t, exit3, "exit 3\n", 0o755)
 		res := runNodeHarness(t, node, root, "echo hi", exit3, nil)
 		if !res.Threw {
 			t.Fatal("want a throw when the gate verb exits non-zero")
@@ -686,9 +686,7 @@ func TestNodeHarnessGatesJS(t *testing.T) {
 	t.Run("output that does not parse blocks closed", func(t *testing.T) {
 		root := t.TempDir()
 		garbage := filepath.Join(t.TempDir(), "garbage.sh")
-		if err := os.WriteFile(garbage, []byte("#!/bin/sh\necho 'not json'\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeShFixture(t, garbage, "echo 'not json'\n", 0o755)
 		res := runNodeHarness(t, node, root, "echo hi", garbage, nil)
 		if !res.Threw {
 			t.Fatal("want a throw when the gate verb's output does not parse")
@@ -936,4 +934,52 @@ func withHookBin(env []string, bin string) []string {
 	env = removeEnv(env, "NIGHTGAUGE_BIN")
 	env = removeEnv(env, notifyDisableEnv)
 	return append(env, hookBinEnv(bin)...)
+}
+
+// writeShFixture writes a /bin/sh stand-in for a verb the plugin spawns. The
+// script drains its stdin before body runs, as the real `nightgauge hook
+// <verb>` does: a fixture that exits without reading lets node's write of the
+// payload hit a closed pipe, gates.js sees EPIPE in result.error and blocks
+// closed, and the test fails only under load (merge-group run 43770443314,
+// TestCapReadLimitAppliesThroughTheRegisteredHook). Every spawn mode the
+// plugin uses closes or nulls the child's stdin, so the drain returns.
+func writeShFixture(t *testing.T, path, body string, mode os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("#!/bin/sh\ncat >/dev/null\n"+body), mode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestShellFixturesReadStdin: no test in this package writes a script (any
+// "#!" literal) outside writeShFixture, so no fixture can exit with its stdin
+// unread.
+func TestShellFixturesReadStdin(t *testing.T) {
+	files, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	for _, name := range files {
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range f.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil &&
+				(fn.Name.Name == "writeShFixture" || fn.Name.Name == "TestShellFixturesReadStdin") {
+				continue
+			}
+			ast.Inspect(decl, func(n ast.Node) bool {
+				lit, ok := n.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					return true
+				}
+				if s, err := strconv.Unquote(lit.Value); err == nil && strings.HasPrefix(s, "#!") {
+					t.Errorf("%s: shell fixture written outside writeShFixture; route it "+
+						"through the helper so it drains its stdin", fset.Position(lit.Pos()))
+				}
+				return true
+			})
+		}
+	}
 }
