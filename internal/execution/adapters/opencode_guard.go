@@ -14,40 +14,41 @@ package adapters
 // sets on `permission` unchanged, because it touches no other key.
 //
 // A stage's tools are governed by #1624's Claude Code → OpenCode tool table,
-// OpenCodeToolForClaudeTool (adapter.go) — already merged and already read by
-// failure classification (opencode_usage.go's OpenCodeAutoRejectMarker), so
-// this file consults the same table rather than a second copy of it
-// (openCodePermissionKeyForClaudeTool). Checked against the six stage
-// skills' declared `allowed-tools` and opencode 1.18.30's own tool set
-// (ADR-022 § 6, observed: bash, edit, write, read, grep, glob, task,
-// todowrite, skill and webfetch), the shared table has no entry for
-// NotebookEdit, WebSearch, TodoWrite or Skill; openCodeSupplementaryToolPermission
-// covers exactly those four, a disjoint name set from the shared table's, so
-// the two can never disagree. 1.18.30 has no permission key of its own for
-// "write" — the headless-posture notice names the rejected permission "edit"
-// for every write tool (ADR-022 § 9) — so Write, Edit, MultiEdit and
-// NotebookEdit all resolve to the same "edit" permission key.
+// OpenCodeToolForClaudeTool (adapter.go) — already read by failure
+// classification (opencode_usage.go's OpenCodeAutoRejectMarker), so this
+// file consults the same table rather than a second copy of it
+// (openCodePermissionKeyForClaudeTool). Both are keyed on OpenCode 2.x's
+// action names (#3304). 2.x offers exactly these tools (spike #3197 § 2,
+// § 3): edit, execute, glob, grep, question, read, shell, skill, subagent,
+// webfetch, websearch and write. The shared table has no entry for
+// NotebookEdit, WebSearch or Skill; openCodeSupplementaryToolPermission covers
+// exactly those three, a disjoint name set from the shared table's, so the two
+// can never disagree. TodoWrite and AskUserQuestion map to nothing: 2.x has
+// no todo tool, and question is always denied (below).
 //
-// Every generated map sets exactly the keys the issue names, explicitly:
+// Every generated map sets exactly these keys, explicitly, one per 2.x tool
+// plus three controls:
 //
 //   - "*" is the default any other permission (an MCP tool's, for instance)
 //     resolves to. It is always "deny": nothing outside this map's explicit
 //     keys is ever granted by default, and an empty or missing AllowedTools
 //     never produces a "*": "allow" map.
-//   - "list" has no AllowedTools entry of its own. opencode's directory
-//     listing is a read-adjacent capability, so it follows "read": a stage
-//     that may Read may also list.
+//   - "subagent", "execute" and "question" are always "deny", whatever the
+//     stage grants; openCodePermissionMap records why for each. A bare deny
+//     also drops the tool from the list OpenCode offers the model, so no step
+//     is spent on a guaranteed refusal.
 //   - "doom_loop" is always "deny" — the issue: "makes the upstream loop
 //     guard an explicit failure."
 //   - "external_directory" is never a plain allow/deny scalar: it is always
 //     the pattern map openCodeExternalDirectoryPermission builds, "*":
 //     "deny" plus the allow-list (openCodeExternalDirectoryAllowList).
-//   - "bash", "read" and "edit" are always pattern maps too, even when the
-//     stage's tools grant nothing: the deny-list backstop
-//     (openCodeBashDenyBackstop, openCodeSecretDenyBackstop,
+//   - "shell", "read", "edit" and "write" are always pattern maps too, even
+//     when the stage's tools grant nothing: the deny-list backstop
+//     (openCodeShellDenyBackstop, openCodeSecretDenyBackstop,
 //     openCodeProjectConfigDenyBackstop) is present in every map, per the
 //     issue's own acceptance criterion, not only when the base tool is
-//     allowed.
+//     allowed. "write" carries the same backstop as "edit": 2.x governs it
+//     separately, so it must not be the unguarded way to the same file.
 //
 // No value is ever "ask": ADR-022 § 9 forbids it outright, because a
 // permission that resolves to "ask" is auto-rejected by opencode itself and
@@ -81,25 +82,21 @@ const (
 	openCodeDeny  = "deny"
 )
 
-// openCodePermissionKeyForClaudeTool maps a Claude Code AllowedTools base
-// name (after stripping a "(...)" scope, openCodeToolScope) to the opencode
-// permission key it governs. #1624's own table, OpenCodeToolForClaudeTool
-// (adapter.go), is consulted first — it is what failure classification
-// (opencode_usage.go's OpenCodeAutoRejectMarker) already reads, so the
-// permission map this file builds and the marker that later classifies a
-// rejection of it must never disagree on a name they both know. It covers
-// Bash, Read, Write, Edit, MultiEdit, Glob, Grep, Task and WebFetch.
-// openCodeSupplementaryToolPermission is consulted only for a name absent
-// from that table — NotebookEdit, WebSearch, TodoWrite and Skill, which the
-// issue's key list needs and #1624's classification table has no use for —
-// so the two maps own disjoint name sets and can never diverge on one they
-// share. A tool absent from both (AskUserQuestion, an MCP tool such as
-// "mcp__foo__bar") sets no permission key directly: it is covered by the
-// top-level "*" default, always "deny".
+// openCodeSupplementaryToolPermission maps the Claude Code AllowedTools base
+// names (after stripping a "(...)" scope, openCodeToolScope) that #1624's
+// table, OpenCodeToolForClaudeTool (adapter.go), does not know to the opencode
+// permission key each governs. The shared table is consulted first — it is
+// what failure classification (opencode_usage.go's OpenCodeAutoRejectMarker)
+// already reads, so the permission map this file builds and the marker that
+// later classifies a rejection of it must never disagree on a name they both
+// know. It covers Bash, Read, Write, Edit, MultiEdit, Glob, Grep, Task and
+// WebFetch. This table holds only NotebookEdit, WebSearch and Skill, so the
+// two own disjoint name sets. A tool absent from both (TodoWrite,
+// AskUserQuestion, an MCP tool such as "mcp__foo__bar") sets no permission
+// key directly: it is covered by the top-level "*" default, always "deny".
 var openCodeSupplementaryToolPermission = map[string]string{
 	"NotebookEdit": "edit",
 	"WebSearch":    "websearch",
-	"TodoWrite":    "todowrite",
 	"Skill":        "skill",
 }
 
@@ -114,11 +111,11 @@ func openCodePermissionKeyForClaudeTool(name string) (string, bool) {
 	return key, ok
 }
 
-// openCodeBashDenyBackstop are the bash patterns the issue's deny-list
+// openCodeShellDenyBackstop are the shell patterns the issue's deny-list
 // backstop names, always denied whatever the stage's tools grant. Enforcement
 // is #1635's careful-gate plugin; this is the backstop, and a glob deny-list
 // can be routed around (`sh -c`), so it is not the only control.
-var openCodeBashDenyBackstop = []string{"rm -rf *", "rm -fr *", "git push --force*", "git push -f*", "git push * --force*"}
+var openCodeShellDenyBackstop = []string{"rm -rf *", "rm -fr *", "git push --force*", "git push -f*", "git push * --force*"}
 
 // openCodeSecretDenyBackstop are the read/edit patterns the issue's deny-list
 // backstop names ("*.env", ".env*", "**/.ssh/**", "**/id_rsa*" and the gh
@@ -232,15 +229,16 @@ type openCodePermissionJSON struct {
 	Wildcard          string              `json:"*"`
 	Read              *openCodePatternMap `json:"read"`
 	Edit              *openCodePatternMap `json:"edit"`
+	Write             *openCodePatternMap `json:"write"`
 	Glob              string              `json:"glob"`
 	Grep              string              `json:"grep"`
-	List              string              `json:"list"`
-	Bash              *openCodePatternMap `json:"bash"`
-	Task              string              `json:"task"`
+	Shell             *openCodePatternMap `json:"shell"`
+	Subagent          string              `json:"subagent"`
 	WebFetch          string              `json:"webfetch"`
 	WebSearch         string              `json:"websearch"`
 	Skill             string              `json:"skill"`
-	TodoWrite         string              `json:"todowrite"`
+	Execute           string              `json:"execute"`
+	Question          string              `json:"question"`
 	DoomLoop          string              `json:"doom_loop"`
 	ExternalDirectory *openCodePatternMap `json:"external_directory"`
 }
@@ -274,9 +272,7 @@ func openCodeToolScope(entry string) (name, scope string, scoped bool) {
 }
 
 // openCodeToolGrants reads allowedTools into one openCodeToolGrant per
-// opencode permission key it names. "list" is not set here: it has no
-// AllowedTools entry of its own (openCodePermissionMap mirrors it from
-// "read" afterward).
+// opencode permission key it names.
 func openCodeToolGrants(allowedTools []string) map[string]*openCodeToolGrant {
 	grants := map[string]*openCodeToolGrant{}
 	for _, entry := range allowedTools {
@@ -312,10 +308,10 @@ func openCodeScalarPermission(g *openCodeToolGrant) string {
 	return openCodeDeny
 }
 
-// openCodeBashPermission is always a pattern map: "*" from g, every scoped
+// openCodeShellPermission is always a pattern map: "*" from g, every scoped
 // pattern g grants, then the deny-list backstop last, so it always wins even
 // over a scoped allow that happened to overlap it.
-func openCodeBashPermission(g *openCodeToolGrant) *openCodePatternMap {
+func openCodeShellPermission(g *openCodeToolGrant) *openCodePatternMap {
 	pm := newOpenCodePatternMap()
 	base := openCodeDeny
 	if g != nil && g.bare {
@@ -327,7 +323,7 @@ func openCodeBashPermission(g *openCodeToolGrant) *openCodePatternMap {
 			pm.set(scope, openCodeAllow)
 		}
 	}
-	for _, pattern := range openCodeBashDenyBackstop {
+	for _, pattern := range openCodeShellDenyBackstop {
 		pm.set(pattern, openCodeDeny)
 	}
 	return pm
@@ -353,7 +349,8 @@ func openCodeReadPermission(g *openCodeToolGrant) *openCodePatternMap {
 	return pm
 }
 
-// openCodeEditPermission is always a pattern map: "*" from g, every scoped
+// openCodeEditPermission builds the edit and the write permission alike: 2.x
+// gives write its own action (#3304). It is always a pattern map: "*" from g, every scoped
 // pattern g grants, the secret and project-config deny-list backstops, and a
 // deny for every pattern in denyDirPatterns — the read-only half of the
 // external_directory allow-list's directory entries (manager.go's
@@ -925,11 +922,6 @@ func SwapOpenCodeBinDirForTest(dir string) (restore func()) {
 // this function stays pure (BuildOpenCodeConfig's own contract).
 func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJSON {
 	grants := openCodeToolGrants(opts.AllowedTools)
-	if r, ok := grants["read"]; ok {
-		if _, has := grants["list"]; !has {
-			grants["list"] = &openCodeToolGrant{bare: r.bare, scopes: append([]string(nil), r.scopes...)}
-		}
-	}
 	editDenyDirPatterns := append(
 		openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, openCodeSkillDir(opts)),
 		openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, binDir)...,
@@ -942,21 +934,30 @@ func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJS
 		Wildcard: openCodeDeny,
 		Read:     openCodeReadPermission(grants["read"]),
 		Edit:     openCodeEditPermission(grants["edit"], editDenyDirPatterns),
+		Write:    openCodeEditPermission(grants["write"], editDenyDirPatterns),
 		Glob:     openCodeScalarPermission(grants["glob"]),
 		Grep:     openCodeScalarPermission(grants["grep"]),
-		List:     openCodeScalarPermission(grants["list"]),
-		Bash:     openCodeBashPermission(grants["bash"]),
-		// task is denied whatever the stage grants: gates.js refuses every
-		// task call (ADR-022 AC9, #1748), and OpenCode drops a tool whose
-		// permission is a bare deny from the tool list it offers the model,
-		// so no step is spent on a guaranteed refusal. A granted task also
-		// made OpenCode's own truncation notice tell the model to delegate
-		// to the Task tool (#2178).
-		Task:              openCodeDeny,
-		WebFetch:          openCodeScalarPermission(grants["webfetch"]),
-		WebSearch:         openCodeScalarPermission(grants["websearch"]),
-		Skill:             openCodeScalarPermission(grants["skill"]),
-		TodoWrite:         openCodeScalarPermission(grants["todowrite"]),
+		Shell:    openCodeShellPermission(grants["shell"]),
+		// subagent is denied whatever the stage grants: gates.js refuses
+		// every subagent call (ADR-022 AC9, #1748), and OpenCode drops a tool
+		// whose permission is a bare deny from the tool list it offers the
+		// model, so no step is spent on a guaranteed refusal. A granted task
+		// also made OpenCode's own truncation notice tell the model to
+		// delegate to the Task tool (#2178).
+		Subagent:  openCodeDeny,
+		WebFetch:  openCodeScalarPermission(grants["webfetch"]),
+		WebSearch: openCodeScalarPermission(grants["websearch"]),
+		Skill:     openCodeScalarPermission(grants["skill"]),
+		// execute is 2.x's code-execution tool. Neither the shell deny-list
+		// backstop nor the careful-gate plugin governs it, and no stage's
+		// allowed-tools names an equivalent, so it is denied whatever the
+		// stage grants (#3304).
+		Execute: openCodeDeny,
+		// question asks the user and waits for an answer. A headless run has
+		// no one to answer — the autonomy contract, the reason
+		// AskUserQuestion is disabled — and "ask" is forbidden (ADR-022 § 9),
+		// so it is denied whatever the stage grants (#3304).
+		Question:          openCodeDeny,
 		DoomLoop:          openCodeDeny,
 		ExternalDirectory: openCodeExternalDirectoryPermission(openCodeExternalDirectoryAllowList(opts)),
 	}

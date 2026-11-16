@@ -16,6 +16,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The OpenCode permission map is now built on OpenCode 2.x's own tool names (#3304). Before, it
+  still emitted 1.x's `list` and `todowrite`, which 2.x has no tool for, and 2.x's `execute`,
+  `question` and `write` got no rule of their own: `write` escaped the secret and
+  project-config deny-list that `edit` carries. The map now sets `write` with the same
+  backstop as `edit`, and always denies `execute` (code execution that no shell deny-list or
+  gate covers) and `question` (a headless run has no one to answer). `subagent` stays denied,
+  and `external_directory` keeps its default deny. The Claude-to-OpenCode tool table maps
+  `Bash` to `shell`, `Task` to `subagent` and `Write` to `write`, and the auto-reject
+  classifier in Go and the SDK matches 2.x permission names, so a rejected `shell` call is no
+  longer reported as `unknown`.
 - A failed run whose PR is still open now raises the "PR parked in In review" card whenever
   the scheduler parks the issue there, not only on the merge-blocked sideline path: the
   generic failure revert and orphaned-run recovery raise it too. The card now clears on its

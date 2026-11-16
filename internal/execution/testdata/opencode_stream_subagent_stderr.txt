@@ -1,1 +1,1 @@
-[93m[1m! [0mpermission requested: bash (python3 /tmp/nightgauge-fixture/repo/calc.py); auto-rejecting
+[93m[1m! [0mpermission requested: shell (python3 /tmp/nightgauge-fixture/repo/calc.py); auto-rejecting

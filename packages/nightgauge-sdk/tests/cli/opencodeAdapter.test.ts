@@ -803,7 +803,7 @@ describe("OpenCodeAdapter spawn (#1637)", () => {
     const { query } = await runStage(LOCAL_MODEL, `  cat '${stream}'\n  cat '${notice}' >&2`);
     await expect(
       drain(query({ prompt: "p", options: { allowedTools: ["Read", "Bash"] } }))
-    ).rejects.toThrow(/^\[adapter-permission-rejected\] tool=bash: /);
+    ).rejects.toThrow(/^\[adapter-permission-rejected\] tool=shell: /);
   });
 
   it("aborting the query kills the opencode process group", async () => {
