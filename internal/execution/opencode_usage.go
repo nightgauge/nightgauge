@@ -586,6 +586,14 @@ func (r *openCodeRun) finish(ctx context.Context, exit openCodeExit, acc *TokenA
 		tool := openCodeToolPermission(r.stream.RejectedTool)
 		marker = openCodeRejectionMarker(tool, r.allowed)
 	}
+	if marker == "" && r.stream.LastEventError {
+		// The session ended on a provider's error event (#3305): on 2.x an
+		// unknown model ends on one `provider.no-route` error and exit 1.
+		// The kind comes from error.type alone; the message is never read.
+		if m, ok := openCodeProviderFailureMarker(r.stream.ProviderErrorType, "the session ended on that error"); ok {
+			marker = m
+		}
+	}
 	r.stream.Finish(exit.exitCode)
 	var endpoint string
 	if res.served.Key != "" && slices.Contains(exit.endpoints, res.served.Key) {

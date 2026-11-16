@@ -279,6 +279,42 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
       "why": "The adapter's binary cannot serve the dispatch (#1627, ADR-022 § 20): opencode below the compat manifest's floor, or a version that could not be read. A version above max-tested is never refused (ADR-022 § 20, 2026-09-25 amendment). `*OpenCodeIncompatibleError` stamps its kind first — `adapter_incompatible: \u003creason\u003e. \u003cremediation\u003e` — and execution.Manager wraps it as `dispatch refused for adapter \"opencode\": …`. Before this rule every such refusal satisfied only the `exit ` fallback, so a refusal that no retry can clear was booked subagent_crash and retried. Second in the ladder, above everything that reads free text: the reason quotes a failed self-test's probe output and the binary's path, either of which can carry a word a generic rule below keys on, and the stamp is the adapter's own verdict. The second clause is opencode's experimental enable gate refusing because NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1 is not set (openCodeGate): only the operator's environment can clear it, so no retry helps, and before this clause it too fell to the `exit ` fallback as subagent_crash (dogfooding session 2)."
     },
     {
+      "id": "opencode-provider-no-route",
+      "kind": "adapter_provider_no_route",
+      "signal": false,
+      "clauses": [
+        [
+          "[opencode-provider-failure]",
+          "adapter_provider_no_route"
+        ]
+      ],
+      "why": "OpenCode 2.x ended the run on one error event whose error.type is `provider.no-route` (#3305, captured on 2.2.7: internal/execution/adapters/testdata/opencode-cli/stream-no-route.jsonl): the provider config routes no model by the dispatched -m, and the run exits 1. The parser (internal/execution/opencode_usage.go) writes `[opencode-provider-failure] adapter_provider_no_route` from error.type alone, never from the message. Parks: the next attempt asks for the same unrouted model. Both terms are required, so a stage's own prose naming the kind takes nothing. Above model-stream-stalled and every free-text rule, because the marker is the parser's own verdict. Not a signal: only the Go manager dispatches opencode."
+    },
+    {
+      "id": "opencode-provider-transport",
+      "kind": "adapter_provider_transport",
+      "signal": false,
+      "clauses": [
+        [
+          "[opencode-provider-failure]",
+          "adapter_provider_transport"
+        ]
+      ],
+      "why": "The provider endpoint refused or dropped the connection, error.type `provider.transport` (#3305, captured on 2.2.7: internal/execution/adapters/testdata/opencode-cli/stream-retry-transport.jsonl). OpenCode 2.x retries it without end, so execution.Manager's retry watchdog stops the stage past adapters.OpenCodeRetryMaxAttempts or OpenCodeRetryMaxElapsed and writes `[opencode-provider-failure] adapter_provider_transport`; a terminal error event of that type writes the same. Retryable: a server that comes back answers the next attempt. Distinct from network_unavailable, whose 1.x clause reads OpenCode's own `AI_APICallError` log line; the 2.x marker carries no provider message. Both terms are required."
+    },
+    {
+      "id": "opencode-provider-error",
+      "kind": "adapter_provider_error",
+      "signal": false,
+      "clauses": [
+        [
+          "[opencode-provider-failure]",
+          "adapter_provider_error"
+        ]
+      ],
+      "why": "Any other `provider.*` error.type OpenCode 2.x reported (#3305), such as `provider.internal` for a provider 500 it retried past adapters.OpenCodeRetryMaxAttempts or OpenCodeRetryMaxElapsed (captured on 2.2.7: internal/execution/adapters/testdata/opencode-cli/stream-retry-internal.jsonl), written as `[opencode-provider-failure] adapter_provider_error`. Retryable. Both terms are required."
+    },
+    {
       "id": "model-stream-stalled",
       "kind": "model_stream_stalled",
       "signal": false,

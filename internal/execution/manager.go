@@ -620,8 +620,11 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	var openCode *openCodeRun
 	var openCodeModel string
 	var costCap *openCodeCostWatchdog
+	// retryCap stops a stage whose provider requests only retry (#3305).
+	var retryCap *openCodeRetryWatchdog
 	if streamFmt == StreamFormatOpenCode {
 		openCode = newOpenCodeRun(tokenAcc.OpenCode(), runOpts.AllowedTools)
+		retryCap = newOpenCodeRetryWatchdog()
 		redactOut = openCodeOutputRedactor(redact)
 		openCodeModel, _ = adapters.OpenCodeModelArg(runOpts.Model)
 		costCap = newOpenCodeCostWatchdog(openCodeModel, runOpts.CostBudget, os.Stderr,
@@ -808,6 +811,10 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 				fmt.Fprintf(os.Stderr, "%s#%d %s: %s\n", opts.Repo, opts.IssueNumber, opts.Stage, costCap.notice())
 				costCap.stop(cmd.Process, execution.done)
 			}
+			if openCode != nil && retryCap.observe(openCode.stream, time.Now()) {
+				fmt.Fprintf(os.Stderr, "%s#%d %s: %s\n", opts.Repo, opts.IssueNumber, opts.Stage, retryCap.notice())
+				retryCap.stop(cmd.Process, execution.done)
+			}
 			// Stage budgets (#1652): turns and tokens are checked on every
 			// event, as it arrives, never once the stage has ended.
 			if stageBudget.observe(event, stepAdded, tokenAcc) {
@@ -956,6 +963,11 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	if costCap != nil && costCap.fired {
 		keepStderr([]byte(costCap.notice()))
 	}
+	// So does a stage the retry watchdog stopped (#3305).
+	retryStopped := retryCap != nil && retryCap.fired
+	if retryStopped {
+		keepStderr([]byte(retryCap.notice()))
+	}
 	// So does a stage the idle-stream watchdog stopped (#2176).
 	streamStalled := streamWatch.hasFired()
 	if streamStalled {
@@ -1056,7 +1068,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 		execErr:     execCtx.Err(),
 		parentErr:   ctx.Err(),
 		stopped:     execution.stopRequested.Load(),
-		otherMarker: handshakeFailure != "" || pluginGate.stopped() || stageBudget.notice() != "" || (costCap != nil && costCap.fired) || streamStalled,
+		otherMarker: handshakeFailure != "" || pluginGate.stopped() || stageBudget.notice() != "" || (costCap != nil && costCap.fired) || retryStopped || streamStalled,
 		timeout:     opts.Timeout,
 		elapsed:     time.Since(stageStartedAt),
 	}); notice != "" {
@@ -1171,6 +1183,10 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	// SIGTERM, and so did one its subagents took past it or whose subagent
 	// usage was only partly read.
 	if costCap != nil && costCap.fired && result.ExitCode == 0 {
+		result.ExitCode = 1
+	}
+	// So did a stage stopped on a provider retry storm (#3305).
+	if retryStopped && result.ExitCode == 0 {
 		result.ExitCode = 1
 	}
 	// So did a stage stopped at a stage budget (#1652).

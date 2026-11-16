@@ -231,6 +231,71 @@
       "signal": ""
     },
     {
+      "input": "[opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[OPENCODE-PROVIDER-FAILURE] ADAPTER_PROVIDER_NO_ROUTE",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure]",
+      "kind": "",
+      "signal": ""
+    },
+    {
+      "input": "adapter_provider_no_route",
+      "kind": "",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[OPENCODE-PROVIDER-FAILURE] ADAPTER_PROVIDER_TRANSPORT",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "adapter_provider_transport",
+      "kind": "",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[OPENCODE-PROVIDER-FAILURE] ADAPTER_PROVIDER_ERROR",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "adapter_provider_error",
+      "kind": "",
+      "signal": ""
+    },
+    {
       "input": "[model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -2961,6 +3026,21 @@
       "signal": "api_overloaded"
     },
     {
+      "input": "attention required! cloudflare | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "attention required! cloudflare | [opencode-provider-failure] adapter_provider_error",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "attention required! cloudflare | [model-stream-stalled]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -3242,6 +3322,21 @@
     },
     {
       "input": "[host-slept] | adapter_incompatible",
+      "kind": "host_slept",
+      "signal": ""
+    },
+    {
+      "input": "[host-slept] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "host_slept",
+      "signal": ""
+    },
+    {
+      "input": "[host-slept] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "host_slept",
+      "signal": ""
+    },
+    {
+      "input": "[host-slept] | [opencode-provider-failure] adapter_provider_error",
       "kind": "host_slept",
       "signal": ""
     },
@@ -3531,6 +3626,21 @@
       "signal": ""
     },
     {
+      "input": "[merge-conflict] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "[merge-conflict] | [model-stream-stalled]",
       "kind": "merge_conflict",
       "signal": ""
@@ -3812,6 +3922,21 @@
     },
     {
       "input": "merge-queue-enqueue-exhausted | adapter_incompatible",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [opencode-provider-failure] adapter_provider_error",
       "kind": "merge_queue_enqueue_failed",
       "signal": ""
     },
@@ -4101,6 +4226,21 @@
       "signal": ""
     },
     {
+      "input": "merge-queue-infra-exhausted | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [opencode-provider-failure] adapter_provider_error",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "merge-queue-infra-exhausted | [model-stream-stalled]",
       "kind": "merge_queue_infra_failed",
       "signal": ""
@@ -4382,6 +4522,21 @@
     },
     {
       "input": "stage_budget_exceeded: | adapter_incompatible",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [opencode-provider-failure] adapter_provider_error",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -4671,6 +4826,21 @@
       "signal": ""
     },
     {
+      "input": "network unavailable: extended github connectivity loss | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | [opencode-provider-failure] adapter_provider_error",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | [model-stream-stalled]",
       "kind": "network_unavailable",
       "signal": ""
@@ -4956,6 +5126,21 @@
       "signal": ""
     },
     {
+      "input": "adapter_incompatible | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "adapter_incompatible | [model-stream-stalled]",
       "kind": "adapter_incompatible",
       "signal": ""
@@ -5206,6 +5391,906 @@
       "signal": ""
     },
     {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [host-slept]",
+      "kind": "host_slept",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [model-stream-stalled]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | stream idle timeout",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | overloaded",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | socket connection was closed",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [rate-limit-quota-exhausted]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [adapter-auth-failed]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [environment-halt]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [gate-plugin-missing]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | ai_apicallerror context_length_exceeded",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | not_found_error model",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | pipeline-start-failure issue-closed",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [blocked-dependency]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | architecture approval required",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | github-quota-low",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | github-network-outage",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | secondary rate limit",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [pr-merge-unmerged",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [stage:worktree-containment]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [not-pipeline-actionable]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [dev-produced-no-changes]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [dev-handoff-missing]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [dev-step-cap-reached]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [dev-step-progress-unproven]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [push-auth-failed]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | premature turn end",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | worktree_uncommitted",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | budget_ceiling_hit",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [runaway-progress-exceeded]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [runaway-ceiling-exceeded]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | stage-no-output-timeout",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [stage-cap-killed]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [stall-killed]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | pipeline_budget_exceeded",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | schema validation",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [no-changes-produced]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [review-cap-reached]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [validation-failed]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [validation-inconclusive]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [branch-forked]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [commit-orphaned]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [adapter-permission-rejected]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [permission-denied]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | stage_context_unreadable",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | dev_build_verification_missing",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | dev_build_verification_failed",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [dev-context-stale]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | dev_tests_failed",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | pr_merge_lookup_failed",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | subagent crash",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [host-slept]",
+      "kind": "host_slept",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [model-stream-stalled]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | stream idle timeout",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | overloaded",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | socket connection was closed",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [rate-limit-quota-exhausted]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [adapter-auth-failed]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [environment-halt]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [gate-plugin-missing]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | ai_apicallerror context_length_exceeded",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | not_found_error model",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | pipeline-start-failure issue-closed",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [blocked-dependency]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | architecture approval required",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | github-quota-low",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | github-network-outage",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | secondary rate limit",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [pr-merge-unmerged",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [stage:worktree-containment]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [not-pipeline-actionable]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [dev-produced-no-changes]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [dev-handoff-missing]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [dev-step-cap-reached]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [dev-step-progress-unproven]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [push-auth-failed]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | premature turn end",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | worktree_uncommitted",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | budget_ceiling_hit",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [runaway-progress-exceeded]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [runaway-ceiling-exceeded]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | stage-no-output-timeout",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [stage-cap-killed]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [stall-killed]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | pipeline_budget_exceeded",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | schema validation",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [no-changes-produced]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [review-cap-reached]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [validation-failed]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [validation-inconclusive]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [branch-forked]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [commit-orphaned]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [adapter-permission-rejected]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [permission-denied]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | stage_context_unreadable",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | dev_build_verification_missing",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | dev_build_verification_failed",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [dev-context-stale]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | dev_tests_failed",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | pr_merge_lookup_failed",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | subagent crash",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [host-slept]",
+      "kind": "host_slept",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [model-stream-stalled]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | stream idle timeout",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | overloaded",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | socket connection was closed",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [rate-limit-quota-exhausted]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [adapter-auth-failed]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [environment-halt]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [gate-plugin-missing]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | ai_apicallerror context_length_exceeded",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | not_found_error model",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | pipeline-start-failure issue-closed",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [blocked-dependency]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | architecture approval required",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | github-quota-low",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | github-network-outage",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | secondary rate limit",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [pr-merge-unmerged",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [stage:worktree-containment]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [not-pipeline-actionable]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [dev-produced-no-changes]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [dev-handoff-missing]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [dev-step-cap-reached]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [dev-step-progress-unproven]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [push-auth-failed]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | premature turn end",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | worktree_uncommitted",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | budget_ceiling_hit",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [runaway-progress-exceeded]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [runaway-ceiling-exceeded]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | stage-no-output-timeout",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [stage-cap-killed]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [stall-killed]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | pipeline_budget_exceeded",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | schema validation",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [no-changes-produced]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [review-cap-reached]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [validation-failed]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [validation-inconclusive]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [branch-forked]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [commit-orphaned]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [adapter-permission-rejected]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [permission-denied]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | stage_context_unreadable",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | dev_build_verification_missing",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | dev_build_verification_failed",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [dev-context-stale]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | dev_tests_failed",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | pr_merge_lookup_failed",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | subagent crash",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[model-stream-stalled] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -5243,6 +6328,21 @@
     {
       "input": "[model-stream-stalled] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -5531,6 +6631,21 @@
       "signal": ""
     },
     {
+      "input": "stream idle timeout | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "stream idle timeout | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "stream idle timeout | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "stream idle timeout | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -5813,6 +6928,21 @@
     {
       "input": "overloaded | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "overloaded | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "overloaded | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "overloaded | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -6101,6 +7231,21 @@
       "signal": ""
     },
     {
+      "input": "socket connection was closed | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "socket connection was closed | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "socket connection was closed | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "socket connection was closed | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -6383,6 +7528,21 @@
     {
       "input": "[rate-limit-quota-exhausted] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -6671,6 +7831,21 @@
       "signal": ""
     },
     {
+      "input": "[adapter-auth-failed] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-auth-failed] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-auth-failed] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[adapter-auth-failed] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -6953,6 +8128,21 @@
     {
       "input": "[environment-halt] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[environment-halt] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[environment-halt] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[environment-halt] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -7241,6 +8431,21 @@
       "signal": ""
     },
     {
+      "input": "[gate-plugin-missing] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[gate-plugin-missing] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[gate-plugin-missing] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[gate-plugin-missing] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -7523,6 +8728,21 @@
     {
       "input": "ai_apicallerror context_length_exceeded | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -7811,6 +9031,21 @@
       "signal": ""
     },
     {
+      "input": "not_found_error model | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "not_found_error model | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -8093,6 +9328,21 @@
     {
       "input": "pipeline-start-failure issue-closed | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -8381,6 +9631,21 @@
       "signal": ""
     },
     {
+      "input": "[blocked-dependency] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[blocked-dependency] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -8663,6 +9928,21 @@
     {
       "input": "architecture approval required | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "architecture approval required | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "architecture approval required | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "architecture approval required | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -8951,6 +10231,21 @@
       "signal": ""
     },
     {
+      "input": "github-quota-low | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "github-quota-low | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "github-quota-low | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "github-quota-low | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -9233,6 +10528,21 @@
     {
       "input": "github-network-outage | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "github-network-outage | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "github-network-outage | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "github-network-outage | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -9521,6 +10831,21 @@
       "signal": ""
     },
     {
+      "input": "secondary rate limit | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "secondary rate limit | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -9803,6 +11128,21 @@
     {
       "input": "[pr-merge-unmerged | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -10091,6 +11431,21 @@
       "signal": ""
     },
     {
+      "input": "[stage:worktree-containment] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[stage:worktree-containment] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[stage:worktree-containment] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[stage:worktree-containment] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -10373,6 +11728,21 @@
     {
       "input": "[not-pipeline-actionable] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -10661,6 +12031,21 @@
       "signal": ""
     },
     {
+      "input": "[dev-produced-no-changes] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[dev-produced-no-changes] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[dev-produced-no-changes] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[dev-produced-no-changes] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -10943,6 +12328,21 @@
     {
       "input": "[dev-handoff-missing] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[dev-handoff-missing] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[dev-handoff-missing] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[dev-handoff-missing] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -11231,6 +12631,21 @@
       "signal": ""
     },
     {
+      "input": "[dev-step-cap-reached] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[dev-step-cap-reached] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -11513,6 +12928,21 @@
     {
       "input": "[dev-step-progress-unproven] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-progress-unproven] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-progress-unproven] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-progress-unproven] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -11801,6 +13231,21 @@
       "signal": ""
     },
     {
+      "input": "[push-auth-failed] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[push-auth-failed] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[push-auth-failed] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[push-auth-failed] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -12083,6 +13528,21 @@
     {
       "input": "premature turn end | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -12371,6 +13831,21 @@
       "signal": ""
     },
     {
+      "input": "worktree_uncommitted | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "worktree_uncommitted | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "worktree_uncommitted | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "worktree_uncommitted | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -12653,6 +14128,21 @@
     {
       "input": "budget_ceiling_hit | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -12941,6 +14431,21 @@
       "signal": ""
     },
     {
+      "input": "[runaway-progress-exceeded] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-progress-exceeded] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-progress-exceeded] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[runaway-progress-exceeded] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -13226,6 +14731,21 @@
       "signal": ""
     },
     {
+      "input": "[runaway-ceiling-exceeded] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[runaway-ceiling-exceeded] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -13507,6 +15027,21 @@
     },
     {
       "input": "[cost-cap-exceeded] | adapter_incompatible",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | [opencode-provider-failure] adapter_provider_error",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -13796,6 +15331,21 @@
       "signal": ""
     },
     {
+      "input": "stage-no-output-timeout | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "stage-no-output-timeout | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "stage-no-output-timeout | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "stage-no-output-timeout | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -14078,6 +15628,21 @@
     {
       "input": "[stage-cap-killed] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -14366,6 +15931,21 @@
       "signal": ""
     },
     {
+      "input": "[stall-killed] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[stall-killed] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[stall-killed] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[stall-killed] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -14648,6 +16228,21 @@
     {
       "input": "pipeline_budget_exceeded | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "pipeline_budget_exceeded | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "pipeline_budget_exceeded | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "pipeline_budget_exceeded | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -14936,6 +16531,21 @@
       "signal": ""
     },
     {
+      "input": "schema validation | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "schema validation | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "schema validation | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "schema validation | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -15218,6 +16828,21 @@
     {
       "input": "[no-changes-produced] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[no-changes-produced] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[no-changes-produced] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[no-changes-produced] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -15506,6 +17131,21 @@
       "signal": ""
     },
     {
+      "input": "[review-cap-reached] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[review-cap-reached] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -15788,6 +17428,21 @@
     {
       "input": "[validation-failed] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -16076,6 +17731,21 @@
       "signal": ""
     },
     {
+      "input": "[validation-inconclusive] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[validation-inconclusive] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[validation-inconclusive] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[validation-inconclusive] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -16358,6 +18028,21 @@
     {
       "input": "[branch-forked] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[branch-forked] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[branch-forked] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[branch-forked] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -16646,6 +18331,21 @@
       "signal": ""
     },
     {
+      "input": "[commit-orphaned] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[commit-orphaned] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[commit-orphaned] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[commit-orphaned] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -16928,6 +18628,21 @@
     {
       "input": "[adapter-permission-rejected] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -17216,6 +18931,21 @@
       "signal": ""
     },
     {
+      "input": "[permission-denied] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[permission-denied] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[permission-denied] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[permission-denied] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -17498,6 +19228,21 @@
     {
       "input": "stage_context_unreadable | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -17786,6 +19531,21 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_missing | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_missing | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -18068,6 +19828,21 @@
     {
       "input": "dev_build_verification_failed | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -18356,6 +20131,21 @@
       "signal": ""
     },
     {
+      "input": "[dev-context-stale] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[dev-context-stale] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[dev-context-stale] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[dev-context-stale] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -18638,6 +20428,21 @@
     {
       "input": "dev_tests_failed | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {
@@ -18926,6 +20731,21 @@
       "signal": ""
     },
     {
+      "input": "pr_merge_lookup_failed | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "pr_merge_lookup_failed | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -19208,6 +21028,21 @@
     {
       "input": "subagent crash | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
       "signal": ""
     },
     {

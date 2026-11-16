@@ -257,6 +257,9 @@ record may carry both fields, neither, or only one.
 | `context_window_exceeded`        | The prompt outgrew the context the model server has the model loaded with (Issue #1631) — read only from the adapter's own failed-request line, never from model text; parked, never retried on the same model and adapter                                                                                                                                                                                                           |
 | `adapter_permission_rejected`    | The adapter rejected a call to a tool the stage's allowed tools grant, #1624's `[adapter-permission-rejected]` marker (Issue #1631) — usually a `deny` in the generated permission map (#1638), such as its `.env` read backstop, else an `ask` rule in a repository's or the user's OpenCode config; parked whatever tool it names, not retried, not charged to the issue                                                           |
 | `adapter_incompatible`           | The adapter's binary cannot serve the dispatch: below the compat floor or unreadable (Issues #1627, #1631; a newer version is never refused) — parked; install a build at or above the floor                                                                                                                                                                                                                                         |
+| `adapter_provider_no_route`      | OpenCode 2.x reported error type `provider.no-route`, the `[opencode-provider-failure]` marker (Issue #3305): the provider config routes no model by the dispatched `-m` — parked; a retry asks for the same model                                                                                                                                                                                                                   |
+| `adapter_provider_transport`     | OpenCode 2.x reported error type `provider.transport`, a refused or dropped connection, stopped past the retry bound or ended on that error (Issue #3305) — retryable                                                                                                                                                                                                                                                                |
+| `adapter_provider_error`         | OpenCode 2.x reported any other `provider.*` error type, such as `provider.internal` for a provider 500, stopped past the retry bound or ended on that error (Issue #3305) — retryable                                                                                                                                                                                                                                               |
 | `dev_context_stale`              | feature-dev's gate found a `dev-N.json` older than the stage it judged, the `[dev-context-stale]` reason (Issue #2637) — a prior attempt's handoff; parked, never judged on its contents, not charged to the issue                                                                                                                                                                                                                   |
 | `environment_halt`               | A project-declared `preflight.environment` check failed in Phase 0, the `[environment-halt]` marker (Issue #101) — the operator's environment, not the code; parked, held for an operator, excluded from the calibration corpus                                                                                                                                                                                                      |
 | `gate_plugin_missing`            | A bundled build's Claude stage did not load the Nightgauge plugin exactly once, the `[gate-plugin-missing]` marker (Issue #2723) — stopped before any work; parked, held for an operator, excluded from the calibration corpus                                                                                                                                                                                                       |
@@ -307,6 +310,9 @@ from the captures in `internal/terminalkind/testdata/opencode/`.
 | The adapter rejected an allowed tool     | `adapter_permission_rejected` | Parked                                                  |
 | The `.env` read guard rejected a `read`  | `adapter_permission_rejected` | Parked                                                  |
 | The binary cannot serve the dispatch     | `adapter_incompatible`        | Parked                                                  |
+| 2.x: the provider routes no such model   | `adapter_provider_no_route`   | Parked                                                  |
+| 2.x: a provider retry storm (transport)  | `adapter_provider_transport`  | Ordinary retry                                          |
+| 2.x: a provider retry storm (other)      | `adapter_provider_error`      | Ordinary retry                                          |
 | A retry inherited a prior dev context    | `dev_context_stale`           | Parked                                                  |
 | The review reached its round cap         | `review_cap_reached`          | Parked                                                  |
 | A resumed run merged nothing             | `resume_no_op`                | Parked                                                  |
@@ -315,8 +321,8 @@ from the captures in `internal/terminalkind/testdata/opencode/`.
 | An Ollama model that is not pulled       | `model_unavailable`           | Cap recovery (below)                                    |
 | The server refused the credentials (401) | `adapter_auth_failed`         | Short backoff, no lifetime-cap increment, not escalated |
 
-**The parked kinds.** `context_window_exceeded`, `adapter_permission_rejected`
-and `adapter_incompatible` each name a condition the next attempt on the same
+**The parked kinds.** `context_window_exceeded`, `adapter_permission_rejected`,
+`adapter_incompatible` and `adapter_provider_no_route` (#3305) each name a condition the next attempt on the same
 model and adapter meets unchanged: the same prompt against the same window,
 the same permission rule, the same binary. None is charged to the issue. So
 `TerminalKindParks` routes all three the same way: the in-run model
@@ -381,6 +387,16 @@ cannot drift (#1753).
 - `adapter_incompatible`: install a build at or above the floor (the refusal
   names the tested one) and pin the adapter's binary to it. The refusal stamps the kind itself
   (`*OpenCodeIncompatibleError`), before anything is spawned.
+- `adapter_provider_no_route` (#3305): fix the model id in the stage's routing, or add the
+  model to the provider's OpenCode config, then clear the issue's failures.
+
+**A provider retry storm on OpenCode 2.x** (#3305). 2.x retries a provider 500 or a refused
+connection without end and writes only `retry` events meanwhile. The manager stops the stage
+after `OpenCodeRetryMaxAttempts` (5) retry events, or once `OpenCodeRetryMaxElapsed` (90 s)
+has passed since the first of them, counted from the last finished step or tool call. The
+stage then ends with `[opencode-provider-failure] <kind>`. The kind comes from OpenCode's
+`error.type` alone, never from its message: `adapter_provider_transport` or
+`adapter_provider_error`. Both retry as ordinary failures.
 
 **A down local server** classifies `network_unavailable` on OpenCode's
 `Cannot connect to API`, which it prints after about 60 s of its own retries.
@@ -577,6 +593,7 @@ kinds that halt on purpose and say so, and the three parked kinds (#1631):
 | `context_window_exceeded`        | A larger context, another model, or a split          | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `adapter_permission_rejected`    | A changed permission rule or issue text              | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `adapter_incompatible`           | A binary at or above the floor, installed and pinned | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `adapter_provider_no_route`      | A model id the provider config routes                | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `dev_context_stale`              | A filed pipeline-gap and the stale handoff removed   | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `environment_halt`               | The check's remedy, applied to the environment       | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `gate_plugin_missing`            | An intact bundled plugin, or a newer Claude Code     | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
@@ -740,6 +757,9 @@ construction (`classifyTerminalKind` / `resolveTerminalKind` in
 | `context_window_exceeded`        | parked — the loaded model's limit, not the issue; no lifetime-cap increment, no cascade     |
 | `adapter_permission_rejected`    | parked — a `deny` or `ask` rule on an allowed tool; no lifetime-cap increment, no cascade   |
 | `adapter_incompatible`           | parked — the adapter's binary, not the issue; no lifetime-cap increment, no cascade         |
+| `adapter_provider_no_route`      | parked — the provider config, not the issue; no lifetime-cap increment, no cascade          |
+| `adapter_provider_transport`     | `infrastructure` — the provider endpoint refused or dropped the connection                  |
+| `adapter_provider_error`         | `infrastructure` — the provider failed the request                                          |
 | `environment_halt`               | parked — the operator's environment, not the issue; no lifetime-cap increment, no cascade   |
 | `gate_plugin_missing`            | parked — the install, not the issue; no lifetime-cap increment, no cascade                  |
 
