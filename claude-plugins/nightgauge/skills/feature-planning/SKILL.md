@@ -632,6 +632,9 @@ failure):**
   Never omit this field or rename it to `new_files`, `files_created`, or
   `files_modified`.
 - `files_to_modify`: MUST be a JSON array of strings (even if empty: `[]`).
+  Both lists empty fails `FeaturePlanningGate` as `not_pipeline_actionable`
+  unless `approach` is `"verify-and-close"` (#3354). When no file change can
+  satisfy the issue, emit the Not-Pipeline-Actionable Signal instead.
 - `created_at`: MUST be an ISO 8601 datetime string (e.g.
   `"2026-01-01T00:00:00Z"`). Never use `planned_at`, `timestamp`, or
   `created_date`.

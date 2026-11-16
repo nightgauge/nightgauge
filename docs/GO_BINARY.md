@@ -4615,7 +4615,8 @@ Each finished round replaces the records of `producer:independent-review` in the
 capture with its own `discovered`, so only the last finished round is filed.
 Each record carries the checkout's run id. A plan-compliance claim that begins
 `Criterion N:` also carries the text of the issue's criterion N (`criterion`,
-#3186); an out-of-range N or an unreadable issue context sets none. The findings
+#3186), N indexing the criteria of `ac-reconcile-{N}.json` when that report
+exists, else `issue-{N}.json` `requirements.acceptance_criteria` (#3354); an out-of-range N or an unreadable issue context sets none. The findings
 schema is unchanged: the link is derived from the claim.
 Findings for a tree that moved, a missing or rejected file and a failed spawn all
 record `catch` with no ledger event, so the next attempt reviews again. Outcomes

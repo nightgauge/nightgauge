@@ -33,6 +33,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/cmd/discoveredwork"
 	"github.com/nightgauge/nightgauge/internal/gateledger"
 	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/preflight"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -428,7 +429,10 @@ type issueContext struct {
 	Requirements json.RawMessage `json:"requirements"`
 }
 
-// loadIssueContext reads issue-{N}.json from the clone's pipeline state.
+// loadIssueContext reads issue-{N}.json from the clone's pipeline state, with
+// its acceptance criteria replaced by the ac-reconcile report's when one exists
+// (withReconciledCriteria). The bundle and recordDiscovered both read through
+// here, so "Criterion N" indexes the same list on both sides.
 func loadIssueContext(root string, issue int) (issueContext, error) {
 	var ic issueContext
 	dir, err := layout.PipelineStateDir(root)
@@ -442,7 +446,44 @@ func loadIssueContext(root string, issue int) (issueContext, error) {
 	if err := json.Unmarshal(raw, &ic); err != nil {
 		return ic, fmt.Errorf("parse the issue context: %w", err)
 	}
-	return ic, nil
+	return ic.withReconciledCriteria(dir, issue), nil
+}
+
+// withReconciledCriteria replaces requirements.acceptance_criteria with the
+// texts of ac-reconcile-{N}.json, in order, keeping every other requirements
+// key. The model-extracted list can hold a fraction of the issue's criteria
+// (#3354: 5 of 15), so a plan-compliance pass judged against it calls the rest
+// out of scope. The report is parsed deterministically from the live issue body
+// before every planning dispatch. A missing, unreadable or empty report leaves
+// the context as it is.
+func (ic issueContext) withReconciledCriteria(dir string, issue int) issueContext {
+	raw, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("ac-reconcile-%d.json", issue)))
+	if err != nil {
+		return ic
+	}
+	var report preflight.ACReconcileResult
+	if json.Unmarshal(raw, &report) != nil || len(report.AcceptanceCriteria) == 0 {
+		return ic
+	}
+	texts := make([]string, len(report.AcceptanceCriteria))
+	for i, c := range report.AcceptanceCriteria {
+		texts[i] = c.Text
+	}
+	var req map[string]json.RawMessage
+	if len(ic.Requirements) > 0 && json.Unmarshal(ic.Requirements, &req) != nil || req == nil {
+		req = map[string]json.RawMessage{}
+	}
+	list, err := json.Marshal(texts)
+	if err != nil {
+		return ic
+	}
+	req["acceptance_criteria"] = list
+	merged, err := json.Marshal(req)
+	if err != nil {
+		return ic
+	}
+	ic.Requirements = merged
+	return ic
 }
 
 // criteria is the issue's acceptance criteria, or nil when the context has

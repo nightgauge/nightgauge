@@ -153,3 +153,29 @@ func failedKind(t *testing.T, as *AutonomousScheduler, repo string, number int) 
 	t.Fatalf("no failure recorded for %s#%d", repo, number)
 	return ""
 }
+
+// #3354: the feature-planning gate's empty-plan verdict is booked as
+// not_pipeline_actionable: no lifetime failure, no retry, and neither the
+// scheduler nor the repository pauses.
+func TestEmptyPlanGateVerdictParksWithoutCharging(t *testing.T) {
+	as := newBlockedQuotaScheduler(t)
+	addRunning(as, "acme/core", 124, "empty plan")
+	detail := "Stage feature-planning gate failed: [not-pipeline-actionable] plan lists no files " +
+		"to create or modify; approach: record via empty commit"
+	as.NotifyComplete("acme/core", 124, false, false, TerminalKindNotPipelineActionable, detail)
+	as.drainBackground()
+
+	key := "acme/core#124"
+	if got := failedKind(t, as, "acme/core", 124); got != TerminalKindNotPipelineActionable {
+		t.Errorf("recorded kind = %q, want %q", got, TerminalKindNotPipelineActionable)
+	}
+	if got := as.state.LifetimeIssueFailures[key]; got != 0 {
+		t.Errorf("LifetimeIssueFailures[%q] = %d, want 0", key, got)
+	}
+	if _, ok := retryDeadline(as, key); ok {
+		t.Errorf("retryBackoff[%q] set — a parked plan must not be retried", key)
+	}
+	if as.state.PausedAt != "" || as.state.PausedRepos["acme/core"] != nil {
+		t.Errorf("paused: at=%q repos=%v", as.state.PausedAt, as.state.PausedRepos)
+	}
+}

@@ -538,6 +538,11 @@ empty tree, and it is neither a failure nor a deferral:
 | Re-dispatched? | Yes, on blocker close       | Yes — hence the repeat spend | **No.** Labelled and parked       |
 | Raised by      | The pickup dependency check | pr-create's create fallback  | The stage that read the issue     |
 
+An **empty plan** is another (#3354): a plan with no `files_to_create` or
+`files_to_modify`, other than `verify-and-close`, fails `FeaturePlanningGate`
+with `[not-pipeline-actionable] plan lists no files to create or modify` and the
+approach as evidence, so the issue parks instead of halting the queue.
+
 A **publication-boundary denial** is one such declaration (#2562). A deliverable
 path that `.github/publication-boundary.yaml` denies, or does not classify, needs
 the owner to choose a permitted location or change the manifest. feature-planning
