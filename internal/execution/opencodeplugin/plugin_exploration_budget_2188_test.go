@@ -13,9 +13,9 @@ import (
 const budgetDriver = `
 const mod = await import(process.env.NG_GATES_PATH);
 const calls = JSON.parse(process.env.NG_CALLS);
-const ctx = { directory: "/w/.nightgauge/worktrees/issue-1" };
-const out = calls.map(([tool, args]) => {
-  try { mod.enforceExplorationBudget(ctx, { tool }, { args }); return "ok"; }
+const ctx = { location: { directory: "/w/.nightgauge/worktrees/issue-1" } };
+const out = calls.map(([tool, input]) => {
+  try { mod.enforceExplorationBudget(ctx, { tool, sessionID: "s", input }); return "ok"; }
   catch (e) { return e.message; }
 });
 process.stdout.write(JSON.stringify(out));
@@ -32,33 +32,33 @@ func TestExplorationBudget2188(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gates := filepath.Join(filepath.Dir(entry), "nightgauge", "gates.js")
+	gates := filepath.Join(entry, "nightgauge", "gates.js")
 	driver := filepath.Join(t.TempDir(), "driver.mjs")
 	if err := os.WriteFile(driver, []byte(budgetDriver), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	calls := [][]any{
-		{"read", map[string]any{"filePath": "internal/a.go"}},                                        // 1
-		{"read", map[string]any{"filePath": "skills/_shared/GOTCHAS.md"}},                            // exempt
-		{"read", map[string]any{"filePath": "/home/u/.claude/plugins/ng/skills/_includes/x.md"}},     // exempt
-		{"read", map[string]any{"filePath": "skills/nightgauge-feature-planning/SKILL.md"}},          // exempt
-		{"read", map[string]any{"filePath": "/w/.git/nightgauge/pipeline/ctx.json"}},                 // exempt
-		{"write", map[string]any{"filePath": "notes.md"}},                                            // not exploration
-		{"bash", map[string]any{"command": "cat a.go > b.go"}},                                       // write
-		{"bash", map[string]any{"command": "nightgauge layout write plans p.md --from p.md"}},        // write
-		{"bash", map[string]any{"command": "nightgauge layout write plans p.md <<'EOF'\nplan\nEOF"}}, // heredoc write
-		{"bash", map[string]any{"command": "echo \"=== phase ===\"; true"}},                          // marker
-		{"bash", map[string]any{"command": "KB=$(jq -r .x cfg.json); echo \"$KB\" 2>/dev/null"}},     // 2
-		{"bash", map[string]any{"command": "for f in internal/*.go; do head -3 $f; done"}},           // 3
-		{"read", map[string]any{"filePath": "skills/nightgauge-dev/SKILL.md"}},                       // refused: source, not exempt
-		{"bash", map[string]any{"command": "echo \"=== x ===\"; grep -n foo a.go"}},                  // refused
-		{"read", map[string]any{"filePath": "skills/_shared/SELF_ASSESSMENT.md"}},                    // exempt still
-		{"edit", map[string]any{"filePath": "a.go"}},                                                 // allowed
-		{"bash", map[string]any{"command": "python3 -c 'print(1)' >/dev/null"}},                      // refused: /dev/null is not a write
-		{"bash", map[string]any{"command": "cat \"$(nightgauge layout path pipeline ctx.json)\""}},   // exempt
-		{"bash", map[string]any{"command": "printf 'x\\n' | nightgauge layout append logs a.log"}},   // write
-		{"read", map[string]any{"filePath": "/w/.git/nightgauge/plans/p.md"}},                        // exempt
-		{"read", map[string]any{"filePath": "/w/.git/config"}},                                       // refused: not per-clone state
+		{"read", map[string]any{"path": "internal/a.go"}},                                             // 1
+		{"read", map[string]any{"path": "skills/_shared/GOTCHAS.md"}},                                 // exempt
+		{"read", map[string]any{"path": "/home/u/.claude/plugins/ng/skills/_includes/x.md"}},          // exempt
+		{"read", map[string]any{"path": "skills/nightgauge-feature-planning/SKILL.md"}},               // exempt
+		{"read", map[string]any{"path": "/w/.git/nightgauge/pipeline/ctx.json"}},                      // exempt
+		{"write", map[string]any{"path": "notes.md"}},                                                 // not exploration
+		{"shell", map[string]any{"command": "cat a.go > b.go"}},                                       // write
+		{"shell", map[string]any{"command": "nightgauge layout write plans p.md --from p.md"}},        // write
+		{"shell", map[string]any{"command": "nightgauge layout write plans p.md <<'EOF'\nplan\nEOF"}}, // heredoc write
+		{"shell", map[string]any{"command": "echo \"=== phase ===\"; true"}},                          // marker
+		{"shell", map[string]any{"command": "KB=$(jq -r .x cfg.json); echo \"$KB\" 2>/dev/null"}},     // 2
+		{"shell", map[string]any{"command": "for f in internal/*.go; do head -3 $f; done"}},           // 3
+		{"read", map[string]any{"path": "skills/nightgauge-dev/SKILL.md"}},                            // refused: source, not exempt
+		{"shell", map[string]any{"command": "echo \"=== x ===\"; grep -n foo a.go"}},                  // refused
+		{"read", map[string]any{"path": "skills/_shared/SELF_ASSESSMENT.md"}},                         // exempt still
+		{"edit", map[string]any{"path": "a.go"}},                                                      // allowed
+		{"shell", map[string]any{"command": "python3 -c 'print(1)' >/dev/null"}},                      // refused: /dev/null is not a write
+		{"shell", map[string]any{"command": "cat \"$(nightgauge layout path pipeline ctx.json)\""}},   // exempt
+		{"shell", map[string]any{"command": "printf 'x\\n' | nightgauge layout append logs a.log"}},   // write
+		{"read", map[string]any{"path": "/w/.git/nightgauge/plans/p.md"}},                             // exempt
+		{"read", map[string]any{"path": "/w/.git/config"}},                                            // refused: not per-clone state
 	}
 	raw, _ := json.Marshal(calls)
 	run := func(budget string) []string {
@@ -114,19 +114,19 @@ func TestExplorationBudgetExemptsKnowledgeBase2193(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gates := filepath.Join(filepath.Dir(entry), "nightgauge", "gates.js")
+	gates := filepath.Join(entry, "nightgauge", "gates.js")
 	driver := filepath.Join(t.TempDir(), "driver.mjs")
 	if err := os.WriteFile(driver, []byte(budgetDriver), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	calls := [][]any{
-		{"read", map[string]any{"filePath": "internal/a.go"}}, // 1: spends the budget
-		{"read", map[string]any{"filePath": "/Users/u/Repositories/nightgauge/nightgauge/.nightgauge/knowledge/features/2087-doctor/PRD.md"}},
-		{"read", map[string]any{"filePath": "/Users/u/Repositories/nightgauge/nightgauge/.nightgauge/knowledge/features/2087-doctor/decisions.md"}},
-		{"bash", map[string]any{"command": "cat /Users/u/Repositories/nightgauge/nightgauge/.nightgauge/knowledge/INDEX.md"}},
-		{"read", map[string]any{"filePath": "/kb/custom/features/2087/PRD.md"}},
-		{"read", map[string]any{"filePath": "/kb/other/PRD.md"}},          // refused
-		{"read", map[string]any{"filePath": "/elsewhere/knowledge/x.md"}}, // refused
+		{"read", map[string]any{"path": "internal/a.go"}}, // 1: spends the budget
+		{"read", map[string]any{"path": "/Users/u/Repositories/nightgauge/nightgauge/.nightgauge/knowledge/features/2087-doctor/PRD.md"}},
+		{"read", map[string]any{"path": "/Users/u/Repositories/nightgauge/nightgauge/.nightgauge/knowledge/features/2087-doctor/decisions.md"}},
+		{"shell", map[string]any{"command": "cat /Users/u/Repositories/nightgauge/nightgauge/.nightgauge/knowledge/INDEX.md"}},
+		{"read", map[string]any{"path": "/kb/custom/features/2087/PRD.md"}},
+		{"read", map[string]any{"path": "/kb/other/PRD.md"}},          // refused
+		{"read", map[string]any{"path": "/elsewhere/knowledge/x.md"}}, // refused
 	}
 	raw, _ := json.Marshal(calls)
 	cmd := exec.Command(node, driver)

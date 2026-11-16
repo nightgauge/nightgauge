@@ -18,13 +18,12 @@
 // can decide synchronously, inside the opencode process. The one event it
 // cannot — "stop_verify", whose verdict is a separate `nightgauge hook
 // stop-verify` process's answer — is written by THAT process, through
-// AppendRunEvent below. The reason is measured, not stylistic: opencode
-// 1.18.30 does NOT await the promise a plugin's `event` hook returns, and a
-// one-shot `opencode run` exits within ~10 ms of publishing session.idle
-// (probe recorded on #1810: a continuation scheduled 20 ms out never runs at
-// all). Neither awaiting the verb inline nor recording it from a .then()
-// continuation can survive that exit; a child process can, so the child owns
-// the line.
+// AppendRunEvent below. The reason is measured, not stylistic: on 1.x a
+// one-shot `opencode run` exited within ~10 ms of publishing session.idle
+// without awaiting the plugin (#1810). On 2.x the plugin spawns the verb on
+// session.execution.succeeded/.failed and the event stream closes about
+// 200 ms later (#3302), still too soon to await the verdict inline, so the
+// child process keeps owning the line.
 //
 // The consequence for READERS — #1653 included — is that the events file
 // finalizes shortly AFTER the opencode CLI exits, not before it. Read it

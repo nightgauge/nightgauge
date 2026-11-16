@@ -5155,12 +5155,13 @@ nightgauge hook claude-statusline   # statusLine command — feeds the VS Code u
 ```
 
 `stop-verify` also takes `--emit-event [--session-id <id>] [--child]`, used
-only by the OpenCode plugin's `session.idle` hook. With it, the verdict code
+only by the OpenCode plugin when a session's execution ends
+(`session.execution.succeeded` or `.failed` on 2.x). With it, the verdict code
 (`complete`, `blocked`, `error` or `timeout`) is appended as one `stop_verify`
 line to the run's OpenCode events file instead of being printed, and the
 evaluation is bounded at 5 s. The plugin spawns this detached and never waits
-on it, because OpenCode does not await a plugin hook's promise and exits
-within milliseconds of going idle — so the process that computes the verdict
+on it, because a one-shot run shuts down right after its last session ends,
+before the plugin could observe the verb's result — so the process that computes the verdict
 is the one that records it (ADR-022, amendment 2026-09-15 #1810). Only the
 verdict code is ever recorded, never the block reason.
 

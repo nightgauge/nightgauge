@@ -127,12 +127,15 @@ func TestInstallNightgaugePluginAddsOnlyThePluginKey(t *testing.T) {
 	if !ok || len(plugins) != 1 {
 		t.Fatalf("plugins key = %v, want a single-entry array", patched["plugins"])
 	}
-	wantEntry := filepath.Join(run.PluginDir, opencodeplugin.EntryFile)
+	// OpenCode 2.x loads a local plugin only from a directory (#3302).
+	wantEntry := filepath.Clean(run.PluginDir)
 	if plugins[0] != wantEntry {
-		t.Errorf("plugin entry = %v, want %q", plugins[0], wantEntry)
+		t.Errorf("plugin entry = %v, want the plugin directory %q", plugins[0], wantEntry)
 	}
-	if _, err := os.Stat(wantEntry); err != nil {
-		t.Errorf("the plugin entry file was not written: %v", err)
+	for _, name := range []string{opencodeplugin.EntryFile, "nightgauge.js"} {
+		if _, err := os.Stat(filepath.Join(wantEntry, name)); err != nil {
+			t.Errorf("the plugin directory has no %s: %v", name, err)
+		}
 	}
 	if run.Env[openCodeConfigContentEnvVar] != run.ConfigContent {
 		t.Error("run.Env[OPENCODE_CONFIG_CONTENT] must be re-patched alongside run.ConfigContent")

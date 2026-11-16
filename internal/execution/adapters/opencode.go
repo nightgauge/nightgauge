@@ -729,7 +729,9 @@ func InstallNightgaugePlugin(ctx context.Context, run *OpenCodeRun, outputFile, 
 }
 
 // addNightgaugePluginToConfig sets content's top-level "plugins" key (2.x;
-// 1.x's "plugin") to an array holding exactly entry, leaving every other key's
+// 1.x's "plugin") to an array holding exactly entry, the plugin directory
+// opencodeplugin.Write returned (2.x loads a local plugin only from a
+// directory, #3302), leaving every other key's
 // value unchanged, and validates the result (validateOpenCodeConfigDocument),
 // so the document OpenCode receives is the validated one. content is decoded
 // generically (map[string]any) rather than through openCodeConfigJSON, so a

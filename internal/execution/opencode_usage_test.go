@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/terminalkind"
 )
@@ -756,7 +757,7 @@ esac
 echo STAGE >> %[6]q
 echo $$ > %[5]q
 if [ -n "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL" ]; then
-  printf '{"nonce":"%%s","plugin_version":"1","hooks":[]}' "$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+  printf '{"nonce":"%%s","plugin_version":"`+opencodeplugin.PluginVersion+`","hooks":[]}' "$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
   # A replayed capture's own events carry the ORIGINAL run's historical
   # timestamps, arbitrarily earlier than this test process's clock — so a
   # sentinel written just now would always read as "late" against them

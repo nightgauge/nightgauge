@@ -41,7 +41,7 @@ import (
 // export below. It is a package variable rather than a direct os.Executable
 // reference because NIGHTGAUGE_BIN is not merely informational any more: the
 // OpenCode plugin SPAWNS it, as `nightgauge hook stop-verify` on every
-// session.idle (#1641). Under `go test`, os.Executable is the Go TEST
+// session.execution.succeeded/.failed (#1641, #3302). Under `go test`, os.Executable is the Go TEST
 // binary, so that spawn re-runs the whole test binary — measured on
 // internal/execution's own suite at 104.5 s of forked git work, orphaned
 // past the test that started it, and bounded only by the plugin's 5 s kill.

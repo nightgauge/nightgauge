@@ -42,16 +42,18 @@ func TestSessionJSNeverPromptsTheModel(t *testing.T) {
 }
 
 // --- Node harness: imports session.js directly (not through nightgauge.js's
-// gates.js-gated tool.execute.before) and drives one or more of its exports
-// in sequence, in the same Node process, so a rate-limit test can observe
-// state (lastNotifyAt, eventsTruncated) surviving across calls exactly as it
-// does inside one real opencode process. ---
+// gates.js-gated execute.before) and drives one or more of its exports in
+// sequence, in the same Node process, so a rate-limit test can observe state
+// (lastNotifyAt, eventsTruncated) surviving across calls exactly as it does
+// inside one real opencode process. Every export takes (ctx, arg), arg being
+// the 2.x hook argument or bus event; the harness reports arg after the call,
+// since a hook's effect is a mutation of its argument. ---
 
 const sessionHarnessDriver = `
 import { pathToFileURL } from "node:url";
 
 const mod = await import(pathToFileURL(process.env.NG_SESSION_PATH).href);
-const ctx = { directory: process.env.NG_CWD, worktree: process.env.NG_CWD };
+const ctx = { location: { directory: process.env.NG_CWD } };
 const calls = JSON.parse(process.env.NG_CALLS);
 
 const results = [];
@@ -59,26 +61,32 @@ for (const call of calls) {
   const fn = mod[call.fn];
   let threw = false;
   let message = "";
-  const output = call.output === undefined ? undefined : call.output;
   try {
-    if (call.fn === "event") {
-      await fn(ctx, call.input);
-    } else {
-      await fn(ctx, call.input, output);
-    }
+    await fn(ctx, call.input);
   } catch (e) {
     threw = true;
     message = String(e && e.message ? e.message : e);
   }
-  results.push({ threw, message, output });
+  results.push({ threw, message, output: call.input });
 }
 process.stdout.write(JSON.stringify(results));
 `
 
 type sessionCall struct {
-	Fn     string `json:"fn"`
-	Input  any    `json:"input"`
-	Output any    `json:"output,omitempty"`
+	Fn    string `json:"fn"`
+	Input any    `json:"input"`
+}
+
+// busEvent is a 2.x bus event as ctx.event.subscribe yields it on 2.2.7:
+// {id, created, type, location, data}.
+func busEvent(eventType string, data map[string]any) map[string]any {
+	return map[string]any{
+		"id":       "evt_test",
+		"created":  1,
+		"type":     eventType,
+		"location": map[string]any{"directory": "/w"},
+		"data":     data,
+	}
 }
 
 type sessionCallResult struct {
@@ -96,7 +104,7 @@ func sessionModulePath(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return filepath.Join(filepath.Dir(entry), "nightgauge", "session.js")
+	return filepath.Join(entry, "nightgauge", "session.js")
 }
 
 // runSessionHarness drives calls against session.js directly in one Node
@@ -144,122 +152,85 @@ func runSessionHarness(t *testing.T, node, cwd string, calls []sessionCall, extr
 	return results
 }
 
-// --- experimental.session.compacting ---
+// --- session.hook("compaction") ---
 
-// TestSessionCompactingInjectsContext: invoking the compacting hook in a
-// temp git repo on branch feat/42-x yields output.context containing
-// "branch":"feat/42-x" — the AC's own verification bullet, driven against
-// the real built nightgauge binary's `hook inject-context` verb.
-func TestSessionCompactingInjectsContext(t *testing.T) {
+// compactionSystemTexts returns the text of every part of a compaction
+// argument's system array, as the harness reported it after the call.
+func compactionSystemTexts(t *testing.T, raw json.RawMessage) []string {
+	t.Helper()
+	var arg struct {
+		System []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"system"`
+	}
+	if err := json.Unmarshal(raw, &arg); err != nil {
+		t.Fatalf("arg did not parse: %v (%s)", err, raw)
+	}
+	var out []string
+	for _, p := range arg.System {
+		if p.Type == "text" {
+			out = append(out, p.Text)
+		}
+	}
+	return out
+}
+
+// compactionArg is the shape 2.2.7 hands ctx.session.hook("compaction"),
+// trimmed to what session.js reads.
+func compactionArg() map[string]any {
+	return map[string]any{
+		"sessionID": "ses_1",
+		"agent":     "build",
+		"system":    []any{map[string]any{"type": "text", "text": "You are an AI agent running in OpenCode."}},
+		"messages":  []any{},
+	}
+}
+
+// TestSessionCompactionInjectsContext: invoking the compaction hook in a
+// temp git repo on branch feat/42-x appends one system text part whose JSON
+// names "branch":"feat/42-x", driven against the real built nightgauge
+// binary's `hook inject-context` verb. The existing system part is kept.
+func TestSessionCompactionInjectsContext(t *testing.T) {
 	node := requireNode(t)
 	bin := buildNightgaugeBin(t)
 	root := initGitRepoOnBranch(t, "feat/42-x")
 
-	calls := []sessionCall{{
-		Fn:     "sessionCompacting",
-		Input:  map[string]any{"sessionID": "ses_1"},
-		Output: map[string]any{"context": []any{}},
-	}}
-	results := runSessionHarness(t, node, root, calls, map[string]string{"NIGHTGAUGE_BIN": bin})
+	results := runSessionHarness(t, node, root, []sessionCall{{Fn: "sessionCompaction", Input: compactionArg()}}, map[string]string{"NIGHTGAUGE_BIN": bin})
 	if len(results) != 1 {
 		t.Fatalf("got %d results, want 1", len(results))
 	}
 	if results[0].Threw {
-		t.Fatalf("sessionCompacting threw: %s", results[0].Message)
+		t.Fatalf("sessionCompaction threw: %s", results[0].Message)
 	}
-	var output struct {
-		Context []string `json:"context"`
+	texts := compactionSystemTexts(t, results[0].Output)
+	if len(texts) != 2 || texts[0] != "You are an AI agent running in OpenCode." {
+		t.Fatalf("system texts = %q, want the original part plus one injected part", texts)
 	}
-	if err := json.Unmarshal(results[0].Output, &output); err != nil {
-		t.Fatalf("output did not parse: %v (%s)", err, results[0].Output)
+	var parsed struct {
+		Branch string `json:"branch"`
 	}
-	// `nightgauge hook inject-context` prints via cmd/nightgauge's printJSON,
-	// which pretty-prints (json.MarshalIndent: a space after every colon), so
-	// the injected entry reads `"branch": "feat/42-x"`, not the compact
-	// `"branch":"feat/42-x"` the issue text describes — verified empirically
-	// here rather than assumed; parsing the entry as JSON is robust to that
-	// either way.
-	found := false
-	for _, c := range output.Context {
-		var parsed struct {
-			Branch string `json:"branch"`
-		}
-		if err := json.Unmarshal([]byte(c), &parsed); err == nil && parsed.Branch == "feat/42-x" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("output.context = %v, want an entry whose parsed \"branch\" field is \"feat/42-x\"", output.Context)
+	if err := json.Unmarshal([]byte(texts[1]), &parsed); err != nil || parsed.Branch != "feat/42-x" {
+		t.Errorf("injected part = %q (err %v), want JSON whose \"branch\" is \"feat/42-x\"", texts[1], err)
 	}
 }
 
-// TestSessionCompactingSkipsWithoutBin: with no NIGHTGAUGE_BIN, compaction
-// context is skipped, never thrown.
-func TestSessionCompactingSkipsWithoutBin(t *testing.T) {
+// TestSessionCompactionSkipsWithoutBin: with no NIGHTGAUGE_BIN, compaction
+// context is skipped, never thrown, and the system array is untouched.
+func TestSessionCompactionSkipsWithoutBin(t *testing.T) {
 	node := requireNode(t)
 	root := t.TempDir()
 
-	calls := []sessionCall{{
-		Fn:     "sessionCompacting",
-		Input:  map[string]any{"sessionID": "ses_1"},
-		Output: map[string]any{"context": []any{}},
-	}}
-	results := runSessionHarness(t, node, root, calls, nil)
+	results := runSessionHarness(t, node, root, []sessionCall{{Fn: "sessionCompaction", Input: compactionArg()}}, nil)
 	if results[0].Threw {
 		t.Fatalf("want no throw with NIGHTGAUGE_BIN unset, got %s", results[0].Message)
 	}
-	var output struct {
-		Context []string `json:"context"`
-	}
-	if err := json.Unmarshal(results[0].Output, &output); err != nil {
-		t.Fatal(err)
-	}
-	if len(output.Context) != 0 {
-		t.Errorf("output.context = %v, want empty (no NIGHTGAUGE_BIN to inject from)", output.Context)
+	if texts := compactionSystemTexts(t, results[0].Output); len(texts) != 1 {
+		t.Errorf("system texts = %q, want only the original part (no NIGHTGAUGE_BIN to inject from)", texts)
 	}
 }
 
-// --- experimental.compaction.autocontinue ---
-
-// TestCompactionAutocontinueBoundedPerSession: a session's first two
-// compactions keep the synthetic continue turn, so a stage that compacted
-// mid-task resumes it (#2180); the third and later are disabled, so a
-// compact/continue loop still ends. Each session counts on its own, and the
-// hook never spawns anything.
-func TestCompactionAutocontinueBoundedPerSession(t *testing.T) {
-	node := requireNode(t)
-	root := t.TempDir()
-
-	call := func(session string) sessionCall {
-		return sessionCall{
-			Fn:     "compactionAutocontinue",
-			Input:  map[string]any{"sessionID": session, "overflow": false},
-			Output: map[string]any{"enabled": true},
-		}
-	}
-	calls := []sessionCall{call("ses_1"), call("ses_1"), call("ses_1"), call("ses_2"), call("ses_1")}
-	want := []bool{true, true, false, true, false}
-	results := runSessionHarness(t, node, root, calls, nil)
-	if len(results) != len(calls) {
-		t.Fatalf("got %d results, want %d", len(results), len(calls))
-	}
-	for i, r := range results {
-		if r.Threw {
-			t.Fatalf("call %d: compactionAutocontinue threw: %s", i, r.Message)
-		}
-		var output struct {
-			Enabled bool `json:"enabled"`
-		}
-		if err := json.Unmarshal(r.Output, &output); err != nil {
-			t.Fatal(err)
-		}
-		if output.Enabled != want[i] {
-			t.Errorf("call %d: output.enabled = %v, want %v", i, output.Enabled, want[i])
-		}
-	}
-}
-
-// --- event: session.idle -> idle, stop_verify ---
+// --- event: session.execution.succeeded -> idle, stop_verify ---
 
 // stopVerifyWaitBound is how long a test waits for the detached `hook
 // stop-verify --emit-event` child to append its line. A real stop-verify
@@ -270,14 +241,13 @@ const stopVerifyWaitBound = 30 * time.Second
 // TestEventIdleStopVerifyEventSurvivesItsHostProcess is #1810's own
 // regression test, and the one that distinguishes every candidate fix.
 //
-// Measured against the pinned opencode 1.18.30 binary: opencode does NOT
-// await the promise a plugin's `event` hook returns, and a one-shot
-// `opencode run` exits within ~10 ms of publishing session.idle (a probe
-// plugin whose event hook awaited 1200 ms never reached the line after its
-// await, and a .then() scheduled 20 ms out never ran). This driver
-// reproduces exactly that: it calls event(session.idle) and then kills its
-// own process with process.exit(0) on the very next tick, allowing NOTHING
-// the plugin scheduled to run afterwards.
+// Measured against opencode 1.18.30, a one-shot `opencode run` exited within
+// ~10 ms of publishing session.idle; on 2.2.7 the event stream closed ~200 ms
+// after session.execution.succeeded (#3302). Either way the process can be
+// gone before anything the plugin scheduled runs. This driver reproduces
+// that: it calls event(session.execution.succeeded) and then kills its own
+// process with process.exit(0) on the very next tick, allowing NOTHING the
+// plugin scheduled to run afterwards.
 //
 // Against #1641's fix-forward shape — the verdict recorded from a .then()
 // continuation on an in-process spawn — no stop_verify line is ever written
@@ -304,16 +274,15 @@ func TestEventIdleStopVerifyEventSurvivesItsHostProcess(t *testing.T) {
 	driver := `
 import { pathToFileURL } from "node:url";
 const mod = await import(pathToFileURL(process.env.NG_SESSION_PATH).href);
-const ctx = { directory: process.env.NG_CWD, worktree: process.env.NG_CWD };
+const ctx = { location: { directory: process.env.NG_CWD } };
 
 const t0 = Date.now();
-await mod.event(ctx, {
-  event: { type: "session.idle", properties: { sessionID: "ses_survives_1" } },
-});
+await mod.event(ctx, { type: "session.execution.succeeded", data: { sessionID: "ses_survives_1" } });
 process.stdout.write(JSON.stringify({ idleMs: Date.now() - t0 }));
-// Exactly what opencode 1.18.30 does ~10ms after publishing session.idle:
-// tear the process down, running no queued continuation, no timer and no
-// pending await.
+// A one-shot run shuts down right after its last session ends (1.18.30
+// exited ~10ms after session.idle; 2.2.7 closed the event stream ~200ms after
+// session.execution.succeeded): tear the process down, running no queued
+// continuation, no timer and no pending await.
 process.exit(0);
 `
 	driverPath := filepath.Join(t.TempDir(), "driver.mjs")
@@ -353,7 +322,7 @@ process.exit(0);
 	// started and let go of, so this is a handful of milliseconds even though
 	// the verb it starts has real work to do.
 	if timing.IdleMs >= 1000 {
-		t.Errorf("event(session.idle) took %dms; it must never wait on the stop-verify verb at all", timing.IdleMs)
+		t.Errorf("event(session.execution.succeeded) took %dms; it must never wait on the stop-verify verb at all", timing.IdleMs)
 	}
 
 	// Invariant (ii): the verdict is not lost, even though the process that
@@ -391,9 +360,7 @@ func TestEventIdleRecordsNoBinWhenTheVerbCannotRun(t *testing.T) {
 	root := t.TempDir()
 
 	notExecutable := filepath.Join(t.TempDir(), "not-a-binary")
-	if err := os.WriteFile(notExecutable, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeShFixture(t, notExecutable, "exit 0\n", 0o600)
 
 	outputFile := filepath.Join(t.TempDir(), "output", "run.json")
 	if err := os.MkdirAll(filepath.Dir(outputFile), 0o700); err != nil {
@@ -407,7 +374,7 @@ func TestEventIdleRecordsNoBinWhenTheVerbCannotRun(t *testing.T) {
 
 	calls := []sessionCall{{
 		Fn:    "event",
-		Input: map[string]any{"event": map[string]any{"type": "session.idle", "properties": map[string]any{"sessionID": "ses_nobin_1"}}},
+		Input: busEvent("session.execution.succeeded", map[string]any{"sessionID": "ses_nobin_1"}),
 	}}
 	results := runSessionHarness(t, node, root, calls, map[string]string{
 		"NIGHTGAUGE_BIN":         notExecutable,
@@ -415,7 +382,7 @@ func TestEventIdleRecordsNoBinWhenTheVerbCannotRun(t *testing.T) {
 		"NIGHTGAUGE_RUN_ID":      runID,
 	})
 	if results[0].Threw {
-		t.Fatalf("event(session.idle) threw: %s", results[0].Message)
+		t.Fatalf("event(session.execution.succeeded) threw: %s", results[0].Message)
 	}
 
 	// No wait: this verdict must already be on disk when the hook returns.
@@ -441,7 +408,7 @@ func TestEventIdleRecordsNoBinWhenTheVerbCannotRun(t *testing.T) {
 // TestEventIdleWritesStopVerifyEvent: an idle event writes an "idle" line
 // followed by a "stop_verify" line to the run's events file, with a verdict
 // and no other free text. Removing the event handler's "idle" append (or its
-// session.idle branch entirely) turns this red.
+// terminal-event branch entirely) turns this red.
 //
 // The two lines come from two processes now (#1810): "idle" from the plugin,
 // "stop_verify" from the detached `hook stop-verify --emit-event` child,
@@ -464,7 +431,7 @@ func TestEventIdleWritesStopVerifyEvent(t *testing.T) {
 
 	calls := []sessionCall{{
 		Fn:    "event",
-		Input: map[string]any{"event": map[string]any{"type": "session.idle", "properties": map[string]any{"sessionID": "ses_idle_1"}}},
+		Input: busEvent("session.execution.succeeded", map[string]any{"sessionID": "ses_idle_1"}),
 	}}
 	results := runSessionHarness(t, node, root, calls, map[string]string{
 		"NIGHTGAUGE_BIN":         bin,
@@ -472,7 +439,7 @@ func TestEventIdleWritesStopVerifyEvent(t *testing.T) {
 		"NIGHTGAUGE_RUN_ID":      runID,
 	})
 	if results[0].Threw {
-		t.Fatalf("event(session.idle) threw: %s", results[0].Message)
+		t.Fatalf("event(session.execution.succeeded) threw: %s", results[0].Message)
 	}
 
 	events, err := WaitForRunEvent(eventsFile, "stop_verify", stopVerifyWaitBound)
@@ -501,29 +468,13 @@ func TestEventIdleWritesStopVerifyEvent(t *testing.T) {
 	}
 }
 
-// --- tool.execute.before: skill usage (via the real plugin, gates.js AND
-// session.js both wired, exactly as nightgauge.js composes them) ---
+// --- execute.before: skill usage (via the real plugin on the fake 2.x host,
+// gates.js AND session.js both wired, exactly as nightgauge.js composes them) ---
 
-const skillToolDriver = `
-import { pathToFileURL } from "node:url";
-
-const mod = await import(pathToFileURL(process.env.NG_PLUGIN_PATH).href);
-const plugin = mod.NightgaugePlugin || mod.default;
-const ctx = { directory: process.env.NG_CWD, worktree: process.env.NG_CWD };
-const hooks = await plugin(ctx);
-
-const input = { tool: "skill", sessionID: "s", callID: "c" };
-const output = { args: { skill: process.env.NG_SKILL || "" } };
-
-let result;
-try {
-  await hooks["tool.execute.before"](input, output);
-  result = { threw: false };
-} catch (e) {
-  result = { threw: true, message: String(e && e.message ? e.message : e) };
-}
-process.stdout.write(JSON.stringify(result));
-`
+var skillToolDriver = hostDriver(`
+const arg = toolArg("skill", { name: process.env.NG_SKILL || "" });
+process.stdout.write(JSON.stringify(await runToolCall(host, arg)));
+`)
 
 func runSkillToolHarness(t *testing.T, node, cwd, skill, nightgaugeBin string) nodeHarnessResult {
 	t.Helper()
@@ -538,7 +489,7 @@ func runSkillToolHarness(t *testing.T, node, cwd, skill, nightgaugeBin string) n
 	}
 	cmd := exec.Command(node, driver)
 	env := append(os.Environ(),
-		"NG_PLUGIN_PATH="+entry,
+		"NG_PLUGIN_PATH="+filepath.Join(entry, EntryFile),
 		"NG_CWD="+cwd,
 		"NG_SKILL="+skill,
 	)
@@ -570,9 +521,7 @@ func TestSkillToolCallFailsOpen(t *testing.T) {
 	node := requireNode(t)
 	root := t.TempDir()
 	exit1 := filepath.Join(t.TempDir(), "exit1.sh")
-	if err := os.WriteFile(exit1, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShFixture(t, exit1, "exit 1\n", 0o755)
 	res := runSkillToolHarness(t, node, root, "nightgauge:some-skill", exit1)
 	if res.Threw {
 		t.Fatalf("want no throw when the skill-usage verb exits 1, got %q", res.Message)
@@ -611,122 +560,21 @@ func TestSkillToolCallLogsUsage(t *testing.T) {
 	}
 }
 
-// --- permission.ask ---
-
-// TestPermissionAskThrottlesNotify: three permission.ask calls in quick
-// succession (the same Node process, so the same in-memory throttle state a
-// real opencode process would keep) produce exactly one notify spawn, and
-// output.status is unchanged after every call.
-func TestPermissionAskThrottlesNotify(t *testing.T) {
-	node := requireNode(t)
-	root := t.TempDir()
-	counter := filepath.Join(t.TempDir(), "notify-calls.txt")
-	counterScript := filepath.Join(t.TempDir(), "count-notify.sh")
-	// POSIX sh only: `<<<` is a bash/zsh herestring dash (Ubuntu's /bin/sh)
-	// rejects, which silently never wrote the counter file in CI (this
-	// workspace's own required Go build & test job runs on ubuntu-latest).
-	script := "#!/bin/sh\necho 1 >> " + shellQuote(counter) + "\nexit 0\n"
-	if err := os.WriteFile(counterScript, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	perm := map[string]any{"id": "p1", "type": "bash", "sessionID": "ses_perm_1", "messageID": "m1", "title": "run a command", "metadata": map[string]any{}, "time": map[string]any{"created": 1}}
-	calls := []sessionCall{
-		{Fn: "permissionAsk", Input: perm, Output: map[string]any{"status": "ask"}},
-		{Fn: "permissionAsk", Input: perm, Output: map[string]any{"status": "ask"}},
-		{Fn: "permissionAsk", Input: perm, Output: map[string]any{"status": "ask"}},
-	}
-	results := runSessionHarness(t, node, root, calls, map[string]string{"NIGHTGAUGE_BIN": counterScript})
-	for i, r := range results {
-		if r.Threw {
-			t.Fatalf("call %d threw: %s", i, r.Message)
-		}
-		var output struct {
-			Status string `json:"status"`
-		}
-		if err := json.Unmarshal(r.Output, &output); err != nil {
-			t.Fatal(err)
-		}
-		if output.Status != "ask" {
-			t.Errorf("call %d: output.status = %q, want unchanged \"ask\"", i, output.Status)
-		}
-	}
-
-	data, err := os.ReadFile(counter)
-	if err != nil {
-		t.Fatalf("the notify script never ran even once: %v", err)
-	}
-	lines := strings.TrimSpace(string(data))
-	got := 0
-	if lines != "" {
-		got = len(strings.Split(lines, "\n"))
-	}
-	if got != 1 {
-		t.Errorf("notify spawned %d times for 3 calls in the same 60s window, want exactly 1", got)
-	}
-}
-
-// TestPermissionAskEmitsEvent: every permission.ask call, throttled or not,
-// records a permission_ask event.
-func TestPermissionAskEmitsEvent(t *testing.T) {
-	node := requireNode(t)
-	root := t.TempDir()
-	outputFile := filepath.Join(t.TempDir(), "output", "run.json")
-	if err := os.MkdirAll(filepath.Dir(outputFile), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	runID := "run-perm-1"
-	eventsFile, ok := EventsPath(outputFile, runID)
-	if !ok {
-		t.Fatal("test premise broken")
-	}
-
-	perm := map[string]any{"id": "p1", "type": "bash", "sessionID": "ses_perm_2", "messageID": "m1", "title": "run a command", "metadata": map[string]any{}, "time": map[string]any{"created": 1}}
-	calls := []sessionCall{{Fn: "permissionAsk", Input: perm, Output: map[string]any{"status": "ask"}}}
-	results := runSessionHarness(t, node, root, calls, map[string]string{
-		"NIGHTGAUGE_OUTPUT_FILE": outputFile,
-		"NIGHTGAUGE_RUN_ID":      runID,
-	})
-	if results[0].Threw {
-		t.Fatalf("permissionAsk threw: %s", results[0].Message)
-	}
-
-	events, err := ReadRunEvents(eventsFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 1 || events[0].Kind != "permission_ask" {
-		t.Fatalf("events = %+v, want exactly one permission_ask event", events)
-	}
-	if events[0].SessionID != "ses_perm_2" {
-		t.Errorf("session_id = %q, want ses_perm_2", events[0].SessionID)
-	}
-	if events[0].Detail["permission_type"] != "bash" {
-		t.Errorf("detail.permission_type = %v, want \"bash\"", events[0].Detail["permission_type"])
-	}
-}
-
-// --- event: permission.asked (the path opencode 1.18.30 actually triggers;
-// the permission.ask hook above never fires on that binary — see session.js's
-// own comment on permissionAsk) ---
+// --- event: permission.asked (no ctx.permission.hook name fired on 2.2.7, so
+// the bus event is the only path a permission ask reaches the plugin) ---
 
 // TestEventPermissionAskedEmitsEventAndThrottlesNotify: event() with a
-// permission.asked bus event (1.18.30's real shape: {id, sessionID,
-// permission, patterns, metadata, always, tool}) records a permission_ask
-// event carrying only permission_type, never the model-authored `patterns`
-// text, and applies the same 60s per-session notify throttle permissionAsk
-// does. Removing event()'s permission.asked branch turns this red — the
-// production defect this covers: the plugin's permission.ask hook export is
-// never called by the pinned binary at all.
+// permission.asked bus event (2.2.7's shape: data {id, sessionID, action,
+// resources, save, source}) records a permission_ask event carrying only
+// permission_type (the action), never the model-authored `resources` text,
+// and applies the 60s per-session notify throttle. Removing event()'s
+// permission.asked branch turns this red.
 func TestEventPermissionAskedEmitsEventAndThrottlesNotify(t *testing.T) {
 	node := requireNode(t)
 	root := t.TempDir()
 	counter := filepath.Join(t.TempDir(), "notify-calls.txt")
 	counterScript := filepath.Join(t.TempDir(), "count-notify.sh")
-	script := "#!/bin/sh\necho 1 >> " + shellQuote(counter) + "\nexit 0\n"
-	if err := os.WriteFile(counterScript, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShFixture(t, counterScript, "echo 1 >> "+shellQuote(counter)+"\nexit 0\n", 0o755)
 	outputFile := filepath.Join(t.TempDir(), "output", "run.json")
 	if err := os.MkdirAll(filepath.Dir(outputFile), 0o700); err != nil {
 		t.Fatal(err)
@@ -737,22 +585,21 @@ func TestEventPermissionAskedEmitsEventAndThrottlesNotify(t *testing.T) {
 		t.Fatal("test premise broken")
 	}
 
-	permAsked := map[string]any{
-		"type": "permission.asked",
-		"properties": map[string]any{
-			"id":         "per_1",
-			"sessionID":  "ses_perm_asked_1",
-			"permission": "bash",
-			"patterns":   []any{"echo the deploy key is SECRET-PLACEHOLDER"},
-			"metadata":   map[string]any{"command": "echo the deploy key is SECRET-PLACEHOLDER"},
-			"always":     []any{"echo *"},
-			"tool":       map[string]any{"messageID": "m1", "callID": "c1"},
-		},
+	// 2.2.7's permission.asked data, observed on a rejected `ask`.
+	permAsked := func() map[string]any {
+		return busEvent("permission.asked", map[string]any{
+			"id":        "per_1",
+			"sessionID": "ses_perm_asked_1",
+			"action":    "shell",
+			"resources": []any{"echo the deploy key is SECRET-PLACEHOLDER"},
+			"save":      []any{"echo *"},
+			"source":    map[string]any{"type": "tool", "messageID": "m1", "id": "c1"},
+		})
 	}
 	calls := []sessionCall{
-		{Fn: "event", Input: map[string]any{"event": permAsked}},
-		{Fn: "event", Input: map[string]any{"event": permAsked}},
-		{Fn: "event", Input: map[string]any{"event": permAsked}},
+		{Fn: "event", Input: permAsked()},
+		{Fn: "event", Input: permAsked()},
+		{Fn: "event", Input: permAsked()},
 	}
 	results := runSessionHarness(t, node, root, calls, map[string]string{
 		"NIGHTGAUGE_BIN":         counterScript,
@@ -779,8 +626,8 @@ func TestEventPermissionAskedEmitsEventAndThrottlesNotify(t *testing.T) {
 		if ev.SessionID != "ses_perm_asked_1" {
 			t.Errorf("events[%d].session_id = %q, want ses_perm_asked_1", i, ev.SessionID)
 		}
-		if ev.Detail["permission_type"] != "bash" {
-			t.Errorf("events[%d].detail.permission_type = %v, want bash", i, ev.Detail["permission_type"])
+		if ev.Detail["permission_type"] != "shell" {
+			t.Errorf("events[%d].detail.permission_type = %v, want shell", i, ev.Detail["permission_type"])
 		}
 		if _, hasPatterns := ev.Detail["patterns"]; hasPatterns {
 			t.Errorf("events[%d].detail carries patterns (model-authored command text); must never be recorded", i)
@@ -822,18 +669,19 @@ func TestChildSessionEventsAreTaggedChild(t *testing.T) {
 		t.Fatal("test premise broken")
 	}
 
-	sessionUpdated := func(id, parentID string) map[string]any {
-		info := map[string]any{"id": id}
+	// 2.2.7's session.created data: a subagent's session carries parentID.
+	sessionCreated := func(id, parentID string) map[string]any {
+		data := map[string]any{"sessionID": id, "agent": "general"}
 		if parentID != "" {
-			info["parentID"] = parentID
+			data["parentID"] = parentID
 		}
-		return map[string]any{"type": "session.updated", "properties": map[string]any{"info": info}}
+		return busEvent("session.created", data)
 	}
 	calls := []sessionCall{
-		{Fn: "event", Input: map[string]any{"event": sessionUpdated("ses_parent", "")}},
-		{Fn: "event", Input: map[string]any{"event": sessionUpdated("ses_child", "ses_parent")}},
-		{Fn: "event", Input: map[string]any{"event": map[string]any{"type": "session.compacted", "properties": map[string]any{"sessionID": "ses_parent"}}}},
-		{Fn: "event", Input: map[string]any{"event": map[string]any{"type": "session.compacted", "properties": map[string]any{"sessionID": "ses_child"}}}},
+		{Fn: "event", Input: sessionCreated("ses_parent", "")},
+		{Fn: "event", Input: sessionCreated("ses_child", "ses_parent")},
+		{Fn: "event", Input: busEvent("session.compaction.started", map[string]any{"sessionID": "ses_parent", "reason": "auto"})},
+		{Fn: "event", Input: busEvent("session.compaction.started", map[string]any{"sessionID": "ses_child", "reason": "auto"})},
 	}
 	results := runSessionHarness(t, node, root, calls, map[string]string{
 		"NIGHTGAUGE_OUTPUT_FILE": outputFile,
@@ -873,7 +721,7 @@ func TestChildSessionEventsAreTaggedChild(t *testing.T) {
 // under SPAWN_TIMEOUT_MS, so it completes on its own rather than being
 // killed by the bound) before appending to a marker file and exiting 0.
 // Against session.js's own original synchronous spawnSync, both
-// event(session.idle) (-> `hook stop-verify`) and event(permission.asked)
+// event(session.execution.succeeded) (-> `hook stop-verify`) and event(permission.asked)
 // (-> `hook notify`) block for the full 3s the shim sleeps, because
 // spawnSync freezes the whole process, including the very call that is
 // waiting on it — this test is red there. Against the fix, both calls return
@@ -881,8 +729,8 @@ func TestChildSessionEventsAreTaggedChild(t *testing.T) {
 //
 // The two children have deliberately DIFFERENT lifetimes (#1810), and this
 // test asserts both. The permission.asked child is an ordinary runHook
-// spawn: this process waits on it, so its marker is written before the
-// driver exits. The session.idle child is runHookDetached and unref'd — it
+// spawn, fire-and-forget: Node keeps the driver alive until it exits, so its
+// marker is written before the driver exits. The terminal-event child is runHookDetached and unref'd — it
 // must outlive this process, because on a terminal event nothing here will
 // be alive to record its result — so its marker is polled for AFTER the
 // driver exits, and a shim that had been killed with its parent would never
@@ -894,10 +742,7 @@ func TestEventIdleAndPermissionHandlersReturnQuicklyWithAHungHook(t *testing.T) 
 	shim := filepath.Join(t.TempDir(), "slow-hook.sh")
 	// $2 is the verb ("stop-verify" or "notify"), so one shim serves both
 	// paths and the marker says which child reached the finish line.
-	script := "#!/bin/sh\nsleep 3\necho \"$2\" >> " + shellQuote(marker) + "\nexit 0\n"
-	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShFixture(t, shim, "sleep 3\necho \"$2\" >> "+shellQuote(marker)+"\nexit 0\n", 0o755)
 
 	outputFile := filepath.Join(t.TempDir(), "output", "run.json")
 	if err := os.MkdirAll(filepath.Dir(outputFile), 0o700); err != nil {
@@ -907,7 +752,7 @@ func TestEventIdleAndPermissionHandlersReturnQuicklyWithAHungHook(t *testing.T) 
 	driver := `
 import { pathToFileURL } from "node:url";
 const mod = await import(pathToFileURL(process.env.NG_SESSION_PATH).href);
-const ctx = { directory: process.env.NG_CWD, worktree: process.env.NG_CWD };
+const ctx = { location: { directory: process.env.NG_CWD } };
 
 async function timed(run) {
   const t0 = Date.now();
@@ -916,14 +761,12 @@ async function timed(run) {
 }
 
 const idleMs = await timed(() =>
-  mod.event(ctx, { event: { type: "session.idle", properties: { sessionID: "ses_slow_1" } } })
+  mod.event(ctx, { type: "session.execution.succeeded", data: { sessionID: "ses_slow_1" } })
 );
 const permMs = await timed(() =>
   mod.event(ctx, {
-    event: {
-      type: "permission.asked",
-      properties: { id: "p1", sessionID: "ses_slow_2", permission: "bash" },
-    },
+    type: "permission.asked",
+    data: { id: "p1", sessionID: "ses_slow_2", action: "shell" },
   })
 );
 
@@ -959,7 +802,7 @@ process.stdout.write(JSON.stringify({ idleMs, permMs }));
 		t.Fatalf("driver printed non-JSON: %s (%v)", out, err)
 	}
 	if timing.IdleMs >= 1000 {
-		t.Errorf("event(session.idle) took %dms against a 3s-hung hook verb; want well under 1000ms — session.js must never block opencode's event loop on a slow spawn", timing.IdleMs)
+		t.Errorf("event(session.execution.succeeded) took %dms against a 3s-hung hook verb; want well under 1000ms — session.js must never block opencode's event loop on a slow spawn", timing.IdleMs)
 	}
 	if timing.PermMs >= 1000 {
 		t.Errorf("event(permission.asked) took %dms against a 3s-hung hook verb; want well under 1000ms", timing.PermMs)
@@ -970,7 +813,7 @@ process.stdout.write(JSON.stringify({ idleMs, permMs }));
 	if raw, err := os.ReadFile(marker); err != nil || !strings.Contains(string(raw), "notify") {
 		t.Errorf("the notify verb's marker line (written after its 3s sleep) is missing: %v / %q — the child was killed early rather than left to finish and reaped", err, raw)
 	}
-	// The session.idle child is detached and unref'd: it MUST still be
+	// The terminal-event child is detached and unref'd: it MUST still be
 	// running now, and must finish on its own. A child killed with its parent
 	// never writes this line.
 	deadline := time.Now().Add(15 * time.Second)
@@ -1013,14 +856,13 @@ func TestSkillToolRejectsFreeTextAndNestedArgs(t *testing.T) {
 	driver := `
 import { pathToFileURL } from "node:url";
 const mod = await import(pathToFileURL(process.env.NG_SESSION_PATH).href);
-const ctx = { directory: process.env.NG_CWD, worktree: process.env.NG_CWD };
+const ctx = { location: { directory: process.env.NG_CWD } };
 const cases = JSON.parse(process.env.NG_ARGS);
 const results = [];
 for (const args of cases) {
-  const input = { tool: "skill", sessionID: "s", callID: "c" };
-  const output = { args };
+  const arg = { tool: "skill", sessionID: "s", agent: "build", messageID: "m", id: "c", input: args };
   try {
-    await mod.toolExecuteBefore(ctx, input, output);
+    await mod.toolExecuteBefore(ctx, arg);
     results.push({ threw: false });
   } catch (e) {
     results.push({ threw: true, message: String(e && e.message ? e.message : e) });
@@ -1119,16 +961,16 @@ func TestEventStreamHeartbeat(t *testing.T) {
 	dataHome := t.TempDir()
 	hb := filepath.Join(dataHome, "opencode", "nightgauge-stream.heartbeat")
 
-	other := sessionCall{Fn: "event", Input: map[string]any{"event": map[string]any{"type": "file.edited", "properties": map[string]any{}}}}
+	other := sessionCall{Fn: "event", Input: busEvent("session.renamed", map[string]any{"sessionID": "ses_1", "title": "t"})}
 	runSessionHarness(t, node, root, []sessionCall{other}, map[string]string{"XDG_DATA_HOME": dataHome})
 	if _, err := os.Stat(hb); err == nil {
 		t.Fatal("an unrelated event wrote the heartbeat")
 	}
 
-	delta := sessionCall{Fn: "event", Input: map[string]any{"event": map[string]any{
-		"type":       "message.part.delta",
-		"properties": map[string]any{"sessionID": "ses_1", "field": "text", "delta": "x"},
-	}}}
+	// 2.2.7's session.text.delta data, one of HEARTBEAT_EVENT_TYPES.
+	delta := sessionCall{Fn: "event", Input: busEvent("session.text.delta", map[string]any{
+		"sessionID": "ses_1", "assistantMessageID": "msg_1", "ordinal": 0, "delta": "x",
+	})}
 	results := runSessionHarness(t, node, root, []sessionCall{delta, delta, delta}, map[string]string{"XDG_DATA_HOME": dataHome})
 	for i, r := range results {
 		if r.Threw {
@@ -1141,5 +983,120 @@ func TestEventStreamHeartbeat(t *testing.T) {
 	}
 	if age := time.Since(info.ModTime()); age > time.Minute {
 		t.Errorf("heartbeat mtime is %v old, want it just written", age)
+	}
+}
+
+// --- the entry's own registrations on the fake 2.x host ---
+
+// runHostSession loads the entry on the fake 2.x host and runs body, which
+// prints JSON; extraEnv is applied on top of a cleaned environment.
+func runHostSession(t *testing.T, node, cwd, body string, extraEnv map[string]string) []byte {
+	t.Helper()
+	dir, err := Write(filepath.Join(t.TempDir(), "plugin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver := filepath.Join(t.TempDir(), "driver.mjs")
+	if err := os.WriteFile(driver, []byte(hostDriver(body)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := append(os.Environ(), "NG_PLUGIN_PATH="+filepath.Join(dir, EntryFile), "NG_CWD="+cwd)
+	for _, k := range []string{"NIGHTGAUGE_BIN", "NIGHTGAUGE_OUTPUT_FILE", "NIGHTGAUGE_RUN_ID", EnvSentinel, EnvNonce} {
+		env = removeEnv(env, k)
+	}
+	for k, v := range extraEnv {
+		env = upsertEnv(env, k, v)
+	}
+	env = upsertEnv(env, notifyDisableEnv, "1")
+	cmd := exec.Command(node, driver)
+	cmd.Env = env
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("host driver failed: %v\nstderr:\n%s", err, ee.Stderr)
+		}
+		t.Fatalf("host driver failed: %v", err)
+	}
+	return out
+}
+
+// TestCompactionHookInjectsContextThroughTheEntry: the entry's registered
+// session:compaction hook reaches session.js and appends the inject-context
+// part to arg.system. Dropping or misnaming the delegate in nightgauge.js
+// turns this red; the sessionCompaction tests above call the export directly.
+func TestCompactionHookInjectsContextThroughTheEntry(t *testing.T) {
+	node := requireNode(t)
+	bin := buildNightgaugeBin(t)
+	root := initGitRepoOnBranch(t, "feat/42-x")
+	arg, err := json.Marshal(compactionArg())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := runHostSession(t, node, root, `
+const arg = JSON.parse(process.env.NG_ARG);
+await host.compaction(arg);
+process.stdout.write(JSON.stringify(arg));
+`, map[string]string{"NIGHTGAUGE_BIN": bin, "NG_ARG": string(arg)})
+	texts := compactionSystemTexts(t, out)
+	if len(texts) != 2 || !strings.Contains(texts[1], `"feat/42-x"`) {
+		t.Errorf("system texts = %q, want the original part plus an inject-context part naming feat/42-x", texts)
+	}
+}
+
+// TestEventsReachSessionJSThroughTheSubscription: events emitted on the fake
+// host's subscription reach session.js through the entry's types filter. A
+// permission.asked records permission_ask, session.execution.failed records
+// idle and (no NIGHTGAUGE_BIN) stop_verify no_bin, and a type outside the
+// filter records nothing. Dropping a type from SUBSCRIBED_EVENT_TYPES, or the
+// entry's subscription, turns this red.
+func TestEventsReachSessionJSThroughTheSubscription(t *testing.T) {
+	node := requireNode(t)
+	root := t.TempDir()
+	outputFile := filepath.Join(t.TempDir(), "output", "run.json")
+	if err := os.MkdirAll(filepath.Dir(outputFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runID := "run-host-events-1"
+	eventsFile, ok := EventsPath(outputFile, runID)
+	if !ok {
+		t.Fatal("test premise broken")
+	}
+	runHostSession(t, node, root, `
+await host.emit({ type: "session.renamed", data: { sessionID: "ses_h", title: "x" } });
+await host.emit({ type: "permission.asked", data: { id: "p", sessionID: "ses_h", action: "shell" } });
+await host.emit({ type: "session.execution.failed", data: { sessionID: "ses_h", error: {} } });
+process.stdout.write("{}");
+process.exit(0);
+`, map[string]string{"NIGHTGAUGE_OUTPUT_FILE": outputFile, "NIGHTGAUGE_RUN_ID": runID})
+	events, err := ReadRunEvents(eventsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, ev := range events {
+		kinds = append(kinds, ev.Kind)
+	}
+	if strings.Join(kinds, ",") != "permission_ask,idle,stop_verify" {
+		t.Fatalf("event kinds = %v, want permission_ask, idle, stop_verify", kinds)
+	}
+	if v, _ := events[2].Detail["verdict"].(string); v != "no_bin" {
+		t.Errorf("stop_verify verdict = %v, want no_bin with NIGHTGAUGE_BIN unset", events[2].Detail["verdict"])
+	}
+}
+
+// TestEveryHeartbeatEventTouchesTheHeartbeat drives each streaming event type
+// session.js counts as progress, one fresh process each.
+func TestEveryHeartbeatEventTouchesTheHeartbeat(t *testing.T) {
+	node := requireNode(t)
+	for _, typ := range []string{"session.text.delta", "session.step.streamed", "session.tool.input.started", "session.tool.progress"} {
+		t.Run(typ, func(t *testing.T) {
+			dataHome := t.TempDir()
+			call := sessionCall{Fn: "event", Input: busEvent(typ, map[string]any{"sessionID": "ses_1"})}
+			runSessionHarness(t, node, t.TempDir(), []sessionCall{call}, map[string]string{"XDG_DATA_HOME": dataHome})
+			if _, err := os.Stat(filepath.Join(dataHome, "opencode", "nightgauge-stream.heartbeat")); err != nil {
+				t.Errorf("%s did not write the heartbeat: %v", typ, err)
+			}
+		})
 	}
 }

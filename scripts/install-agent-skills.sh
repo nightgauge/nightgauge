@@ -571,7 +571,7 @@ install_opencode() {
   local plugins_dir="$root/plugins"
   local d
   for d in "$skills_dir" "$cmd_dir" "$plugins_dir" \
-    "$skills_dir/_shared" "$plugins_dir/nightgauge.js" "$plugins_dir/nightgauge"; do
+    "$skills_dir/_shared" "$plugins_dir/index.js" "$plugins_dir/nightgauge.js" "$plugins_dir/nightgauge"; do
     opencode_refuse_escape "$d" "$root"
   done
   for name in "${names[@]}"; do
@@ -664,6 +664,9 @@ PY
   local what="$count skills and $count commands"
   if [ "$OPENCODE_PLUGIN" = "1" ]; then
     mkdir -p "$plugins_dir"
+    # OpenCode 2.x loads a plugin directory's index.js, which re-exports
+    # nightgauge.js (#3302).
+    rsync -a "$OPENCODE_PLUGIN_SRC/index.js" "$plugins_dir/index.js"
     rsync -a "$OPENCODE_PLUGIN_SRC/nightgauge.js" "$plugins_dir/nightgauge.js"
     rsync -a --delete "$OPENCODE_PLUGIN_SRC/nightgauge/" "$plugins_dir/nightgauge/"
     what="$what and the plugin"

@@ -129,7 +129,7 @@ function runConfig(root: string, binary = "/nonexistent/bin/opencode"): OpenCode
     configContent: JSON.stringify({ model: LOCAL_MODEL, share: "disabled" }),
     env,
     runDir: root,
-    pluginVersion: "1",
+    pluginVersion: "2",
     binary,
     envWithhold: { prefixes: ["OPENCODE_"], names: [] },
     runId: basename(root),
@@ -182,7 +182,7 @@ run)
   cat > '${dir}/stdin'
   if [ -z "$NO_SENTINEL" ] && [ -n "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL" ]; then
     mkdir -p "$(dirname "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL")"
-    printf '{"nonce":"%s","plugin_version":"1","hooks":[]}' "$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+    printf '{"nonce":"%s","plugin_version":"2","hooks":[]}' "$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
     touch -t 202001010000 "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
   fi
 ${runBody}

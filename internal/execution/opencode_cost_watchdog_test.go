@@ -15,6 +15,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -95,7 +96,7 @@ export) %s ;;
 esac
 echo $$ > %q
 if [ -n "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL" ]; then
-  printf '{"nonce":"%%s","plugin_version":"1","hooks":[]}' "$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+  printf '{"nonce":"%%s","plugin_version":"`+opencodeplugin.PluginVersion+`","hooks":[]}' "$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
   # The replayed capture's own tool events carry ITS OWN historical
   # timestamps; backdate the sentinel so VerifyNotLate never reads a
   # just-written file as later than them (mirrors opencode_usage_test.go's

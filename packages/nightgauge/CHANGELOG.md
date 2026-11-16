@@ -11,6 +11,7 @@ and this project adheres to
 
 ### Fixed
 
+- OpenCode setup now installs the plugin's `index.js` entry, which OpenCode 2.x loads, so the extension-installed plugin gates OpenCode 2.x runs (#3302).
 - Runs uploaded from the extension now send an OpenCode stage's provider and endpoint, and upload an unpriced stage or run cost as unknown instead of $0, matching runs uploaded by the scheduler (#1750).
 - A partial-delivery re-run started from the extension now records its remaining criteria in the planning context as `partial_delivery`, as the Go scheduler does. An Action Center steer is spliced as `operator_steer` and reaches feature-dev's prompt. A feature-dev that writes nothing on such a re-run is booked as a no-op instead of a failure that counted toward the lifetime cap and the cascade breaker; when it ignored an operator-revised plan it is first re-dispatched once with the rule restated, and a named plan dispute ends the run as that dispute. A remainder left by an earlier run is cleared before planning even when the binary or repository cannot be resolved (#3163).
 - The autonomous queue no longer halts, or books a crash, when a run is refused because its issue is already closed. A run whose branch is level with its base after feature-validate now ends as a no-op before pr-create instead of failing there (#3269).

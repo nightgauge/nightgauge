@@ -3,53 +3,47 @@
 // which is how the whole plugin fails closed instead of loading with no
 // gate at all.
 //
-// toolExecuteBefore (#1635, extended by #1640) runs the same verbs the
-// Claude Code PreToolUse hooks run (internal/hooks via cmd/nightgauge/main.go's
-// `nightgauge hook <verb>`), so a stage running under OpenCode is blocked by
-// the same rules as one running under Claude Code:
+// toolExecuteBefore (#1635, extended by #1640, ported to OpenCode 2.x by
+// #3302) is registered through ctx.tool.hook("execute.before") and receives
+// 2.x's one argument, {tool, sessionID, agent, messageID, id, input}, with the
+// tool's arguments under `input` (file tools name their file `input.path`).
+// It runs the same verbs the Claude Code PreToolUse hooks run (internal/hooks
+// via `nightgauge hook <verb>`), so a stage running under OpenCode is blocked
+// by the same rules as one running under Claude Code:
 //
-//   - "bash"        -> workflow-gate, careful-gate, stage-gate (in that
-//                      order, matching claude-plugins/nightgauge/hooks/hooks.json's
-//                      PreToolUse:Bash chain — first deny wins).
+//   - "shell"        -> workflow-gate, careful-gate, stage-gate (in that
+//                       order, matching claude-plugins/nightgauge/hooks/hooks.json's
+//                       PreToolUse:Bash chain — first deny wins).
 //   - "edit"/"write" -> workflow-gate only, with a Claude-shaped `file_path`
-//                      payload (claude-plugins/nightgauge/hooks/hooks.json's
-//                      PreToolUse:Edit|Write).
-//   - "read"        -> external-directory-gate: resolves symlinks and
-//                      refuses a read whose resolved directory falls outside
-//                      the worktree and every OpenCode external_directory
-//                      allow-listed root (#1816) — opencode's own permission
-//                      map matches a tool call's filePath lexically, so a
-//                      symlink planted inside an allow-listed directory
-//                      after the config is written is invisible to it.
-//   - "lsp"         -> the same as "read", on its filePath (#1818).
+//                       payload (hooks.json's PreToolUse:Edit|Write).
+//   - "read"         -> external-directory-gate: resolves symlinks and
+//                       refuses a read whose resolved directory falls outside
+//                       the worktree and every OpenCode external_directory
+//                       allow-listed root (#1816) — opencode's own permission
+//                       map matches a path lexically, so a symlink planted
+//                       inside an allow-listed directory after the config is
+//                       written is invisible to it.
 //   - "read", "edit", "write" also refuse a path that matches the
-//                      permission map's secret (and, for edit/write,
-//                      project-config) deny patterns once letter case is
-//                      ignored (#1827; see caseFoldedDeny).
-//   - "task"        -> always denied (see the subagent note below),
-//                      independent of every other gate.
+//                       permission map's secret (and, for edit/write,
+//                       project-config) deny patterns once letter case is
+//                       ignored (#1827; see caseFoldedDeny).
+//   - "subagent"     -> always denied (see the subagent note below),
+//                       independent of every other gate.
 //   - every other tool id in TOOL_CLASSIFICATION -> passthrough (read-only,
-//                      or governed elsewhere, e.g. webfetch by #1638's
-//                      permission map) or, for a mutating tool this table
-//                      cannot map safely, blocked.
+//                       or governed elsewhere, e.g. webfetch by #1638's
+//                       permission map) or, for a tool this table cannot map
+//                       safely, blocked.
 //   - a tool id ABSENT from TOOL_CLASSIFICATION -> blocked closed
-//                      ([nightgauge-gate:unknown-tool]), so a new upstream
-//                      mutating tool can never bypass every gate here by
-//                      simply not being on the list.
+//                       ([nightgauge-gate:unknown-tool]), so a new upstream
+//                       mutating tool can never bypass every gate here by
+//                       simply not being on the list.
 //
-// commandExecuteBefore (#1640) is `command.execute.before`'s gate: the
-// expanded slash-command text is screened by the same `hook sanitize-prompt`
-// verb Claude Code's PreToolUse:Task hook runs, Task-shaped. It is exported
-// here, unit-tested directly (plugin_gates_test.go's TestCommandExecuteBeforeSanitizes
-// and TestGatesParityCorpus), and called from nightgauge.js's own
-// `command.execute.before` registration BEFORE that hook's optional
-// ./nightgauge/session.js delegate (#1641's file) runs — a review finding
-// this round (plugin_gates_test.go's TestCommandExecuteBeforeWiredThroughEntry
-// drives nightgauge.js's own hook, not this export directly, to prove the
-// wiring rather than only the decision).
+// A throw blocks the tool: on 2.x the hook is awaited and the thrown message
+// becomes the tool's error result, which the model reads (observed on 2.2.7,
+// #3302).
 //
-// Model-authored command text and tool arguments reach every verb only as
-// stdin JSON, on a fixed argv, never on a shell command line.
+// Model-authored tool arguments reach every verb only as stdin JSON, on a
+// fixed argv, never on a shell command line.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
@@ -73,10 +67,6 @@ const WORKFLOW_MARKER = "[nightgauge-gate:workflow]";
 // advancing git/forge state outside its mandate, or an `--admin`/`--auto`
 // merge bypass in any stage.
 const STAGE_MARKER = "[nightgauge-gate:stage]";
-
-// SANITIZE_MARKER prefixes a sanitize-prompt denial for a
-// `command.execute.before` expansion.
-const SANITIZE_MARKER = "[nightgauge-gate:sanitize]";
 
 // UNKNOWN_TOOL_MARKER prefixes the fail-closed denial for a tool id absent
 // from TOOL_CLASSIFICATION.
@@ -113,7 +103,7 @@ export const SECRET_DENY_PATTERNS = Object.freeze([
 ]);
 export const PROJECT_CONFIG_DENY_PATTERNS = Object.freeze(["opencode.json*", ".opencode/**"]);
 
-// wildcardMatch is opencode 1.18.30's own Wildcard.match (the same rule
+// wildcardMatch is opencode's own Wildcard.match (the same rule
 // openCodeWildcardMatch models in Go): regex metacharacters other than "*"
 // and "?" are escaped, "*" becomes ".*" (crossing "/"), "?" becomes ".", and
 // the result is anchored at both ends.
@@ -151,99 +141,45 @@ function enforceCaseFoldedDeny(tool, filePath, cwd, patterns) {
   }
 }
 
-// TASK_MARKER prefixes the AC9 fallback's own error, distinct from every
-// other marker, so a stage's remediation output can tell a careful-mode/
-// workflow/stage block apart from the unconditional subagent denial below.
-const TASK_MARKER = "[nightgauge-gate:task-denied]";
+// SUBAGENT_MARKER prefixes the unconditional subagent denial's own error,
+// distinct from every other marker, so a stage's remediation output can tell
+// a careful-mode/workflow/stage block apart from it.
+const SUBAGENT_MARKER = "[nightgauge-gate:subagent-denied]";
 
-// TOOL_CLASSIFICATION is the pinned table of every tool id opencode 1.18.30
-// exposes (#1640 AC4), captured two ways and reconciled:
+// TOOL_CLASSIFICATION is the pinned table of every tool id OpenCode 2.x
+// offers the model: edit, execute, glob, grep, question, read, shell, skill,
+// subagent, webfetch, websearch and write (spike #3197 § 3, the tool list a
+// 2.2.7 request carried). 1.x's bash and task are 2.x's shell and subagent;
+// 1.x's list, todowrite, apply_patch, lsp, plan_exit, invalid and MCP
+// resource tools are not offered on 2.x and are refused as unknown.
 //
-//   - `opencode debug agent build` (testdata/opencode-1.18.30-tools.txt):
-//     invalid, question, bash, read, glob, grep, task, webfetch, todowrite,
-//     skill, apply_patch.
-//   - Real `tool.execute.before`/stream captures already committed to this
-//     repository before #1640 (internal/execution/testdata/opencode_stream_
-//     research_sample.jsonl, opencode_stream_cloud_capture.jsonl, both
-//     `"tool":"edit"`) and docs/decisions/022-opencode-multi-provider-adapter.md
-//     § 6's own "observed default tools" list (bash, edit, write, read, grep,
-//     glob, task, todowrite, skill, webfetch) plus its § 9 "explore" subagent
-//     permission dump (list, websearch, grep, glob, bash, webfetch, read).
-//     `list` there is a permission key only: no 1.18.x tool registers that
-//     id (#1818), so it is not on this table and is refused as unknown.
-//   - Three ids `ToolRegistry` adds only behind an experimental flag the
-//     adapter never sets (#1818): `execute`, `lsp` and `plan_exit`. Each is
-//     classified below rather than left to the unknown-tool refusal.
-//
-// The two captures do NOT disagree on the file-mutation tool surface — a
-// review finding this round (see the ADR-022 amendment dated 2026-09-15,
-// #1640 fix round, for the full correction) traced the difference to
-// 1.18.30's OWN per-model tool selection, not to two inconsistent captures:
-// `ToolRegistry.tools` enables `apply_patch` and disables `edit`/`write`
-// exactly when the dispatch model's id matches `modelID.includes("gpt-") &&
-// !modelID.includes("oss") && !modelID.includes("gpt-4")` (verified against
-// the pinned binary's own minified source), never the other way around for
-// any other model family. `debug agent build`'s empty-HOME default model
-// happened to match that rule; the real dispatch captures used models that
-// did not. This table is still the UNION of both — `edit`/`write` are gated
-// as file mutations (kind "file", the Claude-shaped `{filePath, oldString,
-// newString}` / `{filePath, content}` argument shapes ADR-022 and the real
-// captures confirm) — but `apply_patch` is real and reachable from a
-// GPT-family dispatch, not a static-dump artifact. Its argument shape IS
-// known (`{patchText}`, a single string using `*** Add File:`/
-// `*** Update File:`/`*** Delete File:`/`*** Move to:` headers per path,
-// confirmed against the pinned binary's own patch parser), just never
-// mapped to a Claude-shaped `file_path` payload nor observed on a real
-// Nightgauge dispatch stream — per the issue's own technical notes ("maps to
-// the nearest Claude-shaped payload or is blocked"), it stays blocked (kind
-// "blocked") rather than guessed at. The practical consequence: any OpenCode
-// dispatch against a matching GPT-family model gets no working file-edit
-// tool at all under this plugin (`apply_patch` blocked, `edit`/`write` not
-// offered by opencode itself). File a follow-up to map `apply_patch`'s
-// `patchText` hunks to one or more Claude-shaped `file_path` payloads.
+//   - edit {path, oldString, newString} and write {path, content} are gated
+//     as file mutations (kind "file"), observed on 2.2.7.
+//   - execute is new on 2.x and its argument shape has not been observed on
+//     a Nightgauge dispatch. It runs code, so it is blocked closed rather than
+//     guessed at.
+//   - question asks the user; a headless run cannot answer, and it changes
+//     nothing, so it passes through.
 //
 // TOOL_CLASSIFICATION is built on a null-prototype object and frozen so it
 // can never be read through Object.prototype (a tool id of "constructor",
-// "__proto__", "toString", "hasOwnProperty", ... would otherwise look up an
-// inherited function/object instead of undefined and skip the unknown-tool
-// fail-closed check below — a review finding this round; see
+// "__proto__", "toString", ... would otherwise look up an inherited value
+// instead of undefined and skip the unknown-tool check below; see
 // TestPrototypeKeyToolIDsAreBlocked) or mutated by a co-loaded module.
 export const TOOL_CLASSIFICATION = Object.freeze(
   Object.assign(Object.create(null), {
-    bash: "bash",
+    shell: "shell",
     edit: "file",
     write: "file",
-    task: "task", // intercepted unconditionally above; listed for completeness
-    apply_patch: "blocked",
+    subagent: "subagent", // intercepted unconditionally; listed for completeness
+    execute: "blocked",
     read: "read",
     glob: "passthrough",
     grep: "passthrough",
     webfetch: "passthrough", // governed by #1638's permission map, not here
     websearch: "passthrough",
-    todowrite: "passthrough",
     skill: "passthrough", // Claude's own PostToolUse:Skill hook only logs usage
     question: "passthrough",
-    invalid: "passthrough",
-    // Experimental tools (#1818). `ToolRegistry` adds each only when its flag
-    // is set, and the adapter sets none of them.
-    // OPENCODE_EXPERIMENTAL_CODE_MODE: runs an orchestration script that
-    // calls connected MCP tools, which no gate here can see into.
-    execute: "blocked",
-    // OPENCODE_EXPERIMENTAL_LSP_TOOL: read-only language-server queries on
-    // `{operation, filePath, line, character}`, gated like a read of filePath.
-    lsp: "read",
-    // OPENCODE_EXPERIMENTAL_PLAN_MODE, cli client only: switches the session
-    // from the plan agent to the build agent, a mode change no stage makes.
-    plan_exit: "blocked",
-    // opencode's own read-only MCP resource tools (never a repository's own
-    // MCP server tool, which arrives as "<server>_<tool>" and is not in this
-    // table at all — see the ADR-022 amendment this round for that gap and
-    // its policy). These three only ever list or read resource metadata a
-    // configured MCP server advertises, the same "read" permission category
-    // opencode itself groups them under alongside read/glob/grep.
-    list_mcp_resources: "passthrough",
-    list_mcp_resource_templates: "passthrough",
-    read_mcp_resource: "passthrough",
   })
 );
 
@@ -253,7 +189,7 @@ export const TOOL_CLASSIFICATION = Object.freeze(
 // missing/relative, the verb failing to spawn, timing out, exiting non-zero,
 // printing non-JSON, or printing a `permissionDecision:"deny"` block. Silence
 // (or a parsed decision that is not a deny) is allow. Shared by every verb
-// this module runs (careful-gate, workflow-gate, stage-gate, sanitize-prompt)
+// this module runs (careful-gate, workflow-gate, stage-gate)
 // so the fail-closed contract can never drift between them.
 function runGateVerb(args, payload, cwd, marker) {
   const bin = process.env.NIGHTGAUGE_BIN;
@@ -306,45 +242,39 @@ function runGateVerb(args, payload, cwd, marker) {
 }
 
 // gateCwd resolves the directory every spawned verb runs in and reads its
-// config from: the run's worktree, exactly what the Claude Code hook process
-// sees (ctx.directory/ctx.worktree), falling back to this process's own cwd
-// outside a Nightgauge run.
-function gateCwd(ctx) {
-  return (ctx && (ctx.directory || ctx.worktree)) || process.cwd();
+// config from: the run's worktree, which OpenCode 2.x gives setup as
+// ctx.location.directory (observed on 2.2.7), falling back to this process's
+// own cwd outside a Nightgauge run.
+export function gateCwd(ctx) {
+  const dir = ctx && ctx.location && ctx.location.directory;
+  return typeof dir === "string" && dir !== "" ? dir : process.cwd();
 }
 
-// Subagents. AC9's spike could not tell whether opencode 1.18.30 calls
-// tool.execute.before for a tool a subagent (`task`) session runs; #1805
-// settled it against the pinned binary with a scripted provider: it does, in
-// the child's own sessionID, in this same plugin instance
-// (TestToolExecuteBeforeFiresInSubagentAgainstRealOpenCode). The gates below
-// would therefore bound a subagent's tool calls. What nothing bounds yet is
-// its consumption: a subagent's steps and tokens never reach the stage's
-// stream, so the stage's turn and token ceilings, which every stage on a
-// model no USD cap binds always has, and its cost budget (#1748) are all
-// blind to it while it runs. Until a subagent counts against those caps,
-// "task" is denied unconditionally, careful mode on or off, and before every
-// other gate below, sanitize-prompt included (the ADR-022 amendment dated
-// 2026-10-05).
+// Subagents. On 2.2.7 the execute.before hook fires for a subagent
+// session's own tool calls, with that session's sessionID and agent (spike
+// #3197 § 4, re-observed by #3302), so the gates below would bound them. What
+// nothing bounds yet is a subagent's consumption: its steps and tokens never
+// reach the stage's stream, so the stage's turn and token ceilings and its
+// cost budget (#1748) are blind to it while it runs. Until a subagent counts
+// against those caps, "subagent" is denied unconditionally, careful mode on
+// or off, before every other gate (the ADR-022 amendment dated 2026-10-05).
 // READ_MAX_LINES_ENV is opencodeplugin.EnvReadMaxLines (plugin.go): the
 // most lines one read returns (#2178), set per stage by the Go side.
 const READ_MAX_LINES_ENV = "NIGHTGAUGE_OPENCODE_READ_MAX_LINES";
 
 // capReadLimit gives a read that names no limit, or a larger one, the
-// stage's read cap. opencode 1.18.32 passes this hook's output.args object
-// to the tool's execute unchanged, so setting a field on it is what the read
-// runs with; its read tool then ends a capped result with "(Showing lines
-// A-B of N. Use offset=B+1 to continue.)", the visible marker the model
-// pages from. 1.18.32 has no config key for read's default limit (2000
-// lines), and its tool_output thresholds skip read. An unset, non-numeric or
-// non-positive cap leaves the read as the model asked.
-export function capReadLimit(output) {
+// stage's read cap. On 2.2.7 setting arg.input.limit in execute.before is what
+// the read runs with: a probe that set limit 2 on a 30-line file got "Read
+// file calc.py, lines 1-2 ... [Output truncated. Continue reading with
+// offset: 3]", the visible marker the model pages from (#3302). An unset,
+// non-numeric or non-positive cap leaves the read as the model asked.
+export function capReadLimit(input) {
   const cap = Number.parseInt(process.env[READ_MAX_LINES_ENV] || "", 10);
   if (!Number.isInteger(cap) || cap <= 0) return;
-  if (!output || typeof output.args !== "object" || output.args === null) return;
-  const asked = output.args.limit;
+  if (!input || typeof input !== "object") return;
+  const asked = input.limit;
   if (typeof asked === "number" && Number.isFinite(asked) && asked > 0 && asked <= cap) return;
-  output.args.limit = cap;
+  input.limit = cap;
 }
 
 // EXPLORATION_BUDGET_ENV is opencodeplugin.EnvExplorationBudget (plugin.go):
@@ -360,16 +290,16 @@ const KNOWLEDGE_DIR_ENV = "NIGHTGAUGE_OPENCODE_KNOWLEDGE_DIR";
 // past the budget.
 const EXPLORATION_BUDGET_MARKER = "[nightgauge-gate:exploration-budget]";
 
-// WRITE_COMMANDS mark a bash call as a write (#2190): a call that runs one
+// WRITE_COMMANDS mark a shell call as a write (#2190): a call that runs one
 // of these is never counted against the exploration budget.
 const WRITE_COMMANDS = new Set(["tee", "mkdir", "cp", "mv"]);
 
-// MARKER_COMMANDS only print or move the shell (#2190): a bash call whose
+// MARKER_COMMANDS only print or move the shell (#2190): a shell call whose
 // every command is one of these is phase-marker output, not exploration.
 const MARKER_COMMANDS = new Set(["printf", "echo", "cd", "true", ":"]);
 
 // LAYOUT_PATH_SUBST matches `$(nightgauge layout path <class> [name])`, the
-// way a stage names per-clone state it reads (ADR-024 § 7). bashExplorationPaths
+// way a stage names per-clone state it reads (ADR-024 § 7). shellExplorationPaths
 // replaces each match with LAYOUT_PATH_TARGET, which isExemptPath exempts.
 const LAYOUT_PATH_SUBST =
   /\$\(\s*nightgauge\s+layout\s+path\s+(?:pipeline|plans|retros|logs)(?:\s+[^\s()`$]+)?\s*\)/g;
@@ -414,10 +344,10 @@ export function isExemptPath(p, cwd) {
   return rel.split(path.sep)[0] === ".nightgauge";
 }
 
-// bashWritesFile reports whether command clearly writes a file: a redirect
+// shellWritesFile reports whether command clearly writes a file: a redirect
 // to a path other than /dev/null (a heredoc into a file included), a tee,
 // mkdir, cp or mv, or a `nightgauge layout write|append` (ADR-024 § 7).
-function bashWritesFile(command, segments) {
+function shellWritesFile(command, segments) {
   const stripped = command.replace(/[0-9&]?>>?\s*\/dev\/null|[0-9]?>&[0-9-]/g, "");
   if (/>>?\s*[^\s&|;]/.test(stripped)) return true;
   return segments.some((words) => WRITE_COMMANDS.has(words[0]) || isLayoutWrite(words));
@@ -433,9 +363,9 @@ function isLayoutWrite(words) {
   );
 }
 
-// bashSegments splits command into its commands' words, skipping leading
+// shellSegments splits command into its commands' words, skipping leading
 // VAR=value assignments.
-function bashSegments(command) {
+function shellSegments(command) {
   const out = [];
   for (const seg of command.split(/\|\||&&|[|;\n]/)) {
     const words = seg
@@ -449,16 +379,16 @@ function bashSegments(command) {
   return out;
 }
 
-// bashExplorationPaths returns the path-like arguments of a bash call that
+// shellExplorationPaths returns the path-like arguments of a shell call that
 // counts as exploration, or null when it is clearly not exploration (#2190):
 // a write, or only phase-marker output. Anything uncertain (command
 // substitution, loops, jq, python -c, ...) counts.
-function bashExplorationPaths(raw) {
+function shellExplorationPaths(raw) {
   if (typeof raw !== "string" || raw.trim() === "") return null;
   const command = raw.replace(LAYOUT_PATH_SUBST, LAYOUT_PATH_TARGET);
-  const segments = bashSegments(command);
+  const segments = shellSegments(command);
   if (segments.length === 0) return null;
-  if (bashWritesFile(command, segments)) return null;
+  if (shellWritesFile(command, segments)) return null;
   if (
     !/[`]|\$\(/.test(command) &&
     segments.every(
@@ -482,12 +412,12 @@ function bashExplorationPaths(raw) {
 function explorationTarget(tool, args) {
   switch (tool) {
     case "read":
-      return [args.filePath];
+      return [args.path];
     case "grep":
     case "glob":
       return [typeof args.path === "string" && args.path !== "" ? args.path : "."];
-    case "bash":
-      return bashExplorationPaths(args.command);
+    case "shell":
+      return shellExplorationPaths(args.command);
     default:
       return null;
   }
@@ -498,12 +428,11 @@ function explorationTarget(tool, args) {
 // an error telling the model to write the plan. A call whose every target
 // is a skill file, .nightgauge/ or per-clone context is exempt. Writes, edits and any
 // non-read command are never counted or refused.
-export function enforceExplorationBudget(ctx, input, output) {
+export function enforceExplorationBudget(ctx, arg) {
   const budget = Number.parseInt(process.env[EXPLORATION_BUDGET_ENV] || "", 10);
   if (!Number.isInteger(budget) || budget <= 0) return;
-  if (!input) return;
-  const args = output && output.args && typeof output.args === "object" ? output.args : {};
-  const targets = explorationTarget(input.tool, args);
+  if (!arg) return;
+  const targets = explorationTarget(arg.tool, toolInput(arg));
   if (targets === null) return;
   const cwd = gateCwd(ctx);
   if (targets.length > 0 && targets.every((t) => isExemptPath(t, cwd))) return;
@@ -516,56 +445,80 @@ export function enforceExplorationBudget(ctx, input, output) {
   explorationCount++;
 }
 
-export async function toolExecuteBefore(ctx, input, output) {
-  if (!input) return;
-  if (input.tool === "task") {
+// toolInput returns a 2.x hook argument's tool arguments object, or {} when
+// it has none, so a malformed argument is gated as one with no arguments.
+function toolInput(arg) {
+  return arg && arg.input && typeof arg.input === "object" ? arg.input : {};
+}
+
+// requirePath returns a file tool's input.path, and blocks the call closed
+// when it is missing, empty or not a string: the verbs this module runs treat
+// an empty file_path as nothing to check (external-directory-gate allows it),
+// so gating an empty path would let a call through under an argument key the
+// gate does not read.
+function requirePath(tool, args) {
+  if (typeof args.path === "string" && args.path !== "") return args.path;
+  throw new Error(
+    `${WORKFLOW_MARKER} ${tool} names no input.path, the only file argument OpenCode 2.x's ${tool} takes; the call is blocked closed`
+  );
+}
+
+export async function toolExecuteBefore(ctx, arg) {
+  if (!arg) return;
+  const tool = arg.tool;
+  if (tool === "subagent") {
     throw new Error(
-      `${TASK_MARKER} subagent (task) sessions are denied: a subagent's steps and tokens never reach the stage's turn, token and cost budgets while it runs (ADR-022 amendment 2026-10-05, #1805)`
+      `${SUBAGENT_MARKER} subagent sessions are denied: a subagent's steps and tokens never reach the stage's turn, token and cost budgets while it runs (ADR-022 amendment 2026-10-05, #1805)`
     );
   }
 
-  // Object.hasOwn is the explicit, belt-and-suspenders form of this check:
-  // TOOL_CLASSIFICATION is already a frozen, null-prototype object (so a
-  // prototype-key id such as "constructor" reads back undefined on its
-  // own), but hasOwn keeps this check correct even if that construction
-  // ever changes, and reads unambiguously as "is this id ON the table" —
-  // not "is this id's value not undefined".
-  if (!Object.hasOwn(TOOL_CLASSIFICATION, input.tool)) {
-    throw new Error(`${UNKNOWN_TOOL_MARKER} ${input.tool}`);
+  // Object.hasOwn reads unambiguously as "is this id ON the table", and stays
+  // correct even if the table's null-prototype construction ever changes.
+  if (typeof tool !== "string" || !Object.hasOwn(TOOL_CLASSIFICATION, tool)) {
+    throw new Error(`${UNKNOWN_TOOL_MARKER} ${tool}`);
   }
-  const kind = TOOL_CLASSIFICATION[input.tool];
-  enforceExplorationBudget(ctx, input, output);
-  if (kind === "passthrough" || kind === "task") return;
+  const kind = TOOL_CLASSIFICATION[tool];
+  enforceExplorationBudget(ctx, arg);
+  if (kind === "passthrough" || kind === "subagent") return;
 
   const cwd = gateCwd(ctx);
-  const args = output && output.args ? output.args : {};
+  const args = toolInput(arg);
 
   if (kind === "blocked") {
     throw new Error(
-      `${WORKFLOW_MARKER} ${input.tool} has no verified Claude-shaped payload mapping on opencode 1.18.30 (file it); a mutating tool call this plugin cannot safely gate is blocked closed`
+      `${WORKFLOW_MARKER} ${tool} has no verified Claude-shaped payload mapping on OpenCode 2.x (file it); a tool call this plugin cannot safely gate is blocked closed`
     );
   }
 
   if (kind === "file") {
-    const filePath = typeof args.filePath === "string" ? args.filePath : "";
-    const toolName = input.tool === "edit" ? "Edit" : "Write";
+    const filePath = requirePath(tool, args);
+    const toolName = tool === "edit" ? "Edit" : "Write";
     const payload = {
       tool_name: toolName,
       cwd,
       tool_input: { file_path: filePath },
     };
     runGateVerb(["hook", "workflow-gate"], payload, cwd, WORKFLOW_MARKER);
-    enforceCaseFoldedDeny(input.tool, filePath, cwd, [
+    enforceCaseFoldedDeny(tool, filePath, cwd, [
       ...SECRET_DENY_PATTERNS,
       ...PROJECT_CONFIG_DENY_PATTERNS,
     ]);
     return;
   }
 
-  if (kind === "bash") {
+  if (kind === "shell") {
     // workflow-gate, careful-gate (#1635), stage-gate, in hooks.json's
     // PreToolUse:Bash order — first deny wins.
-    const command = typeof args.command === "string" ? args.command : "";
+    // An empty command is nothing to check for every verb below, so a call
+    // whose input names no string command is blocked closed, as requirePath
+    // does for file tools: a shell argument under another key must never be
+    // gated as an empty command and allowed.
+    if (typeof args.command !== "string" || args.command === "") {
+      throw new Error(
+        `${WORKFLOW_MARKER} ${tool} names no input.command, the only command argument OpenCode 2.x's ${tool} takes; the call is blocked closed`
+      );
+    }
+    const command = args.command;
     const payload = { tool_name: "Bash", cwd, tool_input: { command } };
     runGateVerb(["hook", "workflow-gate"], payload, cwd, WORKFLOW_MARKER);
     runGateVerb(["hook", "careful-gate"], payload, cwd, MARKER);
@@ -574,61 +527,22 @@ export async function toolExecuteBefore(ctx, input, output) {
   }
 
   if (kind === "read") {
-    const filePath = typeof args.filePath === "string" ? args.filePath : "";
+    const filePath = requirePath(tool, args);
     const payload = {
       tool_name: "Read",
       cwd,
       tool_input: { file_path: filePath },
     };
     runGateVerb(["hook", "external-directory-gate"], payload, cwd, EXTERNAL_DIRECTORY_MARKER);
-    enforceCaseFoldedDeny(input.tool, filePath, cwd, SECRET_DENY_PATTERNS);
-    // `limit` is read's own argument; lsp has none to cap.
-    if (input.tool === "read") capReadLimit(output);
+    enforceCaseFoldedDeny(tool, filePath, cwd, SECRET_DENY_PATTERNS);
+    capReadLimit(arg.input);
     return;
   }
 
   // Every kind TOOL_CLASSIFICATION can hold is handled above; reaching here
-  // means the table maps this id to something this function does not
-  // recognise (a typo'd kind string, for example) — fail closed rather than
-  // silently falling through to an implicit allow or an implicit bash run.
+  // means the table maps this id to a kind this function does not recognise.
+  // Fail closed rather than fall through to an implicit allow.
   throw new Error(
-    `${UNKNOWN_TOOL_MARKER} ${input.tool} (unrecognised classification kind ${JSON.stringify(kind)})`
+    `${UNKNOWN_TOOL_MARKER} ${tool} (unrecognised classification kind ${JSON.stringify(kind)})`
   );
-}
-
-// commandExecuteBefore is `command.execute.before`'s gate (#1640 AC3): the
-// command's expanded text is screened by `hook sanitize-prompt`, Task-shaped
-// (the same verb and payload contract PreToolUse:Task drives on Claude
-// Code), and a block throws to abort the command (opencode 1.18.30's
-// documented `command.execute.before` contract: a throw aborts).
-//
-// The screened text is every `type:"text"` part of `output.parts` (the
-// expansion this hook fires to let a plugin inspect/override, mirroring
-// tool.execute.before's already-relied-upon output.args — #1635), plus the
-// description and expanded prompt of every `type:"subtask"` part, the shape
-// 1.18.30 sends for a command whose agent is a subagent or that sets
-// `subtask: true` (#1818). That is all joined with
-// the command's own name and raw argument string, so a hostile expansion
-// cannot hide behind a benign command name and an injection cannot hide
-// behind hostile-looking argv the model never actually resolved into parts.
-export async function commandExecuteBefore(ctx, input, output) {
-  if (!input) return;
-  const cwd = gateCwd(ctx);
-  const parts = output && Array.isArray(output.parts) ? output.parts : [];
-  const partsText = parts
-    .flatMap((p) => {
-      if (!p) return [];
-      if (p.type === "text") return [p.text];
-      if (p.type === "subtask") return [p.description, p.prompt];
-      return [];
-    })
-    .filter((s) => typeof s === "string" && s !== "")
-    .join("\n");
-  const prompt = [input.command, input.arguments, partsText]
-    .filter((s) => typeof s === "string" && s !== "")
-    .join("\n");
-  if (prompt === "") return;
-
-  const payload = { tool_name: "Task", cwd, tool_input: { prompt } };
-  runGateVerb(["hook", "sanitize-prompt"], payload, cwd, SANITIZE_MARKER);
 }

@@ -1,0 +1,19 @@
+# The tools opencode v2.2.7 offers the build agent (#3302), captured from the
+# `tools` object keys of the ctx.session.hook("compaction") argument during an
+# offline stub-provider run (scratch HOME and XDG roots,
+# OPENCODE_DISABLE_PROJECT_CONFIG=1, --standalone), one per line, sorted. The
+# same twelve names are the tool list a 2.2.7 request offered in spike #3197
+# section 3. gates.js TOOL_CLASSIFICATION must classify exactly these
+# (TestToolClassificationMatchesCapturedTools).
+edit
+execute
+glob
+grep
+question
+read
+shell
+skill
+subagent
+webfetch
+websearch
+write

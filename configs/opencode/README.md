@@ -29,10 +29,10 @@ templates carry no 1.x key, no credential and no non-loopback URL.
 
 To install the Nightgauge skills and `/nightgauge-*` commands into OpenCode,
 run `./scripts/install-agent-skills.sh --opencode-only`. Add `--with-plugin`
-for the Nightgauge OpenCode plugin; OpenCode then installs
-`@opencode-ai/plugin` from npm into its config directory on its next start.
-A plugin installed by an earlier `--with-plugin` run is not pruned by a later
-run without the flag, so that npm install keeps firing until you delete
+for the Nightgauge OpenCode plugin: `index.js`, `nightgauge.js` and
+`nightgauge/`. The 2.x plugin has no package dependency, so OpenCode installs
+nothing from npm for it. A plugin installed by an earlier `--with-plugin` run
+is not pruned by a later run without the flag; delete `plugins/index.js`,
 `plugins/nightgauge.js` and `plugins/nightgauge/` yourself.
 
 The templates carry no `permissions` list: they do not restrict OpenCode's

@@ -3,11 +3,15 @@ package opencodeplugin
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,15 +29,23 @@ import (
 // `import("SPEC")`, capturing SPEC in whichever group matched.
 var pluginImportRE = regexp.MustCompile(`(?:from\s+["']([^"']+)["'])|(?:import\(\s*["']([^"']+)["']\s*\))`)
 
-// scopedImport reports whether specifier is one this plugin may import:
-// a Node builtin, or a relative path into ./nightgauge/*. Anything else
+// scopedImport reports whether file's import of specifier is one this
+// plugin may make: a Node builtin, a relative path into ./nightgauge/*, or,
+// from inside nightgauge/, a sibling module. Anything else
 // (an npm package, an absolute path, a parent-directory escape) is refused.
-func scopedImport(specifier string) bool {
+func scopedImport(file, specifier string) bool {
 	if strings.HasPrefix(specifier, "node:") {
+		return true
+	}
+	// A module inside nightgauge/ may import a sibling module by name.
+	if strings.HasPrefix(file, "nightgauge/") && siblingModuleRE.MatchString(specifier) {
 		return true
 	}
 	return strings.HasPrefix(specifier, "./nightgauge/") || specifier == "./nightgauge.js"
 }
+
+// siblingModuleRE matches "./<name>.js" with no further path segment.
+var siblingModuleRE = regexp.MustCompile(`^\./[a-z0-9-]+\.js$`)
 
 // TestPluginImportsAreScoped statically scans every embedded .js file for
 // import specifiers: each must be a Node builtin or a ./nightgauge/* sibling,
@@ -61,7 +73,7 @@ func TestPluginImportsAreScoped(t *testing.T) {
 			if spec == "" {
 				spec = m[2]
 			}
-			if !scopedImport(spec) {
+			if !scopedImport(path, spec) {
 				t.Errorf("%s imports %q, which is neither a node: builtin nor a ./nightgauge/* sibling", path, spec)
 			}
 		}
@@ -137,10 +149,11 @@ func TestWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entry != filepath.Join(dir, EntryFile) {
-		t.Errorf("entry = %q, want %s", entry, filepath.Join(dir, EntryFile))
+	// OpenCode 2.x loads a local plugin only from a directory (#3302).
+	if entry != dir {
+		t.Errorf("entry = %q, want the plugin directory %s", entry, dir)
 	}
-	for _, rel := range []string{"nightgauge.js", filepath.Join("nightgauge", "gates.js")} {
+	for _, rel := range []string{EntryFile, "nightgauge.js", filepath.Join("nightgauge", "gates.js")} {
 		p := filepath.Join(dir, rel)
 		info, err := os.Stat(p)
 		if err != nil {
@@ -328,31 +341,115 @@ func TestHandshakeConfigFromEnv(t *testing.T) {
 	}
 }
 
-// --- Node harness: drives gates.js the way OpenCode's plugin host would,
-// without spawning opencode itself (opencode has no headless "call this
-// hook" mode; this is the same substitution AC's Node-harness verification
-// bullet calls for). Fails, never skips, under CI without node.
+// --- Node harness: drives the plugin the way OpenCode 2.x's plugin host
+// would, without spawning opencode itself (opencode has no headless "call this
+// hook" mode). Fails, never skips, under CI without node.
 
-const nodeHarnessDriver = `
-import { pathToFileURL } from "node:url";
-
-const mod = await import(pathToFileURL(process.env.NG_PLUGIN_PATH).href);
-const plugin = mod.NightgaugePlugin || mod.default;
-const ctx = { directory: process.env.NG_CWD, worktree: process.env.NG_CWD };
-const hooks = await plugin(ctx);
-
-const input = { tool: process.env.NG_TOOL || "bash", sessionID: "s", callID: "c" };
-const output = { args: { command: process.env.NG_COMMAND || "" } };
-
-let result;
-try {
-  await hooks["tool.execute.before"](input, output);
-  result = { threw: false };
-} catch (e) {
-  result = { threw: true, message: String(e && e.message ? e.message : e) };
+// fakeHostJS is a stand-in for OpenCode 2.x's plugin host (#3302), shaped on
+// what a probe observed opencode v2.2.7 hand a plugin's setup:
+// ctx.location.directory, ctx.tool.hook(name, fn), ctx.session.hook(name, fn)
+// and ctx.event.subscribe({types}) returning an async iterable. loadPlugin
+// refuses anything but a {id, setup} definition, as 2.2.7's loader does, and
+// returns the captured registrations. emit(evt) resolves once the plugin's
+// event loop has finished handling evt (the iterator resumes only after the
+// handler's promise settles), so a test reads the event's effects after it.
+const fakeHostJS = `
+async function loadPlugin(def, cwd) {
+  if (!def || typeof def !== "object" || typeof def.id !== "string" || typeof def.setup !== "function") {
+    throw new Error("Plugin must export a default definition with an id and an effect or setup function.");
+  }
+  const hooks = {};
+  const registered = [];
+  const subscriptions = [];
+  const hookService = (svc) => ({
+    hook(name, fn) {
+      registered.push(svc + ":" + name);
+      hooks[svc + ":" + name] = fn;
+    },
+  });
+  const ctx = {
+    location: { directory: cwd },
+    tool: hookService("tool"),
+    session: hookService("session"),
+    event: {
+      subscribe(opts) {
+        registered.push("event:subscribe");
+        const sub = { types: opts && opts.types, queue: [], wake: null };
+        subscriptions.push(sub);
+        return {
+          async *[Symbol.asyncIterator]() {
+            for (;;) {
+              while (sub.queue.length > 0) {
+                const item = sub.queue.shift();
+                yield item.evt;
+                item.done();
+              }
+              await new Promise((r) => (sub.wake = r));
+            }
+          },
+        };
+      },
+    },
+  };
+  const returned = await def.setup(ctx);
+  const call = (key) => (arg) => {
+    if (typeof hooks[key] !== "function") throw new Error("no " + key + " hook registered");
+    return hooks[key](arg);
+  };
+  return {
+    returned,
+    registered,
+    subscriptions,
+    before: call("tool:execute.before"),
+    after: call("tool:execute.after"),
+    compaction: call("session:compaction"),
+    emit(evt) {
+      const waits = [];
+      for (const sub of subscriptions) {
+        if (Array.isArray(sub.types) && !sub.types.includes(evt.type)) continue;
+        waits.push(new Promise((done) => sub.queue.push({ evt, done })));
+        if (sub.wake) {
+          const w = sub.wake;
+          sub.wake = null;
+          w();
+        }
+      }
+      return Promise.all(waits);
+    },
+  };
 }
-process.stdout.write(JSON.stringify(result));
+
+// toolArg is the one argument 2.2.7 hands execute.before.
+function toolArg(tool, input) {
+  return { tool, sessionID: "ses_test", agent: "build", messageID: "msg_test", id: "call_test", input };
+}
+
+// runToolCall drives one execute.before call and reports whether it threw.
+async function runToolCall(host, arg) {
+  try {
+    await host.before(arg);
+    return { threw: false };
+  } catch (e) {
+    return { threw: true, message: String(e && e.message ? e.message : e) };
+  }
+}
 `
+
+// hostDriver is a Node driver: it imports the plugin entry at NG_PLUGIN_PATH,
+// loads it through fakeHostJS with NG_CWD as the worktree, binds it to
+// `host`, then runs body.
+func hostDriver(body string) string {
+	return `import { pathToFileURL } from "node:url";
+` + fakeHostJS + `
+const mod = await import(pathToFileURL(process.env.NG_PLUGIN_PATH).href);
+const host = await loadPlugin(mod.default, process.env.NG_CWD);
+` + body
+}
+
+var nodeHarnessDriver = hostDriver(`
+const arg = toolArg(process.env.NG_TOOL || "shell", { command: process.env.NG_COMMAND || "" });
+process.stdout.write(JSON.stringify(await runToolCall(host, arg)));
+`)
 
 // TestMain removes the nightgauge binary buildNightgaugeBin builds into the
 // OS temp directory (not a per-test t.TempDir(), since it is shared, via
@@ -408,7 +505,7 @@ func runNodeHarness(t *testing.T, node, cwd, command, nightgaugeBin string, extr
 	}
 	cmd := exec.Command(node, driver)
 	env := append(os.Environ(),
-		"NG_PLUGIN_PATH="+entry,
+		"NG_PLUGIN_PATH="+filepath.Join(entry, EntryFile),
 		"NG_CWD="+cwd,
 		"NG_COMMAND="+command,
 	)
@@ -569,9 +666,7 @@ func TestNodeHarnessGatesJS(t *testing.T) {
 		// Must outlast gates.js's SPAWN_TIMEOUT_MS (15000ms); exec so the
 		// timeout's SIGTERM reaches sleep itself and no child holds the pipes.
 		sleeper := filepath.Join(t.TempDir(), "sleeper.sh")
-		if err := os.WriteFile(sleeper, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeShFixture(t, sleeper, "exec sleep 60\n", 0o755)
 		res := runNodeHarness(t, node, root, "echo hi", sleeper, nil)
 		if !res.Threw {
 			t.Fatal("want a throw when the gate verb hangs past its timeout")
@@ -581,9 +676,7 @@ func TestNodeHarnessGatesJS(t *testing.T) {
 	t.Run("a verb that exits non-zero blocks closed", func(t *testing.T) {
 		root := t.TempDir()
 		exit3 := filepath.Join(t.TempDir(), "exit3.sh")
-		if err := os.WriteFile(exit3, []byte("#!/bin/sh\nexit 3\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeShFixture(t, exit3, "exit 3\n", 0o755)
 		res := runNodeHarness(t, node, root, "echo hi", exit3, nil)
 		if !res.Threw {
 			t.Fatal("want a throw when the gate verb exits non-zero")
@@ -593,9 +686,7 @@ func TestNodeHarnessGatesJS(t *testing.T) {
 	t.Run("output that does not parse blocks closed", func(t *testing.T) {
 		root := t.TempDir()
 		garbage := filepath.Join(t.TempDir(), "garbage.sh")
-		if err := os.WriteFile(garbage, []byte("#!/bin/sh\necho 'not json'\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeShFixture(t, garbage, "echo 'not json'\n", 0o755)
 		res := runNodeHarness(t, node, root, "echo hi", garbage, nil)
 		if !res.Threw {
 			t.Fatal("want a throw when the gate verb's output does not parse")
@@ -603,81 +694,151 @@ func TestNodeHarnessGatesJS(t *testing.T) {
 	})
 }
 
-// TestNodeHarnessDeniesTask is AC9's fallback (ADR-022 amendment
-// 2026-09-14): opencode 1.18.30's `tool.execute.before` coverage inside a
-// subagent (`task`) session could not be confirmed within the spike's
-// bound, so the top-level "task" tool call itself — which unquestionably
-// does reach this hook, since it is this session's own call — is always
-// denied, careful mode on or off, and independent of NIGHTGAUGE_BIN or the
-// careful-gate verb entirely (no verb is spawned for it: the deny short-
-// circuits before CAREFUL_GATE_ARGS is ever built). Weakening gates.js's
-// task check back to a no-op turns this red.
-func TestNodeHarnessDeniesTask(t *testing.T) {
+// TestNodeHarnessDeniesSubagent: the `subagent` tool (1.x's `task`) is
+// always denied, careful mode on or off, and independent of NIGHTGAUGE_BIN or
+// any gate verb (no verb is spawned for it). Weakening gates.js's subagent
+// check to a no-op turns this red.
+func TestNodeHarnessDeniesSubagent(t *testing.T) {
 	node := requireNode(t)
 
-	t.Run("task is denied with no NIGHTGAUGE_BIN and careful off", func(t *testing.T) {
+	t.Run("subagent is denied with no NIGHTGAUGE_BIN and careful off", func(t *testing.T) {
 		root := t.TempDir()
-		res := runNodeHarness(t, node, root, "", "", map[string]string{"NG_TOOL": "task"})
+		res := runNodeHarness(t, node, root, "", "", map[string]string{"NG_TOOL": "subagent"})
 		if !res.Threw {
-			t.Fatal("want a throw for the task tool")
+			t.Fatal("want a throw for the subagent tool")
 		}
-		if !strings.HasPrefix(res.Message, "[nightgauge-gate:task-denied]") {
-			t.Errorf("message = %q, want the [nightgauge-gate:task-denied] marker", res.Message)
+		if !strings.HasPrefix(res.Message, "[nightgauge-gate:subagent-denied]") {
+			t.Errorf("message = %q, want the [nightgauge-gate:subagent-denied] marker", res.Message)
 		}
 	})
 
-	t.Run("task is denied with careful on", func(t *testing.T) {
+	t.Run("subagent is denied with careful on", func(t *testing.T) {
 		root := layouttest.Repo(t)
 		bin := buildNightgaugeBin(t)
 		if err := careful.Enable(root, 0, ""); err != nil {
 			t.Fatal(err)
 		}
-		res := runNodeHarness(t, node, root, "", bin, map[string]string{"NG_TOOL": "task"})
+		res := runNodeHarness(t, node, root, "", bin, map[string]string{"NG_TOOL": "subagent"})
 		if !res.Threw {
-			t.Fatal("want a throw for the task tool")
+			t.Fatal("want a throw for the subagent tool")
 		}
-		if !strings.HasPrefix(res.Message, "[nightgauge-gate:task-denied]") {
-			t.Errorf("message = %q, want the [nightgauge-gate:task-denied] marker", res.Message)
+		if !strings.HasPrefix(res.Message, "[nightgauge-gate:subagent-denied]") {
+			t.Errorf("message = %q, want the [nightgauge-gate:subagent-denied] marker", res.Message)
 		}
 	})
 
-	t.Run("bash is unaffected", func(t *testing.T) {
+	t.Run("shell is unaffected", func(t *testing.T) {
 		root := t.TempDir()
 		bin := buildNightgaugeBin(t)
-		res := runNodeHarness(t, node, root, "echo hi", bin, map[string]string{"NG_TOOL": "bash"})
+		res := runNodeHarness(t, node, root, "echo hi", bin, map[string]string{"NG_TOOL": "shell"})
 		if res.Threw {
-			t.Fatalf("want no throw for bash with a safe command, got %q", res.Message)
+			t.Fatalf("want no throw for shell with a safe command, got %q", res.Message)
+		}
+	})
+
+	t.Run("1.x's task is refused as unknown", func(t *testing.T) {
+		root := t.TempDir()
+		res := runNodeHarness(t, node, root, "", "", map[string]string{"NG_TOOL": "task"})
+		if !res.Threw || !strings.HasPrefix(res.Message, "[nightgauge-gate:unknown-tool]") {
+			t.Errorf("task: threw=%v message=%q, want the [nightgauge-gate:unknown-tool] marker", res.Threw, res.Message)
 		}
 	})
 }
 
-// TestNodeHarnessDeniesTaskRegardlessOfCostBudget pins AC1 of #1748: a stage
-// dispatched with a CostBudget still has its `task` calls denied by AC9's
-// fallback, so no subagent session can start to spend past that budget.
-// runNodeHarness's parameters (cwd, command, NIGHTGAUGE_BIN, and an arbitrary
-// extraEnv map) do not thread RunOptions.CostBudget anywhere: OpenCode takes
-// no cost cap of its own, so CostBudget is consumed entirely on the Go side
-// by openCodeCostWatchdog (opencode_cost_watchdog.go) and never reaches the
-// plugin process this harness drives. There is therefore no "budgeted-stage"
-// input this test can pass that differs, from gates.js's perspective, from
-// TestNodeHarnessDeniesTask's plain case — the deny is unconditional and does
-// not special-case a budgeted stage into letting `task` through. This test
-// documents that and pins the current behavior with an extra environment
-// variable in the shape a cost-budget signal might one day take, to catch a
-// future change that starts threading CostBudget into the harness without
-// also preserving the unconditional deny.
-func TestNodeHarnessDeniesTaskRegardlessOfCostBudget(t *testing.T) {
+// TestNodeHarnessDeniesSubagentRegardlessOfCostBudget pins AC1 of #1748: a
+// stage dispatched with a CostBudget still has its `subagent` calls denied, so
+// no subagent session can start to spend past that budget. CostBudget is
+// consumed on the Go side (openCodeCostWatchdog) and never reaches the plugin;
+// this pins the unconditional deny against a future change that threads a
+// cost-budget signal into the plugin without preserving it.
+func TestNodeHarnessDeniesSubagentRegardlessOfCostBudget(t *testing.T) {
 	node := requireNode(t)
 	root := t.TempDir()
 	res := runNodeHarness(t, node, root, "", "", map[string]string{
-		"NG_TOOL":                "task",
+		"NG_TOOL":                "subagent",
 		"NIGHTGAUGE_COST_BUDGET": "0.01",
 	})
 	if !res.Threw {
-		t.Fatal("want a throw for the task tool even with a cost budget present")
+		t.Fatal("want a throw for the subagent tool even with a cost budget present")
 	}
-	if !strings.HasPrefix(res.Message, "[nightgauge-gate:task-denied]") {
-		t.Errorf("message = %q, want the [nightgauge-gate:task-denied] marker", res.Message)
+	if !strings.HasPrefix(res.Message, "[nightgauge-gate:subagent-denied]") {
+		t.Errorf("message = %q, want the [nightgauge-gate:subagent-denied] marker", res.Message)
+	}
+}
+
+// setupDriver loads the plugin through the fake 2.x host and reports what
+// setup registered, what it returned, and the sentinel it wrote.
+var setupDriver = hostDriver(`
+process.stdout.write(JSON.stringify({
+  registered: host.registered,
+  returnedType: typeof host.returned,
+  subscribedTypes: host.subscriptions.map((s) => s.types || null),
+}));
+`)
+
+// TestSetupRegistersThroughCtxAndReturnsNothing (#3302 AC 1): the entry's
+// default export is the 2.x {id, setup} definition, setup registers the gates
+// through ctx.tool.hook("execute.before"/"execute.after") in HookNames order,
+// and returns undefined: a returned 1.x hook map registers nothing on 2.x. The
+// sentinel it writes names the same registrations. Reverting nightgauge.js to
+// a returned hook map turns this red.
+func TestSetupRegistersThroughCtxAndReturnsNothing(t *testing.T) {
+	node := requireNode(t)
+	root := t.TempDir()
+	dir, err := Write(filepath.Join(t.TempDir(), "plugin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver := filepath.Join(t.TempDir(), "driver.mjs")
+	if err := os.WriteFile(driver, []byte(setupDriver), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(t.TempDir(), "sentinel.json")
+	cmd := exec.Command(node, driver)
+	cmd.Env = append(removeEnv(os.Environ(), "NIGHTGAUGE_BIN"),
+		"NG_PLUGIN_PATH="+filepath.Join(dir, EntryFile),
+		"NG_CWD="+root,
+		EnvNonce+"=n-3302",
+		EnvSentinel+"="+sentinel,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("setup driver: %v (%s)", err, out)
+	}
+	var got struct {
+		Registered      []string   `json:"registered"`
+		ReturnedType    string     `json:"returnedType"`
+		SubscribedTypes [][]string `json:"subscribedTypes"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("driver output %s: %v", out, err)
+	}
+	if got.ReturnedType != "undefined" {
+		t.Errorf("setup returned a %s, want undefined: OpenCode 2.x ignores a returned hook map", got.ReturnedType)
+	}
+	if strings.Join(got.Registered, ",") != strings.Join(HookNames, ",") {
+		t.Errorf("setup registered %v, want HookNames %v in order", got.Registered, HookNames)
+	}
+	if len(got.SubscribedTypes) != 1 {
+		t.Fatalf("setup subscribed %d times (types %v), want one subscription", len(got.SubscribedTypes), got.SubscribedTypes)
+	}
+	// Every type session.js's event() handles must pass the filter, or a real
+	// run never delivers it.
+	for _, want := range []string{"session.created", "session.compaction.started", "permission.asked", "session.execution.succeeded", "session.execution.failed", "session.text.delta"} {
+		if !strings.Contains(","+strings.Join(got.SubscribedTypes[0], ",")+",", ","+want+",") {
+			t.Errorf("subscription types %v lack %q", got.SubscribedTypes[0], want)
+		}
+	}
+	var s Sentinel
+	data, err := os.ReadFile(sentinel)
+	if err != nil {
+		t.Fatalf("setup wrote no sentinel: %v", err)
+	}
+	if err := json.Unmarshal(data, &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Nonce != "n-3302" || s.PluginVersion != PluginVersion || strings.Join(s.Hooks, ",") != strings.Join(HookNames, ",") {
+		t.Errorf("sentinel = %+v, want nonce n-3302, version %s, hooks %v", s, PluginVersion, HookNames)
 	}
 }
 
@@ -773,4 +934,52 @@ func withHookBin(env []string, bin string) []string {
 	env = removeEnv(env, "NIGHTGAUGE_BIN")
 	env = removeEnv(env, notifyDisableEnv)
 	return append(env, hookBinEnv(bin)...)
+}
+
+// writeShFixture writes a /bin/sh stand-in for a verb the plugin spawns. The
+// script drains its stdin before body runs, as the real `nightgauge hook
+// <verb>` does: a fixture that exits without reading lets node's write of the
+// payload hit a closed pipe, gates.js sees EPIPE in result.error and blocks
+// closed, and the test fails only under load (merge-group run 43770443314,
+// TestCapReadLimitAppliesThroughTheRegisteredHook). Every spawn mode the
+// plugin uses closes or nulls the child's stdin, so the drain returns.
+func writeShFixture(t *testing.T, path, body string, mode os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("#!/bin/sh\ncat >/dev/null\n"+body), mode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestShellFixturesReadStdin: no test in this package writes a script (any
+// "#!" literal) outside writeShFixture, so no fixture can exit with its stdin
+// unread.
+func TestShellFixturesReadStdin(t *testing.T) {
+	files, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	for _, name := range files {
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range f.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil &&
+				(fn.Name.Name == "writeShFixture" || fn.Name.Name == "TestShellFixturesReadStdin") {
+				continue
+			}
+			ast.Inspect(decl, func(n ast.Node) bool {
+				lit, ok := n.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					return true
+				}
+				if s, err := strconv.Unquote(lit.Value); err == nil && strings.HasPrefix(s, "#!") {
+					t.Errorf("%s: shell fixture written outside writeShFixture; route it "+
+						"through the helper so it drains its stdin", fset.Position(lit.Pos()))
+				}
+				return true
+			})
+		}
+	}
 }
