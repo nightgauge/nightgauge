@@ -339,6 +339,10 @@ func attentionResolveCmd() *cobra.Command {
 					fmt.Fprintf(out, "Request %s was already resolved — no-op.\n", args[0])
 					return nil
 				}
+				if res.Queued {
+					fmt.Fprintf(out, "Running %s for %s in the background; the card resolves when it succeeds (see `nightgauge attention show %s`).\n", option, args[0], args[0])
+					return nil
+				}
 				fmt.Fprintf(out, "Resolved %s → %s\n", args[0], option)
 				return nil
 			}

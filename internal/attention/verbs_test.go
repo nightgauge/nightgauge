@@ -703,20 +703,32 @@ type rerunRecorder struct {
 	repo  string
 	issue int
 	calls int
+	err   error
 }
 
-func (r *rerunRecorder) RerunPostMerge(_ context.Context, repo string, issue int) error {
+func (r *rerunRecorder) ResolveRerunTarget(_ context.Context, repo string, issue int) (int, error) {
 	r.repo, r.issue = repo, issue
 	r.calls++
-	return nil
+	if r.err != nil {
+		return 0, r.err
+	}
+	return 7, nil
+}
+
+func (r *rerunRecorder) RunPostMergeRerun(context.Context, string, int, int) error {
+	panic("the executor must not run the hook inside the store lock (#3353)")
 }
 
 func TestExecuteRerunPostMerge_TargetsOnlyThePersistedContext(t *testing.T) {
 	req := &DecisionRequest{ID: "r1", Context: Context{Repo: "o/app", Issue: 12}}
 	opt := Option{ID: "rerun", Verb: VerbIssueRerunPostMerge}
 	rec := &rerunRecorder{}
-	if err := ExecuteRerunPostMerge(context.Background(), rec, req, opt, []string{"o/app"}); err != nil {
-		t.Fatalf("rerun: %v", err)
+	var queued *VerbQueuedError
+	if err := ExecuteRerunPostMerge(context.Background(), rec, req, opt, []string{"o/app"}); !errors.As(err, &queued) {
+		t.Fatalf("rerun: err = %v, want *VerbQueuedError", err)
+	}
+	if queued.Repo != "o/app" || queued.Issue != 12 || queued.PR != 7 {
+		t.Fatalf("queued = %+v", queued)
 	}
 	if rec.calls != 1 || rec.repo != "o/app" || rec.issue != 12 {
 		t.Fatalf("rerun targeted %s#%d (%d calls)", rec.repo, rec.issue, rec.calls)
@@ -748,5 +760,17 @@ func TestExecuteRerunPostMerge_TargetsOnlyThePersistedContext(t *testing.T) {
 	}
 	if rec.calls != 1 {
 		t.Fatalf("a refused call reached the runner: %d calls", rec.calls)
+	}
+}
+
+// #3353: a failed target read names its cause in a caller-safe type.
+func TestExecuteRerunPostMerge_TargetFailureNamesTheCause(t *testing.T) {
+	req := &DecisionRequest{ID: "r1", Context: Context{Repo: "o/app", Issue: 12}}
+	rec := &rerunRecorder{err: errors.New("no merged pull request closes it")}
+	err := ExecuteRerunPostMerge(context.Background(), rec, req,
+		Option{ID: "rerun", Verb: VerbIssueRerunPostMerge}, []string{"o/app"})
+	var cause *VerbCauseError
+	if !errors.As(err, &cause) || !strings.Contains(cause.Cause, "no merged pull request") {
+		t.Fatalf("err = %v, want *VerbCauseError naming the cause", err)
 	}
 }

@@ -903,3 +903,55 @@ func TestRaiseNormalisesOnsetAndDropsImpossibleOnes(t *testing.T) {
 		})
 	}
 }
+
+type queuingExec struct{}
+
+func (queuingExec) ExecuteVerb(context.Context, *DecisionRequest, Option) error {
+	return &VerbQueuedError{Repo: "o/app", Issue: 12, PR: 7}
+}
+
+// #3353: a queued verb leaves the card open; a background failure is recorded
+// on the card and in the journal, and a terminal card is left alone.
+func TestQueuedVerbThenRecordVerbFailure(t *testing.T) {
+	s := New(layouttest.Repo(t))
+	id := mustID(t)
+	if _, _, err := s.Raise(validRequest(id, "cond:q")); err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	var queued *VerbQueuedError
+	if _, err := s.Resolve(context.Background(), id, "go", "tester", "", "", queuingExec{}); !errors.As(err, &queued) {
+		t.Fatalf("Resolve err = %v, want *VerbQueuedError", err)
+	}
+	if got, _, _ := s.Get(id); got.Lifecycle.State != StateOpen {
+		t.Fatalf("queued resolve transitioned the card to %q", got.Lifecycle.State)
+	}
+	if err := s.RecordVerbFailure(context.Background(), id, "go", "post-merge re-run", "main checks could not be read"); err != nil {
+		t.Fatalf("RecordVerbFailure: %v", err)
+	}
+	got, _, _ := s.Get(id)
+	if got.Lifecycle.State != StateOpen || got.Context.Blocker != "post-merge re-run: main checks could not be read" {
+		t.Fatalf("card = %q / blocker %q", got.Lifecycle.State, got.Context.Blocker)
+	}
+	entries, err := s.ReadJournal()
+	if err != nil {
+		t.Fatalf("ReadJournal: %v", err)
+	}
+	found := false
+	for _, e := range entries {
+		if e.Action == ActionVerbFailed && e.ID == id && e.Error == "main checks could not be read" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no verb_failed journal entry")
+	}
+	if _, err := s.Resolve(context.Background(), id, "go", "tester", "", "", nil); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if err := s.RecordVerbFailure(context.Background(), id, "go", "x", "late"); err != nil {
+		t.Fatalf("RecordVerbFailure on terminal: %v", err)
+	}
+	if got, _, _ := s.Get(id); got.Context.Blocker == "x: late" {
+		t.Fatal("RecordVerbFailure rewrote a terminal card")
+	}
+}

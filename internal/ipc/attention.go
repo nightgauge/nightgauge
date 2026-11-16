@@ -40,6 +40,9 @@ type AttentionListResult struct {
 type AttentionResolveResult struct {
 	Ok              bool `json:"ok"`
 	AlreadyResolved bool `json:"alreadyResolved"`
+	// Queued is true when the option's work was accepted and runs in the
+	// background (#3353); the card resolves itself when that work succeeds.
+	Queued bool `json:"queued,omitempty"`
 }
 
 // AttentionAcknowledgeResult is the attention.acknowledge response.
@@ -175,6 +178,13 @@ func (s *Server) handleAttentionResolve(ctx context.Context, raw json.RawMessage
 		if errors.As(err, &actorErr) {
 			return nil, fmt.Errorf("attention.resolve: %w", actorErr)
 		}
+		if s.acceptQueuedVerb(ctx, err, p.ID, p.OptionID, ipcAttentionActor(p.Actor, actorSurfaceVSCode)) {
+			return AttentionResolveResult{Ok: true, Queued: true}, nil
+		}
+		var causeErr *attention.VerbCauseError
+		if errors.As(err, &causeErr) {
+			return nil, fmt.Errorf("attention.resolve: %w", causeErr)
+		}
 		return nil, fmt.Errorf("attention.resolve: could not resolve request")
 	}
 	if res.SteerErr != nil {
@@ -243,6 +253,11 @@ func (s *Server) ApplyRelayedResolve(ctx context.Context, requestID, optionID, a
 				requestID, s.workspaceRoot, store.Dir())
 			return platform.AttentionResolveOutcome{NotInThisWorkspace: true},
 				fmt.Errorf("%w: %w", platform.ErrRelayedRequestNotHere, err)
+		}
+		// Accepted, not rejected (#3353): the card resolves itself when the
+		// background work succeeds, and its own event reports that.
+		if s.acceptQueuedVerb(ctx, err, requestID, optionID, ipcAttentionActor(actor, actorSurfacePlatform)) {
+			return platform.AttentionResolveOutcome{}, nil
 		}
 		return platform.AttentionResolveOutcome{}, err
 	}
@@ -446,17 +461,10 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		// The card names the held dependency in its own Context (#3081); the
 		// daemon finds the closing merge and runs the same post-merge path a
 		// run that merged it would have run.
-		var runner attention.PostMergeRerunner
-		if s.scheduler != nil {
-			runner = s.scheduler
-		}
-		if err := attention.ExecuteRerunPostMerge(ctx, runner, req, opt, s.configuredRepos()); err != nil {
-			return err
-		}
-		if s.autonomousScheduler != nil {
-			s.autonomousScheduler.TriggerRescan()
-		}
-		return nil
+		// Only the fast closing-merge read runs here, inside the store lock;
+		// the executor returns *attention.VerbQueuedError and the resolve
+		// surface starts the hook outside it (acceptQueuedVerb, #3353).
+		return attention.ExecuteRerunPostMerge(ctx, s.postMergeRerunner(), req, opt, s.configuredRepos())
 
 	case attention.VerbPRUpdateBranch:
 		// The workspace root's configured set, the same one workspace.addRepo
@@ -925,3 +933,74 @@ func removeBlockedByTargets(repo string, issue int, args map[string]any, configu
 	return forge.IssueRef{Owner: bo, Repo: bn, Number: blockedNumber},
 		forge.IssueRef{Owner: ko, Repo: kn, Number: blockerNumber}, nil
 }
+
+// postMergeRerunner is the issue.rerunPostMerge capability: the test override
+// when set, else the scheduler, else nil (the verb refuses).
+func (s *Server) postMergeRerunner() attention.PostMergeRerunner {
+	if s.postMergeRerunOverride != nil {
+		return s.postMergeRerunOverride
+	}
+	if s.scheduler != nil {
+		return s.scheduler
+	}
+	return nil
+}
+
+// postMergeRerunLabel prefixes the cause recorded on a card whose background
+// re-run failed.
+const postMergeRerunLabel = "post-merge re-run"
+
+// acceptQueuedVerb reports whether err is an accepted background verb
+// (*attention.VerbQueuedError) and, if so, starts it (#3353).
+//
+// The post-merge hook polls main for up to twenty minutes, far past both the
+// store's verb deadline and attentionMutationTimeout, so it cannot run inside
+// Store.Resolve. The card stays open while it runs, and is resolved only after
+// the marker exists: resolving it first would let Raise suppress the standing
+// condition, leaving a dependency held with no card if the re-run then failed.
+// One re-run per repo#issue runs at a time; a second click joins the first.
+func (s *Server) acceptQueuedVerb(ctx context.Context, err error, id, optionID, actor string) bool {
+	var queued *attention.VerbQueuedError
+	if !errors.As(err, &queued) {
+		return false
+	}
+	runner := s.postMergeRerunner()
+	store := s.attentionStore()
+	if runner == nil || store == nil {
+		return false
+	}
+	key := fmt.Sprintf("%s#%d", queued.Repo, queued.Issue)
+	if _, running := s.postMergeReruns.LoadOrStore(key, struct{}{}); running {
+		return true
+	}
+	base := detachedRunCtx(ctx)
+	s.postMergeRerunWG.Add(1)
+	go func() {
+		defer s.postMergeRerunWG.Done()
+		defer s.postMergeReruns.Delete(key)
+		rctx, cancel := context.WithTimeout(base, postMergeRerunBudget)
+		runErr := runner.RunPostMergeRerun(rctx, queued.Repo, queued.Issue, queued.PR)
+		cancel()
+		sctx, cancelStore := context.WithTimeout(base, attentionMutationTimeout)
+		defer cancelStore()
+		if runErr != nil {
+			log.Printf("attention: %s for %s failed; card %s stays open: %v", postMergeRerunLabel, key, id, runErr)
+			if err := store.RecordVerbFailure(sctx, id, optionID, postMergeRerunLabel, runErr.Error()); err != nil {
+				log.Printf("attention: could not record the %s failure on %s: %v", postMergeRerunLabel, id, err)
+			}
+			return
+		}
+		// A nil executor transitions without running the verb again.
+		if _, err := store.Resolve(sctx, id, optionID, actor, "", "", nil); err != nil {
+			log.Printf("attention: %s for %s wrote the marker but card %s did not resolve: %v", postMergeRerunLabel, key, id, err)
+		}
+		if s.autonomousScheduler != nil {
+			s.autonomousScheduler.TriggerRescan()
+		}
+	}()
+	return true
+}
+
+// postMergeRerunBudget bounds one background re-run. A var only so tests can
+// shorten it.
+var postMergeRerunBudget = orchestrator.PostMergeRerunBudget
