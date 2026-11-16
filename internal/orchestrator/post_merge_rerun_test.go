@@ -68,7 +68,7 @@ func TestRerunPostMerge(t *testing.T) {
 
 	// The latest merged closing PR is the one the hook runs against.
 	reader := &fakeClosingMerges{merge: &gh.ClosingMerge{Number: 7, SHA: "abc"}}
-	if err := newSched(reader).RerunPostMerge(context.Background(), "o/app", 21); err != nil {
+	if err := rerunBoth(newSched(reader)); err != nil {
 		t.Fatalf("rerun: %v", err)
 	}
 	if gotPR != 7 || reader.asked != "o/app#21" {
@@ -77,7 +77,7 @@ func TestRerunPostMerge(t *testing.T) {
 
 	// Main still red: no marker, the verb fails and the card stays.
 	marker = hooks.ValidationMarkerNotGreen
-	if err := newSched(reader).RerunPostMerge(context.Background(), "o/app", 21); err == nil {
+	if err := rerunBoth(newSched(reader)); err == nil {
 		t.Fatal("a re-run that left no marker reported success")
 	}
 
@@ -87,7 +87,7 @@ func TestRerunPostMerge(t *testing.T) {
 		"no merge":         {},
 		"merge without PR": {merge: &gh.ClosingMerge{}},
 	} {
-		if err := newSched(r).RerunPostMerge(context.Background(), "o/app", 21); err == nil {
+		if err := rerunBoth(newSched(r)); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
 	}
@@ -95,7 +95,7 @@ func TestRerunPostMerge(t *testing.T) {
 		t.Fatalf("the hook ran without a merged closing PR (PR #%d)", gotPR)
 	}
 
-	if err := (&Scheduler{}).RerunPostMerge(context.Background(), "o/app", 21); err == nil {
+	if err := rerunBoth((&Scheduler{})); err == nil {
 		t.Fatal("no forge client and no reader: want an error")
 	}
 }
@@ -115,11 +115,54 @@ func TestRerunPostMergeIgnoresCrossRepoClosingMerge(t *testing.T) {
 			ran = true
 			return hooks.PostMergeResult{ValidationMarker: hooks.ValidationMarkerWritten}
 		}}
-	err := s.RerunPostMerge(context.Background(), "o/app", 21)
+	err := rerunBoth(s)
 	if err == nil || !strings.Contains(err.Error(), "no merged pull request closes it") {
 		t.Fatalf("err = %v, want no merged pull request", err)
 	}
 	if ran {
 		t.Fatal("the post-merge hook ran against another repository's PR")
 	}
+}
+
+// #3353: the verdict names the main-check outcome, not just "no marker".
+func TestPostMergeRerunVerdictNamesMainChecks(t *testing.T) {
+	cases := []struct {
+		mc   hooks.MainCheckResult
+		want string
+	}{
+		{hooks.MainCheckResult{Verdict: hooks.MainChecksError, MergeCommitSha: "abc", Error: "deadline exceeded"},
+			"main checks could not be read at abc: deadline exceeded"},
+		{hooks.MainCheckResult{Verdict: hooks.MainChecksRed, MergeCommitSha: "abc"}, "main is red at abc"},
+		{hooks.MainCheckResult{Verdict: hooks.MainChecksPending, MergeCommitSha: "abc"}, "main is pending at abc"},
+	}
+	for _, tc := range cases {
+		mc := tc.mc
+		err := postMergeRerunVerdict("o/app", 21, 7, hooks.PostMergeResult{
+			ValidationMarker: hooks.ValidationMarkerNotGreen, MainChecks: &mc})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("verdict %s: err = %v, want %q", mc.Verdict, err, tc.want)
+		}
+	}
+}
+
+func TestResolveRerunTargetReturnsThePR(t *testing.T) {
+	s := &Scheduler{closingMergeReader: &fakeClosingMerges{merge: &gh.ClosingMerge{Number: 7}}}
+	pr, err := s.ResolveRerunTarget(context.Background(), "o/app", 21)
+	if err != nil || pr != 7 {
+		t.Fatalf("ResolveRerunTarget = %d, %v; want 7, nil", pr, err)
+	}
+	if _, err := (&Scheduler{closingMergeReader: &fakeClosingMerges{}}).ResolveRerunTarget(
+		context.Background(), "o/app", 21); err == nil || !strings.Contains(err.Error(), "no merged pull request") {
+		t.Fatalf("no closing merge: err = %v", err)
+	}
+}
+
+// rerunBoth runs both halves in order, as the daemon does across its
+// synchronous resolve and its background run.
+func rerunBoth(s *Scheduler) error {
+	pr, err := s.ResolveRerunTarget(context.Background(), "o/app", 21)
+	if err != nil {
+		return err
+	}
+	return s.RunPostMergeRerun(context.Background(), "o/app", 21, pr)
 }

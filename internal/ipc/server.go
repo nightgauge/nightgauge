@@ -85,6 +85,13 @@ type Server struct {
 	execMgr   *execution.Manager
 	scheduler *orchestrator.Scheduler
 
+	// postMergeReruns holds one entry per repo#issue whose post-merge re-run
+	// runs in the background; postMergeRerunWG lets tests wait for them, and
+	// postMergeRerunOverride replaces the scheduler in tests (#3353).
+	postMergeReruns        sync.Map
+	postMergeRerunWG       sync.WaitGroup
+	postMergeRerunOverride attention.PostMergeRerunner
+
 	// doctorMu serializes the doctor.* methods; doctorFixer holds the current
 	// scan and is set only by a full scan (internal/ipc/doctor.go).
 	// newDoctorFixer and doctorFixLogPath are test seams; nil means the real

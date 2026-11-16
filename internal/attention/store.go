@@ -387,6 +387,10 @@ const (
 	// expired (#1450). Distinct from ActionExpired so a log-scraper can find
 	// verb failures without conflating them with a normal successful expiry.
 	ActionExpireVerbFailed = "expire_verb_failed"
+	// ActionVerbFailed records that a verb accepted in the background
+	// (VerbQueuedError, #3353) later failed. The card stays open; the entry
+	// carries the cause in Error, and the card's Context.Blocker names it.
+	ActionVerbFailed = "verb_failed"
 )
 
 // TransitionListener is notified after each transition is durably persisted
@@ -1234,6 +1238,42 @@ func (s *Store) emitVerbFailure(id, appliedOption string, verr error) {
 		fmt.Fprintf(os.Stderr, "attention: journal append failed (fail-open): %v\n", err)
 	}
 	fmt.Fprintf(os.Stderr, "attention: default_action verb failed for %s (option %q): %v\n", id, appliedOption, verr)
+}
+
+// RecordVerbFailure records that a verb running in the background for an open
+// card failed (#3353). The card stays open so the operator can retry; its
+// Context.Blocker becomes "<label>: <cause>" so `attention show` and the
+// sidebar say why, and an ActionVerbFailed journal entry keeps the cause even
+// after a later refresh rewrites the card. A terminal card is left untouched.
+func (s *Store) RecordVerbFailure(ctx context.Context, id, optionID, label, cause string) error {
+	if s.err != nil {
+		return s.err
+	}
+	release, err := s.acquireSectionCtx(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	path, req, err := s.loadLocked(id)
+	if err != nil {
+		return err
+	}
+	if req.Lifecycle.State.IsTerminal() {
+		return nil
+	}
+	req.Context.Blocker = label + ": " + cause
+	if err := s.writeMaterializedLocked(path, req); err != nil {
+		return err
+	}
+	s.emitLocked(JournalEntry{
+		Action:   ActionVerbFailed,
+		ID:       req.ID,
+		State:    req.Lifecycle.State,
+		OptionID: optionID,
+		At:       s.nowUTC().Format(tsLayout),
+		Error:    cause,
+	}, req)
+	return nil
 }
 
 // --- locked helpers (caller holds the per-dir mutex) ---

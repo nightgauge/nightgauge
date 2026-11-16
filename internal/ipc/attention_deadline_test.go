@@ -10,6 +10,9 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -170,4 +173,144 @@ type verbExecutorFunc func(ctx context.Context, req *attention.DecisionRequest, 
 
 func (f verbExecutorFunc) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest, opt attention.Option) error {
 	return f(ctx, req, opt)
+}
+
+// --- #3353: the post-merge re-run runs outside the attention deadline --------
+
+type slowRerunner struct {
+	pr      int
+	target  error
+	delay   time.Duration
+	runErr  error
+	ran     chan struct{}
+	release chan struct{}
+}
+
+func (r *slowRerunner) ResolveRerunTarget(context.Context, string, int) (int, error) {
+	return r.pr, r.target
+}
+
+func (r *slowRerunner) RunPostMergeRerun(ctx context.Context, _ string, _, _ int) error {
+	if r.ran != nil {
+		close(r.ran)
+	}
+	if r.release != nil {
+		<-r.release
+	}
+	select {
+	case <-time.After(r.delay):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return r.runErr
+}
+
+func newRerunServer(t *testing.T, runner attention.PostMergeRerunner) (*Server, string) {
+	t.Helper()
+	s := newAttentionTestServer(t)
+	cfgDir := filepath.Join(s.workspaceRoot, ".nightgauge")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"),
+		[]byte("project:\n  owner: o\n  number: 3\n  repo: r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.postMergeRerunOverride = runner
+	id, err := attention.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.attentionStore().Raise(attention.DecisionRequest{
+		ID: id, IdempotencyKey: "rerun:" + id, Kind: attention.KindChoose,
+		Severity: attention.SeverityBlockingRun, Title: "held dependency", Body: "why",
+		Producer: "test", Context: attention.Context{Repo: "o/r", Issue: 21},
+		Options: []attention.Option{
+			{ID: "rerun-post-merge", Label: "Run post-merge hook", Verb: attention.VerbIssueRerunPostMerge},
+			{ID: "leave", Label: "Leave", Verb: attention.VerbNoop},
+		},
+		DefaultAction: "leave",
+	}); err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	return s, id
+}
+
+func resolveRerun(t *testing.T, s *Server, id string) (AttentionResolveResult, error) {
+	t.Helper()
+	raw, err := json.Marshal(AttentionResolveParams{ID: id, OptionID: "rerun-post-merge", Actor: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.handleAttentionResolve(context.Background(), raw)
+	if err != nil {
+		return AttentionResolveResult{}, err
+	}
+	return out.(AttentionResolveResult), nil
+}
+
+// AC1/AC2: a re-run slower than the attention deadline is queued at once and
+// resolves the card when the marker is written.
+func TestRerunPostMergeOutlivesTheAttentionDeadline(t *testing.T) {
+	withShortMutationTimeout(t, 200*time.Millisecond)
+	runner := &slowRerunner{pr: 7, delay: 600 * time.Millisecond}
+	s, id := newRerunServer(t, runner)
+	start := time.Now()
+	res, err := resolveRerun(t, s, id)
+	if err != nil || !res.Ok || !res.Queued {
+		t.Fatalf("resolve = %+v, %v; want Ok+Queued", res, err)
+	}
+	if time.Since(start) > 150*time.Millisecond {
+		t.Fatalf("resolve waited %s for the hook", time.Since(start))
+	}
+	if got, _, _ := s.attentionStore().Get(id); got.Lifecycle.State != attention.StateOpen {
+		t.Fatalf("card resolved before the marker existed: %q", got.Lifecycle.State)
+	}
+	s.postMergeRerunWG.Wait()
+	got, _, _ := s.attentionStore().Get(id)
+	if got.Lifecycle.State != attention.StateResolved || got.Lifecycle.Resolved.OptionID != "rerun-post-merge" {
+		t.Fatalf("card after a green re-run = %q", got.Lifecycle.State)
+	}
+}
+
+// A second click while a re-run is in flight joins it rather than starting another.
+func TestRerunPostMergeDedupesInFlight(t *testing.T) {
+	runner := &slowRerunner{pr: 7, ran: make(chan struct{}), release: make(chan struct{})}
+	s, id := newRerunServer(t, runner)
+	if res, err := resolveRerun(t, s, id); err != nil || !res.Queued {
+		t.Fatalf("first resolve = %+v, %v", res, err)
+	}
+	<-runner.ran
+	if res, err := resolveRerun(t, s, id); err != nil || !res.Queued {
+		t.Fatalf("second resolve = %+v, %v", res, err)
+	}
+	close(runner.release) // a second RunPostMergeRerun would panic on close(ran)
+	s.postMergeRerunWG.Wait()
+}
+
+// AC3: an unreadable main keeps the card open and records the cause on it.
+func TestRerunPostMergeFailureNamesTheCause(t *testing.T) {
+	runner := &slowRerunner{pr: 7, runErr: errors.New("post-merge re-run for o/r#21 (PR #7): main checks could not be read at abc: 502")}
+	s, id := newRerunServer(t, runner)
+	if _, err := resolveRerun(t, s, id); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	s.postMergeRerunWG.Wait()
+	got, _, _ := s.attentionStore().Get(id)
+	if got.Lifecycle.State != attention.StateOpen || !strings.Contains(got.Context.Blocker, "main checks could not be read") {
+		t.Fatalf("card = %q, blocker %q", got.Lifecycle.State, got.Context.Blocker)
+	}
+}
+
+// AC3: a synchronous target failure names its cause, not "could not resolve request".
+func TestRerunPostMergeTargetFailureIsNotCollapsed(t *testing.T) {
+	runner := &slowRerunner{target: errors.New("post-merge re-run for o/r#21: no merged pull request closes it")}
+	s, id := newRerunServer(t, runner)
+	_, err := resolveRerun(t, s, id)
+	if err == nil || !strings.Contains(err.Error(), "no merged pull request closes it") {
+		t.Fatalf("err = %v, want the named cause", err)
+	}
+	if got, _, _ := s.attentionStore().Get(id); got.Lifecycle.State != attention.StateOpen {
+		t.Fatalf("card = %q, want open", got.Lifecycle.State)
+	}
 }

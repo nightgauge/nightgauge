@@ -927,7 +927,7 @@ type Scheduler struct {
 	endpointSlots *endpointLedger
 
 	client *gh.Client
-	// closingMergeReader overrides the forge read RerunPostMerge makes
+	// closingMergeReader overrides the forge read ResolveRerunTarget makes
 	// (#3081); nil reads through s.client. Tests set it.
 	closingMergeReader ClosingMergeReader
 	boardSvc           *gh.BoardService

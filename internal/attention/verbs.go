@@ -576,20 +576,49 @@ func ExecuteClearBlockedFinding(ctx context.Context, clearer BlockedFindingClear
 
 // --- issue.rerunPostMerge (#3081) -------------------------------------------
 
-// PostMergeRerunner is the single capability issue.rerunPostMerge needs: run
-// the post-merge hook for one closed issue against its latest merged closing
-// pull request. An implementation that finds no merged closing pull request,
-// or whose hook does not leave the validation marker, returns an error so the
-// card survives to say the dependency is still held.
+// PostMergeRerunner is the capability issue.rerunPostMerge needs, split in two
+// halves (#3353). ResolveRerunTarget is one forge read and runs inside the
+// store's lock, under its verb deadline. RunPostMergeRerun is the whole
+// post-merge hook, which polls main for up to twenty minutes; it never runs
+// inside the lock. It returns nil only when the hook left the validation
+// marker, so the card survives otherwise to say the dependency is still held.
 type PostMergeRerunner interface {
-	RerunPostMerge(ctx context.Context, repo string, issue int) error
+	ResolveRerunTarget(ctx context.Context, repo string, issue int) (int, error)
+	RunPostMergeRerun(ctx context.Context, repo string, issue, pr int) error
 }
+
+// VerbQueuedError is the verb result that means "accepted, running in the
+// background" (#3353). Store.Resolve treats every verb error as "do not
+// transition", so the card stays open and unpersisted; the surface that
+// receives this error starts the slow half, reports success to its caller, and
+// resolves the card itself once the work succeeds.
+type VerbQueuedError struct {
+	Repo  string
+	Issue int
+	PR    int
+}
+
+func (e *VerbQueuedError) Error() string {
+	return fmt.Sprintf("attention: %s for %s#%d (PR #%d) is queued", VerbIssueRerunPostMerge, e.Repo, e.Issue, e.PR)
+}
+
+// VerbCauseError is a verb failure whose cause is safe to show the caller
+// (#3353): it names a repository, issue, pull request and forge error the
+// operator already owns, never option or verb internals (§J). Surfaces pass it
+// through instead of collapsing it into a generic message.
+type VerbCauseError struct {
+	Cause string
+}
+
+func (e *VerbCauseError) Error() string { return e.Cause }
 
 // ExecuteRerunPostMerge is the ONLY implementation of the issue.rerunPostMerge
 // verb. It refuses a mis-bound option, any argument, a request that names no
 // repository or issue, a repository outside the configured set, and a surface
 // without the capability — the same refusals as ExecuteClearBlockedFinding,
-// for the same reasons.
+// for the same reasons. It then resolves the closing merge synchronously and
+// returns *VerbQueuedError: the hook itself is the caller's to run outside the
+// lock (#3353). A failed target read returns *VerbCauseError.
 func ExecuteRerunPostMerge(ctx context.Context, runner PostMergeRerunner, req *DecisionRequest, opt Option, configuredRepos []string) error {
 	if req == nil {
 		return fmt.Errorf("attention: %s requires the persisted request", VerbIssueRerunPostMerge)
@@ -613,7 +642,11 @@ func ExecuteRerunPostMerge(ctx context.Context, runner PostMergeRerunner, req *D
 	if runner == nil {
 		return fmt.Errorf("attention: %s is not available on this surface", VerbIssueRerunPostMerge)
 	}
-	return runner.RerunPostMerge(ctx, repo, req.Context.Issue)
+	pr, err := runner.ResolveRerunTarget(ctx, repo, req.Context.Issue)
+	if err != nil {
+		return &VerbCauseError{Cause: err.Error()}
+	}
+	return &VerbQueuedError{Repo: repo, Issue: req.Context.Issue, PR: pr}
 }
 
 // --- pr.updateBranch (#1575) ------------------------------------------------
