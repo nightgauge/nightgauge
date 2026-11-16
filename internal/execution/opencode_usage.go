@@ -90,16 +90,39 @@ var openCodeAutoRejectStartRE = regexp.MustCompile(`^!\s*permission requested: (
 // openCodeAutoRejectEnd ends the notice's last line.
 const openCodeAutoRejectEnd = "); auto-rejecting"
 
-// openCodePermissions are the permissions opencode 1.18.30 asks for itself,
-// read from its bundled source. A notice naming any other, such as an MCP
+// openCodePermissions are the permission actions OpenCode 2.x asks for
+// itself: one per 2.x tool (spike #3197 § 2, § 3) plus external_directory and
+// doom_loop, with lsp and workflow_tool_approval kept so a notice naming
+// either never regresses to unknown. They are the same names the permission
+// map and adapters.OpenCodeToolForClaudeTool use (#3304), so a notice and a
+// grant always compare like for like. A notice naming any other, such as an MCP
 // tool's, which a config names, is recorded as openCodeUnknownPermission: a
 // marker is what failure classification reads, so no name a config chose may
 // reach it.
 var openCodePermissions = map[string]bool{
-	"bash": true, "read": true, "edit": true, "glob": true, "grep": true,
-	"task": true, "webfetch": true, "websearch": true, "todowrite": true,
-	"skill": true, "lsp": true, "external_directory": true, "doom_loop": true,
-	"workflow_tool_approval": true,
+	"shell": true, "read": true, "edit": true, "write": true, "glob": true,
+	"grep": true, "subagent": true, "webfetch": true, "websearch": true,
+	"skill": true, "execute": true, "question": true, "external_directory": true,
+	"doom_loop": true, "lsp": true, "workflow_tool_approval": true,
+}
+
+// openCodeToolPermission maps a rejected tool_use event's own part.tool id to
+// the permission action that gates it. A tool id that is itself an action
+// passes through; apply_patch is gated by edit, and the pre-2.x ids task and
+// bash by subagent and shell. Anything else is openCodeUnknownPermission.
+func openCodeToolPermission(tool string) string {
+	switch tool {
+	case "apply_patch":
+		return "edit"
+	case "task":
+		return "subagent"
+	case "bash":
+		return "shell"
+	}
+	if openCodePermissions[tool] {
+		return tool
+	}
+	return openCodeUnknownPermission
 }
 
 // openCodeUnknownPermission stands for a rejected permission this parser
@@ -146,25 +169,6 @@ func openCodeRejectedPermission(plain string) (string, bool) {
 // failure classification reads.
 func openCodeKeptNotice(permission string) string {
 	return "! permission requested: " + permission + " (..." + openCodeAutoRejectEnd
-}
-
-// openCodeToolRejectionPermission maps a rejected tool_use event's own
-// part.tool name (stream.go's OpenCodeStream.RejectedTool, opencode's own
-// lowercase tool id) to the permission key openCodeRejectionMarker
-// classifies by. 1.18.30 has no permission of its own for "write" or
-// "apply_patch": both are governed by the same "edit" permission the
-// generated map's own "edit" key controls (ADR-022 § 9; the map's edit
-// deny-list is what a "write" or "apply_patch" call is actually refused
-// against). Every other tool name already equals its own permission key
-// ("bash", "read", "glob", "grep", "task", "webfetch", "websearch",
-// "todowrite", "skill"), so it passes through unchanged.
-func openCodeToolRejectionPermission(tool string) string {
-	switch tool {
-	case "write", "apply_patch":
-		return "edit"
-	default:
-		return tool
-	}
 }
 
 func openCodeRejectionMarker(permission string, allowed map[string]bool) string {
@@ -572,15 +576,14 @@ func (r *openCodeRun) finish(ctx context.Context, exit openCodeExit, acc *TokenA
 		// ADR-022 § 9) never prints the "auto-rejecting" notice a stderr-only
 		// read depends on. The run still stopped there, so it still fails.
 		// The rejected tool_use event's own part.tool (AC3, #1638 fix round)
-		// is what names it instead, mapped through
-		// openCodeToolRejectionPermission (write/apply_patch -> edit); an
-		// event that named no tool at all still falls back to
-		// openCodeUnknownPermission.
+		// is what names it instead, through openCodeToolPermission: most 2.x
+		// tool ids are their own permission action (#3304), write included,
+		// and the few that are not (apply_patch, task, bash) map to the action
+		// that gates them. A tool that names no permission of
+		// openCodePermissions (an MCP tool's, or none at all) falls back to
+		// openCodeUnknownPermission, as a stderr notice does.
 		r.stream.Drift("the stream shows a tool call OpenCode rejected, but stderr carried no auto-reject line naming its permission; classified from the rejected tool_use event's own tool name")
-		tool := openCodeUnknownPermission
-		if r.stream.RejectedTool != "" {
-			tool = openCodeToolRejectionPermission(r.stream.RejectedTool)
-		}
+		tool := openCodeToolPermission(r.stream.RejectedTool)
 		marker = openCodeRejectionMarker(tool, r.allowed)
 	}
 	r.stream.Finish(exit.exitCode)

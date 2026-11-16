@@ -365,8 +365,8 @@ func TestOpenCodeIncludesReadAllowed(t *testing.T) {
 	permission := openCodePermissionMap(opts, "")
 
 	stub := newGuardStubServer(t, []guardStubTurn{
-		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"filePath": includeFile}}},
-		{ToolCall: &guardStubToolCall{Name: "edit", Arguments: map[string]any{"filePath": includeFile, "oldString": "PROBE-1638-INCLUDE-CONTENT", "newString": "TAMPERED"}}},
+		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"path": includeFile}}},
+		{ToolCall: &guardStubToolCall{Name: "edit", Arguments: map[string]any{"path": includeFile, "oldString": "PROBE-1638-INCLUDE-CONTENT", "newString": "TAMPERED"}}},
 		{Content: "done"},
 	})
 
@@ -447,7 +447,7 @@ func TestOpenCodeIncludesEditDeniedInGitWorktree(t *testing.T) {
 	permission := openCodePermissionMap(opts, "")
 
 	stub := newGuardStubServer(t, []guardStubTurn{
-		{ToolCall: &guardStubToolCall{Name: "edit", Arguments: map[string]any{"filePath": includeFile, "oldString": "PROBE-1638-INCLUDE-CONTENT", "newString": "TAMPERED"}}},
+		{ToolCall: &guardStubToolCall{Name: "edit", Arguments: map[string]any{"path": includeFile, "oldString": "PROBE-1638-INCLUDE-CONTENT", "newString": "TAMPERED"}}},
 		{Content: "done"},
 	})
 	exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
@@ -492,7 +492,7 @@ func TestOpenCodeBinDirEditDenied(t *testing.T) {
 	permission := openCodePermissionMap(opts, binDir)
 
 	stub := newGuardStubServer(t, []guardStubTurn{
-		{ToolCall: &guardStubToolCall{Name: "write", Arguments: map[string]any{"filePath": planted, "content": "#!/bin/sh\necho PLANTED\n"}}},
+		{ToolCall: &guardStubToolCall{Name: "write", Arguments: map[string]any{"path": planted, "content": "#!/bin/sh\necho PLANTED\n"}}},
 		{Content: "done"},
 	})
 	exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
@@ -546,7 +546,7 @@ func runOpenCodeBinDirCpDeniedProbe(t *testing.T) {
 	permission := openCodePermissionMap(opts, binDir)
 
 	stub := newGuardStubServer(t, []guardStubTurn{
-		{ToolCall: &guardStubToolCall{Name: "bash", Arguments: map[string]any{"command": fmt.Sprintf("cp %q %q", source, planted)}}},
+		{ToolCall: &guardStubToolCall{Name: "shell", Arguments: map[string]any{"command": fmt.Sprintf("cp %q %q", source, planted)}}},
 		{Content: "done"},
 	})
 	exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
@@ -554,12 +554,12 @@ func runOpenCodeBinDirCpDeniedProbe(t *testing.T) {
 
 	for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
 		tool, status, errText, ok := guardToolUseEvent(line)
-		if !ok || tool != "bash" {
+		if !ok || tool != "shell" {
 			continue
 		}
 		if status != "error" {
 			t.Errorf("the bash cp into NIGHTGAUGE_BIN was not rejected (status=%q)", status)
-		} else if !strings.Contains(errText, `"permission":"external_directory"`) {
+		} else if !strings.Contains(errText, openCodeExternalDirectoryDenied) {
 			t.Errorf("the rejection's error text does not name permission external_directory: %s", errText)
 		}
 	}
@@ -622,7 +622,7 @@ func runOpenCodeOutsideReadRejectedProbe(t *testing.T) {
 	permission := openCodePermissionMap(opts, "")
 
 	stub := newGuardStubServer(t, []guardStubTurn{
-		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"filePath": outsideFile}}},
+		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"path": outsideFile}}},
 		{Content: "done"},
 	})
 
@@ -638,7 +638,7 @@ func runOpenCodeOutsideReadRejectedProbe(t *testing.T) {
 		if status != "error" {
 			t.Fatalf("the outside read's tool_use status = %q, want \"error\":\n%s", status, stdout)
 		}
-		if !strings.Contains(errText, `"permission":"external_directory"`) {
+		if !strings.Contains(errText, openCodeExternalDirectoryDenied) {
 			t.Errorf("the rejection's error text does not name permission external_directory: %s", errText)
 		}
 		sawRejection = true
@@ -686,9 +686,9 @@ func TestOpenCodeNestedDotEnvDenied(t *testing.T) {
 	prodEnv := filepath.Join(resolved, "config", "prod.env.local")
 	plain := filepath.Join(resolved, "config", "plain.txt")
 	stub := newGuardStubServer(t, []guardStubTurn{
-		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"filePath": envLocal}}},
-		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"filePath": prodEnv}}},
-		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"filePath": plain}}},
+		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"path": envLocal}}},
+		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"path": prodEnv}}},
+		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"path": plain}}},
 		{Content: "done"},
 	})
 	exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
@@ -758,8 +758,8 @@ func TestOpenCodeTmpDirAllowLetsAStageReadAndCatFromTmp(t *testing.T) {
 	permission := openCodePermissionMap(opts, "")
 
 	stub := newGuardStubServer(t, []guardStubTurn{
-		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"filePath": automergeErr}}},
-		{ToolCall: &guardStubToolCall{Name: "bash", Arguments: map[string]any{"command": fmt.Sprintf("cat %q", automergeErr)}}},
+		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"path": automergeErr}}},
+		{ToolCall: &guardStubToolCall{Name: "shell", Arguments: map[string]any{"command": fmt.Sprintf("cat %q", automergeErr)}}},
 		{Content: "done"},
 	})
 	exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
@@ -778,7 +778,7 @@ func TestOpenCodeTmpDirAllowLetsAStageReadAndCatFromTmp(t *testing.T) {
 			} else {
 				t.Errorf("the read of /tmp/automerge.err was rejected: %s", errText)
 			}
-		case "bash":
+		case "shell":
 			if status != "error" {
 				sawBashSuccess = true
 			} else {
@@ -825,8 +825,8 @@ func TestOpenCodeTmpDirAllowDoesNotReachANestedFile(t *testing.T) {
 	permission := openCodePermissionMap(opts, "")
 
 	stub := newGuardStubServer(t, []guardStubTurn{
-		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"filePath": nested}}},
-		{ToolCall: &guardStubToolCall{Name: "write", Arguments: map[string]any{"filePath": sibling, "content": "OVERWRITTEN\n"}}},
+		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"path": nested}}},
+		{ToolCall: &guardStubToolCall{Name: "write", Arguments: map[string]any{"path": sibling, "content": "OVERWRITTEN\n"}}},
 		{Content: "done"},
 	})
 	exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
@@ -848,7 +848,7 @@ func TestOpenCodeTmpDirAllowDoesNotReachANestedFile(t *testing.T) {
 		}
 		if status != "error" {
 			t.Errorf("nested /tmp %s was not rejected (status=%q)", tool, status)
-		} else if !strings.Contains(errText, `"permission":"external_directory"`) {
+		} else if !strings.Contains(errText, openCodeExternalDirectoryDenied) {
 			t.Errorf("the rejection's error text does not name permission external_directory: %s", errText)
 		}
 	}
@@ -859,3 +859,8 @@ func TestOpenCodeTmpDirAllowDoesNotReachANestedFile(t *testing.T) {
 		t.Errorf("a nested /tmp sibling file was overwritten via external_directory: got %q", got)
 	}
 }
+
+// openCodeExternalDirectoryDenied is the error text OpenCode 2.x gives a tool
+// call the external_directory permission refused (observed on 2.2.7, #3304).
+// 1.18.30 named the permission as JSON, `"permission":"external_directory"`.
+const openCodeExternalDirectoryDenied = "Permission denied: external_directory"

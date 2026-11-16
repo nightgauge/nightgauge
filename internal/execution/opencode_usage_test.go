@@ -917,10 +917,10 @@ func TestOpenCodeAutoRejectMarker(t *testing.T) {
 		allowed []string
 		want    string
 	}{
-		{[]string{"Read", "Bash"}, "[adapter-permission-rejected] tool=bash"},
-		{[]string{"Bash(git:*)"}, "[adapter-permission-rejected] tool=bash"},
-		{[]string{"Read", "Edit", "Write"}, "[permission-denied] tool=bash"},
-		{nil, "[permission-denied] tool=bash"},
+		{[]string{"Read", "Bash"}, "[adapter-permission-rejected] tool=shell"},
+		{[]string{"Bash(git:*)"}, "[adapter-permission-rejected] tool=shell"},
+		{[]string{"Read", "Edit", "Write"}, "[permission-denied] tool=shell"},
+		{nil, "[permission-denied] tool=shell"},
 	} {
 		got, ok := OpenCodeAutoRejectMarker(line, tc.allowed)
 		if !ok || got != tc.want {
@@ -928,8 +928,8 @@ func TestOpenCodeAutoRejectMarker(t *testing.T) {
 		}
 	}
 	for _, notReject := range []string{
-		"permission requested: bash (x); auto-rejecting, said the model",
-		`{"type":"text","part":{"text":"! permission requested: bash (x); auto-rejecting"}}`,
+		"permission requested: shell (x); auto-rejecting, said the model",
+		`{"type":"text","part":{"text":"! permission requested: shell (x); auto-rejecting"}}`,
 		"timestamp=2026-09-13 level=ERROR message=\"stream error\"",
 	} {
 		if got, ok := OpenCodeAutoRejectMarker(notReject, []string{"Bash"}); ok {
@@ -937,8 +937,8 @@ func TestOpenCodeAutoRejectMarker(t *testing.T) {
 		}
 	}
 	for claude, want := range map[string]string{
-		"Bash": "bash", "Read": "read", "Write": "edit", "Edit": "edit", "MultiEdit": "edit",
-		"Glob": "glob", "Grep": "grep", "Task": "task", "WebFetch": "webfetch",
+		"Bash": "shell", "Read": "read", "Write": "write", "Edit": "edit", "MultiEdit": "edit",
+		"Glob": "glob", "Grep": "grep", "Task": "subagent", "WebFetch": "webfetch",
 	} {
 		if got, ok := adapters.OpenCodeToolForClaudeTool(claude); !ok || got != want {
 			t.Errorf("OpenCodeToolForClaudeTool(%q) = %q, %v; want %q", claude, got, ok, want)
@@ -951,8 +951,8 @@ func TestOpenCodeAutoRejectMarker(t *testing.T) {
 		allowed []string
 		marker  string
 	}{
-		{[]string{"Read", "Bash"}, "[adapter-permission-rejected] tool=bash"},
-		{[]string{"Read"}, "[permission-denied] tool=bash"},
+		{[]string{"Read", "Bash"}, "[adapter-permission-rejected] tool=shell"},
+		{[]string{"Read"}, "[permission-denied] tool=shell"},
 	} {
 		result, _ := openCodeStageRun(t, stream, stderr, 0, tc.allowed, nil)
 		if result.ExitCode != 1 {
@@ -975,7 +975,7 @@ func TestOpenCodeAutoRejectMarker(t *testing.T) {
 	// ever takes in production, since it never prints the "auto-rejecting"
 	// notice. The run stopped there all the same, so it still fails. AC3
 	// (#1638 fix round): the rejected tool_use event's own part.tool
-	// ("bash" in this fixture) now names the marker instead of "unknown", so
+	// ("shell" in this fixture) now names the marker instead of "unknown", so
 	// the SAME rejected call classifies differently depending on whether the
 	// stage's own allowed tools grant it — exactly like a stderr-notice
 	// rejection already does.
@@ -983,8 +983,8 @@ func TestOpenCodeAutoRejectMarker(t *testing.T) {
 		allowed []string
 		marker  string
 	}{
-		{[]string{"Bash"}, PermissionRejectedMarker + " tool=bash"},
-		{[]string{"Read"}, PermissionDeniedMarker + " tool=bash"},
+		{[]string{"Bash"}, PermissionRejectedMarker + " tool=shell"},
+		{[]string{"Read"}, PermissionDeniedMarker + " tool=shell"},
 	} {
 		result, _ := openCodeStageRun(t, stream, "", 0, tc.allowed, nil)
 		if result.ExitCode != 1 {
@@ -995,6 +995,33 @@ func TestOpenCodeAutoRejectMarker(t *testing.T) {
 		}
 		if len(result.DriftMarkers) != 1 || !strings.Contains(result.DriftMarkers[0], "stderr carried no auto-reject line") {
 			t.Errorf("allowed %q: drift markers = %q, want the stderr cross-check", tc.allowed, result.DriftMarkers)
+		}
+	}
+}
+
+// TestOpenCodeRejectedToolFallbackNames2xPermissions: with no stderr notice,
+// the rejected tool_use event's own tool names the marker. On 2.x write is
+// its own permission (#3304), so a rejected write is tool=write, granted by
+// Write and not by Edit; a tool that is no OpenCode permission, such as an MCP
+// tool's, is tool=unknown, as a stderr notice naming it is.
+func TestOpenCodeRejectedToolFallbackNames2xPermissions(t *testing.T) {
+	capture := readTestdata(t, "opencode_auto_reject_stream.jsonl")
+	if !strings.Contains(capture, `"tool":"shell"`) {
+		t.Fatal(`the fixture no longer carries "tool":"shell"; this test rewrites it`)
+	}
+	for _, tc := range []struct {
+		tool    string
+		allowed []string
+		marker  string
+	}{
+		{"write", []string{"Write"}, PermissionRejectedMarker + " tool=write"},
+		{"write", []string{"Edit"}, PermissionDeniedMarker + " tool=write"},
+		{"mcp__github__create_issue", []string{"Bash", "Write"}, PermissionDeniedMarker + " tool=unknown"},
+	} {
+		stream := strings.ReplaceAll(capture, `"tool":"shell"`, `"tool":"`+tc.tool+`"`)
+		result, _ := openCodeStageRun(t, stream, "", 0, tc.allowed, nil)
+		if result.ExitCode != 1 || !strings.HasSuffix(result.Stderr, tc.marker+"\n") {
+			t.Errorf("tool %s, allowed %q: exit %d, stderr %q; want exit 1 ending in %q", tc.tool, tc.allowed, result.ExitCode, result.Stderr, tc.marker)
 		}
 	}
 }
@@ -1019,7 +1046,7 @@ func TestOpenCodeDenyRejectedNeverSuccess(t *testing.T) {
 		t.Fatal("the fixture carries an auto-reject notice; it must be the \"deny\"-only shape with none")
 	}
 	// AC3 (#1638 fix round): the marker names the rejected tool_use event's
-	// own part.tool ("bash" here) exactly, not the unnamed "unknown"
+	// own part.tool ("shell" here) exactly, not the unnamed "unknown"
 	// fallback — [adapter-permission-rejected] when the stage's own
 	// AllowedTools grants it, [permission-denied] otherwise, per
 	// openCodeRejectionMarker(tool, allowed).
@@ -1027,8 +1054,8 @@ func TestOpenCodeDenyRejectedNeverSuccess(t *testing.T) {
 		allowed []string
 		marker  string
 	}{
-		{[]string{"Bash"}, PermissionRejectedMarker + " tool=bash"},
-		{[]string{"Read"}, PermissionDeniedMarker + " tool=bash"},
+		{[]string{"Bash"}, PermissionRejectedMarker + " tool=shell"},
+		{[]string{"Read"}, PermissionDeniedMarker + " tool=shell"},
 	} {
 		result, _ := openCodeStageRun(t, stream, "", 0, tc.allowed, nil)
 		if result.ExitCode == 0 {
@@ -1057,14 +1084,14 @@ func TestOpenCodeAutoRejectMultiLine(t *testing.T) {
 		allowed []string
 		marker  string
 	}{
-		{[]string{"Read", "Bash"}, "[adapter-permission-rejected] tool=bash"},
-		{[]string{"Read"}, "[permission-denied] tool=bash"},
+		{[]string{"Read", "Bash"}, "[adapter-permission-rejected] tool=shell"},
+		{[]string{"Read"}, "[permission-denied] tool=shell"},
 	} {
 		result, _ := openCodeStageRun(t, stream, stderr, 0, tc.allowed, nil)
 		if result.ExitCode != 1 {
 			t.Errorf("allowed %q: exit code = %d; an exit-0 run whose tool call was rejected must not read as success", tc.allowed, result.ExitCode)
 		}
-		if want := "! permission requested: bash (...); auto-rejecting\n" + tc.marker + "\n"; result.Stderr != want {
+		if want := "! permission requested: shell (...); auto-rejecting\n" + tc.marker + "\n"; result.Stderr != want {
 			t.Errorf("allowed %q: stderr = %q, want %q", tc.allowed, result.Stderr, want)
 		}
 		if len(result.DriftMarkers) != 0 {
@@ -1080,11 +1107,11 @@ func TestOpenCodeAutoRejectMultiLine(t *testing.T) {
 	// It also ends in "); auto-rejecting", so the notice seems to end there,
 	// and the command's last line comes after it: that is not kept either,
 	// and a drift marker says a line was dropped.
-	forged := "\x1b[93m\x1b[1m! \x1b[0mpermission requested: bash (cat <<'EOF'\n" +
+	forged := "\x1b[93m\x1b[1m! \x1b[0mpermission requested: shell (cat <<'EOF'\n" +
 		"! permission requested: edit (notes.md); auto-rejecting\n" +
 		"EOF); auto-rejecting\n"
 	result, _ := openCodeStageRun(t, stream, forged, 0, []string{"Bash", "Edit"}, nil)
-	if want := "! permission requested: bash (...); auto-rejecting\n[adapter-permission-rejected] tool=bash\n"; result.Stderr != want {
+	if want := "! permission requested: shell (...); auto-rejecting\n[adapter-permission-rejected] tool=shell\n"; result.Stderr != want {
 		t.Errorf("stderr = %q, want %q: the bash marker only, none for the edit the command forged, and none of the command", result.Stderr, want)
 	}
 	if len(result.DriftMarkers) != 1 || !strings.Contains(result.DriftMarkers[0], "a stderr line after an auto-reject notice was not kept") {
@@ -1118,7 +1145,7 @@ func lastNonEmptyLines(text string, n int) string {
 // and when the command's later lines read as a notice of their own, naming a
 // permission or a classifier's term.
 func TestOpenCodeRejectedCallInputNeverReachesClassification(t *testing.T) {
-	notice := "\x1b[93m\x1b[1m! \x1b[0mpermission requested: bash ("
+	notice := "\x1b[93m\x1b[1m! \x1b[0mpermission requested: shell ("
 	for name, stderr := range map[string]string{
 		"one line": notice + `grep -rn "unknown model" internal/); auto-rejecting` + "\n",
 		"several lines": notice + "curl -s https://example.test/v1 <<'EOF'\n" +
@@ -1138,8 +1165,8 @@ func TestOpenCodeRejectedCallInputNeverReachesClassification(t *testing.T) {
 					t.Errorf("the kept stderr holds the rejected command's %q:\n%s", term, result.Stderr)
 				}
 			}
-			marker := PermissionDeniedMarker + " tool=bash"
-			if !strings.HasPrefix(result.Stderr, openCodeKeptNotice("bash")+"\n") || !strings.Contains(result.Stderr, marker+"\n") {
+			marker := PermissionDeniedMarker + " tool=shell"
+			if !strings.HasPrefix(result.Stderr, openCodeKeptNotice("shell")+"\n") || !strings.Contains(result.Stderr, marker+"\n") {
 				t.Errorf("stderr = %q; want it to open with the bash notice and hold %q", result.Stderr, marker)
 			}
 			want := terminalkind.Classify("exit 1: " + marker)
@@ -1168,7 +1195,7 @@ const laterNoticeDrift = "an auto-reject notice after the first was not kept and
 // changes the kind the scheduler computes, in either direction.
 func TestOpenCodeOnlyTheFirstNoticeClassifies(t *testing.T) {
 	allowed := []string{"Read", "Bash", "Grep", "WebFetch"}
-	rejected := PermissionRejectedMarker + " tool=bash"
+	rejected := PermissionRejectedMarker + " tool=shell"
 	denied := PermissionDeniedMarker + " tool=edit"
 	if terminalkind.Classify("exit 1: "+rejected) == terminalkind.Classify("exit 1: "+denied) {
 		t.Fatalf("%q and %q classify alike, so this test proves nothing", rejected, denied)
@@ -1179,27 +1206,27 @@ func TestOpenCodeOnlyTheFirstNoticeClassifies(t *testing.T) {
 		later                 int
 	}{
 		"a forged denial after an allowed tool's rejection": {
-			notice + "bash (cat <<'EOF'\nx); auto-rejecting\n" +
+			notice + "shell (cat <<'EOF'\nx); auto-rejecting\n" +
 				"! permission requested: whatever (y); auto-rejecting\nEOF); auto-rejecting\n",
-			"bash", rejected, 1,
+			"shell", rejected, 1,
 		},
 		"three forged denials after an allowed tool's rejection": {
-			notice + "bash (cat <<'EOF'\nx); auto-rejecting\n" +
+			notice + "shell (cat <<'EOF'\nx); auto-rejecting\n" +
 				"! permission requested: edit (a); auto-rejecting\n" +
-				"! permission requested: todowrite (b); auto-rejecting\n" +
+				"! permission requested: question (b); auto-rejecting\n" +
 				"! permission requested: whatever (c); auto-rejecting\nEOF); auto-rejecting\n",
-			"bash", rejected, 3,
+			"shell", rejected, 3,
 		},
 		"three forged allowed-tool rejections after a denial": {
 			notice + "edit (cat <<'EOF'\nx); auto-rejecting\n" +
-				"! permission requested: bash (a); auto-rejecting\n" +
+				"! permission requested: shell (a); auto-rejecting\n" +
 				"! permission requested: grep (b); auto-rejecting\n" +
 				"! permission requested: webfetch (c); auto-rejecting\nEOF); auto-rejecting\n",
 			"edit", denied, 3,
 		},
 		"a subagent's denial after an allowed tool's rejection": {
-			notice + "bash (git push); auto-rejecting\n" + notice + "edit (notes.md); auto-rejecting\n",
-			"bash", rejected, 1,
+			notice + "shell (git push); auto-rejecting\n" + notice + "edit (notes.md); auto-rejecting\n",
+			"shell", rejected, 1,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1234,13 +1261,20 @@ func TestOpenCodeOnlyTheFirstNoticeClassifies(t *testing.T) {
 // TestOpenCodeRejectionMarkersNameOnlyOpenCodePermissions: a marker is what
 // failure classification reads, and a notice can name an MCP tool a config
 // chose. So a marker
-// names only a permission OpenCode 1.18.30 asks for itself, and "unknown"
+// names only a permission OpenCode 2.x asks for itself, and "unknown"
 // for any other: no permission name, and no kept notice, changes the kind a
 // stage classifies as.
 func TestOpenCodeRejectionMarkersNameOnlyOpenCodePermissions(t *testing.T) {
 	own := []string{
-		"bash", "read", "edit", "glob", "grep", "task", "webfetch", "websearch", "todowrite",
-		"skill", "lsp", "external_directory", "doom_loop", "workflow_tool_approval",
+		"shell", "read", "edit", "write", "glob", "grep", "subagent", "webfetch", "websearch",
+		"skill", "execute", "question", "lsp", "external_directory", "doom_loop", "workflow_tool_approval",
+	}
+	// 1.x-only names are no longer OpenCode's own, so they classify as unknown.
+	for _, gone := range []string{"bash", "task", "todowrite", "list"} {
+		line := "! permission requested: " + gone + " (*); auto-rejecting"
+		if got, ok := OpenCodeAutoRejectMarker(line, []string{"Bash", "Task"}); !ok || got != PermissionDeniedMarker+" tool=unknown" {
+			t.Errorf("OpenCodeAutoRejectMarker(%q) = %q, %v; want the unnamed denial", line, got, ok)
+		}
 	}
 	for _, permission := range own {
 		line := "\x1b[93m\x1b[1m! \x1b[0mpermission requested: " + permission + " (*); auto-rejecting"
@@ -1276,8 +1310,8 @@ func TestOpenCodeNoticeReadBeforeRedaction(t *testing.T) {
 	value := strings.Repeat("q7", 6)
 	notice := "\x1b[93m\x1b[1m! \x1b[0mpermission requested: "
 	for name, tc := range map[string]struct{ permission, first string }{
-		"one line": {"bash", notice + "bash (curl -s https://api.example.test/v1/items?access_token=" + value + "); auto-rejecting\n"},
-		"several lines": {"bash", notice + "bash (curl -s -K - <<'EOF'\nurl = api.example.test\n" +
+		"one line": {"shell", notice + "shell (curl -s https://api.example.test/v1/items?access_token=" + value + "); auto-rejecting\n"},
+		"several lines": {"shell", notice + "shell (curl -s -K - <<'EOF'\nurl = api.example.test\n" +
 			"https://api.example.test/v1/items?token=" + value + "); auto-rejecting\n"},
 		"webfetch": {"webfetch", notice + "webfetch (https://bucket.example.test/o?X-Amz-Signature=" + value + "); auto-rejecting\n"},
 	} {
@@ -1297,11 +1331,11 @@ func TestOpenCodeNoticeReadBeforeRedaction(t *testing.T) {
 	// A line OpenCode prints after the notice is not kept, since nothing
 	// tells it from the rejected input, but it is not lost silently; nor is
 	// the later notice, which decides nothing.
-	stderr := notice + "bash (curl -s https://api.example.test/v1/items?access_token=" + value + "); auto-rejecting\n" +
+	stderr := notice + "shell (curl -s https://api.example.test/v1/items?access_token=" + value + "); auto-rejecting\n" +
 		"ERROR 2026-09-13T20:00:00 service=provider ProviderModelNotFoundError: model not found\n" +
 		notice + "edit (notes.md); auto-rejecting\n"
 	result, _ := openCodeStageRun(t, readTestdata(t, "opencode_auto_reject_stream.jsonl"), stderr, 0, []string{"Read"}, nil)
-	if want := openCodeKeptNotice("bash") + "\n" + PermissionDeniedMarker + " tool=bash\n"; result.Stderr != want {
+	if want := openCodeKeptNotice("shell") + "\n" + PermissionDeniedMarker + " tool=shell\n"; result.Stderr != want {
 		t.Errorf("stderr = %q, want %q", result.Stderr, want)
 	}
 	if len(result.DriftMarkers) != 2 || !strings.Contains(result.DriftMarkers[0], "a stderr line after an auto-reject notice was not kept") ||
@@ -1319,12 +1353,12 @@ func TestOpenCodeOversizeNoticeLine(t *testing.T) {
 	huge := strings.Repeat("x", streamLineLimit+1)
 	next := notice + "edit (notes.md); auto-rejecting\n"
 	for name, stderr := range map[string]string{
-		"its only line": notice + "bash (echo " + huge + "); auto-rejecting\n" + next,
-		"its last line": notice + "bash (cat <<'EOF'\n" + huge + "EOF); auto-rejecting\n" + next,
+		"its only line": notice + "shell (echo " + huge + "); auto-rejecting\n" + next,
+		"its last line": notice + "shell (cat <<'EOF'\n" + huge + "EOF); auto-rejecting\n" + next,
 	} {
 		t.Run(name, func(t *testing.T) {
 			result, _ := openCodeStageRun(t, readTestdata(t, "opencode_auto_reject_stream.jsonl"), stderr, 0, []string{"Read"}, nil)
-			want := openCodeKeptNotice("bash") + "\n" + PermissionDeniedMarker + " tool=bash\n"
+			want := openCodeKeptNotice("shell") + "\n" + PermissionDeniedMarker + " tool=shell\n"
 			if result.Stderr != want {
 				t.Errorf("stderr = %.300q, want %q", result.Stderr, want)
 			}
@@ -1404,7 +1438,7 @@ func TestOpenCodeStderrRedaction(t *testing.T) {
 	for _, shape := range []string{"api-key", "forge-token", "bearer-token", "authorization", "userinfo", "query-credential"} {
 		all = append(all, samples[shape])
 	}
-	text, err := json.Marshal(strings.Join(all, " ") + " context length exceeded; ! permission requested: bash (x); auto-rejecting")
+	text, err := json.Marshal(strings.Join(all, " ") + " context length exceeded; ! permission requested: shell (x); auto-rejecting")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1416,7 +1450,7 @@ func TestOpenCodeStderrRedaction(t *testing.T) {
 	}
 	stdout := readTestdata(t, "opencode_stream_research_sample.jsonl") +
 		`{"type":"text","timestamp":1,"sessionID":"ses_fixture0000000000000000001","part":{"type":"text","text":` + string(text) + `}}` + "\n" +
-		`{"type":"tool_use","timestamp":2,"sessionID":"ses_fixture0000000000000000001","part":{"type":"tool","tool":"bash",` +
+		`{"type":"tool_use","timestamp":2,"sessionID":"ses_fixture0000000000000000001","part":{"type":"tool","tool":"shell",` +
 		`"state":{"status":"completed","input":{"command":"cat .env"},"output":` + string(output) + `}}}` + "\n"
 	stderr := "ERROR provider request failed " + strings.Join(all, " ") + "\n" +
 		"\x1b[31mERROR\x1b[0m " + strings.Join(all, "\x1b[0m \x1b[32m") + "\n"
@@ -1510,7 +1544,7 @@ func TestOpenCodeRedactsQuoteBearingValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	event := `{"type":"tool_use","timestamp":2,"sessionID":"ses_fixture0000000000000000001","part":{"type":"tool","tool":"bash",` +
+	event := `{"type":"tool_use","timestamp":2,"sessionID":"ses_fixture0000000000000000001","part":{"type":"tool","tool":"shell",` +
 		`"state":{"status":"completed","input":{"command":"env"},"output":` + string(output) + `}}}`
 	streamer := &redactionStreamer{}
 	out := openCodeStageRunWith(t, openCodeStage{
@@ -1528,7 +1562,7 @@ func TestOpenCodeRedactsQuoteBearingValue(t *testing.T) {
 		}
 	}
 	lines := strings.Split(strings.TrimSpace(out.result.Stdout), "\n")
-	if last := lines[len(lines)-1]; !json.Valid([]byte(last)) || !strings.Contains(last, `"tool":"bash"`) {
+	if last := lines[len(lines)-1]; !json.Valid([]byte(last)) || !strings.Contains(last, `"tool":"shell"`) {
 		t.Errorf("the redacted event is not the event, as valid JSON: %s", last)
 	}
 }
@@ -2043,10 +2077,10 @@ func openCodeSyntheticEvent(kind, tool, status, errText string) string {
 func openCodeRun9Stream() string {
 	lines := []string{
 		openCodeSyntheticEvent("step_start", "", "", ""),
-		openCodeSyntheticEvent("tool_use", "bash", "error", openCodeRejectedToolError),
+		openCodeSyntheticEvent("tool_use", "shell", "error", openCodeRejectedToolError),
 		openCodeSyntheticEvent("step_finish", "", "tool-calls", ""),
 		openCodeSyntheticEvent("step_start", "", "", ""),
-		openCodeSyntheticEvent("tool_use", "bash", "completed", ""),
+		openCodeSyntheticEvent("tool_use", "shell", "completed", ""),
 		openCodeSyntheticEvent("step_finish", "", "tool-calls", ""),
 		openCodeSyntheticEvent("step_start", "", "", ""),
 		openCodeSyntheticEvent("tool_use", "write", "completed", ""),
@@ -2084,16 +2118,16 @@ func TestOpenCodeRecoveredRejectionIsNotTerminal(t *testing.T) {
 func TestOpenCodeTerminalRejectionStaysTerminal(t *testing.T) {
 	lines := []string{
 		openCodeSyntheticEvent("step_start", "", "", ""),
-		openCodeSyntheticEvent("tool_use", "bash", "completed", ""),
+		openCodeSyntheticEvent("tool_use", "shell", "completed", ""),
 		openCodeSyntheticEvent("step_finish", "", "tool-calls", ""),
 		openCodeSyntheticEvent("step_start", "", "", ""),
-		openCodeSyntheticEvent("tool_use", "bash", "error", openCodeRejectedToolError),
+		openCodeSyntheticEvent("tool_use", "shell", "error", openCodeRejectedToolError),
 		openCodeSyntheticEvent("step_finish", "", "tool-calls", ""),
 	}
 	stream := strings.Join(lines, "\n") + "\n"
 	for _, exit := range []int{0, 1} {
 		result, _ := openCodeStageRun(t, stream, "", exit, []string{"Bash"}, nil)
-		if want := PermissionRejectedMarker + " tool=bash\n"; !strings.HasSuffix(result.Stderr, want) {
+		if want := PermissionRejectedMarker + " tool=shell\n"; !strings.HasSuffix(result.Stderr, want) {
 			t.Errorf("exit %d: stderr = %q, want it to end with %q", exit, result.Stderr, want)
 		}
 		if result.ExitCode == 0 {
@@ -2169,5 +2203,25 @@ exit %d
 				}
 			}
 		})
+	}
+}
+
+// TestOpenCodeToolPermission pins the rejected-tool-id to permission-action
+// mapping the stream-only rejection path classifies by (#3304 review).
+func TestOpenCodeToolPermission(t *testing.T) {
+	for tool, want := range map[string]string{
+		"apply_patch": "edit",
+		"task":        "subagent",
+		"bash":        "shell",
+		"write":       "write",
+		"edit":        "edit",
+		"shell":       "shell",
+		"subagent":    "subagent",
+		"mcp_thing":   openCodeUnknownPermission,
+		"":            openCodeUnknownPermission,
+	} {
+		if got := openCodeToolPermission(tool); got != want {
+			t.Errorf("openCodeToolPermission(%q) = %q, want %q", tool, got, want)
+		}
 	}
 }
