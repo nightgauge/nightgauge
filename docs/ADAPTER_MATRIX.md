@@ -621,6 +621,10 @@ probe landing `adapter_auth_failed`) is recorded in
 `internal/execution/adapters/opencode.go` (Go). Full design record:
 [ADR-022](decisions/022-opencode-multi-provider-adapter.md).
 
+**Versions:** floor `2.2.7` (fail closed) and tested up to `2.2.7`, from the
+[version table](#tested-up-to) and ADR-022 § 20's
+[2026-11-16 amendment](decisions/022-opencode-multi-provider-adapter.md#20-version-policy).
+
 **Release status:** Experimental. `Manager.RunStage` (Go) and
 `OpenCodeAdapter.validateAuth`/`createQueryFunction` (TS) refuse every dispatch
 unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set in the process environment,
@@ -657,7 +661,8 @@ like every other non-`native-workflow` adapter.
   `self_hosted: true`).
 - A hosted model the registry knows is re-priced from the registry's rate
   card, never from OpenCode's own reported `cost`, which reads `0` for a
-  provider OpenCode holds no price for (observed on opencode 1.18.30).
+  provider OpenCode holds no price for (observed on opencode 1.18.30; on 2.2.7
+  `step_finish` keeps the same `tokens` and `cost` shape).
 - The USD watchdog bounds the stage's own steps at the registry rate of the
   dispatched model as the stream arrives; it cannot bound spend inside a
   subagent session, which is priced only after the stage ends.
