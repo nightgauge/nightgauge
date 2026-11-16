@@ -6562,6 +6562,11 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			// (pr-create on a branch level with its base, #2941) has no one
 			// else to, and a row left in Ready is dispatched again. Idempotent.
 			as.goTrackedBoardOp(func(genCtx context.Context) { as.moveParkedToBacklog(genCtx, repo, issue) })
+			// A blocked finding owns its own card (#1241); otherwise this is
+			// the only operator surface for the verdict (#3354).
+			if _, ok := as.blockedFindingFor(repo, issue); !ok {
+				as.dispatchAttention(func() { as.raiseNotPipelineActionable(repo, issue, title, detail) })
+			}
 			if as.safetyRails != nil {
 				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()

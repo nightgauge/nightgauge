@@ -2,9 +2,12 @@ package orchestrator
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/terminalkind"
 )
 
@@ -159,6 +162,8 @@ func failedKind(t *testing.T, as *AutonomousScheduler, repo string, number int) 
 // scheduler nor the repository pauses.
 func TestEmptyPlanGateVerdictParksWithoutCharging(t *testing.T) {
 	as := newBlockedQuotaScheduler(t)
+	as.attention = attention.New(layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 	addRunning(as, "acme/core", 124, "empty plan")
 	detail := "Stage feature-planning gate failed: [not-pipeline-actionable] plan lists no files " +
 		"to create or modify; approach: record via empty commit"
@@ -177,5 +182,17 @@ func TestEmptyPlanGateVerdictParksWithoutCharging(t *testing.T) {
 	}
 	if as.state.PausedAt != "" || as.state.PausedRepos["acme/core"] != nil {
 		t.Errorf("paused: at=%q repos=%v", as.state.PausedAt, as.state.PausedRepos)
+	}
+	// The verdict reaches the operator as one card carrying the approach (#3354).
+	reqs, err := as.Attention().List(attention.ListFilter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(reqs) != 1 {
+		t.Fatalf("open cards = %d, want 1: %+v", len(reqs), reqs)
+	}
+	if reqs[0].Producer != "not-pipeline-actionable" ||
+		!strings.Contains(reqs[0].Body, "approach: record via empty commit") {
+		t.Errorf("card = producer %q body %q, want the NPA card quoting the approach", reqs[0].Producer, reqs[0].Body)
 	}
 }

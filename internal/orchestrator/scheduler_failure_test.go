@@ -2415,3 +2415,26 @@ func TestFailurePausesQueue_HeldKindsStopOneIssue(t *testing.T) {
 		}
 	}
 }
+
+// An empty-plan gate verdict's run error carries the planner's approach (#3354)
+// and keeps the marker ClassifyTerminalKind keys on; other gates keep the bare reason.
+func TestGateFailureError_NPACarriesApproach(t *testing.T) {
+	res := gates.GateResult{
+		Reason:       "[not-pipeline-actionable] plan lists no files to create or modify",
+		Evidence:     []string{"approach: record via empty commit", "plan_file=/p.md"},
+		Kind:         gates.KindFail,
+		TerminalKind: gates.TerminalKindNotPipelineActionable,
+	}
+	msg := gateFailureError(res).Error()
+	if !strings.HasPrefix(msg, "stage gate failed: [not-pipeline-actionable]") ||
+		!strings.Contains(msg, "approach: record via empty commit") {
+		t.Errorf("NPA gate error = %q, want marker first and the approach", msg)
+	}
+	if got := ClassifyTerminalKind(msg); got != TerminalKindNotPipelineActionable {
+		t.Errorf("ClassifyTerminalKind = %q, want %q", got, TerminalKindNotPipelineActionable)
+	}
+	res.TerminalKind = ""
+	if msg := gateFailureError(res).Error(); strings.Contains(msg, "approach:") {
+		t.Errorf("non-NPA gate error leaked evidence: %q", msg)
+	}
+}
