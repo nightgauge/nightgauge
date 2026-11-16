@@ -158,6 +158,13 @@ conflicts. The open PRs are read through the scheduler's own forge client,
 every page. When they cannot be read, the status is left unchanged rather than
 set to Ready, and the log says so.
 
+Every move to In review behind an open PR, from this revert, from orphaned-run
+recovery or from the pr-merge sideline, raises a `pr-merge-parked:<repo>#<issue>`
+Action Center card naming the PR and the failure (#3345). The card clears when
+a fresh graph shows the PR merged or closed, the issue closed or out of In
+review, or when a later run succeeds. Missing evidence (the issue absent from
+the graph, or a failed open-PR listing) keeps it.
+
 ### 3. Priority Ordering
 
 Candidates passing the board status gate are sorted using a 6-factor priority:

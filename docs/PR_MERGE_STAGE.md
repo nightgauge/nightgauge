@@ -274,7 +274,8 @@ on core, #2225). The runner therefore:
    the run as a plain refusal. `conflict_recovery.enabled` gates conflicts only.
    When a failed pr-merge parks the issue in In review behind its open PR, the
    scheduler raises a `pr-merge-parked:<repo>#<issue>` Action Center card
-   naming the PR and the refusal.
+   naming the PR and the refusal. Its lifecycle is in
+   [AUTONOMOUS_ORCHESTRATOR.md](AUTONOMOUS_ORCHESTRATOR.md#2-board-status-gating).
    An `UNMERGEABLE` entry on a PR that still reads `MERGEABLE` or `UNKNOWN`
    is blocked behind an entry ahead, so the wait continues. If GitHub removes
    that entry while the PR reads `MERGEABLE`, the wait re-enqueues it; once
