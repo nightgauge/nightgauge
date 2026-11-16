@@ -407,7 +407,12 @@ depends on:
    `tool_use` event has `status: "error"` and OpenCode's rejection message;
    the run ends after that step and exits 0. The line names the permission,
    which for the write tools is `edit`, and the tool's input, which the
-   parser never reads.
+   parser never reads. #3304 moved the classifier to OpenCode 2.x's action
+   names, so the committed auto-reject, deny and subagent captures are no
+   longer verbatim 1.18.30 output: they name the shell tool and permission
+   `shell` where 1.18.30 printed `bash`, and nothing else in them was edited.
+   A recapture with the 1.18.30 script brings `bash` back and fails the 2.x
+   classifier tests; recapture on 2.x, or make the same rename.
 5. The tool's input is printed unescaped, so the heredoc's notice spans three
    stderr lines: the first names the permission and ends inside the command,
    the last is the command's last line followed by `); auto-rejecting`. The

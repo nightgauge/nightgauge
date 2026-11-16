@@ -5,7 +5,7 @@
  * | --- | --- |
  * | change failure rate | `<clone>/pipeline/survival-records.jsonl`, folded by `merge_commit_sha` |
  * | per-change first-pass merge | `<clone>/pipeline/trace/*.jsonl` lines with `kind: "backtrack"` |
- * | plan fidelity | `<clone>/pipeline/planning-{N}.json` against `git diff-tree` of the merge SHA |
+ * | plan fidelity | the run record's `planned_files`, else `<clone>/pipeline/planning-{N}.json`, against `git diff-tree` of the merge SHA |
  *
  * Nothing here writes: these are files the pipeline already produces. An
  * absent survival journal reads as `null`, so the metrics are omitted rather
@@ -26,6 +26,7 @@ import type {
 } from "@nightgauge/sdk";
 import type { DateRangeFilter } from "../types/aggregation";
 import { isUsableWorkspaceRoot, pipelineStateDir } from "./cloneLayout";
+import { ExecutionHistoryReader } from "./executionHistoryReader";
 
 const execFileAsync = promisify(execFile);
 
@@ -132,7 +133,17 @@ async function readBacktracks(
   return out;
 }
 
-async function readPlannedFiles(dir: string, issue: number): Promise<string[] | null> {
+/**
+ * The issue's planned files: the durable run record's `planned_files` first
+ * (#3081), then `planning-<N>.json`, which is pruned per clone.
+ */
+async function readPlannedFiles(
+  dir: string,
+  issue: number,
+  durable: Map<number, string[]>
+): Promise<string[] | null> {
+  const recorded = durable.get(issue);
+  if (recorded) return recorded;
   try {
     const ctx = JSON.parse(
       await fs.promises.readFile(path.join(dir, `planning-${issue}.json`), "utf-8")
@@ -161,9 +172,10 @@ export async function readChangeSignals(
     return null;
   }
 
-  const [survival, backtracks] = await Promise.all([
+  const [survival, backtracks, durablePlans] = await Promise.all([
     readSurvival(survivalPath, filter),
     readBacktracks(path.join(dir, "trace"), filter),
+    ExecutionHistoryReader.plannedFilesByIssue(workspaceRoot),
   ]);
 
   const planComparisons: PlanComparisonEntry[] = await Promise.all(
@@ -171,7 +183,7 @@ export async function readChangeSignals(
       .filter((s) => s.issueNumber > 0)
       .map(async (s) => ({
         issueNumber: s.issueNumber,
-        plannedFiles: await readPlannedFiles(dir, s.issueNumber),
+        plannedFiles: await readPlannedFiles(dir, s.issueNumber, durablePlans),
         mergedFiles: SHA_PATTERN.test(s.mergeCommitSha)
           ? await mergedFiles(workspaceRoot, s.mergeCommitSha)
           : [],

@@ -39,24 +39,39 @@ const OutcomeTypeDeferred = "deferred"
 // it from the latest run record. Issue #2756.
 const OutcomeTypeAwaitingApproval = "awaiting_approval"
 
-// IsNonFailureTerminalKind reports whether a terminal kind is a deliberate
-// human hold rather than a failure, so every surface (run record, run state,
-// live pipeline_done event) books it the same way. Issue #2756.
+// OutcomeTypeIssueClosed is the run outcome_type for a run that stopped
+// because its issue was already closed (#3081). Nothing failed: the work is
+// done or was withdrawn, so the run books as a "cancelled" skip, never as a
+// failed run in the dashboard's or exit-records' failure totals.
+const OutcomeTypeIssueClosed = "issue_closed"
+
+// IsNonFailureTerminalKind reports whether a terminal kind is not a failure —
+// a deliberate human hold (#2756) or a stop on an already-closed issue (#3081)
+// — so every surface (run record, run state, live pipeline_done event) books
+// it the same way.
 func IsNonFailureTerminalKind(kind string) bool {
-	return kind == TerminalKindArchitectureApprovalRequired
+	return kind == TerminalKindArchitectureApprovalRequired || kind == TerminalKindIssueClosed
 }
 
 // ApplyNonFailureOutcome rewrites a built run record whose terminal kind is a
-// deliberate human hold into a non-failure: outcome "cancelled" with a distinct
-// outcome_type. The terminal kind and detail are retained. Every other record is
-// left untouched. Both run-record writers call it after BuildV2Record so the
-// local history and the telemetry push agree. Issue #2756.
+// non-failure into outcome "cancelled" with a distinct outcome_type:
+// awaiting_approval for a human hold (#2756), issue_closed for a skip on a
+// closed issue (#3081). The terminal kind and detail are retained. Every other
+// record is left untouched. Both run-record writers call it after
+// BuildV2Record so the local history and the telemetry push agree.
 func ApplyNonFailureOutcome(rec *state.V2RunRecord) {
-	if rec == nil || !IsNonFailureTerminalKind(rec.TerminalFailureKind) {
+	if rec == nil {
+		return
+	}
+	switch rec.TerminalFailureKind {
+	case TerminalKindArchitectureApprovalRequired:
+		rec.OutcomeType = OutcomeTypeAwaitingApproval
+	case TerminalKindIssueClosed:
+		rec.OutcomeType = OutcomeTypeIssueClosed
+	default:
 		return
 	}
 	rec.Outcome = "cancelled"
-	rec.OutcomeType = OutcomeTypeAwaitingApproval
 }
 
 // Terminal failure kinds — what aborted the pipeline run (Issue #3001).
@@ -700,6 +715,24 @@ const (
 	// ADR-022 § 20; a newer version is never refused). Mirrors
 	// adapters.OpenCodeIncompatible, the kind the refusal itself carries.
 	TerminalKindAdapterIncompatible = "adapter_incompatible"
+	// TerminalKindAdapterProviderNoRoute: OpenCode's provider config routes no
+	// model by the dispatched -m (#3305): 2.x ends the run on one error event,
+	// error.type `provider.no-route`, exit 1, and the parser writes
+	// `[opencode-provider-failure] adapter_provider_no_route`. It parks: the
+	// next attempt asks for the same unrouted model. Mirrors
+	// adapters.OpenCodeProviderNoRoute.
+	TerminalKindAdapterProviderNoRoute = "adapter_provider_no_route"
+	// TerminalKindAdapterProviderTransport: the provider endpoint refused or
+	// dropped the connection, error.type `provider.transport` (#3305), either
+	// as a retry storm the manager stopped past adapters.OpenCodeRetryMaxAttempts
+	// or adapters.OpenCodeRetryMaxElapsed, or as a terminal error event. An
+	// ordinary retryable failure: a server that comes back answers the next
+	// attempt. Mirrors adapters.OpenCodeProviderTransport.
+	TerminalKindAdapterProviderTransport = "adapter_provider_transport"
+	// TerminalKindAdapterProviderError: any other `provider.*` error.type
+	// (#3305), such as `provider.internal` for a provider 500 retried past the
+	// bound. Retryable. Mirrors adapters.OpenCodeProviderError.
+	TerminalKindAdapterProviderError = "adapter_provider_error"
 	// TerminalKindDevContextStale: FeatureDevGate found a dev-N.json older
 	// than the feature-dev stage it was judging (#2637) — the retry wrote no
 	// handoff and inherited the prior attempt's. Its contents are not this
@@ -733,7 +766,7 @@ const (
 func TerminalKindParks(kind string) bool {
 	switch kind {
 	case TerminalKindContextWindowExceeded, TerminalKindAdapterPermissionRejected, TerminalKindAdapterIncompatible,
-		TerminalKindEnvironmentHalt, TerminalKindDevContextStale, TerminalKindGatePluginMissing,
+		TerminalKindAdapterProviderNoRoute, TerminalKindEnvironmentHalt, TerminalKindDevContextStale, TerminalKindGatePluginMissing,
 		TerminalKindReviewCapReached, TerminalKindResumeNoOp:
 		return true
 	}
@@ -783,6 +816,10 @@ func TerminalKindRemediation(kind string) string {
 		return "a run resumed at pr-merge and found the PR already merged, so nothing was delivered; check the " +
 			"issue's remaining acceptance criteria and its stale pr-N.json in the pipeline state directory, " +
 			parkedReleaseStep + ", then move the issue from Backlog to Ready to re-run it"
+	case TerminalKindAdapterProviderNoRoute:
+		return "OpenCode's provider config routes no model by the name the stage was dispatched with " +
+			"(error type provider.no-route); fix the model id in the stage's routing or add the model to the " +
+			"provider's opencode config, " + parkedReleaseStep + " — a retry asks for the same model"
 	case TerminalKindAdapterIncompatible:
 		return "the adapter's binary cannot serve this dispatch; install a version at or above the floor the refusal names " +
 			"or pin the adapter's binary to it, " + parkedReleaseStep

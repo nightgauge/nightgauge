@@ -316,11 +316,12 @@ type toolUse struct {
 // (opencode's own lowercase tool id, ADR-022 § 1 / opencode_usage.go) to the
 // Claude tool name stageRules matches on, so the one rule table drives phase
 // inference on both the Claude assistant-message shape and OpenCode's. write
-// and apply_patch join edit: opencode 1.18.30 has no permission or usage
-// distinction between them (openCodeToolRejectionPermission), and neither
-// does an edit-heavy stage's phase progress. A tool this table has no entry
-// for (task, webfetch, websearch, todowrite, skill, lsp, ...) matches no
-// phase rule, same as an unrecognized Claude tool name would.
+// and apply_patch join edit: an edit-heavy stage's phase progress draws no
+// distinction between them. The table is still keyed on 1.18.30's tool ids
+// (bash, filePath); moving it to 2.x's (shell, path) belongs to the 2.x
+// stream port (#3305). A tool this table has no entry for (task, webfetch,
+// websearch, todowrite, skill, lsp, ...) matches no phase rule, same as an
+// unrecognized Claude tool name would.
 var openCodeToolNameToClaudeName = map[string]string{
 	"bash":        "Bash",
 	"edit":        "Edit",

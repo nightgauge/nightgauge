@@ -588,6 +588,9 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   network_unavailable: "infrastructure-outage",
   api_connection_lost: "infrastructure-outage",
   model_stream_stalled: "infrastructure-outage",
+  // OpenCode 2.x provider failures past the retry bound (#3305).
+  adapter_provider_transport: "infrastructure-outage",
+  adapter_provider_error: "infrastructure-outage",
   api_overloaded: "infrastructure-outage",
   github_network_outage: "infrastructure-outage",
   stream_idle_timeout: "infrastructure-outage",
@@ -600,6 +603,8 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
 
   // The API rejected the model itself, so the stage never ran.
   model_unavailable: "model-unavailable",
+  // OpenCode's provider config routes no model by the dispatched name (#3305).
+  adapter_provider_no_route: "model-unavailable",
 
   // The adapter could not authenticate before the stage started.
   adapter_auth_failed: "adapter-unavailable",

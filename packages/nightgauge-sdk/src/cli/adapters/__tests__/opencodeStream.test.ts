@@ -33,6 +33,7 @@ import {
   classifyOpenCodeRun,
   openCodeRedactor,
   openCodeStageCostUsd,
+  openCodeToolPermission,
   parseOpenCodeStream,
   redactOpenCodeLine,
   type OpenCodeHelper,
@@ -315,7 +316,7 @@ describe("opencode stream parser: failures are never success (#1637)", () => {
       allowedTools: ["Bash"],
       dispatched: "lmstudio/qwen/qwen3.8-27b",
     });
-    expect(summary.failure).toMatch(/^\[adapter-permission-rejected\] tool=bash: /);
+    expect(summary.failure).toMatch(/^\[adapter-permission-rejected\] tool=shell: /);
     // The notice's patterns are the rejected call's input: never kept.
     expect(summary.failure).not.toContain("python3 calc.py");
   });
@@ -341,12 +342,12 @@ describe("opencode stream parser: failures are never success (#1637)", () => {
   it("a rejected call with no stderr notice names the tool_use event's own tool (AC3, #1638 fix round)", async () => {
     // A "deny" match (the generated permission map's only rejection shape,
     // ADR-022 § 9) never prints the "auto-rejecting" notice, so the marker
-    // must come from the rejected tool_use event's own part.tool ("bash" in
+    // must come from the rejected tool_use event's own part.tool ("shell" in
     // this fixture) instead of the unnamed "unknown" fallback, classified
     // differently by whether the stage's own allowed tools grant it.
     for (const tc of [
-      { allowedTools: ["Bash"], want: /^\[adapter-permission-rejected\] tool=bash: / },
-      { allowedTools: ["Read"], want: /^\[permission-denied\] tool=bash: / },
+      { allowedTools: ["Bash"], want: /^\[adapter-permission-rejected\] tool=shell: / },
+      { allowedTools: ["Read"], want: /^\[permission-denied\] tool=shell: / },
     ] as const) {
       const summary = await classifyOpenCodeRun({
         stdout: testdata("opencode_auto_reject_stream.jsonl"),
@@ -359,6 +360,73 @@ describe("opencode stream parser: failures are never success (#1637)", () => {
     }
   });
 
+  it("a rejected call's own tool names a 2.x permission, else unknown (#3304)", async () => {
+    // Go parity: TestOpenCodeRejectedToolFallbackNames2xPermissions.
+    const capture = testdata("opencode_auto_reject_stream.jsonl");
+    expect(capture).toContain('"tool":"shell"');
+    for (const tc of [
+      {
+        tool: "write",
+        allowedTools: ["Write"],
+        want: /^\[adapter-permission-rejected\] tool=write: /,
+      },
+      { tool: "write", allowedTools: ["Edit"], want: /^\[permission-denied\] tool=write: / },
+      {
+        tool: "mcp__github__create_issue",
+        allowedTools: ["Bash", "Write"],
+        want: /^\[permission-denied\] tool=unknown: /,
+      },
+    ] as const) {
+      const summary = await classifyOpenCodeRun({
+        stdout: capture.replaceAll('"tool":"shell"', `"tool":"${tc.tool}"`),
+        stderr: "",
+        exitCode: 0,
+        allowedTools: tc.allowedTools,
+        dispatched: "lmstudio/qwen/qwen3.8-27b",
+      });
+      expect(summary.failure).toMatch(tc.want);
+    }
+  });
+
+  it("only OpenCode 2.x's own permissions name a stderr marker (#3304)", async () => {
+    // Go parity: TestOpenCodeRejectionMarkersNameOnlyOpenCodePermissions.
+    const stdout = testdata("opencode_auto_reject_stream.jsonl");
+    const own = [
+      "shell",
+      "read",
+      "edit",
+      "write",
+      "glob",
+      "grep",
+      "subagent",
+      "webfetch",
+      "websearch",
+      "skill",
+      "execute",
+      "question",
+      "lsp",
+      "external_directory",
+      "doom_loop",
+      "workflow_tool_approval",
+    ];
+    const cases = [
+      ...own.map((p) => ({ permission: p, named: p })),
+      ...["bash", "task", "todowrite", "list"].map((p) => ({ permission: p, named: "unknown" })),
+    ];
+    for (const { permission, named } of cases) {
+      const summary = await classifyOpenCodeRun({
+        stdout,
+        stderr: `! permission requested: ${permission} (*); auto-rejecting\n`,
+        exitCode: 0,
+        allowedTools: [],
+        dispatched: "lmstudio/qwen/qwen3.8-27b",
+      });
+      expect(summary.failure?.split("\n")[0], permission).toMatch(
+        new RegExp(`^\\[permission-denied\\] tool=${named}: `)
+      );
+    }
+  });
+
   it('a real "deny"-only capture (no stderr notice at all) is never a success (AC3, #1638 fix round)', async () => {
     // opencode_deny_rejected_stream.jsonl/_stderr.txt is a real 1.18.30
     // capture of a "deny"-matched tool call: its stderr file is empty, the
@@ -367,8 +435,8 @@ describe("opencode stream parser: failures are never success (#1637)", () => {
     const stdout = testdata("opencode_deny_rejected_stream.jsonl");
     expect(stdout).not.toContain("auto-rejecting");
     for (const tc of [
-      { allowedTools: ["Bash"], want: /^\[adapter-permission-rejected\] tool=bash: / },
-      { allowedTools: ["Read"], want: /^\[permission-denied\] tool=bash: / },
+      { allowedTools: ["Bash"], want: /^\[adapter-permission-rejected\] tool=shell: / },
+      { allowedTools: ["Read"], want: /^\[permission-denied\] tool=shell: / },
     ] as const) {
       const summary = await classifyOpenCodeRun({
         stdout,
@@ -638,5 +706,19 @@ describe("opencode stdout redaction (ADR-022 § 22, #1637)", () => {
     expect(redact(`region us-east-1 secret ${secret}`)).toBe(
       "region us-east-1 secret [REDACTED:AWS_SECRET_ACCESS_KEY]"
     );
+  });
+});
+
+describe("openCodeToolPermission (#3304)", () => {
+  it.each([
+    ["apply_patch", "edit"],
+    ["task", "subagent"],
+    ["bash", "shell"],
+    ["write", "write"],
+    ["shell", "shell"],
+    ["mcp_thing", "unknown"],
+    [undefined, "unknown"],
+  ])("maps %s to %s, as Go's openCodeToolPermission does", (tool, want) => {
+    expect(openCodeToolPermission(tool)).toBe(want);
   });
 });

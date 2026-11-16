@@ -15,9 +15,9 @@
       "failures": [
         {
           "allowed_tools": ["Read", "Edit", "Bash"],
-          "marker": "[adapter-permission-rejected] tool=bash"
+          "marker": "[adapter-permission-rejected] tool=shell"
         },
-        { "allowed_tools": ["Read"], "marker": "[permission-denied] tool=bash" }
+        { "allowed_tools": ["Read"], "marker": "[permission-denied] tool=shell" }
       ],
       "fold": null
     },
@@ -35,9 +35,9 @@
       "failures": [
         {
           "allowed_tools": ["Read", "Edit", "Bash"],
-          "marker": "[adapter-permission-rejected] tool=bash"
+          "marker": "[adapter-permission-rejected] tool=shell"
         },
-        { "allowed_tools": ["Read"], "marker": "[permission-denied] tool=bash" }
+        { "allowed_tools": ["Read"], "marker": "[permission-denied] tool=shell" }
       ],
       "fold": null
     },
@@ -55,9 +55,9 @@
       "failures": [
         {
           "allowed_tools": ["Read", "Edit", "Bash"],
-          "marker": "[adapter-permission-rejected] tool=bash"
+          "marker": "[adapter-permission-rejected] tool=shell"
         },
-        { "allowed_tools": ["Read"], "marker": "[permission-denied] tool=bash" }
+        { "allowed_tools": ["Read"], "marker": "[permission-denied] tool=shell" }
       ],
       "failure_drift_markers": [
         "[opencode-drift] the stream shows a tool call OpenCode rejected, but stderr carried no auto-reject line naming its permission; classified from the rejected tool_use event's own tool name"

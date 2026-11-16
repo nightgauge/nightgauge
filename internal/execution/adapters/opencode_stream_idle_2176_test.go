@@ -35,3 +35,27 @@ func TestStreamIdleBound_DeclaredEndpointOnly(t *testing.T) {
 		}
 	}
 }
+
+// TestOpenCodeRetryBoundBelowIdleBound pins #3305's ordering: a provider
+// retry storm is stopped by the retry bound before the idle-stream watchdog
+// could, at an endpoint's default header/chunk timeout, and a hosted model,
+// which arms no idle watchdog at all, is still bounded.
+func TestOpenCodeRetryBoundBelowIdleBound(t *testing.T) {
+	if OpenCodeRetryMaxElapsed <= 0 || OpenCodeRetryMaxAttempts <= 0 {
+		t.Fatalf("retry bounds %v / %d must be positive", OpenCodeRetryMaxElapsed, OpenCodeRetryMaxAttempts)
+	}
+	if OpenCodeRetryMaxElapsed >= openCodeDefaultTimeout {
+		t.Fatalf("OpenCodeRetryMaxElapsed = %v, want it below the default idle bound %v", OpenCodeRetryMaxElapsed, openCodeDefaultTimeout)
+	}
+	a := &OpenCodeAdapter{settings: func(string) (config.OpenCodeConfig, error) {
+		return config.OpenCodeConfig{Endpoints: []config.OpenCodeEndpointConfig{{
+			ID: "mtplx", Provider: "openai-compatible", BaseURL: "http://127.0.0.1:8000/v1",
+			Limit: config.OpenCodeLimit{Context: 131072, Output: 8192},
+		}}}, nil
+	}}
+	run := RunOptions{Model: "mtplx/some-model", RunRoot: &RunRoot{Dir: t.TempDir(), Endpoints: []string{"mtplx"}}}
+	_, bound, _, ok := a.StreamIdleBound(run)
+	if !ok || OpenCodeRetryMaxElapsed >= bound {
+		t.Fatalf("idle bound = %v (armed %v), want the retry bound %v below it", bound, ok, OpenCodeRetryMaxElapsed)
+	}
+}

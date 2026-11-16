@@ -1936,6 +1936,69 @@
       "rationale": "The enable gate is read from the operator's environment only, so a retry is refused identically. It was booked subagent_crash through the `exit ` fallback; it belongs with the other adapter refusals no retry can clear."
     },
     {
+      "id": "opencode-provider-no-route-marker",
+      "input": "exit 1: [opencode-provider-failure] adapter_provider_no_route: opencode reported error type provider.no-route; the session ended on that error",
+      "expected": "adapter_provider_no_route",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "openCodeRun.finish (internal/execution/opencode_usage.go) for the captured 2.2.7 stream internal/execution/adapters/testdata/opencode-cli/stream-no-route.jsonl (#3305): `-m stub/nope`, one error event with error.type provider.no-route, exit 1; behind the `exit 1: ` the scheduler's terminalFailureReason adds.",
+      "rationale": "An unknown model cannot succeed on retry, so it parks. The marker carries the type and not OpenCode's `Model unavailable: …` message."
+    },
+    {
+      "id": "opencode-provider-transport-retry-storm",
+      "input": "exit -1: [opencode-provider-failure] adapter_provider_transport: opencode reported error type provider.transport; the provider request was retried 5 times over 24s with no step finished, past the bound of 5 retries or 1m30s, so the stage was stopped",
+      "expected": "adapter_provider_transport",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "openCodeRetryWatchdog.notice (internal/execution/opencode_retry_watchdog.go) for the captured 2.2.7 stream internal/execution/adapters/testdata/opencode-cli/stream-retry-transport.jsonl (#3305): a refused connection retried without end, stopped by the manager.",
+      "rationale": "A refused connection is retryable and must not read as a stall or a crash: the notice says `stopped` and `retried`, and the provider kind must win over every free-text rule."
+    },
+    {
+      "id": "opencode-provider-internal-retry-storm",
+      "input": "exit -1: [opencode-provider-failure] adapter_provider_error: opencode reported error type provider.internal; the provider request was retried 5 times over 24s with no step finished, past the bound of 5 retries or 1m30s, so the stage was stopped",
+      "expected": "adapter_provider_error",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "openCodeRetryWatchdog.notice for the captured 2.2.7 stream internal/execution/adapters/testdata/opencode-cli/stream-retry-internal.jsonl (#3305): a provider HTTP 500 retried without end, stopped by the manager.",
+      "rationale": "Any provider type other than no-route and transport is the generic retryable provider kind."
+    },
+    {
+      "id": "opencode-provider-marker-without-kind",
+      "input": "[opencode-provider-failure] the stage quoted the marker with no kind after it",
+      "expected": "",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Negative row for the #3305 provider-failure rules' two-term clauses.",
+      "rationale": "The marker alone names no kind, so no provider rule may claim it: each rule needs its own kind word beside the marker."
+    },
+    {
+      "id": "opencode-provider-no-route-word-alone",
+      "input": "a review comment mentions adapter_provider_no_route in prose",
+      "expected": "",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Negative row for the #3305 provider-failure rules' two-term clauses.",
+      "rationale": "The kind word without the parser's marker is a stage's own prose, and an unrouted-model park must never be read from prose."
+    },
+    {
+      "id": "opencode-provider-transport-word-alone",
+      "input": "a review comment mentions adapter_provider_transport in prose",
+      "expected": "",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Negative row for the #3305 provider-failure rules' two-term clauses.",
+      "rationale": "The kind word without the parser's marker is a stage's own prose."
+    },
+    {
+      "id": "opencode-provider-error-word-alone",
+      "input": "a review comment mentions adapter_provider_error in prose",
+      "expected": "",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Negative row for the #3305 provider-failure rules' two-term clauses.",
+      "rationale": "The kind word without the parser's marker is a stage's own prose."
+    },
+    {
       "id": "adapter-permission-rejected-marker",
       "input": "[adapter-permission-rejected] tool=bash",
       "expected": "adapter_permission_rejected",

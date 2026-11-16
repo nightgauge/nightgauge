@@ -136,6 +136,7 @@ const HALT_SKIP_PARKED: ReadonlySet<string> = new Set([
   "context_window_exceeded",
   "adapter_permission_rejected",
   "adapter_incompatible",
+  "adapter_provider_no_route",
   "environment_halt",
   "dev_context_stale",
   "gate_plugin_missing",

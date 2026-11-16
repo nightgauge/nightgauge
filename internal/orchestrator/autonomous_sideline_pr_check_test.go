@@ -2,12 +2,18 @@ package orchestrator
 
 import (
 	"context"
+	"io"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/depgraph"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
@@ -182,6 +188,111 @@ func TestOnPipelineComplete_PrMergeUnmerged_RaisesParkedCard(t *testing.T) {
 			}
 			if !strings.Contains(c.Title, "PR #42") || !strings.Contains(c.Body, reason) {
 				t.Errorf("card title/body = %q / %q", c.Title, c.Body)
+			}
+		})
+	}
+}
+
+// TestOnPipelineComplete_FailedRunWithOpenPR_RaisesParkedCard pins #3345: a
+// failed run whose PR is open goes to In review through the generic failure
+// tail and raises exactly one parked card — idempotent across a second failure
+// — while a transient kind (Ready) or a missing PR raises none.
+func TestOnPipelineComplete_FailedRunWithOpenPR_RaisesParkedCard(t *testing.T) {
+	const reason = "pr-merge: required check failed"
+	openPR := map[int]string{42: "feat/900-x"}
+	for _, tc := range []struct {
+		name, kind, detail, wantBlocker string
+		prs                             map[int]string
+		want                            int
+	}{
+		{"untyped failure with detail", "", reason, reason, openPR, 1},
+		{"typed failure without detail", "pipeline-failure", "", "pipeline failed (pipeline-failure) with PR open", openPR, 1},
+		{"transient kind goes to Ready", TerminalKindApiConnectionLost, reason, "", openPR, 0},
+		{"no open PR", "", reason, "", map[int]string{}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			as := heldTestScheduler(t)
+			as.attention = attention.New(layouttest.Repo(t))
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				w.Header().Set("Content-Type", "application/json")
+				if strings.Contains(string(body), "pullRequests(") {
+					_, _ = io.WriteString(w, openPRPageJSON(tc.prs, false, ""))
+					return
+				}
+				_, _ = io.WriteString(w, `{"errors":[{"message":"not served"}]}`)
+			}))
+			t.Cleanup(srv.Close)
+			as.ghClient = gh.NewClientWithURL("test-token", srv.URL)
+			as.repos = []depgraph.RepoConfig{{Owner: "O", Name: "app", Project: 7}}
+			as.inReviewMoveStatus = func(context.Context, string, string, int, gh.OwnerType, int) error { return nil }
+			for i := 0; i < 2; i++ {
+				addRunning(as, "O/app", 900, "x")
+				as.onPipelineComplete("O/app", 900, false, false, tc.kind, tc.detail, false)
+				// drainBackground cancels before it joins; let the board op
+				// finish its forge read first.
+				for deadline := time.Now().Add(5 * time.Second); as.BoardRecoveryInFlight() > 0 && time.Now().Before(deadline); {
+					time.Sleep(5 * time.Millisecond)
+				}
+				if n := as.BoardRecoveryInFlight(); n > 0 {
+					t.Fatalf("board op still in flight after 5s (%d)", n)
+				}
+				as.drainBackground()
+			}
+			cards := parkedCards(t, as, "O/app", 900)
+			if len(cards) != tc.want {
+				t.Fatalf("got %d parked cards, want %d", len(cards), tc.want)
+			}
+			if tc.want == 0 {
+				return
+			}
+			if c := cards[0].Context; c.PR != 42 || c.Issue != 900 || c.Blocker != tc.wantBlocker {
+				t.Errorf("card context = %+v, want PR 42 issue 900 blocker %q", c, tc.wantBlocker)
+			}
+		})
+	}
+}
+
+// TestReconcilePrMergeParkedCards pins #3345's clearing: a parked card clears
+// when its issue leaves In review or its PR is no longer open, and is kept on
+// missing evidence (repo listing failed, issue absent from the graph).
+func TestReconcilePrMergeParkedCards(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		node            *depgraph.Node
+		backed, queryOK bool
+		want            int
+	}{
+		{"moved to Done", &depgraph.Node{State: "OPEN", BoardStatus: "Done"}, true, true, 0},
+		{"closed", &depgraph.Node{State: "CLOSED", BoardStatus: "In review"}, true, true, 0},
+		{"PR merged or closed", &depgraph.Node{State: "OPEN", BoardStatus: "In review"}, false, true, 0},
+		{"listing failed", &depgraph.Node{State: "OPEN", BoardStatus: "In review"}, false, false, 1},
+		{"PR still open", &depgraph.Node{State: "OPEN", BoardStatus: "In review"}, true, true, 1},
+		{"stale In progress read", &depgraph.Node{State: "OPEN", BoardStatus: "In progress"}, false, true, 1},
+		{"absent from graph", nil, false, true, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			as := heldTestScheduler(t)
+			as.attention = attention.New(layouttest.Repo(t))
+			as.raiseAttention(BuildPrMergeParkedBlock("O/app", 900, 42, "", "x"))
+			as.raiseAttention(BuildPrMergeParkedBlock("O/app", 901, 43, "", "x"))
+			g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
+				"O/app#901": {Repo: "O/app", Number: 901, State: "OPEN", BoardStatus: "In review"},
+			}}
+			if tc.node != nil {
+				tc.node.Repo, tc.node.Number = "O/app", 900
+				g.Nodes["O/app#900"] = tc.node
+			}
+			as.mu.Lock()
+			as.inReviewPRBacked = map[string]bool{"O/app#900": tc.backed, "O/app#901": true}
+			as.prQueryOKRepos = map[string]bool{"O/app": tc.queryOK}
+			as.mu.Unlock()
+			as.reconcilePrMergeParkedCards(g)
+			if got := len(parkedCards(t, as, "O/app", 900)); got != tc.want {
+				t.Fatalf("got %d cards for #900, want %d", got, tc.want)
+			}
+			if got := len(parkedCards(t, as, "O/app", 901)); got != 1 {
+				t.Fatalf("unrelated card #901 = %d, want 1", got)
 			}
 		})
 	}

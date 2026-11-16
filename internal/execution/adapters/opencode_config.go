@@ -911,16 +911,11 @@ func openCodeVariants(ids []string) []openCodeVariantJSON {
 	return out
 }
 
-// openCodeActionNames are the 1.x permission keys 2.x renamed (spike #3197
-// § 3): 2.2.7 applies the same renames when it translates a 1.x map.
-var openCodeActionNames = map[string]string{"task": openCodeSubagentAction, "bash": "shell"}
-
 // openCodePermissionRules translates the ADR-022 § 9 permission map into a
 // 2.x rule list, mechanically and in order: one rule per top-level key in
 // field order, a string value as the rule for resource "*", an object as one
-// rule per pattern in insertion order, task and bash renamed. That is the
-// translation 2.2.7 applies to the 1.x map itself, so no rule changes
-// meaning; which actions are emitted is #3304's.
+// rule per pattern in insertion order. The map is already keyed on the 2.x
+// action names (#3304), so each key is its rule's action unchanged.
 func openCodePermissionRules(p *openCodePermissionJSON) ([]openCodeRuleJSON, error) {
 	raw, err := json.Marshal(p)
 	if err != nil {
@@ -938,9 +933,6 @@ func openCodePermissionRules(p *openCodePermissionJSON) ([]openCodeRuleJSON, err
 		}
 		key, _ := tok.(string)
 		action := key
-		if renamed, ok := openCodeActionNames[key]; ok {
-			action = renamed
-		}
 		next, err := dec.Token()
 		if err != nil {
 			return nil, err

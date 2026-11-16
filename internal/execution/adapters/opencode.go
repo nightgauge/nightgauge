@@ -872,6 +872,56 @@ func (a *OpenCodeAdapter) StreamIdleBound(opts RunOptions) (endpoint string, bou
 	return ep.ID, max(ep.HeaderTimeout, ep.ChunkTimeout), OpenCodeSessionDBDir(opts.RunRoot.Dir), true
 }
 
+// OpenCodeRetryMaxAttempts and OpenCodeRetryMaxElapsed bound a provider retry
+// storm (#3305). OpenCode 2.x retries a provider 500 (`provider.internal`) or
+// a refused connection (`provider.transport`) without end, writing one
+// `retry` event per attempt and nothing else (spike #3197 § 3). Captured on
+// 2.2.7 (testdata/opencode-cli/stream-retry-*.jsonl), attempts 2 to 6 arrive
+// about 2, 4, 8 and 11 s apart, so the fifth retry lands about 24 s in. The
+// manager stops an opencode stage once its stream has shown this many retry
+// events with no step finished and no tool run in between, or once a stream
+// event arrives this long after the first of them, and the stage fails as a
+// provider failure. The elapsed bound is checked per stream event, not on a
+// timer: a storm whose gaps outgrow it is stopped at its next retry. Both bounds apply to
+// every opencode stage, hosted models included: the idle-stream watchdog
+// (StreamIdleBound, #2176) arms only for a declared endpoint, and then only
+// after its header or chunk timeout, which defaults to openCodeDefaultTimeout.
+const (
+	OpenCodeRetryMaxAttempts = 5
+	OpenCodeRetryMaxElapsed  = 90 * time.Second
+)
+
+// The provider failure kinds (#3305), the words the
+// `[opencode-provider-failure]` marker carries and the terminal-kind table
+// keys on, the way OpenCodeIncompatible is carried. Each names what
+// OpenCode's error.type said about the provider, never its message:
+//   - OpenCodeProviderNoRoute: `provider.no-route`, a model the provider
+//     config does not route (`-m stub/nope` ends on one error event, exit 1).
+//     No retry can succeed, so the orchestrator parks it.
+//   - OpenCodeProviderTransport: `provider.transport`, the endpoint refused or
+//     dropped the connection, as a retry storm or a terminal error.
+//   - OpenCodeProviderError: any other `provider.*` type, such as
+//     `provider.internal` for a provider 500 retried past the bound.
+const (
+	OpenCodeProviderNoRoute   = "adapter_provider_no_route"
+	OpenCodeProviderTransport = "adapter_provider_transport"
+	OpenCodeProviderError     = "adapter_provider_error"
+)
+
+// OpenCodeProviderFailureKind maps an OpenCode error.type to its provider
+// failure kind, and reports false for a type that is not a provider's.
+func OpenCodeProviderFailureKind(errorType string) (string, bool) {
+	switch {
+	case errorType == "provider.no-route":
+		return OpenCodeProviderNoRoute, true
+	case errorType == "provider.transport":
+		return OpenCodeProviderTransport, true
+	case strings.HasPrefix(errorType, "provider."):
+		return OpenCodeProviderError, true
+	}
+	return "", false
+}
+
 // OpenCodeSessionDBDir is where a per-run root keeps opencode.db.
 func OpenCodeSessionDBDir(root string) string {
 	return filepath.Join(root, "data", "opencode")

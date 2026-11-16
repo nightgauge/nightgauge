@@ -279,20 +279,20 @@ type StageBudgetBreach struct {
 }
 
 // openCodeToolForClaudeTool maps the Claude Code tool names a skill's
-// allowed-tools frontmatter uses to the OpenCode permission governing the same
-// capability. OpenCode 1.18.30 gates its write and edit tools with one
-// permission, `edit`, so Write, Edit and MultiEdit all map to it. This is the
-// only mapping: the stream parser's rejection markers and the permission map
-// (#1638) both read it.
+// allowed-tools frontmatter uses to the OpenCode 2.x permission action
+// governing the same capability (spike #3197 § 2, § 3). 2.x gives write its
+// own action, so Write maps to write while Edit and MultiEdit map to edit.
+// This is the only mapping: the stream parser's rejection markers and the
+// permission map (#1638, #3304) both read it.
 var openCodeToolForClaudeTool = map[string]string{
-	"Bash":      "bash",
+	"Bash":      "shell",
 	"Read":      "read",
-	"Write":     "edit",
+	"Write":     "write",
 	"Edit":      "edit",
 	"MultiEdit": "edit",
 	"Glob":      "glob",
 	"Grep":      "grep",
-	"Task":      "task",
+	"Task":      openCodeSubagentAction,
 	"WebFetch":  "webfetch",
 }
 

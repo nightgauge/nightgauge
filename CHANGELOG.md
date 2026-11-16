@@ -17,6 +17,59 @@ changelog, and the release workflow refuses a tag that does not.
 ### Fixed
 
 - An OpenCode dispatch now fails before spawn when the Nightgauge plugin is not installed as a loadable directory (#3306). The plugin directory carries a `package.json` (`"type": "module"`, `"main": "index.js"`, no dependencies), and a file entry, a missing path or a directory without `package.json` or `index.js` stops the dispatch with an error naming the plugin. The load handshake now runs on the first stream event of any type, so a plugin that did not load kills the stage before any tool runs. The prompt cannot wait for the plugin's load marker: OpenCode 2.2.7 reads stdin to the end before it loads plugins. The vendored `@opencode-ai/plugin` 1.18.30 seed is removed: the plugin needs no npm package.
+- A pickup hold is no longer silent (#3081). While a blocked finding defers an issue, an Action
+  Center card with **Blocker resolved** is open for it, and pickup raises it again if the earlier
+  card was resolved or expired. A finding whose every native `blockedBy` edge is closed is
+  cleared automatically, and the next pickup runs the issue. A Ready issue held only by a
+  dependency closed without the `nightgauge:validated` marker raises an `unvalidated-dependency`
+  card naming the dependency, with **Run post-merge hook** (the new `issue.rerunPostMerge`
+  verb). A cycle of open `blockedBy` edges raises one `dependency-cycle` card naming every issue
+  and edge, with an option to remove each edge, and `nightgauge doctor` reports it as `NGD114`.
+- A run stopped because its issue was already closed (`issue_closed`) is booked as a skip, not a
+  failure (#3081). The run record says `outcome: cancelled`, `outcome_type: issue_closed`, the
+  live `pipeline_done` event is not red, `exit-records` shows `skip/issue_closed`, and the stop
+  joins no failed list. The scheduler then leaves the issue out of its candidates until the
+  dependency graph shows the close, so a closed issue the board still lists as Ready dispatches
+  at most once.
+- Run-state hygiene (#3081). A run adopts `run-state.json`'s run ID only when the record names
+  the same issue. The first feature-dev dispatch of a run moves an earlier attempt's
+  `dev-<N>.json` to `dev-<N>.<unix>.prior.json`, so a retry never inherits it. The run record
+  carries `planned_files` from `planning-<N>.json` and the run's `backtracks`, so plan fidelity
+  and retry analysis survive pipeline-state pruning. The extension sends its backtracks to Go
+  through the new `pipeline.recordBacktrack` IPC verb, and its plan-fidelity metric reads the
+  run record first.
+- The gate's machine-state backstop no longer fails on macOS Finder's `.DS_Store`, or on the
+  serve claims of a pipeline worktree a live daemon removed through the ledgered cleanup
+  during the gate (#3081).
+- An OpenCode 2.x stage whose provider keeps failing now stops in seconds and is named as a
+  provider failure (#3305). 2.x retries a provider 500 or a refused connection forever, writing
+  only `retry` events, so the stage used to wait for its stage timeout, or for the idle-stream
+  watchdog when a declared endpoint served it. The manager now stops the stage after 5 retries
+  or 90 s (`OpenCodeRetryMaxAttempts`, `OpenCodeRetryMaxElapsed`) with no step finished in
+  between. Three new terminal kinds come from OpenCode's own error type, never from its
+  message: `adapter_provider_transport` for a refused or dropped connection,
+  `adapter_provider_error` for any other provider error, and `adapter_provider_no_route` for a
+  model the provider config does not route. The no-route kind parks, because a retry asks for
+  the same model. The other two retry. The stream parser also reads 2.x's `retry` event, the
+  `subagent` tool name, the 2.x headless-rejection text and `state.metadata.providerCall`. On
+  2.2.7, OpenCode's `db` and top-level `export` commands no longer exist, so subagent usage is
+  recorded as partial until the usage fold is ported.
+- The OpenCode permission map is now built on OpenCode 2.x's own tool names (#3304). Before, it
+  still emitted 1.x's `list` and `todowrite`, which 2.x has no tool for, and 2.x's `execute`,
+  `question` and `write` got no rule of their own: `write` escaped the secret and
+  project-config deny-list that `edit` carries. The map now sets `write` with the same
+  backstop as `edit`, and always denies `execute` (code execution that no shell deny-list or
+  gate covers) and `question` (a headless run has no one to answer). `subagent` stays denied,
+  and `external_directory` keeps its default deny. The Claude-to-OpenCode tool table maps
+  `Bash` to `shell`, `Task` to `subagent` and `Write` to `write`, and the auto-reject
+  classifier in Go and the SDK matches 2.x permission names, so a rejected `shell` call is no
+  longer reported as `unknown`.
+- A failed run whose PR is still open now raises the "PR parked in In review" card whenever
+  the scheduler parks the issue there, not only on the merge-blocked sideline path: the
+  generic failure revert and orphaned-run recovery raise it too. The card now clears on its
+  own once the PR merges or closes, the issue leaves In review, or a later run succeeds
+  (#3345).
+- The OpenCode edit-hook test against the real `nightgauge` binary no longer fails under the local gate: it ignores an inherited `NIGHTGAUGE_SKIP_TEST_QUALITY`, warms the freshly built binary before the timed call, and names why a warning is missing (skipped, timed out, could not run, exit code, or silent) (#3343).
 - A merge-group code failure on the VS Code path now rewinds to feature-dev instead of failing the run (#3339). The orchestrator sends the refusal to `nightgauge pr-stage recover`, which now accepts code failures as well as conflicts. feature-dev gets a `MERGE_QUEUE_CODE_FAILURE` signal carrying the failed job, step and log excerpt. The new `--run-id` flag keeps the once-per-check bound from #3198 on this path: a second removal for the same check fails the run, and so does a call without a run id. `conflict_recovery.enabled: false` now disables only conflict recovery. When a failed pr-merge parks an issue in In review behind its open PR, the scheduler also raises an Action Center card that names the PR and the refusal. Before, the issue sat in In review with no card.
 - The Nightgauge OpenCode plugin now loads and gates on OpenCode 2.x (#3302). On 2.2.7 the 1.x plugin never loaded: 2.x accepts only a plugin directory and loads its `index.js`, and ignores a hook map a plugin returns, so a dispatch ran with no gates. The plugin is now `export default { id, setup }`, and `setup` registers the gates through `ctx.tool.hook("execute.before")` and `"execute.after"`, compaction context through `ctx.session.hook("compaction")`, and session tracking through `ctx.event.subscribe`. Each name was observed firing on 2.2.7, and a gate's denial reaches the model as the tool's error. The gates read 2.x's argument (`input.path`) and tool names: `shell` replaces `bash`, `subagent` replaces `task` and is still always denied (marker `[nightgauge-gate:subagent-denied]`), `execute` is blocked and `question` passes. The per-run config names the plugin directory, and the handshake's `plugin_version` is `2`. End-of-run stop-verification now runs on `session.execution.succeeded` or `.failed`, which replace 1.x's `session.idle`. 2.x has no hook for three 1.x features, so they are gone: the sanitize-prompt check on slash-command expansions, the cap on resuming after compaction, and the `permission.ask` hook. A permission ask is still recorded from the `permission.asked` event. Real-binary integration tests cover plugin load, a gate-denied edit and a denied subagent on 2.2.7, plus the permission, compaction and end-of-run events.
 - OpenCode stages now run `--standalone` and leave nothing behind (#3303). The dispatch argv is `run --standalone --format json --print-logs --log-level error -m <provider/model[#variant]>`, so a run uses its own private server instead of the background service OpenCode 2.x shares across the machine. The usage fold's `export`, `db` and `--version` and the preflight version probe also pass `--standalone`. A declared effort variant is now the `#<variant>` suffix of `-m`; before, the adapter emitted `--variant`, which 2.2.7 removed. The flag contract now drives a declared-variant model and fails if `--variant` comes back. After a stage exits, the manager now kills the stage's whole process group, whatever the adapter, so a child left running (OpenCode's `serve --stdio` and its loopback listener among them) no longer outlives the stage. Before, the group was killed only on a cancel, a timeout or a budget stop. The fold's helpers and the preflight probe get the same guarantee: the stage, every helper and every probe start through one shared reaper that kills the group the moment the process exits, on every path, so the private server each `--standalone` process starts is gone when it returns, and a server holding a probe's output no longer stalls the probe for a second and fails it. The egress fixture checks that no process of the run survives it.

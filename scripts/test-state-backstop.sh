@@ -41,6 +41,12 @@
 #      line older than the snapshot → 1; a line naming another worktree → 1;
 #      a recorded worktree plus an unrelated STATE path removed → 1, naming
 #      only the unrelated path as failing.
+#  23. A .DS_Store Finder writes into the legacy root or STATE → 0; one beside
+#      a real leak does not cover it → 1 (#3081).
+#  24-25. A live daemon's worktree churn (#2611): a ledgered worktree removal
+#      with its serve claims, worktrees and claims added, a lock created and
+#      deleted inside the run → 0; a worktree's claim removed with no ledger
+#      line → 1 (#3081).
 #
 # Run: bash scripts/test-state-backstop.sh
 # Also run by scripts/ci-local.sh.
@@ -247,6 +253,34 @@ elif ! names "$fails" "removed: $h/$STATE_REL/serve/claim-1.json" || names "$fai
 else
   ok "a recorded worktree plus an unrelated removal fails, naming only the unrelated path"
 fi
+
+# 23 (#3081). macOS Finder writes .DS_Store into any directory it shows,
+# the legacy root included. That is the operator's file browser, not a leak.
+h="$(fixture ds-store)"
+expect "a .DS_Store Finder writes during the run passes" 0 "as the run found them" "$h" \
+  "printf 'f' > .nightgauge/.DS_Store; printf 'f' > .nightgauge/usage/.DS_Store; printf 'f' > $STATE_REL/.DS_Store"
+h="$(fixture ds-store-cover)"
+expect "a .DS_Store does not cover a real leak beside it" 1 "added:   $h/.nightgauge/usage/y" "$h" \
+  "printf 'f' > .nightgauge/.DS_Store; printf 'y\n' > .nightgauge/usage/y"
+
+# 24-25 (#3081, the #2611 shape). A live daemon churns worktrees while the
+# gate runs: it removes a worktree through the ledgered cleanup, and the serve
+# daemon that served that worktree exits with it, taking its claims; it adds
+# new worktrees and serve claims; and it creates and deletes a lock inside the
+# run. All of that passes. A claim of a root nobody recorded removing fails.
+claim_key() { local p="$1/$STATE_REL/worktrees/abc/$2"; printf '%s' "${p//\//\~}"; }
+wtc() { wt "$1"; local k; k="$(claim_key "$1" repo-issue-1)"
+  printf 'c\n' >"$1/$STATE_REL/serve/$k.json"; : >"$1/$STATE_REL/serve/$k.lock"; }
+h="$(fixture wt-churn)"; wtc "$h"; k1="$(claim_key "$h" repo-issue-1)"; k3="$(claim_key "$h" repo-issue-3)"
+expect "a daemon's worktree churn during the run passes (#2611)" 0 \
+  "    removed: $h/$STATE_REL/serve/$k1.lock" "$h" \
+  "printf '%s\\trepo-issue-1\\n' \"\$(date +%s)\" >> $L; rm -rf $STATE_REL/worktrees/abc/repo-issue-1; \
+   rm $STATE_REL/serve/$k1.json $STATE_REL/serve/$k1.lock; \
+   mkdir -p $STATE_REL/worktrees/abc/repo-issue-3 $STATE_REL/worktrees/def/repo-issue-4; \
+   : > $STATE_REL/serve/$k3.lock; : > $STATE_REL/serve/transient.lock; rm $STATE_REL/serve/transient.lock"
+h="$(fixture wt-claim-unmarked)"; wtc "$h"; k1="$(claim_key "$h" repo-issue-1)"
+expect "a worktree's serve claim removed with no ledger line fails, named" 1 \
+  "removed: $h/$STATE_REL/serve/$k1.lock" "$h" "rm $STATE_REL/serve/$k1.lock"
 
 # 12 (#2360). compare() asked "is this removed path also added?" by piping the
 # added list into grep -q under pipefail. With a list this size, grep matches

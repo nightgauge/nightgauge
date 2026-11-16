@@ -242,3 +242,48 @@ func TestOpenCodeParkedFailuresAreNotEscalated(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenCodeProviderFailureKinds pins #3305's three provider kinds: each
+// mirrors the adapter's kind word, the marker texts the parser and the retry
+// watchdog write classify to distinct kinds, and only no-route parks.
+func TestOpenCodeProviderFailureKinds(t *testing.T) {
+	mirrors := map[string]string{
+		TerminalKindAdapterProviderNoRoute:   adapters.OpenCodeProviderNoRoute,
+		TerminalKindAdapterProviderTransport: adapters.OpenCodeProviderTransport,
+		TerminalKindAdapterProviderError:     adapters.OpenCodeProviderError,
+	}
+	for kind, word := range mirrors {
+		if kind != word {
+			t.Errorf("terminal kind %q does not mirror the adapter's %q", kind, word)
+		}
+	}
+	retried := "; the provider request was retried 5 times over 24s with no step finished, past the bound of 5 retries or 1m30s, so the stage was stopped"
+	cases := []struct {
+		stderr string
+		want   string
+		parks  bool
+	}{
+		{"[opencode-provider-failure] adapter_provider_no_route: opencode reported error type provider.no-route; the session ended on that error\n",
+			TerminalKindAdapterProviderNoRoute, true},
+		{"[opencode-provider-failure] adapter_provider_transport: opencode reported error type provider.transport" + retried + "\n",
+			TerminalKindAdapterProviderTransport, false},
+		{"[opencode-provider-failure] adapter_provider_error: opencode reported error type provider.internal" + retried + "\n",
+			TerminalKindAdapterProviderError, false},
+	}
+	for _, c := range cases {
+		reason := terminalFailureReason(1, nil, c.stderr)
+		if got := ClassifyTerminalKind(reason); got != c.want {
+			t.Errorf("%q classifies %q, want %q", reason, got, c.want)
+		}
+		if got := TerminalKindParks(c.want); got != c.parks {
+			t.Errorf("TerminalKindParks(%q) = %v, want %v", c.want, got, c.parks)
+		}
+		if got := TerminalKindRemediation(c.want) != ""; got != c.parks {
+			t.Errorf("TerminalKindRemediation(%q) set = %v, want %v: only a parked kind has one", c.want, got, c.parks)
+		}
+	}
+	// The kind word alone, in a stage's own prose, is not the marker.
+	if got := ClassifyTerminalKind("exit 1: the docs mention adapter_provider_no_route"); got == TerminalKindAdapterProviderNoRoute {
+		t.Errorf("prose naming the kind classified as %q", got)
+	}
+}

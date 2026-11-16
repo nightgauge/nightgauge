@@ -79,6 +79,11 @@ func (n *Node) IsSubIssueOf(epic *Node) bool {
 	return ok && strings.EqualFold(parent.Repo, epic.Repo) && parent.Number == epic.Number
 }
 
+// EdgeSourceGraphQL is Edge.Source for an edge read from the forge's own
+// blockedBy relation (not parsed from issue-body prose): the edges
+// issue.removeBlockedBy can remove.
+const EdgeSourceGraphQL = "graphql"
+
 // Edge represents a dependency between two issues.
 type Edge struct {
 	From       NodeID `json:"from"`       // blocked issue (depends on To)

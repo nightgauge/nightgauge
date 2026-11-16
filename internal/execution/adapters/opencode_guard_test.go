@@ -120,13 +120,13 @@ func TestOpenCodeScanForAskCatchesAsk(t *testing.T) {
 	if err := json.Unmarshal(raw, &corrupt); err != nil {
 		t.Fatal(err)
 	}
-	bash, ok := corrupt["bash"].(map[string]any)
+	shell, ok := corrupt["shell"].(map[string]any)
 	if !ok {
-		t.Fatalf("permission.bash is not an object: %#v", corrupt["bash"])
+		t.Fatalf("permission.shell is not an object: %#v", corrupt["shell"])
 	}
-	bash["*"] = "ask"
-	if hits := openCodeFindAsk(corrupt); len(hits) == 0 || hits[0] != "permission.bash.*" {
-		t.Errorf("openCodeFindAsk did not catch a planted \"ask\" at permission.bash.*: got %v", hits)
+	shell["*"] = "ask"
+	if hits := openCodeFindAsk(corrupt); len(hits) == 0 || hits[0] != "permission.shell.*" {
+		t.Errorf("openCodeFindAsk did not catch a planted \"ask\" at permission.shell.*: got %v", hits)
 	}
 }
 
@@ -197,8 +197,7 @@ func TestOpenCodePermissionMap(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			wantKeys := []string{"*", "read", "edit", "glob", "grep", "list", "bash", "task",
-				"webfetch", "websearch", "skill", "todowrite", "doom_loop", "external_directory"}
+			wantKeys := slices.Clone(openCodeWantPermissionKeys)
 			var gotKeys []string
 			for k := range permission {
 				gotKeys = append(gotKeys, k)
@@ -229,14 +228,15 @@ func TestOpenCodePermissionMap(t *testing.T) {
 				t.Fatalf("%s/SKILL.md allowed-tools = %v, want exactly %v; this test's scalar-permission assertions below assume this set", name, tools, wantTools)
 			}
 
-			for _, allowedKey := range []string{"glob", "grep", "list"} {
+			for _, allowedKey := range []string{"glob", "grep"} {
 				if permission[allowedKey] != openCodeAllow {
 					t.Errorf("permission[%q] = %v, want %q", allowedKey, permission[allowedKey], openCodeAllow)
 				}
 			}
-			// task is denied though every stage grants it: gates.js refuses
-			// every task call, so it is not offered at all (#2178, #1748).
-			for _, deniedKey := range []string{"task", "webfetch", "websearch", "skill", "todowrite"} {
+			// subagent is denied though every stage grants Task: gates.js
+			// refuses every subagent call, so it is not offered at all
+			// (#2178, #1748). execute and question are never granted (#3304).
+			for _, deniedKey := range []string{"subagent", "webfetch", "websearch", "skill", "execute", "question"} {
 				if permission[deniedKey] != openCodeDeny {
 					t.Errorf("permission[%q] = %v, want %q", deniedKey, permission[deniedKey], openCodeDeny)
 				}
@@ -248,17 +248,23 @@ func TestOpenCodePermissionMap(t *testing.T) {
 			}
 			edit, ok := permission["edit"].(map[string]any)
 			if !ok || edit["*"] != openCodeAllow {
-				t.Errorf(`permission.edit["*"] = %v, want %q (Write/Edit are in AllowedTools)`, permission["edit"], openCodeAllow)
+				t.Errorf(`permission.edit["*"] = %v, want %q (Edit is in AllowedTools)`, permission["edit"], openCodeAllow)
 			}
-			bash, ok := permission["bash"].(map[string]any)
-			if !ok || bash["*"] != openCodeAllow {
-				t.Errorf(`permission.bash["*"] = %v, want %q (Bash is in AllowedTools)`, permission["bash"], openCodeAllow)
+			write, ok := permission["write"].(map[string]any)
+			if !ok || write["*"] != openCodeAllow {
+				t.Errorf(`permission.write["*"] = %v, want %q (Write is in AllowedTools)`, permission["write"], openCodeAllow)
+			}
+			shell, ok := permission["shell"].(map[string]any)
+			if !ok || shell["*"] != openCodeAllow {
+				t.Errorf(`permission.shell["*"] = %v, want %q (Bash is in AllowedTools)`, permission["shell"], openCodeAllow)
 			}
 
-			openCodeBackstopEntries(t, permission, "bash", openCodeBashDenyBackstop)
+			openCodeBackstopEntries(t, permission, "shell", openCodeShellDenyBackstop)
 			openCodeBackstopEntries(t, permission, "read", openCodeSecretDenyBackstop)
-			openCodeBackstopEntries(t, permission, "edit", openCodeSecretDenyBackstop)
-			openCodeBackstopEntries(t, permission, "edit", openCodeProjectConfigDenyBackstop)
+			for _, key := range []string{"edit", "write"} {
+				openCodeBackstopEntries(t, permission, key, openCodeSecretDenyBackstop)
+				openCodeBackstopEntries(t, permission, key, openCodeProjectConfigDenyBackstop)
+			}
 
 			extDir, ok := permission["external_directory"].(map[string]any)
 			if !ok {
@@ -280,6 +286,9 @@ func TestOpenCodePermissionMap(t *testing.T) {
 			for _, skillDirPattern := range openCodeWorktreeRelativeDirPatterns(worktree, filepath.Join(skillsRoot, name)) {
 				if edit[skillDirPattern] != openCodeDeny {
 					t.Errorf("permission.edit[%q] = %v, want %q (the skill dir is read-only: Read succeeds, Edit is denied)", skillDirPattern, edit[skillDirPattern], openCodeDeny)
+				}
+				if write[skillDirPattern] != openCodeDeny {
+					t.Errorf("permission.write[%q] = %v, want %q (the skill dir is read-only: Read succeeds, Write is denied)", skillDirPattern, write[skillDirPattern], openCodeDeny)
 				}
 			}
 			for _, p := range openCodeTmpDirAllowPatterns {
@@ -304,12 +313,12 @@ func TestOpenCodePermissionMapEmptyAllowedToolsNeverAllows(t *testing.T) {
 	if err := json.Unmarshal(raw, &permission); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"*", "glob", "grep", "list", "task", "webfetch", "websearch", "skill", "todowrite", "doom_loop"} {
+	for _, key := range []string{"*", "glob", "grep", "subagent", "webfetch", "websearch", "skill", "execute", "question", "doom_loop"} {
 		if permission[key] != openCodeDeny {
 			t.Errorf("permission[%q] = %v, want %q with no AllowedTools", key, permission[key], openCodeDeny)
 		}
 	}
-	for _, key := range []string{"read", "edit", "bash", "external_directory"} {
+	for _, key := range []string{"read", "edit", "write", "shell", "external_directory"} {
 		obj, ok := permission[key].(map[string]any)
 		if !ok || obj["*"] != openCodeDeny {
 			t.Errorf("permission.%s[\"*\"] = %v, want %q with no AllowedTools", key, permission[key], openCodeDeny)
@@ -348,13 +357,13 @@ func TestOpenCodePermissionMapNeverAllowsBinDir(t *testing.T) {
 
 // TestOpenCodeDenyListBackstopComplete is the golden's own "deleting one
 // makes it fail" coverage: every literal here is copied from the issue's own
-// text, independent of openCodeBashDenyBackstop/openCodeSecretDenyBackstop/
+// text, independent of openCodeShellDenyBackstop/openCodeSecretDenyBackstop/
 // openCodeProjectConfigDenyBackstop, so a change that shortens one of those
 // vars — as well as the map they feed — is what this test catches; reading
 // the assertion back from the same var it is meant to guard would pass
 // vacuously no matter how short the var got.
 func TestOpenCodeDenyListBackstopComplete(t *testing.T) {
-	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Read", "Edit", "Bash"}}, "")
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Read", "Edit", "Write", "Bash"}}, "")
 	raw, err := json.Marshal(pm)
 	if err != nil {
 		t.Fatal(err)
@@ -364,15 +373,16 @@ func TestOpenCodeDenyListBackstopComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bash := permission["bash"].(map[string]any)
+	shell := permission["shell"].(map[string]any)
 	for _, want := range []string{"rm -rf *", "rm -fr *", "git push --force*", "git push -f*", "git push * --force*"} {
-		if bash[want] != openCodeDeny {
-			t.Errorf("permission.bash[%q] = %v, want %q", want, bash[want], openCodeDeny)
+		if shell[want] != openCodeDeny {
+			t.Errorf("permission.shell[%q] = %v, want %q", want, shell[want], openCodeDeny)
 		}
 	}
 	read := permission["read"].(map[string]any)
 	edit := permission["edit"].(map[string]any)
-	for _, m := range []map[string]any{read, edit} {
+	write := permission["write"].(map[string]any)
+	for _, m := range []map[string]any{read, edit, write} {
 		// "**/*.env" and "**/.env*" cover a NESTED secret file
 		// (apps/web/.env.local): "*.env" and ".env*" alone only ever match a
 		// root-level one, since opencode's own pattern matching has no
@@ -386,6 +396,9 @@ func TestOpenCodeDenyListBackstopComplete(t *testing.T) {
 	for _, want := range []string{"opencode.json*", ".opencode/**"} {
 		if edit[want] != openCodeDeny {
 			t.Errorf("permission.edit[%q] = %v, want %q", want, edit[want], openCodeDeny)
+		}
+		if write[want] != openCodeDeny {
+			t.Errorf("permission.write[%q] = %v, want %q", want, write[want], openCodeDeny)
 		}
 	}
 }
@@ -404,7 +417,7 @@ func TestOpenCodeBashScopedEntry(t *testing.T) {
 	if err := json.Unmarshal(raw, &permission); err != nil {
 		t.Fatal(err)
 	}
-	bash := permission["bash"].(map[string]any)
+	bash := permission["shell"].(map[string]any)
 	if bash["*"] != openCodeDeny {
 		t.Errorf(`bash["*"] = %v, want %q: the bare Bash tool was never granted`, bash["*"], openCodeDeny)
 	}
@@ -419,11 +432,11 @@ func TestOpenCodeBashScopedEntry(t *testing.T) {
 	// entries must be the LAST entries the pattern map marshals, so nothing
 	// added earlier (a scoped allow) can be reordered ahead of them by
 	// encoding/json's usual key-sort.
-	raw2, err := json.Marshal(openCodeBashPermission(&openCodeToolGrant{scopes: []string{"git *"}}))
+	raw2, err := json.Marshal(openCodeShellPermission(&openCodeToolGrant{scopes: []string{"git *"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	last := openCodeBashDenyBackstop[len(openCodeBashDenyBackstop)-1]
+	last := openCodeShellDenyBackstop[len(openCodeShellDenyBackstop)-1]
 	wantSuffix := fmt.Sprintf("%q:%q}", last, openCodeDeny)
 	if !strings.HasSuffix(string(raw2), wantSuffix) {
 		t.Errorf("bash pattern map does not end with the backstop's last entry %s: %s", wantSuffix, raw2)
@@ -929,5 +942,162 @@ func TestOpenCodePermissionMapCoversTheSystemAliasOfAResolvedWorktree(t *testing
 	rel, _ := filepath.Rel(wt, filepath.Join(alias, "src", "main.go"))
 	if got := openCodePatternAction(perm.Edit, filepath.ToSlash(rel)); got != openCodeAllow {
 		t.Errorf("edit %q = %q, want allow (a deliverable file through the alias)", rel, got)
+	}
+}
+
+// openCodeWantPermissionKeys is every key a generated map must carry: one per
+// OpenCode 2.x tool (spike #3197 § 2, § 3) plus "*", "doom_loop" and
+// "external_directory" (#3304). Literal, not read back from the struct, so a
+// dropped or renamed field fails the tests that use it.
+var openCodeWantPermissionKeys = []string{
+	"*",
+	"edit", "execute", "glob", "grep", "question", "read",
+	"shell", "skill", "subagent", "webfetch", "websearch", "write",
+	"doom_loop", "external_directory",
+}
+
+// openCodeAllMappedClaudeTools grants every Claude Code tool the guard maps,
+// plus the two it deliberately maps to nothing.
+var openCodeAllMappedClaudeTools = []string{
+	"Bash", "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Glob", "Grep",
+	"Task", "WebFetch", "WebSearch", "Skill", "TodoWrite", "AskUserQuestion",
+}
+
+// openCodeStageRuleSets returns the emitted 2.x rule list for every stage
+// skill's committed AllowedTools, plus the empty AllowedTools, keyed by name.
+func openCodeStageRuleSets(t *testing.T) map[string][]openCodeRuleJSON {
+	t.Helper()
+	skillsRoot := filepath.Join(repoRootForTest(t), "skills")
+	sets := map[string][]openCodeRuleJSON{}
+	add := func(name string, opts RunOptions) {
+		rules, err := openCodePermissionRules(openCodePermissionMap(opts, ""))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		sets[name] = rules
+	}
+	for _, name := range openCodeStageSkillDirs {
+		add(name, RunOptions{
+			AllowedTools: stageSkillAllowedTools(t, skillsRoot, name),
+			SkillPath:    filepath.Join(skillsRoot, name, "SKILL.md"),
+			WorktreeDir:  "/work/w",
+		})
+	}
+	add("(empty)", RunOptions{})
+	add("(all mapped tools)", RunOptions{AllowedTools: openCodeAllMappedClaudeTools, WorktreeDir: "/work/w"})
+	return sets
+}
+
+// TestOpenCodePermissionRulesUse2xActions is #3304 AC1: the emitted rules
+// cover exactly the 2.x actions plus the three controls, for every stage, and
+// never a 1.x-only name.
+func TestOpenCodePermissionRulesUse2xActions(t *testing.T) {
+	want := slices.Clone(openCodeWantPermissionKeys)
+	sort.Strings(want)
+	for name, rules := range openCodeStageRuleSets(t) {
+		seen := map[string]bool{}
+		for _, r := range rules {
+			seen[r.Action] = true
+			switch r.Action {
+			case "list", "todowrite", "bash", "task":
+				t.Errorf("%s: rule %+v uses a 1.x-only action", name, r)
+			}
+		}
+		got := make([]string, 0, len(seen))
+		for a := range seen {
+			got = append(got, a)
+		}
+		sort.Strings(got)
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: rule actions = %v, want exactly %v", name, got, want)
+		}
+	}
+}
+
+// TestOpenCodePermissionRulesNeverAsk is #3304 AC3: no emitted rule, for any
+// stage or the empty map, has effect "ask" (ADR-022 § 9).
+func TestOpenCodePermissionRulesNeverAsk(t *testing.T) {
+	for name, rules := range openCodeStageRuleSets(t) {
+		for _, r := range rules {
+			if r.Effect != openCodeAllow && r.Effect != openCodeDeny {
+				t.Errorf("%s: rule %+v has effect %q, want allow or deny", name, r, r.Effect)
+			}
+		}
+	}
+}
+
+// TestOpenCodePermissionRulesExternalDirectoryDeniesByDefault is #3304 AC4:
+// external_directory keeps its "*" deny on 2.x, ahead of every allow.
+func TestOpenCodePermissionRulesExternalDirectoryDeniesByDefault(t *testing.T) {
+	wantDefault := openCodeRuleJSON{Action: "external_directory", Resource: "*", Effect: openCodeDeny}
+	for name, rules := range openCodeStageRuleSets(t) {
+		first := -1
+		for i, r := range rules {
+			if r.Action == "external_directory" {
+				first = i
+				break
+			}
+		}
+		if first == -1 || rules[first] != wantDefault {
+			t.Errorf("%s: first external_directory rule is not %+v: %+v", name, wantDefault, rules)
+		}
+	}
+}
+
+// TestOpenCodePermissionKeyForClaudeTool is #3304 AC5: each Claude Code tool
+// maps to its 2.x action, and TodoWrite and AskUserQuestion map to nothing.
+func TestOpenCodePermissionKeyForClaudeTool(t *testing.T) {
+	cases := map[string]string{
+		"Bash":         "shell",
+		"Bash(git *)":  "shell",
+		"Task":         "subagent",
+		"Write":        "write",
+		"Edit":         "edit",
+		"MultiEdit":    "edit",
+		"NotebookEdit": "edit",
+		"Read":         "read",
+		"Glob":         "glob",
+		"Grep":         "grep",
+		"WebFetch":     "webfetch",
+		"WebSearch":    "websearch",
+		"Skill":        "skill",
+	}
+	for claude, want := range cases {
+		name, _, _ := openCodeToolScope(claude)
+		got, ok := openCodePermissionKeyForClaudeTool(name)
+		if !ok || got != want {
+			t.Errorf("openCodePermissionKeyForClaudeTool(%q) = %q, %v; want %q", claude, got, ok, want)
+		}
+	}
+	for _, unmapped := range []string{"TodoWrite", "AskUserQuestion", "mcp__foo__bar"} {
+		if got, ok := openCodePermissionKeyForClaudeTool(unmapped); ok {
+			t.Errorf("openCodePermissionKeyForClaudeTool(%q) = %q, want no mapping", unmapped, got)
+		}
+	}
+}
+
+// TestOpenCodePermissionMapDeniesExecuteAndQuestion is #3304 AC2: execute
+// and question stay denied even when every mapped tool is granted, while the
+// granted tools themselves are allowed (so the deny is not vacuous).
+func TestOpenCodePermissionMapDeniesExecuteAndQuestion(t *testing.T) {
+	pm := openCodePermissionMap(RunOptions{AllowedTools: openCodeAllMappedClaudeTools}, "")
+	if pm.Execute != openCodeDeny || pm.Question != openCodeDeny || pm.Subagent != openCodeDeny {
+		t.Errorf("execute, question, subagent = %q, %q, %q; want all %q", pm.Execute, pm.Question, pm.Subagent, openCodeDeny)
+	}
+	if pm.WebSearch != openCodeAllow || pm.Skill != openCodeAllow || pm.Glob != openCodeAllow {
+		t.Errorf("websearch, skill, glob = %q, %q, %q; want all %q with every tool granted", pm.WebSearch, pm.Skill, pm.Glob, openCodeAllow)
+	}
+	for key, m := range map[string]*openCodePatternMap{"write": pm.Write, "edit": pm.Edit, "shell": pm.Shell} {
+		raw, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded["*"] != openCodeAllow {
+			t.Errorf(`permission.%s["*"] = %v, want %q with every tool granted`, key, decoded["*"], openCodeAllow)
+		}
 	}
 }

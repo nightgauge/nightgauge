@@ -201,7 +201,7 @@ func (as *AutonomousScheduler) recheckPR(ctx context.Context, item PRRecheckItem
 	}
 	if closed {
 		as.moveIssueToDone(ctx, item.Repo, item.Number)
-	} else if !as.revertFailedIssueStatus(ctx, item.Repo, item.Number, item.Kind) {
+	} else if !as.revertFailedIssueStatus(ctx, item.Repo, item.Number, item.Kind, "") {
 		return // the revert could not list open PRs; it kept the entry
 	}
 	as.mu.Lock()

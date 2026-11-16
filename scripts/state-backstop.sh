@@ -35,7 +35,9 @@
 #     the append-only ledger worktrees/<hash>/.removed-worktrees. The removal
 #     is excused, and printed as information, only when that ledger holds a
 #     line naming exactly <name> with an epoch no older than the snapshot's
-#     start. Anything else removed, ledger or not, still fails.
+#     start. The serve/ claims of the daemon that served that worktree go
+#     with it and are excused too (#3081). Anything else removed, ledger or
+#     not, still fails.
 #   - the agent homes the extension installs skills into (#2935):
 #     ~/.codex/skills, ~/.grok/skills, ~/.config/opencode and
 #     ~/.claude/plugins. Only Nightgauge's part of each, held to the legacy
@@ -44,6 +46,9 @@
 #     plugins/nightgauge.js and plugins/nightgauge/, and the nightgauge
 #     entries of Claude's plugin registries. A host smoke run with a real
 #     HOME re-synced the worktree's skills into them, and nothing watched.
+#
+# macOS Finder's .DS_Store is left out of every listing (#3081): the
+# operator's file browser writes it into any directory it shows.
 #
 # NIGHTGAUGE_STATE_HOME and XDG_STATE_HOME are ignored on purpose: the data
 # at risk is the default location's, whatever the gate's environment
@@ -205,6 +210,9 @@ list_strict() { # list_strict <root> [prune]
   find -H "$root" -mindepth 1 ${skip[@]+"${skip[@]}"} -print 2>/dev/null |
     LC_ALL=C sort |
     while IFS= read -r p; do
+      # macOS Finder writes .DS_Store into any directory it shows (#3081,
+      # #1887): the operator's file browser, not a test, so never a leak.
+      [ "${p##*/}" = .DS_Store ] && continue
       rel="${p#"$root"/}"
       if [ -L "$p" ]; then
         printf '%s\tlink:%s\n' "$rel" "$(readlink "$p")"
@@ -243,6 +251,7 @@ list_state() { # list_state <root>
   find "$root" -mindepth 1 -maxdepth 3 -print 2>/dev/null |
     LC_ALL=C sort |
     while IFS= read -r p; do
+      [ "${p##*/}" = .DS_Store ] && continue # Finder's, as in list_strict (#3081)
       printf '%s\n' "${p#"$root"/}"
     done
 }
@@ -319,6 +328,27 @@ pipeline_removed() {
   return 0
 }
 
+# worktree_serve_claims <excused-worktrees> <removed-paths>: print the removed
+# serve/ claims (<encoded-root>.json and .lock, runstate.ServeSidecarName)
+# of a daemon that served one of the excused pipeline worktrees (#3081). The
+# daemon exits with its worktree and takes its claims with it, so they go
+# together with the ledgered removal; a claim of any other root still fails.
+worktree_serve_claims() {
+  local rel file key wt sep='~'
+  [ -n "$1" ] || return 0
+  while IFS= read -r rel; do
+    case "$rel" in serve/*.json | serve/*.lock) ;; *) continue ;; esac
+    file="${rel#serve/}"
+    case "$file" in */*) continue ;; esac
+    key="${file%.*}"
+    while IFS= read -r wt; do
+      # worktrees/<hash>/<name> encodes as …~worktrees~<hash>~<name>.
+      case "$key" in *"$sep${wt//\//$sep}") printf '%s\n' "$rel" && break ;; esac
+    done <<<"$1"
+  done <<<"$2"
+  return 0
+}
+
 compare() { # compare <before> <after>
   local before="$1" after="$2" legacy state fail=0 removed added f root roots=""
   legacy="$(cat "$before/legacy.root")"
@@ -335,10 +365,12 @@ compare() { # compare <before> <after>
 
   # Default STATE: a removed path fails; an added one is information.
   removed="$(LC_ALL=C comm -23 "$before/state.list" "$after/state.list" | grep -vx ABSENT || true)"
-  local started="" excused=""
+  local started="" excused="" claims=""
   [ -f "$before/started" ] && started="$(cat "$before/started")"
   if [ -n "$removed" ]; then
     excused="$(pipeline_removed "$state" "$started" "$removed")"
+    claims="$(worktree_serve_claims "$excused" "$removed")"
+    [ -n "$claims" ] && excused="$(printf '%s\n%s\n' "$excused" "$claims" | LC_ALL=C sort -u | grep -v '^$')"
     [ -n "$excused" ] &&
       removed="$(LC_ALL=C comm -23 <(printf '%s\n' "$removed") <(printf '%s\n' "$excused") | grep -v '^$' || true)"
   fi
@@ -352,7 +384,7 @@ compare() { # compare <before> <after>
     printf '%s\n' "$removed" | sed "s|^|    removed: $state/|"
   fi
   if [ -n "$excused" ]; then
-    echo "  (information) pipeline worktrees removed by the pipeline's cleanup during the run:"
+    echo "  (information) pipeline worktrees (and their serve claims) removed by the pipeline's cleanup during the run:"
     printf '%s\n' "$excused" | sed "s|^|    removed: $state/|"
   fi
   if [ -n "$added" ]; then

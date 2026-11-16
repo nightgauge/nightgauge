@@ -7,13 +7,17 @@ package opencodeplugin
 // (writePluginTreeForGatesTest, requireNode, buildNightgaugeBin).
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // editJSPath writes a fresh copy of the embedded plugin tree and returns
@@ -108,14 +112,13 @@ func runEditHarness(t *testing.T, node, cwd, tool, argsJSON, outputJSON, nightga
 	t.Helper()
 	entry, _ := editJSPath(t)
 	driver := writeGatesDriver(t, nodeToolExecuteAfterDriver)
-	env := append(os.Environ(),
+	env := append(editHarnessEnv(nightgaugeBin, extraEnv),
 		"NG_PLUGIN_PATH="+filepath.Join(entry, EntryFile),
 		"NG_CWD="+cwd,
 		"NG_TOOL="+tool,
 		"NG_ARGS="+argsJSON,
 		"NG_OUTPUT="+outputJSON,
 	)
-	env = applyHarnessEnv(env, nightgaugeBin, extraEnv)
 	cmd := exec.Command(node, driver)
 	cmd.Env = env
 	cmd.Dir = cwd
@@ -131,6 +134,16 @@ func runEditHarness(t *testing.T, node, cwd, tool, argsJSON, outputJSON, nightga
 		t.Fatalf("node harness printed non-JSON: %s (%v)", out, err)
 	}
 	return res
+}
+
+// editHarnessEnv is the child env every edit-hook harness run gets: the
+// parent's env with an inherited NIGHTGAUGE_SKIP_TEST_QUALITY removed (an
+// operator or parent process that exports it would otherwise silence the real
+// verb, #3343), then the shared harness scrubbing. extraEnv may still set the
+// opt-out deliberately.
+func editHarnessEnv(nightgaugeBin string, extraEnv map[string]string) []string {
+	env := removeEnv(os.Environ(), skipTestQualityEnv)
+	return applyHarnessEnv(env, nightgaugeBin, extraEnv)
 }
 
 // readEditTimeoutConstants reads edit.js's own exported timeout constants
@@ -554,20 +567,123 @@ func TestEditHookTimeoutLeavesToolResultIntact(t *testing.T) {
 // output.output, driven against the REAL built nightgauge binary rather
 // than a fake ---
 
-func TestEditHookAppendsRealTestQualityWarnings(t *testing.T) {
+const (
+	// skipTestQualityEnv is the verb's opt-out (internal/hooks/testquality.go).
+	skipTestQualityEnv = "NIGHTGAUGE_SKIP_TEST_QUALITY"
+	// editTestQualityTimeoutMS mirrors edit.js's TEST_QUALITY_TIMEOUT_MS,
+	// which TestEditHookTimeoutConstants pins.
+	editTestQualityTimeoutMS = 5000
+	// testQualityWarmupTimeout bounds the warm-up exec: a cold first exec
+	// under gate load, not the verb's own work.
+	testQualityWarmupTimeout = 60 * time.Second
+)
+
+var realTestQualityWarnings = []string{"Tautological assertion detected", "Empty test body detected"}
+
+// warmTestQualityVerb runs the freshly linked binary's `hook test-quality`
+// once directly, with the payload edit.js would send and the harness env,
+// under a generous bound. A fresh binary's first exec (cold page cache, the
+// macOS codesign check) under gate load can exceed edit.js's 5000 ms
+// test-quality bound; paying it here keeps the measured call about the verb
+// (#3343). A broken verb fails here, with its own stderr, not as a missing
+// append. Returns the verb's stderr.
+func warmTestQualityVerb(t *testing.T, bin, cwd string, payload []byte, env []string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), testQualityWarmupTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "hook", "test-quality")
+	cmd.Env = env
+	cmd.Dir = cwd
+	cmd.Stdin = bytes.NewReader(payload)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("warm-up `hook test-quality` failed: %v\nstderr:\n%s", err, stderr.String())
+	}
+	for _, want := range realTestQualityWarnings {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("warm-up `hook test-quality` stderr lacks %q (verb itself is broken):\n%s", want, stderr.String())
+		}
+	}
+	return stderr.String()
+}
+
+// describeTestQualityOutcome names why a test-quality warning did not reach
+// output.output, from edit.js's own diagnostics outcome (#1863) and whether
+// the child env carried the skip opt-out.
+func describeTestQualityOutcome(outcome map[string]any, skipInEnv bool) string {
+	if skipInEnv {
+		return "skipped: NIGHTGAUGE_SKIP_TEST_QUALITY=1 reached the child env"
+	}
+	if outcome == nil {
+		return "no test-quality outcome recorded (verb never spawned)"
+	}
+	sig, _ := outcome["signal"].(string)
+	if sig == "SIGTERM" || outcome["error_code"] == "ETIMEDOUT" {
+		return fmt.Sprintf("timed out: past edit.js's %d ms test-quality bound (signal=%v error_code=%v)",
+			editTestQualityTimeoutMS, outcome["signal"], outcome["error_code"])
+	}
+	if sig != "" {
+		return "killed by " + sig
+	}
+	if kind, _ := outcome["error_kind"].(string); kind != "" {
+		return fmt.Sprintf("could not run: error_kind=%s error_code=%v", kind, outcome["error_code"])
+	}
+	if status, ok := outcome["status"].(float64); ok && status != 0 {
+		return fmt.Sprintf("exited %d", int(status))
+	}
+	if outcome["stderr_nonempty"] != true {
+		return "ran and printed nothing"
+	}
+	return fmt.Sprintf("printed %v bytes but the warning is not in output.output", outcome["stderr_bytes"])
+}
+
+// testQualityOutcome returns the test-quality entry from the diagnostics
+// metadata, or nil when absent.
+func testQualityOutcome(res toolExecuteAfterResult) map[string]any {
+	metadata, _ := res.Output["metadata"].(map[string]any)
+	raw, _ := metadata["nightgauge_edit_hook_outcomes"].([]any)
+	for _, item := range raw {
+		if o, ok := item.(map[string]any); ok && o["verb"] == "test-quality" {
+			return o
+		}
+	}
+	return nil
+}
+
+// assertRealTestQualityWarnings drives the measured edit hook against the
+// real binary, after a warm-up, and explains any missing warning.
+func assertRealTestQualityWarnings(t *testing.T) {
+	t.Helper()
 	node := requireNode(t)
 	bin := buildNightgaugeBin(t)
 	root := t.TempDir()
 
-	env := map[string]string{"OPENCODE_CONFIG_CONTENT": `{"formatter":true}`} // skip format; no formatter binaries required
-	argsJSON, err := json.Marshal(map[string]any{
-		"path":    "a.test.ts",
-		"content": "it(\"does nothing\", () => {})\nexpect(true).toBe(true);",
+	extra := map[string]string{
+		"OPENCODE_CONFIG_CONTENT":          `{"formatter":true}`, // skip format; no formatter binaries required
+		"NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS": "1",
+	}
+	content := "it(\"does nothing\", () => {})\nexpect(true).toBe(true);"
+	argsJSON, err := json.Marshal(map[string]any{"path": "a.test.ts", "content": content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"tool_name":  "Write",
+		"cwd":        root,
+		"tool_input": map[string]any{"file_path": "a.test.ts", "content": content},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := runEditHarness(t, node, root, "write", string(argsJSON), `{"output":"original tool output"}`, bin, env)
+	env := editHarnessEnv(bin, extra)
+	skipInEnv := slices.Contains(env, skipTestQualityEnv+"=1")
+	if skipInEnv {
+		t.Fatalf("%s", describeTestQualityOutcome(nil, true))
+	}
+	warm := warmTestQualityVerb(t, bin, root, payload, env)
+
+	res := runEditHarness(t, node, root, "write", string(argsJSON), `{"output":"original tool output"}`, bin, extra)
 	if res.Threw {
 		t.Fatalf("want no throw, got %q", res.Message)
 	}
@@ -575,10 +691,51 @@ func TestEditHookAppendsRealTestQualityWarnings(t *testing.T) {
 	if !strings.HasPrefix(out, "original tool output") {
 		t.Fatalf("output.output = %q, want it to still start with the original tool output", out)
 	}
-	for _, want := range []string{"Tautological assertion detected", "Empty test body detected"} {
+	for _, want := range realTestQualityWarnings {
 		if !strings.Contains(out, want) {
-			t.Errorf("output.output does not contain the real test-quality.sh-equivalent warning %q:\n%s", want, out)
+			reason := describeTestQualityOutcome(testQualityOutcome(res), skipInEnv)
+			t.Errorf("output.output lacks real test-quality warning %q: %s (warm-up printed %d bytes)\n%s",
+				want, reason, len(warm), out)
 		}
+	}
+}
+
+func TestEditHookAppendsRealTestQualityWarnings(t *testing.T) {
+	assertRealTestQualityWarnings(t)
+}
+
+// TestEditHookRealTestQualityIgnoresInheritedSkip: a parent process
+// exporting NIGHTGAUGE_SKIP_TEST_QUALITY=1 must not silence the real verb in
+// the harness (#3343). Not parallel: t.Setenv.
+func TestEditHookRealTestQualityIgnoresInheritedSkip(t *testing.T) {
+	t.Setenv(skipTestQualityEnv, "1")
+	assertRealTestQualityWarnings(t)
+}
+
+func TestDescribeTestQualityOutcome(t *testing.T) {
+	cases := []struct {
+		name    string
+		outcome map[string]any
+		skip    bool
+		want    string
+	}{
+		{"skip", map[string]any{"status": float64(0)}, true, "skipped"},
+		{"missing", nil, false, "no test-quality outcome"},
+		{"signal", map[string]any{"signal": "SIGTERM"}, false, "timed out"},
+		{"etimedout", map[string]any{"signal": "SIGTERM", "error_code": "ETIMEDOUT"}, false, "timed out"},
+		{"other-signal", map[string]any{"signal": "SIGKILL"}, false, "killed by SIGKILL"},
+		{"spawn", map[string]any{"error_kind": "spawn-error", "error_code": "ENOENT"}, false,
+			"could not run: error_kind=spawn-error error_code=ENOENT"},
+		{"exit", map[string]any{"status": float64(23)}, false, "exited 23"},
+		{"silent", map[string]any{"status": float64(0), "stderr_nonempty": false}, false, "ran and printed nothing"},
+		{"absent", map[string]any{"status": float64(0), "stderr_nonempty": true, "stderr_bytes": float64(40)}, false, "printed 40 bytes"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := describeTestQualityOutcome(c.outcome, c.skip); !strings.HasPrefix(got, c.want) {
+				t.Errorf("got %q, want prefix %q", got, c.want)
+			}
+		})
 	}
 }
 

@@ -273,17 +273,72 @@
       "effect": "deny"
     },
     {
+      "action": "write",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "write",
+      "resource": "*.env",
+      "effect": "deny"
+    },
+    {
+      "action": "write",
+      "resource": ".env*",
+      "effect": "deny"
+    },
+    {
+      "action": "write",
+      "resource": "**/*.env",
+      "effect": "deny"
+    },
+    {
+      "action": "write",
+      "resource": "**/.env*",
+      "effect": "deny"
+    },
+    {
+      "action": "write",
+      "resource": "*.env.*",
+      "effect": "deny"
+    },
+    {
+      "action": "write",
+      "resource": "**/*.env.*",
+      "effect": "deny"
+    },
+    {
+      "action": "write",
+      "resource": "**/.ssh/**",
+      "effect": "deny"
+    },
+    {
+      "action": "write",
+      "resource": "**/id_rsa*",
+      "effect": "deny"
+    },
+    {
+      "action": "write",
+      "resource": "**/gh/hosts.yml",
+      "effect": "deny"
+    },
+    {
+      "action": "write",
+      "resource": "opencode.json*",
+      "effect": "deny"
+    },
+    {
+      "action": "write",
+      "resource": ".opencode/**",
+      "effect": "deny"
+    },
+    {
       "action": "glob",
       "resource": "*",
       "effect": "deny"
     },
     {
       "action": "grep",
-      "resource": "*",
-      "effect": "deny"
-    },
-    {
-      "action": "list",
       "resource": "*",
       "effect": "deny"
     },
@@ -338,7 +393,12 @@
       "effect": "deny"
     },
     {
-      "action": "todowrite",
+      "action": "execute",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "question",
       "resource": "*",
       "effect": "deny"
     },

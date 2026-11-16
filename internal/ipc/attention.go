@@ -394,17 +394,16 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		return s.closeIssueBestEffort(ctx, owner, name, issue)
 
 	case attention.VerbIssueRemoveBlockedBy:
-		blocker := argInt(opt.Args, "blockerNumber")
-		if blocker == 0 {
-			return fmt.Errorf("issue.removeBlockedBy: blockerNumber required")
-		}
-		c, err := s.resolveClientForRequest(ctx, "", owner, name)
+		blockedRef, blockerRef, err := removeBlockedByTargets(repo, issue, opt.Args, s.configuredRepos())
 		if err != nil {
 			return err
 		}
-		return s.boardServicesFor(c, owner, 0, gh.OwnerTypeUser).Project.RemoveBlockedByNumber(ctx,
-			forge.IssueRef{Owner: owner, Repo: name, Number: issue},
-			forge.IssueRef{Owner: owner, Repo: name, Number: blocker})
+		c, err := s.resolveClientForRequest(ctx, "", blockedRef.Owner, blockedRef.Repo)
+		if err != nil {
+			return err
+		}
+		return s.boardServicesFor(c, blockedRef.Owner, 0, gh.OwnerTypeUser).Project.RemoveBlockedByNumber(ctx,
+			blockedRef, blockerRef)
 
 	case attention.VerbWorkspaceAddRepo:
 		// The manifest root, not s.repoRoot(repo) or the mutable current root:
@@ -439,6 +438,22 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		// clearIssueFailures arm (#2528).
 		if s.autonomousScheduler != nil {
 			s.autonomousScheduler.ClearIssueFailures(key)
+			s.autonomousScheduler.TriggerRescan()
+		}
+		return nil
+
+	case attention.VerbIssueRerunPostMerge:
+		// The card names the held dependency in its own Context (#3081); the
+		// daemon finds the closing merge and runs the same post-merge path a
+		// run that merged it would have run.
+		var runner attention.PostMergeRerunner
+		if s.scheduler != nil {
+			runner = s.scheduler
+		}
+		if err := attention.ExecuteRerunPostMerge(ctx, runner, req, opt, s.configuredRepos()); err != nil {
+			return err
+		}
+		if s.autonomousScheduler != nil {
 			s.autonomousScheduler.TriggerRescan()
 		}
 		return nil
@@ -877,4 +892,36 @@ func (u prBranchUpdater) UpdatePRBranch(ctx context.Context, owner, repo string,
 		return fmt.Errorf("attention: pr.updateBranch for %s/%s#%d: %w", owner, repo, number, err)
 	}
 	return gh.NewPRService(c).UpdatePRBranch(ctx, owner, repo, number)
+}
+
+// removeBlockedByTargets resolves the edge an issue.removeBlockedBy option
+// removes. blockerNumber is required. A dependency-cycle card (#3081) offers
+// one option per edge, and those edges join different issues, possibly across
+// repositories, so the option may also name blockedNumber, blockedRepo and
+// blockerRepo; whatever it does not name is the card's own repository and
+// issue. A repository other than the card's must be in the configured set.
+func removeBlockedByTargets(repo string, issue int, args map[string]any, configured []string) (blocked, blocker forge.IssueRef, err error) {
+	blockerNumber := argInt(args, "blockerNumber")
+	if blockerNumber == 0 {
+		return blocked, blocker, fmt.Errorf("issue.removeBlockedBy: blockerNumber required")
+	}
+	blockedRepo, blockerRepo, blockedNumber := repo, repo, issue
+	if r := argString(args, "blockedRepo"); r != "" {
+		blockedRepo = r
+	}
+	if r := argString(args, "blockerRepo"); r != "" {
+		blockerRepo = r
+	}
+	if n := argInt(args, "blockedNumber"); n != 0 {
+		blockedNumber = n
+	}
+	for _, r := range []string{blockedRepo, blockerRepo} {
+		if r != repo && !attention.RepoInConfiguredSet(configured, r) {
+			return blocked, blocker, fmt.Errorf("%w: %q", attention.ErrVerbTargetNotConfigured, r)
+		}
+	}
+	bo, bn := splitOwnerRepo(blockedRepo)
+	ko, kn := splitOwnerRepo(blockerRepo)
+	return forge.IssueRef{Owner: bo, Repo: bn, Number: blockedNumber},
+		forge.IssueRef{Owner: ko, Repo: kn, Number: blockerNumber}, nil
 }

@@ -926,14 +926,17 @@ type Scheduler struct {
 	// OpenCode dispatch (#1679), guarded by mu (endpoint_select.go).
 	endpointSlots *endpointLedger
 
-	client        *gh.Client
-	boardSvc      *gh.BoardService
-	issueSvc      issueGetter
-	epicSvc       *gh.EpicService
-	execMgr       *execution.Manager
-	stateSvc      *state.BoardStateService
-	owner         string
-	projectNumber int
+	client *gh.Client
+	// closingMergeReader overrides the forge read RerunPostMerge makes
+	// (#3081); nil reads through s.client. Tests set it.
+	closingMergeReader ClosingMergeReader
+	boardSvc           *gh.BoardService
+	issueSvc           issueGetter
+	epicSvc            *gh.EpicService
+	execMgr            *execution.Manager
+	stateSvc           *state.BoardStateService
+	owner              string
+	projectNumber      int
 	// boardCache is the autonomous scheduler's board snapshot cache (the
 	// daemon's shared one, or the private one NewAutonomousScheduler sets),
 	// set by AutonomousScheduler.SetBoardCache, so the post-merge board sync
@@ -5454,12 +5457,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		}
 		if runID == "" {
 			if baseDir, dirErr := layout.CheckoutDir(workspaceRoot); dirErr == nil {
-				if rs, err := runstate.Load(baseDir); err == nil && rs != nil && rs.RunID != "" {
-					if runstate.IsIdentity(rs.RunID) {
-						runID = rs.RunID
-					} else {
-						log.Printf("#%d: ignoring non-identity run id %q from run-state.json — minting locally (ADR-017 Decision 1)",
-							item.Number, rs.RunID)
+				if rs, err := runstate.Load(baseDir); err == nil && rs != nil {
+					// The record must name this issue (#3081): run-state.json
+					// is per clone and outlives the run that wrote it.
+					adopted, why := adoptableRunStateID(rs, item.Number)
+					if adopted != "" {
+						runID = adopted
+					} else if why != "" {
+						log.Printf("#%d: not adopting run id from run-state.json (%s) — minting locally (ADR-017 Decision 1)",
+							item.Number, why)
 					}
 				}
 			}
@@ -6366,6 +6372,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	operatorRelapped := false
 	relapNote := ""
 
+	// The first feature-dev dispatch of a run archives the dev-{N}.json an
+	// earlier run left (#3081), so this run never inherits that handoff. A
+	// later feature-dev lap in the same run (a validate backtrack) keeps the
+	// handoff this run wrote. A run that enters past feature-dev (a resume
+	// or a dispatched PR) already owns its dev handoff, so it never archives.
+	priorDevArchived := startsPastFeatureDev(stages, stageIdx)
+
 	// Endpoint-aware OpenCode dispatch (#1679): the slot a stage holds on a
 	// declared endpoint, the endpoints it has lost, and how often it has
 	// failed over. Reset whenever the loop moves to another stage.
@@ -7016,6 +7029,18 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				terminalFailureKind, workRecovered = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
 					"ac-reconcile", "ac-reconcile regeneration failed: "+err.Error())
 				return
+			}
+		}
+
+		if stage == state.StageFeatureDev && !priorDevArchived {
+			priorDevArchived = true
+			devPath, pathErr := stagecontext.ContextPath(ws, item.Number, "dev")
+			if pathErr != nil {
+				log.Printf("#%d: could not resolve the dev context to archive a prior attempt's: %v", item.Number, pathErr)
+			} else if archived, err := archivePriorDevContext(devPath, time.Now()); err != nil {
+				log.Printf("#%d: could not archive prior dev context %s: %v", item.Number, devPath, err)
+			} else if archived != "" {
+				log.Printf("#%d: archived prior attempt's dev context to %s (#3081)", item.Number, archived)
 			}
 		}
 
@@ -8485,6 +8510,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 								item.Number, btErr)
 						} else if decision.ShouldBacktrack {
 							s.retryEngine.RecordBacktrack(string(stage), string(decision.TargetStage), decision.SignalType)
+							runtime.RecordBacktrack(string(stage), string(decision.TargetStage), decision.SignalType, decision.Rationale, time.Now()) // durable (#3081)
 							stallRetryCount++
 							tracer.Emit(trace.KindBacktrack, string(stage), trace.BacktrackPayload{
 								FromStage:   string(stage),
@@ -8694,6 +8720,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						// bounded loop.
 						targetStage := state.PipelineStage(result.BacktrackTargetStage)
 						s.retryEngine.RecordBacktrack(string(stage), result.BacktrackTargetStage, result.Action)
+						runtime.RecordBacktrack(string(stage), result.BacktrackTargetStage, result.Action, "", time.Now()) // durable (#3081)
 						tracer.Emit(trace.KindBacktrack, string(stage), trace.BacktrackPayload{
 							FromStage:   string(stage),
 							TargetStage: result.BacktrackTargetStage,
@@ -8737,6 +8764,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 								item.Number, result.Action, btErr)
 						} else if decision.ShouldBacktrack {
 							s.retryEngine.RecordBacktrack(string(stage), string(decision.TargetStage), decision.SignalType)
+							runtime.RecordBacktrack(string(stage), string(decision.TargetStage), decision.SignalType, decision.Rationale, time.Now()) // durable (#3081)
 							tracer.Emit(trace.KindBacktrack, string(stage), trace.BacktrackPayload{
 								FromStage:   string(stage),
 								TargetStage: string(decision.TargetStage),
@@ -9299,6 +9327,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				log.Printf("#%d: backtracking from %s to %s — %s",
 					item.Number, stage, backtrack.TargetStage, backtrack.Rationale)
 				s.retryEngine.RecordBacktrack(string(stage), string(backtrack.TargetStage), backtrack.SignalType)
+				runtime.RecordBacktrack(string(stage), string(backtrack.TargetStage), backtrack.SignalType, backtrack.Rationale, time.Now()) // durable (#3081)
 				tracer.Emit(trace.KindBacktrack, string(stage), trace.BacktrackPayload{
 					FromStage:   string(stage),
 					TargetStage: string(backtrack.TargetStage),

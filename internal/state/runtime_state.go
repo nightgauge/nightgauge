@@ -395,6 +395,10 @@ type RuntimeState struct {
 	StageLineages    map[string]StageLineageRecord `json:"stageLineages,omitempty"`
 	HandoffEvents    []HandoffEvent                `json:"handoffEvents,omitempty"`
 
+	// Backtracks are the run's backward stage transitions (#3081), recorded
+	// by the scheduler's backtrack engine or by pipeline.recordBacktrack.
+	Backtracks []BacktrackEvent `json:"backtracks,omitempty"`
+
 	// StageThinking captures the "on"/"off" reasoning state resolved for each
 	// stage's dispatch (Issue #580, spike #568 §3's canonical binary thinking
 	// axis), derived from the resolved model's registry
@@ -3474,6 +3478,7 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		}
 	}
 	snap.HandoffEvents = append([]HandoffEvent(nil), rs.HandoffEvents...)
+	snap.Backtracks = append([]BacktrackEvent(nil), rs.Backtracks...)
 	if len(rs.StageEfforts) > 0 {
 		snap.StageEfforts = make(map[string]string, len(rs.StageEfforts))
 		for k, v := range rs.StageEfforts {

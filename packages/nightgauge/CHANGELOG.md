@@ -11,6 +11,7 @@ and this project adheres to
 
 ### Fixed
 
+- Backtracks taken by the extension's orchestrator are now kept in the run record, and the health plan-fidelity metric reads the planned files from the run record once `planning-<N>.json` has been pruned (#3081).
 - A merge-group code failure now sends the run back to feature-dev with the failed job's log excerpt, once per failing check, instead of failing the run (#3339).
 - OpenCode setup now installs the plugin's `index.js` entry, which OpenCode 2.x loads, so the extension-installed plugin gates OpenCode 2.x runs (#3302).
 - Runs uploaded from the extension now send an OpenCode stage's provider and endpoint, and upload an unpriced stage or run cost as unknown instead of $0, matching runs uploaded by the scheduler (#1750).

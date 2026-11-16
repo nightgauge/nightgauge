@@ -207,7 +207,7 @@ export interface OpenCodeStreamState {
   rejectedToolCalls: number;
   /**
    * The FIRST rejected tool_use event's own `part.tool` (opencode's own
-   * lowercase name: "bash", "edit", "apply_patch", ...), `undefined` when
+   * lowercase name: "shell", "edit", "write", ...), `undefined` when
    * the event named none. classifyOpenCodeRun's own fallback source for the
    * marker (AC3, #1638 fix round) when stderr carries no auto-reject notice
    * at all — a "deny" match never prints one. Go parity:
@@ -360,37 +360,58 @@ const ANSI_ESCAPE_RE = /\x1b\[[0-9;?]*[A-Za-z]/g;
 const AUTO_REJECT_START_RE = /^!\s*permission requested: (\S+) \(/;
 const AUTO_REJECT_END = "); auto-rejecting";
 
-/** The permissions opencode 1.18.30 asks for itself; any other is recorded as "unknown". */
+/**
+ * The permissions OpenCode 2.x asks for itself (#3304); any other is recorded
+ * as "unknown". Go parity: openCodePermissions in opencode_usage.go.
+ */
 const OPENCODE_PERMISSIONS: ReadonlySet<string> = new Set([
-  "bash",
+  "shell",
   "read",
   "edit",
+  "write",
   "glob",
   "grep",
-  "task",
+  "subagent",
   "webfetch",
   "websearch",
-  "todowrite",
   "skill",
-  "lsp",
+  "execute",
+  "question",
   "external_directory",
   "doom_loop",
+  "lsp",
   "workflow_tool_approval",
 ]);
+
+/**
+ * Maps a rejected tool_use event's own part.tool id to the permission action
+ * that gates it. Mirrors Go's openCodeToolPermission (opencode_usage.go).
+ */
+export function openCodeToolPermission(tool: string | undefined): string {
+  switch (tool) {
+    case "apply_patch":
+      return "edit";
+    case "task":
+      return "subagent";
+    case "bash":
+      return "shell";
+  }
+  return tool !== undefined && OPENCODE_PERMISSIONS.has(tool) ? tool : "unknown";
+}
 
 /**
  * The OpenCode permission each Claude Code tool name grants, a copy of
  * `openCodeToolForClaudeTool` in internal/execution/adapters/adapter.go.
  */
 const OPENCODE_TOOL_FOR_CLAUDE_TOOL: Readonly<Record<string, string>> = Object.freeze({
-  Bash: "bash",
+  Bash: "shell",
   Read: "read",
-  Write: "edit",
+  Write: "write",
   Edit: "edit",
   MultiEdit: "edit",
   Glob: "glob",
   Grep: "grep",
-  Task: "task",
+  Task: "subagent",
   WebFetch: "webfetch",
 });
 
@@ -409,20 +430,6 @@ export function openCodeToolsAllowed(allowedTools: readonly string[] = []): Read
 
 function plain(line: string): string {
   return line.replace(ANSI_ESCAPE_RE, "").trim();
-}
-
-/**
- * Maps a rejected tool_use event's own `part.tool` name (opencode's own
- * lowercase tool id, {@link OpenCodeStreamState.rejectedTool}) to the
- * permission key {@link rejectionMarker} classifies by. 1.18.30 has no
- * permission of its own for "write" or "apply_patch": both are governed by
- * the same "edit" permission the generated map's own "edit" key controls
- * (ADR-022 § 9). Every other tool name already equals its own permission
- * key, so it passes through unchanged. Go parity:
- * openCodeToolRejectionPermission in opencode_usage.go.
- */
-function openCodeToolRejectionPermission(tool: string): string {
-  return tool === "write" || tool === "apply_patch" ? "edit" : tool;
 }
 
 function rejectionMarker(permission: string, allowed: ReadonlySet<string>): string {
@@ -1113,16 +1120,14 @@ export async function classifyOpenCodeRun(input: OpenCodeRunInput): Promise<Open
     // "pattern matching" amendment) never prints the "auto-rejecting"
     // notice a stderr-only read depends on. AC3 (#1638 fix round): the
     // rejected tool_use event's own part.tool names the marker instead of
-    // "unknown", mapped through openCodeToolRejectionPermission
-    // (write/apply_patch -> edit); an event that named no tool at all
-    // still falls back to "unknown".
+    // "unknown", through openCodeToolPermission (Go's openCodeToolPermission):
+    // most 2.x tool ids are their own permission action (#3304); apply_patch,
+    // task and bash map to the action that gates them. Anything else falls
+    // back to "unknown", as a stderr notice does.
     drift.add(
       "the stream shows a tool call OpenCode rejected, but stderr carried no auto-reject line naming its permission; classified from the rejected tool_use event's own tool name"
     );
-    const tool =
-      stream.rejectedTool !== undefined
-        ? openCodeToolRejectionPermission(stream.rejectedTool)
-        : "unknown";
+    const tool = openCodeToolPermission(stream.rejectedTool);
     marker = rejectionMarker(tool, openCodeToolsAllowed(input.allowedTools));
   }
   const noSteps = input.exitCode === 0 && stream.stepFinishes === 0;

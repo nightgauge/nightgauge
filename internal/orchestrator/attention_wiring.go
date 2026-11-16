@@ -31,6 +31,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/deliverable"
+	"github.com/nightgauge/nightgauge/internal/depgraph"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
@@ -1312,9 +1313,13 @@ func keyPrMergeParked(repo string, issue int) string {
 	return fmt.Sprintf("%s:%s#%d", ProducerPrMergeParked, repo, issue)
 }
 
-// BuildPrMergeParkedBlock is the card for a failed pr-merge whose issue the
-// scheduler parked in In review behind its open PR (#3339). Without it the
-// issue sits off the dispatch path with nothing in the Action Center. The key
+// BuildPrMergeParkedBlock is the card for a failed run whose issue the
+// scheduler parked in In review behind its open PR (#3339). It is raised by the
+// pr-merge sideline branch, the generic failure revert and orphaned-run
+// recovery (#3345), and retracted by reconcilePrMergeParkedCards or a later
+// successful run. Without it the issue sits off the dispatch path with nothing
+// in the Action Center. The 48h expiry is deliberate: the sweep retracts only
+// on evidence, so expiry is the backstop for a card it can never judge. The key
 // is distinct from the branch-protection card: that one is raised on a punt,
 // this one when the run failed.
 func BuildPrMergeParkedBlock(repo string, issue, prNumber int, runID, reason string) attention.DecisionRequest {
@@ -1327,6 +1332,12 @@ func BuildPrMergeParkedBlock(repo string, issue, prNumber int, runID, reason str
 			prNumber, reason),
 		Producer: ProducerPrMergeParked,
 		Context:  attention.Context{Repo: repo, Issue: issue, PR: prNumber, RunID: runID, Stage: "pr-merge", Blocker: reason, TraceRef: runTraceRef(runID)},
+		// Standing so the scheduler can retract it once the PR merges or the
+		// issue leaves In review (#3345). Each failed run is its own event, so
+		// each raise carries its own fingerprint: a failure after a "retry
+		// after fix" re-alerts instead of matching the resolved card (#2876).
+		Standing:    true,
+		Fingerprint: fmt.Sprintf("parked:pr#%d:%d", prNumber, time.Now().UnixNano()),
 		Options: []attention.Option{
 			{ID: "retry-after-fix", Label: "Retry after fix", Verb: attention.VerbAutonomousClearIssueFailures,
 				Args: map[string]any{"key": fmt.Sprintf("%s#%d", repo, issue), "then": "autonomous.rescan"}, Style: attention.StylePrimary},
@@ -1335,6 +1346,76 @@ func BuildPrMergeParkedBlock(repo string, issue, prNumber int, runID, reason str
 		DefaultAction: attention.ExpireNoop,
 		ExpiresAt:     expiryFromNow(48 * time.Hour),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Tell the pipeline what to do differently on retry"},
+	}
+}
+
+// parkedPRReason is the parked card's reason: the run's own failure text when
+// it has one, else the failure kind, else a generic line (#3345).
+func parkedPRReason(kind, detail string) string {
+	if d := strings.TrimSpace(detail); d != "" {
+		return d
+	}
+	if k := strings.TrimSpace(kind); k != "" {
+		return fmt.Sprintf("pipeline failed (%s) with PR open", k)
+	}
+	return "run ended with its PR open"
+}
+
+// retractPrMergeParked clears one issue's parked card, leaving every other
+// card of the producer alone (#3345). Fail-open.
+func (as *AutonomousScheduler) retractPrMergeParked(repo string, issue int) {
+	if as == nil || as.attention == nil {
+		return
+	}
+	if _, err := as.attention.AutoResolveKey(ProducerPrMergeParked, keyPrMergeParked(repo, issue)); err != nil {
+		log.Printf("attention: retract %q failed (fail-open): %v", keyPrMergeParked(repo, issue), err)
+	}
+}
+
+// reconcilePrMergeParkedCards clears parked cards whose condition ended, read
+// from a fresh graph and the PR evidence refreshBlockedReadyPRs just wrote
+// (#3345). A card is retracted when its issue is closed, has left In review,
+// or its repo's open-PR listing succeeded without the issue's PR in it (merged
+// or closed). Missing evidence retracts nothing (#265): an issue absent from
+// the graph, or a repo whose listing failed, keeps its card. "In progress" is
+// also left alone: a board read racing the failure's In review write shows it,
+// and a re-dispatched run clears or re-raises the card when it ends.
+func (as *AutonomousScheduler) reconcilePrMergeParkedCards(graph *depgraph.Graph) {
+	if as == nil || as.attention == nil || graph == nil {
+		return
+	}
+	reqs, err := as.attention.List(attention.ListFilter{})
+	if err != nil {
+		log.Printf("attention: %q sweep list failed (fail-open): %v", ProducerPrMergeParked, err)
+		return
+	}
+	// Snapshot under as.mu, release before any store call (lock order #2528).
+	as.mu.Lock()
+	backed := as.inReviewPRBacked
+	queryOK := as.prQueryOKRepos
+	as.mu.Unlock()
+	for _, r := range reqs {
+		if r.Producer != ProducerPrMergeParked {
+			continue
+		}
+		repo, issue := r.Context.Repo, r.Context.Issue
+		key := fmt.Sprintf("%s#%d", repo, issue)
+		node := graph.Nodes[key]
+		if node == nil {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(node.BoardStatus))
+		switch {
+		case strings.EqualFold(node.State, "CLOSED"):
+		case status == "in progress":
+			continue
+		case !isWorkCompleteStatus(node.BoardStatus):
+		case queryOK[repo] && !backed[key]:
+		default:
+			continue
+		}
+		log.Printf("attention: retracting %q — %s#%d is no longer parked behind an open PR", r.IdempotencyKey, repo, issue)
+		as.retractPrMergeParked(repo, issue)
 	}
 }
 
@@ -2027,7 +2108,9 @@ func BuildOutOfScopeBlocker(repo string, issue int, runID, stage string) attenti
 		// The finding is durable and the condition does not decay on its own, so
 		// a short window would retract the operator's only handle on it while it
 		// is still true. The same 72h window the blockedBy deferral uses, for
-		// the same reason.
+		// the same reason. Pickup raises it again whenever no card is open while
+		// the finding still defers (#3081), so a resolved or expired card comes
+		// back instead of the deferral going silent.
 		ExpiresAt: expiryFromNow(72 * time.Hour),
 		Steer: &attention.Steer{Enabled: true,
 			Hint: "Note which work this actually depends on, or why it should stay blocked"},

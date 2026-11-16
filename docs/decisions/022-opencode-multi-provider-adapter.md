@@ -3555,6 +3555,34 @@ paragraph in full.
 - ADR-020 gains two reasons for a default to be off, security and privacy, each
   valid only when written down with its row.
 
+## The 2.x stream: provider retry storms and their kinds (amendment 2026-11-16, #3305)
+
+On opencode v2.2.7 a provider failure no longer ends the run. A provider 500
+(`provider.internal`) or a refused connection (`provider.transport`) is
+retried without end, and the stream carries only `retry` events (`attempt`,
+`nextRetryAt`, `error`). An unknown model still ends the run, on one `error`
+event with type `provider.no-route` and exit 1. The captures are in
+`internal/execution/adapters/testdata/opencode-cli/`.
+
+Decided:
+
+- **The manager bounds a retry storm for every opencode stage.** It stops the
+  stage after `adapters.OpenCodeRetryMaxAttempts` (5) retry events, or once a
+  stream event arrives `adapters.OpenCodeRetryMaxElapsed` (90 s) after the
+  first of them. Either bound counts from the last finished step or tool call,
+  so a provider that recovers is never stopped. #2176's stall watchdog arms
+  only for a declared endpoint, and only after its header or chunk timeout, so
+  without this bound a hosted model's storm lasts until the stage timeout.
+- **The kind comes from `error.type`, never the message.** The message can
+  carry a host or a response body. The `[opencode-provider-failure]` marker
+  names `adapter_provider_no_route`, `adapter_provider_transport` or
+  `adapter_provider_error` (any other `provider.*` type). Only no-route parks:
+  a retry asks for the same model. The other two retry as ordinary failures.
+- **The subagent usage fold does not run on 2.x yet.** 2.2.7 has no `db`
+  subcommand, its export is `session export --standalone`, and the session
+  table is `session_v2`. A 2.x stage's subagent usage is recorded as partial
+  until the fold is ported. `info.tokens` and `info.cost` keep their shape.
+
 ## Implementation
 
 This change (#1612) registers the adapter, adds the `PreDispatch` hook, the

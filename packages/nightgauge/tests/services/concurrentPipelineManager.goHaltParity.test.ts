@@ -194,6 +194,7 @@ describe("Go/extension halt-decision parity (#1169)", () => {
     expect(parked, "TerminalKindParks parsed to nothing — this guard checks nothing").toEqual([
       "adapter_incompatible",
       "adapter_permission_rejected",
+      "adapter_provider_no_route",
       "context_window_exceeded",
       "dev_context_stale",
       "environment_halt",

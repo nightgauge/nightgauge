@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
@@ -114,7 +116,7 @@ func TestRevertFailedIssueStatus_OpenPRMovesToInReviewNotReady(t *testing.T) {
 		map[int]string{42: "feat/1-x"},
 	)
 
-	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, "")
+	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, "", "")
 
 	got := buf.String()
 	if strings.Contains(got, "back to Ready") {
@@ -138,7 +140,7 @@ func TestRevertFailedIssueStatus_NoOwnPRStillRevertsToReady(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, writes, _ := revertFixture(t, map[int]string{43: "feat/2-other", 44: "feat/10-ten"})
 
-	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, "")
+	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, "", "")
 
 	got := buf.String()
 	if !strings.Contains(got, "back to Ready") {
@@ -159,7 +161,7 @@ func TestRevertFailedIssueStatus_ForkPRDoesNotBackTheIssue(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, writes, _ := revertFixture(t, map[int]string{42: "fork:feat/1-x"})
 
-	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, "")
+	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, "", "")
 
 	got := buf.String()
 	if strings.Contains(got, "move-to-in-review:") || strings.Contains(got, "PR #42") {
@@ -217,7 +219,7 @@ func TestRevertFailedIssueStatus_PRQueryFailureLeavesStatusUnchanged(t *testing.
 			buf := withCapturedLog(t)
 			as, writes, _ := revertFixture(t, pages...)
 
-			as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, "")
+			as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, "", "")
 
 			if n := writes.Load(); n != 0 {
 				t.Errorf("board requests = %d, want 0: no status may be written without the PR answer", n)
@@ -323,7 +325,7 @@ func TestRevertFailedIssueStatus_MergedPROnlyEndsReady(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, writes, _ := revertFixture(t, map[int]string{})
 
-	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 312, "")
+	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 312, "", "")
 
 	got := buf.String()
 	if !strings.Contains(got, "revert-status:") || !strings.Contains(got, "back to Ready") {
@@ -371,7 +373,7 @@ func TestRevertFailedIssueStatus_TransientKindWithOpenPRMovesToReady(t *testing.
 			buf := withCapturedLog(t)
 			as, writes, _ := revertFixture(t, map[int]string{42: "feat/1-x"})
 
-			as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, kind)
+			as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, kind, "")
 
 			got := buf.String()
 			if strings.Contains(got, "move-to-in-review:") {
@@ -394,7 +396,7 @@ func TestRevertFailedIssueStatus_NonTransientKindWithOpenPRStaysInReview(t *test
 			buf := withCapturedLog(t)
 			as, _, _ := revertFixture(t, map[int]string{42: "feat/1-x"})
 
-			as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, kind)
+			as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, kind, "")
 
 			got := buf.String()
 			if strings.Contains(got, "Ready after transient") {
@@ -447,7 +449,7 @@ func TestRevertFailedIssueStatus_PRQueryFailureQueuesARecheck(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, _, _ := revertFixture(t)
 
-	if answered := as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, TerminalKindApiConnectionLost); answered {
+	if answered := as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, TerminalKindApiConnectionLost, ""); answered {
 		t.Error("revert reported an answer although the open-PR list was never read")
 	}
 
@@ -524,5 +526,101 @@ func TestReconcileStateAgainstGraph_KeepsAFailureWithAPendingRecheck(t *testing.
 
 	if len(as.state.Failed) != 1 || as.state.Failed[0].Number != 1 {
 		t.Errorf("Failed = %+v, want only O/a#1, whose recheck is pending", as.state.Failed)
+	}
+}
+
+// parkedCount counts open pr-merge-parked cards for repo#issue.
+func parkedCount(t *testing.T, as *AutonomousScheduler, repo string, issue int) int {
+	t.Helper()
+	return len(parkedCards(t, as, repo, issue))
+}
+
+// TestRevertAndRecovery_ParkedCardOnlyWhenInReviewWriteLands pins #3345's
+// raise sites: the failure revert and orphan recovery raise one parked card
+// when the In review write lands, and none when it is refused, no PR of the
+// issue's own is open, or the PR list is unread.
+func TestRevertAndRecovery_ParkedCardOnlyWhenInReviewWriteLands(t *testing.T) {
+	own := map[int]string{42: "feat/1-x"}
+	for _, tc := range []struct {
+		name      string
+		pages     []map[int]string
+		moveErr   error
+		want      int
+		wantBlock string
+	}{
+		{"own PR, write lands", []map[int]string{own}, nil, 1, ""},
+		{"own PR, write refused", []map[int]string{own}, errors.New("refused"), 0, ""},
+		{"fork PR", []map[int]string{{42: "fork:feat/1-x"}}, nil, 0, ""},
+		{"no PR", []map[int]string{{}}, nil, 0, ""},
+		{"unread list", []map[int]string{nil}, nil, 0, ""},
+	} {
+		for _, site := range []string{"revert", "recovery"} {
+			t.Run(site+"/"+tc.name, func(t *testing.T) {
+				as, _, _ := revertFixture(t, tc.pages...)
+				as.attention = attention.New(layouttest.Repo(t))
+				as.inReviewMoveStatus = func(context.Context, string, string, int, gh.OwnerType, int) error { return tc.moveErr }
+				want := "run ended with its PR open"
+				if site == "revert" {
+					as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, "", "pr-merge: required check failed")
+					want = "pr-merge: required check failed"
+				} else {
+					as.recoverOrphanedRunningItems(context.Background(), []RunningItem{{Repo: "O/a", Number: 1}})
+				}
+				cards := parkedCards(t, as, "O/a", 1)
+				if len(cards) != tc.want {
+					t.Fatalf("got %d parked cards, want %d", len(cards), tc.want)
+				}
+				if tc.want == 1 && (cards[0].Context.PR != 42 || cards[0].Context.Blocker != want) {
+					t.Errorf("card context = %+v, want PR 42 blocker %q", cards[0].Context, want)
+				}
+			})
+		}
+	}
+}
+
+// TestOnPipelineComplete_SuccessRetractsParkedCard: a run that succeeds is no
+// longer parked behind its PR, so its card clears; another issue's survives.
+func TestOnPipelineComplete_SuccessRetractsParkedCard(t *testing.T) {
+	as := heldTestScheduler(t)
+	as.attention = attention.New(layouttest.Repo(t))
+	as.raiseAttention(BuildPrMergeParkedBlock("O/app", 900, 42, "", "x"))
+	as.raiseAttention(BuildPrMergeParkedBlock("O/app", 901, 43, "", "x"))
+	addRunning(as, "O/app", 900, "x")
+	as.onPipelineComplete("O/app", 900, true, false, "", "", true)
+	as.drainBackground()
+	if n := parkedCount(t, as, "O/app", 900); n != 0 {
+		t.Errorf("succeeded issue keeps %d parked card(s), want 0", n)
+	}
+	if n := parkedCount(t, as, "O/app", 901); n != 1 {
+		t.Errorf("unrelated issue has %d parked card(s), want 1", n)
+	}
+}
+
+// TestPrMergeParkedCard_ReAlertsAfterRetraction: each failure is its own
+// event, so a raise after the previous card cleared opens a new card instead
+// of matching the cleared one (#2876).
+func TestPrMergeParkedCard_ReAlertsAfterRetraction(t *testing.T) {
+	as := heldTestScheduler(t)
+	as.attention = attention.New(layouttest.Repo(t))
+	as.raiseAttention(BuildPrMergeParkedBlock("O/app", 900, 42, "", "x"))
+	as.retractPrMergeParked("O/app", 900)
+	if n := parkedCount(t, as, "O/app", 900); n != 0 {
+		t.Fatalf("after retraction got %d cards, want 0", n)
+	}
+	as.raiseAttention(BuildPrMergeParkedBlock("O/app", 900, 42, "", "x"))
+	if n := parkedCount(t, as, "O/app", 900); n != 1 {
+		t.Fatalf("after a second failure got %d cards, want 1", n)
+	}
+}
+
+func TestParkedPRReason(t *testing.T) {
+	for _, tc := range []struct{ kind, detail, want string }{
+		{"k", " boom ", "boom"},
+		{"k", "  ", "pipeline failed (k) with PR open"},
+		{" ", "", "run ended with its PR open"},
+	} {
+		if got := parkedPRReason(tc.kind, tc.detail); got != tc.want {
+			t.Errorf("parkedPRReason(%q, %q) = %q, want %q", tc.kind, tc.detail, got, tc.want)
+		}
 	}
 }

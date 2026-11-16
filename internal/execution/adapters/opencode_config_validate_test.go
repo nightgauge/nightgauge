@@ -181,8 +181,8 @@ func TestOpenCodeConfigSafetyKeys(t *testing.T) {
 }
 
 // TestOpenCodePermissionRulesTranslatesInOrder: the permission map becomes a
-// rule list in field and pattern-insertion order, task and bash renamed, the
-// translation 2.2.7 applies to the 1.x map itself (spike #3197 § 2). Order
+// rule list in field and pattern-insertion order, every action already a 2.x
+// name (#3304), so no 1.x-only action reaches the rules. Order
 // carries meaning (the last matching rule wins), so the expected rules are
 // literal and must appear in this order.
 func TestOpenCodePermissionRulesTranslatesInOrder(t *testing.T) {
@@ -198,11 +198,15 @@ func TestOpenCodePermissionRulesTranslatesInOrder(t *testing.T) {
 		{"read", "**/gh/hosts.yml", "deny"},
 		{"edit", "*", "deny"},
 		{"edit", ".opencode/**", "deny"},
-		{"list", "*", "allow"},
+		{"write", "*", "deny"},
+		{"write", ".opencode/**", "deny"},
 		{"shell", "*", "deny"},
 		{"shell", "git *", "allow"},
 		{"shell", "rm -rf *", "deny"},
 		{"subagent", "*", "deny"},
+		{"execute", "*", "deny"},
+		{"question", "*", "deny"},
+		{"doom_loop", "*", "deny"},
 		{"external_directory", "*", "deny"},
 		{"external_directory", "/work/w/**", "allow"},
 	}
@@ -212,7 +216,7 @@ func TestOpenCodePermissionRulesTranslatesInOrder(t *testing.T) {
 			next++
 		}
 		switch r.Action {
-		case "bash", "task":
+		case "bash", "task", "list", "todowrite":
 			t.Errorf("rule %+v keeps a 1.x tool name", r)
 		}
 		if r.Effect != "allow" && r.Effect != "deny" {
