@@ -1225,6 +1225,9 @@ type AutonomousScheduler struct {
 	// releaseMoveStatus overrides the architecture release's board write in
 	// tests; nil writes through projectService.
 	releaseMoveStatus func(ctx context.Context, owner, repoName string, project int, ownerType gh.OwnerType, issue int, status string) error
+	// inReviewMoveStatus overrides moveIssueToInReview's board write in tests
+	// (#3345); nil uses the project service.
+	inReviewMoveStatus func(ctx context.Context, owner, repoName string, project int, ownerType gh.OwnerType, issue int) error
 
 	// refinementSem limits concurrent refinements (buffered channel as semaphore).
 	refinementSem chan struct{}
@@ -4055,6 +4058,7 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 		// recovery its attempt; if that attempt does not fix the PR, the NEXT
 		// fresh scan sees a Ready issue with an un-mergeable PR and blocks it.
 		as.refreshBlockedReadyPRs(ctx, graph)
+		as.reconcilePrMergeParkedCards(graph)
 		as.reconcileStuckInReviewPRs(ctx, graph)
 	}
 
@@ -5655,6 +5659,8 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// success proves the approval landed — including approval granted
 		// out-of-band via the label, which never touches the card.
 		as.dispatchAttention(func() { as.retractArchitectureApproval(repo, issue) })
+		// A run that succeeded is not parked behind its PR any more (#3345).
+		as.dispatchAttention(func() { as.retractPrMergeParked(repo, issue) })
 		log.Printf("autonomous: completed %s#%d — triggering cascade re-scan + promotion", repo, issue)
 
 		// Promote newly-unblocked downstream issues from Backlog → Ready.
@@ -5773,7 +5779,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: github-quota-low for %s — environmental, retry after %s (no lifetime-cap increment)",
 				key, resetAt.UTC().Format(time.RFC3339))
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			as.goTrackedBoardOp(func(genCtx context.Context) {
+				as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+			})
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5807,7 +5815,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: github-network-outage for %s — environmental, retry after %s (no lifetime-cap increment, no pause)",
 				key, resetAt.UTC().Format(time.RFC3339))
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			as.goTrackedBoardOp(func(genCtx context.Context) {
+				as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+			})
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5911,7 +5921,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s for %s — environmental failure, retry in %v (no lifetime-cap increment)",
 				label, key, streamIdleTimeoutBackoff)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			as.goTrackedBoardOp(func(genCtx context.Context) {
+				as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+			})
 			// Trigger an immediate re-scan so other unblocked items proceed
 			// while this one waits out its backoff.
 			select {
@@ -5970,7 +5982,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				as.state.Safety = &safetySnap
 			}
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			as.goTrackedBoardOp(func(genCtx context.Context) {
+				as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+			})
 			return
 		}
 
@@ -5987,7 +6001,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: host-slept for %s — infrastructure, retry in %v (no lifetime-cap increment, no repo halt)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			as.goTrackedBoardOp(func(genCtx context.Context) {
+				as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+			})
 			as.dispatchAttention(func() { as.raiseHostSlept(repo, issue, title, failureDetail) })
 			select {
 			case as.rescanCh <- struct{}{}:
@@ -6024,7 +6040,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s for %s — transient, retry in %v (no lifetime-cap increment)",
 				logLabel, key, stallKillBackoff)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			as.goTrackedBoardOp(func(genCtx context.Context) {
+				as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+			})
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -6094,7 +6112,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 					delete(as.retryBackoff, key)
 				}
 				as.persistStateLocked()
-				as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+				as.goTrackedBoardOp(func(genCtx context.Context) {
+					as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+				})
 				select {
 				case as.rescanCh <- struct{}{}:
 				default:
@@ -6114,7 +6134,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s for %s — transient, retry in %v (attempt %d, no lifetime-cap increment, no pause)",
 				terminalFailureKind, key, backoff, priorAttempts+1)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			as.goTrackedBoardOp(func(genCtx context.Context) {
+				as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+			})
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -6151,7 +6173,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: adapter_auth_failed for %s — retryable infra, retry in %v (no lifetime-cap increment, no cascade feed, no pause)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			as.goTrackedBoardOp(func(genCtx context.Context) {
+				as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+			})
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -6198,7 +6222,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				log.Printf("autonomous: permission_denied for %s exceeded %d consecutive denials — held for an operator, no lifetime-cap increment",
 					key, permissionDeniedMaxAttempts)
 				as.persistStateLocked()
-				as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+				as.goTrackedBoardOp(func(genCtx context.Context) {
+					as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+				})
 				select {
 				case as.rescanCh <- struct{}{}:
 				default:
@@ -6217,7 +6243,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: permission_denied for %s — retryable harness fault, retry in %v (attempt %d, no lifetime-cap increment, no cascade feed, no pause)",
 				key, permissionDeniedBackoff, priorAttempts+1)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			as.goTrackedBoardOp(func(genCtx context.Context) {
+				as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+			})
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -6246,7 +6274,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: model_unavailable for %s — environmental, retry in %v (no lifetime-cap increment, no pause)",
 				key, streamIdleTimeoutBackoff)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			as.goTrackedBoardOp(func(genCtx context.Context) {
+				as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+			})
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -6293,7 +6323,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: network_unavailable for %s — environmental, retry in %v (no lifetime-cap increment, no cascade feed, no pause)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			as.goTrackedBoardOp(func(genCtx context.Context) {
+				as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+			})
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -6322,7 +6354,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s for %s — recoverable, retry in %v (no lifetime-cap increment)",
 				terminalFailureKind, key, stallKillBackoff)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			as.goTrackedBoardOp(func(genCtx context.Context) {
+				as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+			})
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -6351,7 +6385,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: validation_inconclusive for %s — recoverable, retry in %v (no lifetime-cap increment)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			as.goTrackedBoardOp(func(genCtx context.Context) {
+				as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+			})
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -6385,7 +6421,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s#%d blocked-dependency deferral (non-failure) — board → Ready, retry in %v (no lifetime-cap increment, no pause) — %s",
 				repo, issue, blockedDependencyBackoff, detail)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			as.goTrackedBoardOp(func(genCtx context.Context) {
+				as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+			})
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -6797,7 +6835,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// idempotent — MoveStatus to Ready is a no-op if the issue is already
 		// at Ready (e.g., terminal kill before status moved). Runs in a
 		// goroutine to avoid holding as.mu during a network call.
-		as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+		as.goTrackedBoardOp(func(genCtx context.Context) {
+			as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind, failureDetail)
+		})
 	}
 
 	// Record completion with safety rails (tokens are tracked via AddTokensSpent)
@@ -6874,7 +6914,10 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 // status question is still unanswered; the recheck sweep keeps its entry for
 // the next scan on false. Every other outcome, including a refused board
 // write, is an answer.
-func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, repo string, issue int, kind string) bool {
+//
+// detail is the run's failure text; it becomes the parked card's reason when
+// the issue goes to In review behind its open PR (#3345).
+func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, repo string, issue int, kind, detail string) bool {
 	owner, repoName := splitOwnerRepo(repo)
 	var projectNum int
 	var ownerType gh.OwnerType
@@ -6916,7 +6959,12 @@ func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, r
 	if found {
 		log.Printf("autonomous: revert-status: NOT moving %s#%d to Ready after pipeline failure — its PR #%d is open; moving it to In review instead",
 			repo, issue, pr)
-		as.moveIssueToInReview(parent, repo, issue, pr)
+		// A PR parked in In review is invisible without a card (#3345). This
+		// runs on the board-op goroutine, which never holds as.mu, so the
+		// raise is inline (#3339 ADR-004). Only a write that landed is parked.
+		if as.moveIssueToInReview(parent, repo, issue, pr) {
+			as.raiseAttention(BuildPrMergeParkedBlock(repo, issue, pr, "", parkedPRReason(kind, detail)))
+		}
 		return true
 	}
 	projSvc := as.projectService(owner, projectNum, ownerType)
@@ -6974,10 +7022,12 @@ func (as *AutonomousScheduler) moveIssueToDone(parent context.Context, repo stri
 // pr is the open PR that backs the issue, the evidence every "In review"
 // writer requires (#1496): a caller that has not confirmed one passes 0 and
 // nothing is written, so "In review" never stands for a PR that does not exist.
-func (as *AutonomousScheduler) moveIssueToInReview(parent context.Context, repo string, issue, pr int) {
+//
+// It reports whether the In review write landed (#3345).
+func (as *AutonomousScheduler) moveIssueToInReview(parent context.Context, repo string, issue, pr int) bool {
 	if pr <= 0 {
 		log.Printf("autonomous: move-to-in-review: NOT moving %s#%d to In review — no open PR backs it (#1496)", repo, issue)
-		return
+		return false
 	}
 	owner, repoName := splitOwnerRepo(repo)
 	var projectNum int
@@ -6993,19 +7043,25 @@ func (as *AutonomousScheduler) moveIssueToInReview(parent context.Context, repo 
 	as.mu.Unlock()
 	if projectNum == 0 {
 		log.Printf("autonomous: move-to-in-review: no project config for %s — skipping #%d", repo, issue)
-		return
+		return false
 	}
 
 	ctx, cancel := context.WithTimeout(parent, boardRecoveryTimeout)
 	defer cancel()
-	projSvc := as.projectService(owner, projectNum, ownerType)
-	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "In review"); err != nil {
+	move := func() error {
+		return as.projectService(owner, projectNum, ownerType).MoveStatus(ctx, owner, repoName, issue, "In review")
+	}
+	if as.inReviewMoveStatus != nil {
+		move = func() error { return as.inReviewMoveStatus(ctx, owner, repoName, projectNum, ownerType, issue) }
+	}
+	if err := move(); err != nil {
 		log.Printf("autonomous: move-to-in-review: failed to move %s#%d to In review after unmerged PR: %v",
 			repo, issue, err)
-		return
+		return false
 	}
 	log.Printf("autonomous: move-to-in-review: moved %s#%d → In review (open PR #%d, externally blocked — no re-dispatch)",
 		repo, issue, pr)
+	return true
 }
 
 // moveIssueToInProgress moves a sidelined issue's board status to "In
@@ -7278,7 +7334,9 @@ func (as *AutonomousScheduler) recoverOrphanedRunningItems(ctx context.Context, 
 		if found {
 			log.Printf("autonomous: recovery: NOT moving %s#%d to Ready — its PR #%d is open; moving it to In review instead",
 				item.Repo, item.Number, pr)
-			as.moveIssueToInReview(context.WithoutCancel(ctx), item.Repo, item.Number, pr)
+			if as.moveIssueToInReview(context.WithoutCancel(ctx), item.Repo, item.Number, pr) {
+				as.raiseAttention(BuildPrMergeParkedBlock(item.Repo, item.Number, pr, "", parkedPRReason("", "")))
+			}
 			recovered++
 			continue
 		}
