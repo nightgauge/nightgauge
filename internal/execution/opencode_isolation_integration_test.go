@@ -16,12 +16,9 @@ package execution
 // resolved. The stage names a model the catalog does not list under a hosted
 // provider, so the run exits 1 before any model request, and every opencode
 // call runs with a throwaway HOME and npm pointed at a closed loopback port
-// as a belt-and-suspenders check: InstallNightgaugePlugin now seeds
-// @opencode-ai/plugin from an embedded, version-pinned copy
-// (opencodeplugin.WriteDependencies, ADR-022 amendment 2026-09-14), so
-// OpenCode's own install of it finds an already-satisfied node_modules tree
-// and makes no request of its own — the closed port proves that, rather than
-// being what stops a live install from reaching one. The operator's real
+// as a belt-and-suspenders check: the Nightgauge plugin is a self-contained
+// directory that needs no npm package (#3306), and the closed port proves no
+// dispatch reaches the registry for it. The operator's real
 // config is never read either way. With CI=true a missing binary fails every
 // case rather than skipping it.
 //
@@ -487,10 +484,9 @@ func writeOperatorOpenCodeConfig(t *testing.T, home string, plugin bool) {
 	}
 }
 
-// seedOperatorInstallSatisfied writes dir's own FULL four-file set —
-// package.json, package-lock.json, node_modules/.package-lock.json, and
-// node_modules/@opencode-ai/plugin/package.json naming opencodeplugin.DepsVersion
-// — via opencodeplugin.WriteDependencies. That set satisfies both opencode
+// seedOperatorInstallSatisfied writes node_modules/, package.json and
+// package-lock.json naming @opencode-ai/plugin via
+// writeOperatorInstallFixture. That set satisfies both opencode
 // 1.18.30's own "is @opencode-ai/plugin already installed" check and
 // opencodeplugin.OperatorInstallSatisfied (which reads only a subset of it —
 // node_modules, package.json's dependency names and package-lock.json's own
@@ -516,11 +512,9 @@ func writeOperatorOpenCodeConfig(t *testing.T, home string, plugin bool) {
 // regressed fails here, by name, before any dispatch.
 func seedOperatorInstallSatisfied(t *testing.T, dir string) {
 	t.Helper()
-	if err := opencodeplugin.WriteDependencies(dir); err != nil {
-		t.Fatal(err)
-	}
+	writeOperatorInstallFixture(t, dir)
 	if !opencodeplugin.OperatorInstallSatisfied(dir) {
-		t.Fatalf("OperatorInstallSatisfied reads %s as unsatisfied after seeding the full four-file set; the watchdog would arm on a directory OpenCode itself treats as installed", dir)
+		t.Fatalf("OperatorInstallSatisfied reads %s as unsatisfied after seeding it; the watchdog would arm on a directory OpenCode itself treats as installed", dir)
 	}
 }
 
@@ -868,9 +862,7 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 	}
 }
 
-// depsMarkerPath is the file WriteDependencies' embedded copy always creates
-// in the run's own OpenCode config directory, checked below in place of
-// enumerating the whole extracted tree.
+// depsMarkerPath is the installed @opencode-ai/plugin version marker.
 func depsMarkerPath(dir string) string {
 	return filepath.Join(dir, "node_modules", "@opencode-ai", "plugin", "package.json")
 }

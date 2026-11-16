@@ -9,8 +9,8 @@
  * of them; the plugin (internal/execution/opencodeplugin/plugin/nightgauge.js)
  * writes the sentinel at init, and this module only reads it back.
  *
- * - At the run's first `step_start` event, the earliest moment a tool call
- *   could exist, the sentinel must exist and carry this run's nonce and the
+ * - At the run's first stream event of any type (opencode runs the plugin's
+ *   setup during bootstrap, before its first event, #3306), the sentinel must exist and carry this run's nonce and the
  *   plugin version the verb installed; otherwise the run is killed at once.
  * - When the run has ended, if it made a tool call, the sentinel's mtime must
  *   not be after that call's start: a sentinel written late means a tool ran
@@ -62,7 +62,7 @@ function incompatible(h: OpenCodeHandshake, reason: string): string {
 }
 
 /**
- * The step_start check (`VerifyLoaded`): the failure marker, or `undefined`
+ * The first-event check (`VerifyLoaded`): the failure marker, or `undefined`
  * when the sentinel carries this run's nonce and the installed plugin version.
  */
 export function verifyOpenCodePluginLoaded(h: OpenCodeHandshake): string | undefined {
@@ -142,7 +142,7 @@ export class OpenCodeHandshakeWatch {
   ) {}
 
   /**
-   * Observe one stdout line. Returns true exactly once, when the step_start
+   * Observe one stdout line. Returns true exactly once, when the first-event
    * check fails: the caller kills the run's process group at once.
    */
   observe(line: string): boolean {
@@ -154,10 +154,12 @@ export class OpenCodeHandshakeWatch {
       return false;
     }
     if (event === null || typeof event !== "object") return false;
-    if (event.type === "step_start" && !this.checked) {
+    if (!this.checked) {
+      // The first parsed event of any type, as manager.go checks it (#3306):
+      // a run whose first event is an error or a tool_use is still checked.
       this.checked = true;
       this.failure = verifyOpenCodePluginLoaded(this.handshake);
-      return this.failure !== undefined;
+      if (this.failure !== undefined) return true;
     }
     if (event.type === "tool_use" && this.firstToolUseMs === undefined) {
       // The tool's own start time: opencode emits tool_use only once a call

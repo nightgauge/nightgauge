@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- An OpenCode dispatch now fails before spawn when the Nightgauge plugin is not installed as a loadable directory (#3306). The plugin directory carries a `package.json` (`"type": "module"`, `"main": "index.js"`, no dependencies), and a file entry, a missing path or a directory without `package.json` or `index.js` stops the dispatch with an error naming the plugin. The load handshake now runs on the first stream event of any type, so a plugin that did not load kills the stage before any tool runs. The prompt cannot wait for the plugin's load marker: OpenCode 2.2.7 reads stdin to the end before it loads plugins. The vendored `@opencode-ai/plugin` 1.18.30 seed is removed: the plugin needs no npm package.
 - A pickup hold is no longer silent (#3081). While a blocked finding defers an issue, an Action
   Center card with **Blocker resolved** is open for it, and pickup raises it again if the earlier
   card was resolved or expired. A finding whose every native `blockedBy` edge is closed is

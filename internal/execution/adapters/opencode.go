@@ -591,7 +591,7 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 	// minted root and a real spawn, so it must still get a handshake, or a
 	// plugin that fails to load on that dispatch goes unnoticed (#1635 fix
 	// round finding 1/5).
-	if err := InstallNightgaugePlugin(ctx, run, req.Run.OutputFile, req.ID); err != nil {
+	if err := InstallNightgaugePlugin(run, req.Run.OutputFile, req.ID); err != nil {
 		return nil, err
 	}
 	root := &RunRoot{
@@ -605,6 +605,11 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 	}
 	return root, nil
 }
+
+// writeNightgaugePlugin is opencodeplugin.Write, a variable so a test can
+// hand InstallNightgaugePlugin an install that writes without error but
+// cannot load, and so reach the VerifyInstalled check below.
+var writeNightgaugePlugin = opencodeplugin.Write
 
 // InstallNightgaugePlugin writes the embedded Nightgauge OpenCode plugin
 // (internal/execution/opencodeplugin, #1635) into run's PluginDir and adds it
@@ -657,26 +662,19 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 // though it spawns nothing and so nothing ever verifies the handshake it
 // arms. This branch exists only so a direct, non-CLI caller with no run
 // identity of its own still gets a usable config back rather than an error.
-
-// seedPluginDependencies runs before the plugin is referenced: opencode
-// 1.18.30 installs the @opencode-ai/plugin npm package into any OpenCode
-// config directory whose resolved config carries a non-empty `plugin` array —
-// observed independent of whether the plugin itself is a local file with no
-// import of that package — and every invocation that resolves such a config
-// (`debug config`, `run`, ...) waits for that install before doing anything
-// else. Pre-seeding this run's own OpenCode config directory with the
-// embedded, version-pinned copy WriteDependencies extracts
-// (opencode_plugin_deps.go, ADR-022 amendment 2026-09-14) is what keeps a
-// dispatch from ever making a network request for it, cold cache or warm.
-// ctx is honoured by the seed (bounded, local work; see
-// writeEmbeddedPluginDependencies) rather than a disconnected
-// context.Background() of its own.
-func InstallNightgaugePlugin(ctx context.Context, run *OpenCodeRun, outputFile, runID string) error {
-	entry, err := opencodeplugin.Write(run.PluginDir)
+//
+// The written directory is checked with opencodeplugin.VerifyInstalled before
+// it is referenced: opencode 2.x only logs a WARN for a plugin entry it cannot
+// load and then runs the stage ungated, so a bad install fails the dispatch
+// here, before spawn (#3306).
+func InstallNightgaugePlugin(run *OpenCodeRun, outputFile, runID string) error {
+	entry, err := writeNightgaugePlugin(run.PluginDir)
 	if err != nil {
 		return fmt.Errorf("opencode: writing the nightgauge plugin: %w", err)
 	}
-	seedPluginDependencies(ctx, filepath.Dir(run.PluginDir))
+	if err := opencodeplugin.VerifyInstalled(entry); err != nil {
+		return fmt.Errorf("opencode: the nightgauge plugin did not install: %w", err)
+	}
 	// 1.18.30 installs @opencode-ai/plugin into every directory its own
 	// ConfigPaths.directories names, not only the run's own XDG config
 	// directory: $HOME/.opencode when it exists — under
@@ -690,7 +688,7 @@ func InstallNightgaugePlugin(ctx context.Context, run *OpenCodeRun, outputFile, 
 	// amendment 2026-09-15, narrowed AC1: an earlier round did, and the
 	// review that found the seed it fell back to left an operator's own
 	// `import ... from "@opencode-ai/plugin"` unresolvable — see
-	// opencode_plugin_deps.go's package doc comment). OpenCode's own install
+	// ADR-022's narrowed-AC1 amendment). OpenCode's own install
 	// into its own config directories is the operator's environment, exactly
 	// as in the operator's own OpenCode runs. operatorInstallRisk only READS
 	// (never writes) whether either directory is in play AND does not already

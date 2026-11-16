@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
-	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -487,8 +486,7 @@ exit 7
 // actually reads into operatorDir — node_modules/, a package.json naming
 // @opencode-ai/plugin as a dependency, and a package-lock.json whose root
 // ("") package entry lists that same name under "dependencies" (the real npm
-// lockfile shape depsdata/opencode-ai-plugin-1.18.30.tar.gz's own
-// package-lock.json takes — depsdata/README.md), standing in for OpenCode's
+// lockfile shape), standing in for OpenCode's
 // own real install completing in the background — no registry ever touched
 // — then stays silent — no step_start, nothing at all — until release
 // exists (or about 20s pass), before finally printing one harmless,
@@ -514,8 +512,8 @@ echo not-json-output
 `,
 		openCodeFakeVersion,
 		filepath.Join(operatorDir, "node_modules"),
-		opencodeplugin.DepsVersion, filepath.Join(operatorDir, "package.json"),
-		opencodeplugin.DepsVersion, filepath.Join(operatorDir, "package-lock.json"),
+		operatorFixturePluginVersion, filepath.Join(operatorDir, "package.json"),
+		operatorFixturePluginVersion, filepath.Join(operatorDir, "package-lock.json"),
 		release,
 	)
 	if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte(script), 0o755); err != nil {
@@ -632,8 +630,7 @@ func TestOpenCodeOperatorInstallRiskNeverArmsForAnAlreadySatisfiedDirectory(t *t
 	writeOpenCodeMachineConfig(t, openCodeMachineConfigInherited)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
 	operatorOpenCode := filepath.Join(home, ".opencode")
-	// The full four-file archive (a superset of what OperatorInstallSatisfied
-	// itself reads), written BEFORE the dispatch, standing in for "the
+	// The files OperatorInstallSatisfied reads, written BEFORE the dispatch, standing in for "the
 	// operator already ran opencode themselves" — never written by
 	// production code for an operator-owned directory (opencode_plugin_deps.go's
 	// operatorInstallRisk doc comment).
@@ -642,9 +639,7 @@ func TestOpenCodeOperatorInstallRiskNeverArmsForAnAlreadySatisfiedDirectory(t *t
 	// operator's own XDG OpenCode directory, which operatorInstallRisk checks
 	// the same way, so an operator who already ran opencode has both.
 	for _, dir := range []string{operatorOpenCode, filepath.Join(home, ".config", "opencode")} {
-		if err := opencodeplugin.WriteDependencies(dir); err != nil {
-			t.Fatal(err)
-		}
+		writeOperatorInstallFixture(t, dir)
 	}
 	installOpenCodeFakeSlowButHarmless(t, time.Second)
 	withShortOperatorInstallWaitBound(t, 500*time.Millisecond)
@@ -677,5 +672,31 @@ func TestOpenCodeOperatorInstallRiskNeverArmsForAnAlreadySatisfiedDirectory(t *t
 	}
 	if result != nil && result.ExitCode != 0 {
 		t.Errorf("ExitCode = %d, want 0: the fake exits cleanly and must not be killed", result.ExitCode)
+	}
+}
+
+// operatorFixturePluginVersion is the @opencode-ai/plugin version the
+// operator-directory fixtures name. OperatorInstallSatisfied never compares
+// versions.
+const operatorFixturePluginVersion = "1.18.30"
+
+// writeOperatorInstallFixture writes the files opencode's own install check
+// reads (node_modules/, a package.json naming @opencode-ai/plugin, and a
+// package-lock.json whose root entry names it), standing in for an operator
+// who already ran opencode. Test fixture only: production code never writes
+// into an operator-owned directory.
+func writeOperatorInstallFixture(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dep := `"@opencode-ai/plugin":"` + operatorFixturePluginVersion + `"`
+	if err := os.WriteFile(filepath.Join(dir, "package.json"),
+		[]byte(`{"dependencies":{`+dep+`}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package-lock.json"),
+		[]byte(`{"packages":{"":{"dependencies":{`+dep+`}}}}`), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -13,7 +13,9 @@
 // handshake (VerifyLoaded, VerifyNotLate) lets the manager's stream loop
 // (internal/execution/manager.go) confirm the plugin actually initialized
 // before any tool call could run, and fail the stage closed — never silently
-// ungated — when it did not.
+// ungated — when it did not. VerifyInstalled checks the written directory
+// before spawn. The plugin imports only node:* built-ins and its own files,
+// so no npm package is installed beside it (#3306).
 package opencodeplugin
 
 import (
@@ -48,6 +50,11 @@ const PluginVersion = "2"
 // Observed on 2.2.7 (#3302): it loads <dir>/index.js and ignores a
 // package.json `main` naming another file, loading nothing at all.
 const EntryFile = "index.js"
+
+// ManifestFile is the npm package manifest's file name: the one beside
+// EntryFile, whose `main` must name EntryFile, and the one
+// OperatorInstallSatisfied reads in an operator's config directory.
+const ManifestFile = "package.json"
 
 // HookNames are every registration nightgauge.js's setup makes, in order, as
 // "<service>:<name>": the handshake sentinel's "hooks" field, and what
@@ -217,10 +224,52 @@ func (e *IncompatibleError) Error() string {
 // Kind reports incompatibleKind, matching adapters.OpenCodeIncompatible.
 func (e *IncompatibleError) Kind() string { return incompatibleKind }
 
-// VerifyLoaded is the step_start check: an opencode run never emits
-// tool_use before its first step_start event, so calling this the instant
-// that event is observed proves the plugin had already run its init (and so
-// written the sentinel) before any tool call could exist. The sentinel must
+// VerifyInstalled checks, before spawn, that dir is the plugin directory
+// OpenCode 2.x will load: a directory holding EntryFile and a package.json
+// whose `main` is EntryFile (#3306). opencode 2.x only logs a WARN for a file
+// entry, a missing path or a directory it cannot load, then runs the stage
+// with no gate, so a bad install must fail the dispatch here instead.
+func VerifyInstalled(dir string) error {
+	const notInstalledReason = "the Nightgauge OpenCode plugin is not installed as a loadable directory: "
+	fail := func(format string, args ...any) error {
+		return &IncompatibleError{
+			Reason:     notInstalledReason + fmt.Sprintf(format, args...),
+			PluginPath: dir,
+		}
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return fail("%v", err)
+	}
+	if !fi.IsDir() {
+		return fail("%s is a file; OpenCode 2.x loads only a plugin directory", dir)
+	}
+	if fi, err := os.Stat(filepath.Join(dir, EntryFile)); err != nil {
+		return fail("%v", err)
+	} else if !fi.Mode().IsRegular() {
+		return fail("%s in %s is not a regular file", EntryFile, dir)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ManifestFile))
+	if err != nil {
+		return fail("%v", err)
+	}
+	var pkg struct {
+		Main string `json:"main"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return fail("%s did not parse: %v", ManifestFile, err)
+	}
+	if pkg.Main != EntryFile {
+		return fail("%s main is %q, not %q; OpenCode 2.x would load nothing",
+			ManifestFile, pkg.Main, EntryFile)
+	}
+	return nil
+}
+
+// VerifyLoaded is the first-event check: opencode runs the plugin's setup
+// during bootstrap, before its first stream event, so calling this the
+// instant the first event of any type is observed proves the plugin had
+// already run its init (and so written the sentinel) before any tool call could exist. The sentinel must
 // carry this run's own nonce and the plugin version this binary embeds;
 // anything else means the plugin failed to load, loaded late, or a
 // stale/foreign sentinel is being read.
@@ -257,9 +306,9 @@ func VerifyLoaded(cfg HandshakeConfig) error {
 // VerifyNotLate re-checks the same sentinel once the run has exited: its
 // mtime must precede firstToolUse, the moment a caller first observed a
 // tool_use event on the run's stream. A late sentinel means some tool ran
-// before this exact file was written — VerifyLoaded's step_start check alone
+// before this exact file was written — VerifyLoaded's first-event check alone
 // cannot see that, since it only proves a sentinel existed by the first
-// step_start, not that it stayed the one gating every tool after it.
+// stream event, not that it stayed the one gating every tool after it.
 //
 // firstToolUse.IsZero() (no tool call was ever observed) always passes:
 // there is nothing a late sentinel could have let through.
