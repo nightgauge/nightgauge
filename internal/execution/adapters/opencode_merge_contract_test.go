@@ -1055,7 +1055,7 @@ func mcAgentRules(agent map[string]any, action string) []string {
 // mcRunNeedsDispatch skips a question whose observation needs a 2.x
 // `opencode run` that loads the per-run config and its plugin: 2.x runs a
 // prompt against its shared background service unless --standalone is
-// passed, which #3303 adds to dispatch, and loads a plugin only from a
+// passed, which dispatch passes since #3303, and loads a plugin only from a
 // directory, which #3302 provides. Each such question names what it waits on.
 func mcRunNeedsDispatch(t *testing.T, what string) {
 	t.Helper()
@@ -1088,7 +1088,7 @@ func (h *mcHarness) runStubModel(dir, inline string, stub *mcModelStub, extra ma
 	env := withInline(withModelStub(h.t, inline, stub), extra)
 	env[mcSentinelEnv] = sentinel
 	before := len(stub.requests())
-	res := h.run(dir, env, mcPrompt, "run", "--format", "json", "--print-logs", "--log-level", "error", "-m", mcStubModel)
+	res := h.run(dir, env, mcPrompt, "run", "--standalone", "--format", "json", "--print-logs", "--log-level", "error", "-m", mcStubModel)
 	if len(stub.requests()) == before {
 		h.t.Fatalf("the run never reached the model stub (exit %d):\nstdout:\n%s\nstderr:\n%s", res.exit, res.stdout, res.stderr)
 	}

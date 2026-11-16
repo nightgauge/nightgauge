@@ -22,6 +22,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
+	"github.com/nightgauge/nightgauge/internal/execution/procgroup"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
@@ -499,8 +500,18 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 		return nil, fmt.Errorf("stderr pipe: %w", err)
 	}
 
-	// Start process
-	if err := cmd.Start(); err != nil {
+	// Start process. procgroup.Start kills whatever the stage leaves in its
+	// process group after every exit, not only a cancel, a timeout or a budget
+	// stop (#3303). Every OpenCode 2.x run spawns a private `serve --stdio
+	// --port 0` holding a loopback listener, and spike #3197 saw it still
+	// alive just after its client exited. A process a stage leaves behind is a
+	// leak under #1253 whatever the adapter, so this is not opencode's alone.
+	// The group is killed the moment the leader exits, before it is reaped and
+	// before the output readers finish: a survivor holding the stdout or
+	// stderr pipe would otherwise keep wg.Wait() below blocked until the stage
+	// timeout.
+	group, err := procgroup.Start(cmd)
+	if err != nil {
 		return nil, fmt.Errorf("start %s: %w", cmdName, err)
 	}
 
@@ -1015,10 +1026,11 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 		fmt.Fprintf(os.Stderr, "%s: %s\n", stageLabel, notice)
 		keepStderr([]byte(notice))
 	}
-	err = cmd.Wait()
+	// The group was killed when the leader exited (#3303, at procgroup.Start).
+	err = group.Wait()
 	// Signal waitForExit callers (CancelWithGrace/StopExecution) that the
 	// process is reaped, THIS function is the one that reaped it — closing
-	// immediately after cmd.Wait() returns, not after the map deletion below,
+	// immediately after group.Wait() returns, not after the map deletion below,
 	// keeps the window a concurrent CancelWithGrace could still be blocked in
 	// its own Process.Wait() as short as possible.
 	close(execution.done)

@@ -22,6 +22,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/execution/procgroup"
 	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
@@ -247,6 +248,27 @@ type OpenCodeProbeResult struct {
 	Stderr   []byte
 }
 
+// openCodeStandaloneFlag runs an OpenCode process on a private server it
+// spawns for itself instead of the background service 2.x shares across the
+// machine (spike #3197 § 1). The dispatch and every helper and probe pass it.
+const openCodeStandaloneFlag = "--standalone"
+
+// OpenCodeStandaloneArgs returns args with --standalone appended, and args
+// unchanged when it is empty or already carries --standalone. Every OpenCode
+// process Nightgauge spawns besides the dispatch itself, the usage fold's
+// helpers and the preflight probes, goes through it. Without the flag
+// OpenCode 2.x reaches for a background service shared across the machine:
+// `debug config` exited 1 on a port that service held, and `debug config
+// --standalone` and `models --standalone` ran on a private server (spike
+// #3197 § 1). The flag goes last, the position the spike observed, so every
+// positional keeps its place.
+func OpenCodeStandaloneArgs(args []string) []string {
+	if len(args) == 0 || slices.Contains(args, openCodeStandaloneFlag) {
+		return args
+	}
+	return append(slices.Clip(args), openCodeStandaloneFlag)
+}
+
 // Run starts bin with args in the probe's directory and waits for it.
 //
 // content, when set, is OPENCODE_CONFIG_CONTENT, and files are the files it
@@ -260,13 +282,19 @@ type OpenCodeProbeResult struct {
 // provider (OpenCodeProviderVars), each set to a placeholder and never to its
 // value; any other name is refused. It runs in its own process group with
 // stdin closed, and the whole group is killed at openCodeProbeTimeout, when
-// ctx is done, and again once it exits, so nothing it started outlives it.
+// ctx is done, and the moment it exits, on every path, before it is reaped
+// (procgroup), so nothing it started outlives it: not even the private server
+// --standalone starts while it holds the probe's output pipes (#3303).
 // Once ctx is done it starts nothing (#1627).
+//
+// args run --standalone (OpenCodeStandaloneArgs), so a probe never reaches
+// for the background service.
 //
 // A non-zero exit is a result, not an error; an error is a process that could
 // not start, ran past the timeout, was stopped by ctx, or printed more than
 // openCodeProbeMaxOutput. An error ctx caused wraps ctx's error.
 func (p *OpenCodeProbe) Run(ctx context.Context, bin string, args []string, content string, files map[string]string, providerVars ...string) (OpenCodeProbeResult, error) {
+	args = OpenCodeStandaloneArgs(args)
 	label := "`" + strings.Join(append([]string{openCodeBinaryName}, args...), " ") + "`"
 	if err := ctx.Err(); err != nil {
 		return OpenCodeProbeResult{ExitCode: -1}, fmt.Errorf("%s not started: %w", label, err)
@@ -303,16 +331,12 @@ func (p *OpenCodeProbe) Run(ctx context.Context, bin string, args []string, cont
 	cmd := exec.CommandContext(runCtx, bin, args...)
 	cmd.Dir = p.root
 	cmd.Env = env
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	procgroup.Prepare(cmd)
 	cmd.WaitDelay = time.Second
 	stdout := &openCodeProbeBuffer{max: openCodeProbeMaxOutput}
 	stderr := &openCodeProbeBuffer{max: openCodeProbeMaxOutput}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	err := cmd.Run()
-	if cmd.Process != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
+	err := procgroup.Run(cmd)
 	res := OpenCodeProbeResult{ExitCode: -1, Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
 	if cmd.ProcessState != nil {
 		res.ExitCode = cmd.ProcessState.ExitCode()

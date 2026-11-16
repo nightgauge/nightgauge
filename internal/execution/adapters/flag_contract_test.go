@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/nightgauge/nightgauge/internal/adaptercompat"
+	"github.com/nightgauge/nightgauge/internal/config"
 )
 
 // The flag contract (#1617): every flag a CLI adapter's BuildCommand can emit
@@ -106,6 +107,41 @@ func flagContractModel(adapter string) string {
 	return "sonnet"
 }
 
+// flagContractOpenCodeSettings is the machine-tier `opencode:` block the
+// contract's opencode adapter reads: one lm-studio endpoint declaring
+// flagContractModel("opencode") with the "high" variant, the Effort value
+// flagContractOptions varies. It drives BuildCommand's declared-variant path,
+// the `-m provider/model#variant` suffix OpenCode 2.x takes in place of the
+// --variant flag 2.2.7 removed (#3303); without it no option in the product
+// reaches that path, and a reintroduced --variant would go unchecked.
+func flagContractOpenCodeSettings() config.OpenCodeConfig {
+	provider, modelID, _ := strings.Cut(flagContractModel("opencode"), "/")
+	return config.OpenCodeConfig{
+		Endpoints: []config.OpenCodeEndpointConfig{{
+			ID:       provider,
+			Provider: "lm-studio",
+			BaseURL:  "http://127.0.0.1:1234/v1",
+			Limit:    config.OpenCodeLimit{Context: 32768, Output: 4096},
+			Models:   []config.OpenCodeEndpointModel{{ID: modelID, Variants: []string{"low", "high"}}},
+		}},
+	}
+}
+
+// flagContractRunner is the registry's adapter as the contract drives it:
+// opencode's reads flagContractOpenCodeSettings instead of the machine's
+// config, so it declares a variant for the contract model.
+func flagContractRunner(t *testing.T, registry *Registry, adapter string) SkillRunner {
+	t.Helper()
+	runner, err := registry.Get(adapter)
+	if err != nil {
+		t.Fatalf("registry has no %s adapter: %v", adapter, err)
+	}
+	if oc, ok := runner.(*OpenCodeAdapter); ok {
+		oc.settings = fixedOpenCodeSettings(flagContractOpenCodeSettings())
+	}
+	return runner
+}
+
 // flagContractToolSets are the allowed-tools values that change an argv: none,
 // read-only, edit-only, and every tool. They are codex's three sandbox modes
 // and claude's --allowedTools on and off.
@@ -132,7 +168,9 @@ func expandOptions[T any](in []RunOptions, values []T, set func(*RunOptions, T))
 // flagContractOptions is the cartesian product of the RunOptions values that
 // change what a BuildCommand emits: model, effort, turn cap, token cap,
 // allowed tools, cost budget, worktree, prompt and resume session (opencode's
-// -s flag). TestFlagContractOptionsCoversEveryRunOptionsField holds this list,
+// -s flag). Effort "high" is a variant flagContractOpenCodeSettings declares
+// for opencode's contract model, so the product reaches the -m #variant
+// suffix. TestFlagContractOptionsCoversEveryRunOptionsField holds this list,
 // plus flagContractFixedFields below, to every field RunOptions declares.
 func flagContractOptions(models, prompts []string) []RunOptions {
 	opts := []RunOptions{{
@@ -353,10 +391,7 @@ func emittedFlagsByAdapter(t *testing.T) map[string]map[string]string {
 	registry := NewRegistry()
 	out := map[string]map[string]string{}
 	for _, adapter := range flagContractAdapters {
-		runner, err := registry.Get(adapter)
-		if err != nil {
-			t.Fatalf("registry has no %s adapter: %v", adapter, err)
-		}
+		runner := flagContractRunner(t, registry, adapter)
 		flags := map[string]string{}
 		// The writable TMPDIR goes last so it stays set after this returns:
 		// t.TempDir in the caller creates its directories under TMPDIR.
@@ -696,6 +731,42 @@ func TestFlagContract(t *testing.T) {
 	}
 	for _, p := range problems {
 		t.Error(p)
+	}
+}
+
+// TestFlagContractDrivesTheOpenCodeVariant holds the contract product to the
+// declared-variant path (#3303): some option must put `-m <model>#high` on
+// opencode's argv, and none may emit --variant, which OpenCode 2.2.7 removed.
+// And the contract itself must refuse --variant: planted in opencode's
+// emitted flags, flagContractProblems reports it against the committed 2.x
+// run-help capture.
+func TestFlagContractDrivesTheOpenCodeVariant(t *testing.T) {
+	runner := flagContractRunner(t, NewRegistry(), "opencode")
+	want := flagContractModel("opencode") + "#high"
+	suffixed := false
+	for _, o := range flagContractOptions([]string{"", flagContractModel("opencode")}, []string{"", "implement the issue"}) {
+		_, args, _ := runner.BuildCommand(o)
+		if slices.Contains(args, "--variant") {
+			t.Fatalf("opencode argv carries --variant with %s: %q", describeOptions(o), args)
+		}
+		if i := slices.Index(args, "-m"); i >= 0 && i+1 < len(args) && args[i+1] == want {
+			suffixed = true
+		}
+	}
+	if !suffixed {
+		t.Errorf("no option in the contract product put -m %s on opencode's argv: the declared-variant path is not driven", want)
+	}
+
+	ignoreHelpDirOverride(t)
+	emitted := emittedFlagsByAdapter(t)
+	emitted["opencode"]["--variant"] = "Effort=high"
+	problems, _ := flagContractProblems(committedHelpDir, true, emitted)
+	found := false
+	for _, p := range problems {
+		found = found || (strings.HasPrefix(p, "opencode: ") && strings.Contains(p, "emits --variant"))
+	}
+	if !found {
+		t.Errorf("flagContractProblems accepted --variant on opencode's argv; got problems %q", problems)
 	}
 }
 

@@ -22,7 +22,7 @@
     "installer_sha256": "bbc4584fd6a888bcd14623b8a63afa0f1b4075a2e84a2c3518cd509b446b3135"
   },
   "managed_install": "",
-  "required_flags": ["--format", "--log-level", "--print-logs", "-m", "-s"],
+  "required_flags": ["--format", "--log-level", "--print-logs", "--standalone", "-m", "-s"],
   "catalog": { "command": "opencode models" },
   "fixtures": [
     "internal/execution/adapters/testdata/opencode-cli/run-help.txt",

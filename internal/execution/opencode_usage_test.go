@@ -1656,6 +1656,11 @@ func TestOpenCodeFoldHelpersRunPureFromTheRunRoot(t *testing.T) {
 			t.Fatalf("a helper call recorded no argv: %+v", call)
 		}
 		seen[call.args[0]] = true
+		// OpenCode 2.x reaches for a background service shared across the
+		// machine unless told --standalone (spike #3197 § 1, #3303).
+		if call.args[len(call.args)-1] != "--standalone" {
+			t.Errorf("opencode %q did not run --standalone", call.args)
+		}
 		if call.args[0] != "--version" && !slices.Contains(call.args, "--pure") {
 			t.Errorf("opencode %q ran without --pure", call.args)
 		}
@@ -1683,7 +1688,7 @@ func TestOpenCodeFoldHelpersRunPureFromTheRunRoot(t *testing.T) {
 	}
 	// Before the stage, the version policy (#1627) ran `--version` once, in a
 	// directory of its own, holding no credential and nothing of the stage.
-	if len(out.preDispatch) != 1 || strings.Join(out.preDispatch[0].args, " ") != "--version" {
+	if len(out.preDispatch) != 1 || strings.Join(out.preDispatch[0].args, " ") != "--version --standalone" {
 		t.Fatalf("before the stage opencode ran %+v, want the version policy's one --version", out.preDispatch)
 	}
 	pre := out.preDispatch[0]
@@ -2122,5 +2127,47 @@ func TestOpenCodeFoldVersionAcceptsEveryPrintedShape(t *testing.T) {
 		if err != nil || v != want {
 			t.Errorf("%q: version = %q, %v; want %s", printed, v, err, want)
 		}
+	}
+}
+
+// TestOpenCodeFoldHelperReapsTheStandaloneServer: a fold helper runs
+// --standalone, which starts a private OpenCode server, and that server is
+// gone when the helper returns, after a zero exit and after a non-zero exit
+// alike, for export, db and --version (#3303). The fake starts its `server`
+// only when argv carries --standalone, as OpenCode 2.x does, and leaves it on
+// no pipe, so only the group kill at the leader's exit can end it.
+func TestOpenCodeFoldHelperReapsTheStandaloneServer(t *testing.T) {
+	for _, exit := range []int{0, 1} {
+		t.Run(fmt.Sprintf("exit %d", exit), func(t *testing.T) {
+			pidDir := t.TempDir()
+			bin := writeFakeOpenCode(t, fmt.Sprintf(`for a in "$@"; do
+  if [ "$a" = --standalone ]; then
+    sleep 30 >/dev/null 2>&1 &
+    echo $! > %q/"$1".pid
+  fi
+done
+echo '{}'
+exit %d
+`, pidDir, exit))
+			fold := testFold(bin, t.TempDir())
+			for _, args := range [][]string{{"export", "ses_x"}, {"db", "select 1"}, {"--version"}} {
+				_, err := fold.helper(context.Background(), args...)
+				if exit == 0 && err != nil || exit != 0 && err == nil {
+					t.Errorf("helper(%q) = %v, want an error exactly on a non-zero exit", args, err)
+				}
+				raw, err := os.ReadFile(filepath.Join(pidDir, args[0]+".pid"))
+				if err != nil {
+					t.Fatalf("opencode %s started no server, so it did not run --standalone: %v", args[0], err)
+				}
+				server, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = syscall.Kill(server, syscall.SIGKILL) })
+				if !waitGone(server, 3*time.Second) && !zombie(server) {
+					t.Errorf("opencode %s's standalone server %d outlived the helper", args[0], server)
+				}
+			}
+		})
 	}
 }

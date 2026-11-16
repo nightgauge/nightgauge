@@ -39,8 +39,8 @@ gate stays until those controls exist and the beta decision in § 23 lifts it.
 Three things are fixed by the change that carries this ADR:
 
 1. The argv is exactly
-   `opencode run --format json --print-logs --log-level error -m <provider/model>`
-   (amended for OpenCode 2.x, 2026-11-15, #3300: see § The command).
+   `opencode run --standalone --format json --print-logs --log-level error -m <provider/model[#variant]>`
+   (amended for OpenCode 2.x, 2026-11-15, #3300 and #3303: see § The command).
    No auto-approve, share or discovery flag is ever emitted.
 2. The prompt goes on stdin and nowhere else.
 3. Every spawn carries a fresh random `OPENCODE_SERVER_PASSWORD`.
@@ -250,8 +250,26 @@ has opted in.
 ### The command
 
 ```text
-opencode run --format json --print-logs --log-level error -m <provider/model>
+opencode run --standalone --format json --print-logs --log-level error -m <provider/model[#variant]>
 ```
+
+Amendment 2026-11-15 (#3303): every run is `--standalone`, so it uses a
+private server it spawns for itself and never the background service 2.x
+otherwise shares across the machine, which would cross the per-run root. The
+fold's helpers (`export`, `db`, `--version`) and the preflight probes
+(`--version`, doctor's `models`) take the same flag, last on their argv
+(`OpenCodeStandaloneArgs`). A 2.x run spawns `serve --stdio --port 0`, which
+holds a loopback listener and was seen alive just after its client exited
+(spike #3197 § 1), so the manager SIGKILLs the stage's process group after
+every exit, not only on a cancel, a timeout or a budget stop; the egress
+fixture asserts nothing of the run survives it. The dispatch, the fold's
+helpers and the probes all start through `internal/execution/procgroup`, which
+kills the group the moment the leader exits, before it is reaped, so the kill
+cannot reach a recycled group id. 2.2.7 also removed
+`run --variant`: a declared variant is the `#<variant>` suffix of `-m`, and
+`TestFlagContract` drives that path and fails on a reintroduced `--variant`.
+`--archived` is not emitted: run roots are already per run, and its effect on
+`-s` resume and `export <id>` is unobserved.
 
 Amendment 2026-11-15 (#3300): OpenCode 2.x removed `run --dir` and reads a
 positional path as prompt text, and requires `--log-level` in lower case
@@ -311,8 +329,9 @@ configured (§ 7).
 
 The `RunOptions` fields OpenCode has no flag of its own for are mapped
 elsewhere: `AllowedTools` becomes the permission map in the per-run config
-(#1638), `Effort` becomes `--variant` for a model that declares that variant
-(#1643), `MaxTurns` becomes a steps cap and `MaxTokens` becomes the
+(#1638), `Effort` becomes the `#<variant>` suffix of `-m` for a model
+that declares that variant (#1643, #3303; 2.x has no `--variant`),
+`MaxTurns` becomes a steps cap and `MaxTokens` becomes the
 endpoint's output limit in the per-run config (#1625), and `CostBudget` is
 enforced by the manager's USD watchdog, since OpenCode takes no cost cap
 (#1630).
@@ -1333,7 +1352,7 @@ Every OpenCode capability has one disposition:
 | Import                           | non-goal                                      | a session file or URL is untrusted input with nothing to gain                                                                                                                                                                                                                                        |
 | Usage (`opencode stats`)         | non-goal                                      | usage comes from the stream and the registry (§ 3), not OpenCode's catalog prices                                                                                                                                                                                                                    |
 | `json_schema` output             | non-goal                                      | #1650: unusable on 1.18.31 — a `json_schema` prompt makes the session unreadable (see the amendment dated 2026-09-21)                                                                                                                                                                                |
-| Variants (`--variant`)           | supported                                     | #1643 maps effort to a variant                                                                                                                                                                                                                                                                       |
+| Variants (`-m model#variant`)    | supported                                     | #1643 maps effort to a variant                                                                                                                                                                                                                                                                       |
 | Compaction                       | supported                                     | #1625 (settings), #1641 (events)                                                                                                                                                                                                                                                                     |
 | Worktrees and workspaces         | non-goal                                      | Nightgauge owns worktrees; OpenCode's experimental workspaces stay off                                                                                                                                                                                                                               |
 | Snapshots                        | off by default                                | § 12                                                                                                                                                                                                                                                                                                 |
@@ -3079,14 +3098,16 @@ already end-to-end wired for a different purpose
 `internal/execution/adapters/opencode_config.go`, itself commented "#1643's
 --variant mapping is what reads it"): `openCodeVariantsForModel`
 (`internal/execution/adapters/opencode.go`) looks up the dispatched model's
-declared endpoint entry and `BuildCommand` emits `--variant <effort>` only
+declared endpoint entry and `BuildCommand` passes the effort as a variant only
 when the dispatched `RunOptions.Effort` is itself one of that model's declared
 variants — never a guessed rung, and nothing for a model that declares no
 variants at all (effort records "not applicable" for those, same as every
 other adapter with no Go-visible effort evidence, § "Provider-aware call
 sites" above / `dispatch_envelope.go`'s `#580` convention). Reopen the
 `--verbose` catalog-probe extension once a real capture exists; until then this
-is the complete, honest source.
+is the complete, honest source. On 1.x the variant was `--variant <effort>`;
+OpenCode 2.2.7 removed that flag, so since #3303 it is the suffix of
+`-m <provider/model>#<effort>`.
 
 Session resume (`RunOptions.ResumeSessionID`, `-s <id>` in `BuildCommand`)
 follows § 8's reading of the retention window unchanged: the run's own data
@@ -3099,7 +3120,8 @@ changing (a cap-hop, a tier descent, a worktree switch) starts a fresh
 session. The id itself is captured by reading back the same events file
 (`opencodeplugin.EventsPath`/`ReadRunEvents`) the session-lifecycle plugin (§
 "Session-lifecycle events plugin" amendment above, #1641) already writes to —
-no new writer, only a new reader. `-s` and `--variant` are both validated
+no new writer, only a new reader. `-s` and the variant (since #3303 the
+`#<variant>` suffix of `-m`) are both validated
 against a fixed, non-guessable shape before they ever reach argv
 (`openCodeSessionIDRE`, `openCodeRejectsFlagValue`), mirroring
 `OpenCodeModelArg`'s existing reject-on-leading-dash guard for `-m`: never a
