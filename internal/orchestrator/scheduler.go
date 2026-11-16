@@ -7858,7 +7858,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					if gateRes.Kind == gates.KindNoOp {
 						err = fmt.Errorf("premature turn end: stage exited 0 with no state change (gate no-op): %s%s", gateRes.Reason, ctxProbe.compactionNote())
 					} else {
-						err = fmt.Errorf("stage gate failed: %s", gateRes.Reason)
+						err = gateFailureError(gateRes)
 					}
 					exitCode = 2
 				} else {
@@ -12606,4 +12606,24 @@ func (s *Scheduler) bookHostSleptStage(issue int, stage state.PipelineStage, run
 	log.Printf("#%d: stage %s failed after the host slept %s — booked host_slept, no retry in this run, no escalation (was %q: %s)",
 		issue, stage, formatSleep(slept), kind, failText)
 	return true
+}
+
+// maxNPAGateDetail bounds the evidence appended to a not_pipeline_actionable
+// gate failure, so the run's error text stays a one-line record.
+const maxNPAGateDetail = 600
+
+// gateFailureError builds the run error for a failed post-stage gate. A
+// not_pipeline_actionable verdict carries its evidence (the planner's
+// approach, #3354) after the reason: that text becomes the failure detail the
+// autonomous scheduler records and puts on the operator's card. The reason
+// stays first so ClassifyTerminalKind still matches its marker.
+func gateFailureError(gateRes gates.GateResult) error {
+	if gateRes.TerminalKind == gates.TerminalKindNotPipelineActionable && len(gateRes.Evidence) > 0 {
+		ev := strings.Join(gateRes.Evidence, "; ")
+		if len(ev) > maxNPAGateDetail {
+			ev = ev[:maxNPAGateDetail] + "…"
+		}
+		return fmt.Errorf("stage gate failed: %s; %s", gateRes.Reason, ev)
+	}
+	return fmt.Errorf("stage gate failed: %s", gateRes.Reason)
 }

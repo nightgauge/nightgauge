@@ -451,6 +451,34 @@ func (as *AutonomousScheduler) raiseBlockedByDeferral(repo string, issue int, ti
 	})
 }
 
+// --- Producer (unnumbered): not pipeline-actionable (per-issue) -------------
+
+// raiseNotPipelineActionable surfaces a run that ended not_pipeline_actionable
+// (#3354): an empty plan, a publication-boundary verdict, or a pr-create on a
+// branch level with its base. The issue is parked in Backlog with no retry, so
+// without this card the verdict and the planner's approach are invisible.
+func (as *AutonomousScheduler) raiseNotPipelineActionable(repo string, issue int, title, detail string) {
+	as.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: fmt.Sprintf("not-pipeline-actionable:%s#%d", repo, issue),
+		Kind:           attention.KindHandoff,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("Not pipeline-actionable: %s (#%d)", title, issue),
+		// No requeue option: the park is Backlog plus the owner-action label, and
+		// queue.add lifts neither, so the way back in is the board itself.
+		Body: fmt.Sprintf("%s\n\nThe issue is parked in Backlog and will not be retried. "+
+			"Revise the issue or its plan so there is something to build, remove any "+
+			"`owner-action` label, and move it to Ready.", detail),
+		Producer: "not-pipeline-actionable",
+		Context:  attention.Context{Repo: repo, Issue: issue, Blocker: detail},
+		Options: []attention.Option{
+			noopOption("ack", "Acknowledge"),
+		},
+		DefaultAction: "ack",
+		ExpiresAt:     expiryFromNow(14 * 24 * time.Hour),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Optional note: what will change so a later run has work to do"},
+	})
+}
+
 // --- Producer (unnumbered): architecture-approval gate (per-issue) -----------
 
 // raiseArchitectureApproval surfaces an issue the architecture-approval gate
