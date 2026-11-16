@@ -131,6 +131,18 @@ type fakeEpicForge struct {
 }
 
 func (f *fakeEpicForge) serve(w http.ResponseWriter, r *http.Request) {
+	// MergeEpicPR's merge-policy check (#3358): a repository that takes merge
+	// commits on its default branch, with no branch rules.
+	switch r.URL.Path {
+	case "/repos/example-org/platform":
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"full_name":"example-org/platform","allow_merge_commit":true,"default_branch":"main"}`)
+		return
+	case "/repos/example-org/platform/rules/branches/main":
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[]`)
+		return
+	}
 	var req gqlRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	f.mu.Lock()

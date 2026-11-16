@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- An epic no longer lands as one squashed commit on a default branch that refuses merge commits (#3358). The scheduler skips the epic branch when the repository setting, a `pull_request` rule, or the merge-queue method refuses `MERGE`, so each story lands as its own commit, and stage evidence names the refusing setting. An existing epic whose merge is refused stays open as `integration_merge_refused` instead of being squashed by the queue.
 - The review plan-compliance pass now judges a change against every acceptance criterion in the issue body (#3354). Its issue context takes the criteria from `ac-reconcile-{N}.json`, which is parsed from every criteria section, instead of the model-extracted list that can hold only some of them, and a `Criterion N:` finding resolves against the same list.
 - A plan that lists no files to create or modify now fails the feature-planning gate as `not_pipeline_actionable`, quoting the plan's approach, so the issue parks for its owner instead of dispatching feature-dev to implement nothing and halting the queue (#3354). `verify-and-close` plans still pass.
 - A `not_pipeline_actionable` outcome in autonomous mode now raises an Action Center card (#3354). The card quotes the gate's evidence, including the planner's approach for an empty plan, and says how to re-admit the issue: revise it, remove any `owner-action` label, and move it to Ready. Before, the issue moved to Backlog with no operator-visible record of why.

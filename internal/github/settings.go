@@ -19,6 +19,12 @@ type RepositorySettings struct {
 	// COMMIT_MESSAGES | BLANK).
 	SquashMergeCommitTitle   string `json:"squash_merge_commit_title"`
 	SquashMergeCommitMessage string `json:"squash_merge_commit_message"`
+	// Merge-method settings and the default branch (#3358). CheckEpicMerge
+	// decides on AllowMergeCommit and probes DefaultBranch's rules.
+	AllowMergeCommit bool   `json:"allow_merge_commit"`
+	AllowSquashMerge bool   `json:"allow_squash_merge"`
+	AllowRebaseMerge bool   `json:"allow_rebase_merge"`
+	DefaultBranch    string `json:"default_branch"`
 }
 
 // repoAPIResponse is the relevant subset of the GitHub REST API repository response.
@@ -28,6 +34,10 @@ type repoAPIResponse struct {
 	DeleteBranchOnMerge      bool   `json:"delete_branch_on_merge"`
 	SquashMergeCommitTitle   string `json:"squash_merge_commit_title"`
 	SquashMergeCommitMessage string `json:"squash_merge_commit_message"`
+	AllowMergeCommit         bool   `json:"allow_merge_commit"`
+	AllowSquashMerge         bool   `json:"allow_squash_merge"`
+	AllowRebaseMerge         bool   `json:"allow_rebase_merge"`
+	DefaultBranch            string `json:"default_branch"`
 }
 
 // SettingsService provides repository settings operations via GitHub REST API.
@@ -59,6 +69,10 @@ func (s *SettingsService) GetRepositorySettings(ctx context.Context, owner, repo
 		DeleteBranchOnMerge:      resp.DeleteBranchOnMerge,
 		SquashMergeCommitTitle:   resp.SquashMergeCommitTitle,
 		SquashMergeCommitMessage: resp.SquashMergeCommitMessage,
+		AllowMergeCommit:         resp.AllowMergeCommit,
+		AllowSquashMerge:         resp.AllowSquashMerge,
+		AllowRebaseMerge:         resp.AllowRebaseMerge,
+		DefaultBranch:            resp.DefaultBranch,
 		RepoFullName:             resp.FullName,
 		Owner:                    owner,
 		Repo:                     repo,

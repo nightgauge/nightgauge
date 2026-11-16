@@ -529,10 +529,21 @@ func (s *PRService) CreateEpicPR(ctx context.Context, owner, repo string, epicNu
 }
 
 // MergeEpicPR merges an epic PR using MERGE strategy (preserves sub-issue commit history)
-// and deletes the epic branch afterward.
+// and deletes the epic branch afterward. It first checks the default branch's
+// merge policy: when MERGE is refused it returns *EpicMergeRefusedError without
+// merging or deleting the branch, and a policy read error also aborts (#3358).
 func (s *PRService) MergeEpicPR(ctx context.Context, owner, repo string, prNodeID, epicBranch string) error {
-	// Epic PRs use MERGE (not SQUASH) to preserve sub-issue commit history
-	if _, err := s.MergePRWithStrategy(ctx, prNodeID, "MERGE"); err != nil {
+	// Epic PRs use MERGE (not SQUASH) to preserve sub-issue commit history.
+	// A required merge queue applies its own method, so check first that the
+	// default branch will take a MERGE; never let an epic land squashed (#3358).
+	check, err := NewSettingsService(s.client).CheckEpicMerge(ctx, owner, repo)
+	if err != nil {
+		return fmt.Errorf("merge epic PR: check epic merge policy: %w", err)
+	}
+	if !check.Allowed {
+		return &EpicMergeRefusedError{Check: check}
+	}
+	if _, err := s.MergePRWithStrategy(ctx, prNodeID, EpicMergeMethod); err != nil {
 		return fmt.Errorf("merge epic PR: %w", err)
 	}
 

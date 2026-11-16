@@ -137,6 +137,7 @@ func TestIntegrateEpic_RedCIAndPendingKeepEpicOpen(t *testing.T) {
 		{&MergeQueueError{PRNumber: 900, Kind: MergeQueueNotReady}, IntegrationPending},
 		{&MergeQueueError{PRNumber: 900, Kind: MergeQueueChecksFailed}, IntegrationCIFailed},
 		{errors.New("graphql: something else"), IntegrationError},
+		{&EpicMergeRefusedError{Check: EpicMergeCheck{Method: EpicMergeMethod, Base: "main", Reason: "repository setting allow_merge_commit=false"}}, IntegrationMergeRefused},
 	} {
 		clone := epicFixture(t, "")
 		svc, _ := git.NewService(clone)
@@ -146,6 +147,9 @@ func TestIntegrateEpic_RedCIAndPendingKeepEpicOpen(t *testing.T) {
 		}
 		if got.Blocked() != (tc.want != IntegrationPending) {
 			t.Errorf("merge err %v: Blocked() = %v; only a pending integration is retried silently", tc.err, got.Blocked())
+		}
+		if tc.want == IntegrationMergeRefused && !strings.Contains(got.Error, "MERGE") {
+			t.Errorf("refused error %q does not name MERGE", got.Error)
 		}
 	}
 }

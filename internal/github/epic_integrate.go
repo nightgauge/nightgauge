@@ -22,6 +22,10 @@ const (
 	IntegrationCIFailed      = "ci_failed"
 	IntegrationNoCheckout    = "no_checkout"
 	IntegrationError         = "error"
+	// IntegrationMergeRefused: the default branch cannot take an epic MERGE
+	// (squash-only setting, rule or queue method), so the epic stays open
+	// rather than landing as one squashed commit (#3358).
+	IntegrationMergeRefused = "merge_refused"
 )
 
 // EpicIntegration reports how an epic branch was brought onto its base.
@@ -147,7 +151,10 @@ func integrateEpicWith(ctx context.Context, gitSvc *git.Service, prs epicPRMerge
 	}
 	if err := prs.MergeEpicPR(ctx, ref.Owner, ref.Repo, pr.PRNodeID, branch); err != nil {
 		var mq *MergeQueueError
-		if errors.As(err, &mq) && (mq.Kind == MergeQueueTimeout || mq.Kind == MergeQueueNotReady) {
+		var refused *EpicMergeRefusedError
+		if errors.As(err, &refused) {
+			res.Outcome = IntegrationMergeRefused
+		} else if errors.As(err, &mq) && (mq.Kind == MergeQueueTimeout || mq.Kind == MergeQueueNotReady) {
 			// Still settling (#2584): retried on the next cycle.
 			res.Outcome = IntegrationPending
 		} else if errors.As(err, &mq) {
