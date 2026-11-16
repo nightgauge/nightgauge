@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 )
 
@@ -1037,6 +1038,11 @@ type OpenCodeStream struct {
 	// ProviderExecutedToolCalls counts the run's own 2.x tool calls whose
 	// part.state.metadata says the provider executed them (#3305).
 	ProviderExecutedToolCalls int
+	// ToolEvidence is one redacted record per tool_use event (#3305), at
+	// most adapters.OpenCodeToolEvidenceMaxCalls; ToolEvidenceDropped counts
+	// the calls past it. The manager writes them into the run root.
+	ToolEvidence        []adapters.OpenCodeToolEvidence
+	ToolEvidenceDropped int
 
 	// RetryEvents counts every 2.x `retry` event (#3305), and
 	// RetriesSinceProgress those since the last finished step or tool call:
@@ -1157,6 +1163,11 @@ func (acc *TokenAccumulator) ParseOpenCodeStreamLine(line string) (*StreamEvent,
 		}
 	case "tool_use":
 		s.RetriesSinceProgress = 0
+		if len(s.ToolEvidence) >= adapters.OpenCodeToolEvidenceMaxCalls {
+			s.ToolEvidenceDropped++
+		} else if rec, ok := adapters.ReadOpenCodeToolEvidence([]byte(line)); ok {
+			s.ToolEvidence = append(s.ToolEvidence, rec)
+		}
 		if ev.Part != nil && ev.Part.State != nil && ev.Part.State.Metadata.providerExecuted() {
 			s.ProviderExecutedToolCalls++
 		}
