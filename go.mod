@@ -6,11 +6,10 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/google/uuid v1.6.0
 	github.com/oapi-codegen/runtime v1.7.0
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/shurcooL/graphql v0.0.0-20240915155400-7ee5256398cf
 	github.com/spf13/cobra v1.10.2
 	github.com/zalando/go-keyring v0.2.8
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.59.0
 	golang.org/x/oauth2 v0.38.0
 	golang.org/x/sys v0.50.0
 	golang.org/x/term v0.48.0
@@ -31,7 +30,8 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/tools v0.52.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	modernc.org/libc v1.77.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
