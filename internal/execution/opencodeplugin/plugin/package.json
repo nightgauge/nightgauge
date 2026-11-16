@@ -1,0 +1,6 @@
+{
+  "name": "nightgauge-opencode-plugin",
+  "private": true,
+  "type": "module",
+  "main": "index.js"
+}

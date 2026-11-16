@@ -22,8 +22,7 @@ package adapters
 // substitution plugin_test.go's own suite uses) and a dispatch no longer
 // waits on the real npm registry on every run — nor, since the #1635 fix
 // round's second pass, does it ever install a live npm package at all
-// (opencode_plugin_deps.go's pluginDependencySeeder extracts an embedded,
-// version-pinned copy instead).
+// (the plugin needs no npm package at all, #3306).
 
 import (
 	"context"
@@ -36,16 +35,23 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 )
 
-// stubPluginDependencySeeder replaces pluginDependencySeeder with a no-op
-// for the duration of a test: these are unit tests of the config-patching
-// logic, not of the dependency seed (opencodeplugin's own deps_test.go
-// covers that), and a stub keeps them from paying even the real, entirely
-// local extraction's cost.
-func stubPluginDependencySeeder(t *testing.T) {
+// writeSatisfiedOperatorDir writes the files opencode's own install check
+// reads (package.json, package-lock.json naming @opencode-ai/plugin, and
+// node_modules/), so opencodeplugin.OperatorInstallSatisfied reports dir
+// satisfied. Test fixture only: production code never writes there.
+func writeSatisfiedOperatorDir(t *testing.T, dir string) {
 	t.Helper()
-	prev := pluginDependencySeeder
-	pluginDependencySeeder = func(context.Context, string) error { return nil }
-	t.Cleanup(func() { pluginDependencySeeder = prev })
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package.json"),
+		[]byte(`{"dependencies":{"@opencode-ai/plugin":"1.18.30"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package-lock.json"),
+		[]byte(`{"packages":{"":{"dependencies":{"@opencode-ai/plugin":"1.18.30"}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // builtOpenCodeContent is a per-run document the builder wrote, which
@@ -63,7 +69,6 @@ func builtOpenCodeContent(t *testing.T) string {
 // receives is the validated one, so a document that would lose a control on
 // 2.x is refused after the plugins key is added, not dispatched.
 func TestInstallNightgaugePluginRefusesAnInvalidDocument(t *testing.T) {
-	stubPluginDependencySeeder(t)
 	for name, content := range map[string]string{
 		"1.x document":    `{"model":"lmstudio/x","agent":{},"mcp":{}}`,
 		"empty document":  `{}`,
@@ -86,7 +91,6 @@ func TestInstallNightgaugePluginRefusesAnInvalidDocument(t *testing.T) {
 }
 
 func TestInstallNightgaugePluginAddsOnlyThePluginKey(t *testing.T) {
-	stubPluginDependencySeeder(t)
 	root := t.TempDir()
 	before := builtOpenCodeContent(t)
 	run := &OpenCodeRun{
@@ -155,7 +159,6 @@ func TestInstallNightgaugePluginAddsOnlyThePluginKey(t *testing.T) {
 }
 
 func TestInstallNightgaugePluginWithoutRunIDSkipsHandshake(t *testing.T) {
-	stubPluginDependencySeeder(t)
 	root := t.TempDir()
 	run := &OpenCodeRun{
 		ConfigContent: builtOpenCodeContent(t),
@@ -182,7 +185,6 @@ func TestInstallNightgaugePluginWithoutRunIDSkipsHandshake(t *testing.T) {
 }
 
 func TestInstallNightgaugePluginRejectsUnparseableConfig(t *testing.T) {
-	stubPluginDependencySeeder(t)
 	root := t.TempDir()
 	run := &OpenCodeRun{
 		ConfigContent: `not json`,
@@ -195,19 +197,10 @@ func TestInstallNightgaugePluginRejectsUnparseableConfig(t *testing.T) {
 	}
 }
 
-// TestInstallNightgaugePluginSeedsEmbeddedDependencies wires
-// InstallNightgaugePlugin end to end through the REAL pluginDependencySeeder
-// (no stub): the run's OpenCode config directory must end up holding the
-// embedded, version-pinned @opencode-ai/plugin copy
-// opencodeplugin.WriteDependencies extracts, with no npm binary and no
-// network reachable — PATH is emptied and the npm registry variable points
-// at an address nothing answers, exactly like a dispatch on a machine with
-// no npm at all. Weakening seedPluginDependencies back to shelling out to
-// npm turns this red for the same reason
-// opencodeplugin.TestWriteDependenciesIsPureExtraction does.
-func TestInstallNightgaugePluginSeedsEmbeddedDependencies(t *testing.T) {
-	t.Setenv("PATH", "")
-	t.Setenv("npm_config_registry", "http://192.0.2.1:1/")
+// TestInstallNightgaugePluginInstallsADirectoryWithPackageJSON (#3306 AC1/AC2):
+// the config's `plugins` entry is a directory holding package.json and
+// index.js, and no npm package is seeded into the run's config directory.
+func TestInstallNightgaugePluginInstallsADirectoryWithPackageJSON(t *testing.T) {
 	root := t.TempDir()
 	before := builtOpenCodeContent(t)
 	run := &OpenCodeRun{
@@ -219,14 +212,53 @@ func TestInstallNightgaugePluginSeedsEmbeddedDependencies(t *testing.T) {
 	if err := InstallNightgaugePlugin(context.Background(), run, "", "01890a5d-ac96-774b-bcce-b30209a81625"); err != nil {
 		t.Fatal(err)
 	}
+	entry := run.Env[opencodeplugin.EnvPluginPath]
+	if !strings.Contains(run.ConfigContent, entry) {
+		t.Fatalf("per-run config does not name the plugin directory %s: %s", entry, run.ConfigContent)
+	}
+	if fi, err := os.Stat(entry); err != nil || !fi.IsDir() {
+		t.Fatalf("plugin entry %s is not a directory: %v", entry, err)
+	}
+	for _, name := range []string{"package.json", "index.js"} {
+		if _, err := os.Stat(filepath.Join(entry, name)); err != nil {
+			t.Errorf("plugin directory lacks %s: %v", name, err)
+		}
+	}
 	configDir := filepath.Dir(run.PluginDir)
-	if _, err := os.Stat(filepath.Join(configDir, "node_modules", "@opencode-ai", "plugin", "package.json")); err != nil {
-		t.Errorf("InstallNightgaugePlugin did not seed @opencode-ai/plugin into %s: %v", configDir, err)
+	if _, err := os.Stat(filepath.Join(configDir, "node_modules")); err == nil {
+		t.Errorf("InstallNightgaugePlugin seeded node_modules into %s; the plugin needs no npm package", configDir)
 	}
 }
 
-// depsMarker is the file WriteDependencies' embedded copy always creates,
-// checked below in place of enumerating the whole extracted tree.
+// TestInstallNightgaugePluginFailsWhenPluginDirIsAFile (#3306 AC4): a plugin
+// path that is a regular file (the 1.x file entry) fails the dispatch before
+// spawn, the error names the plugin, and the config is left unchanged.
+func TestInstallNightgaugePluginFailsWhenPluginDirIsAFile(t *testing.T) {
+	root := t.TempDir()
+	pluginDir := filepath.Join(root, "plugin")
+	if err := os.WriteFile(pluginDir, []byte("export default async () => ({})\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := builtOpenCodeContent(t)
+	run := &OpenCodeRun{
+		ConfigContent: before,
+		Env:           map[string]string{openCodeConfigContentEnvVar: before},
+		PluginDir:     pluginDir,
+		RunDir:        root,
+	}
+	err := InstallNightgaugePlugin(context.Background(), run, "", "01890a5d-ac96-774b-bcce-b30209a81633")
+	if err == nil {
+		t.Fatal("want an error when the plugin path is a regular file")
+	}
+	if !strings.Contains(err.Error(), "nightgauge plugin") || !strings.Contains(err.Error(), pluginDir) {
+		t.Errorf("error %q does not name the plugin and its path %s", err, pluginDir)
+	}
+	if run.ConfigContent != before {
+		t.Error("the per-run config changed despite the failed install")
+	}
+}
+
+// depsMarker is the installed @opencode-ai/plugin version marker.
 func depsMarker(dir string) string {
 	return filepath.Join(dir, "node_modules", "@opencode-ai", "plugin", "package.json")
 }
@@ -241,7 +273,6 @@ func depsMarker(dir string) string {
 // env carries the risk marker naming it, so the manager can bound and
 // classify a stage that waits on OpenCode's own install there instead.
 func TestInstallNightgaugePluginNeverWritesOperatorHomeOpenCode(t *testing.T) {
-	stubPluginDependencySeeder(t)
 	home := t.TempDir()
 	operatorOpenCode := filepath.Join(home, ".opencode")
 	if err := os.MkdirAll(filepath.Join(operatorOpenCode, "bin"), 0o700); err != nil {
@@ -288,7 +319,6 @@ func TestInstallNightgaugePluginNeverWritesOperatorHomeOpenCode(t *testing.T) {
 // creates $HOME/.opencode on its own, so an absent one is not this
 // dispatch's problem.
 func TestInstallNightgaugePluginNeverCreatesOperatorHomeOpenCode(t *testing.T) {
-	stubPluginDependencySeeder(t)
 	home := t.TempDir()
 	root := t.TempDir()
 	before := builtOpenCodeContent(t)
@@ -317,7 +347,6 @@ func TestInstallNightgaugePluginNeverCreatesOperatorHomeOpenCode(t *testing.T) {
 // never creates an absent one. The run's env still carries the risk marker,
 // since opencode itself creates and installs into this one unconditionally.
 func TestInstallNightgaugePluginNeverWritesInheritedConfigDir(t *testing.T) {
-	stubPluginDependencySeeder(t)
 	// A path under a real temp directory that this test never creates: the
 	// production shape of "opencode.inherit_user_config is on, and the
 	// operator has never run opencode with XDG_CONFIG_HOME set this way
@@ -349,10 +378,10 @@ func TestInstallNightgaugePluginNeverWritesInheritedConfigDir(t *testing.T) {
 // round 8, ADR-022 amendment 2026-09-15, correcting round 7): a
 // $HOME/.opencode already holding what opencode 1.18.30's own "is
 // @opencode-ai/plugin already installed" check requires (not only the
-// version marker — depsdata/README.md) is NOT flagged as a risk. Round 7
+// version marker) is NOT flagged as a risk. Round 7
 // flagged a satisfied directory too, on a re-measurement that seeded only
 // the version marker and found the wait unchanged; driven directly against
-// the real 1.18.30 binary with the full four-file archive this test seeds
+// the real 1.18.30 binary with the files this test seeds
 // (a superset of what OperatorInstallSatisfied itself reads), a satisfied
 // operator directory DOES get OpenCode's local, instant fast path (~1s for
 // `debug config`), the same as a run's own XDG-resolved config directory —
@@ -361,17 +390,9 @@ func TestInstallNightgaugePluginNeverWritesInheritedConfigDir(t *testing.T) {
 // directory that never waits on the registry at all would leave narrowed
 // AC1's online case indistinguishable from a genuine install wait.
 func TestInstallNightgaugePluginDoesNotRiskASatisfiedOperatorDir(t *testing.T) {
-	stubPluginDependencySeeder(t)
 	home := t.TempDir()
 	operatorOpenCode := filepath.Join(home, ".opencode")
-	// The full four-file archive — a superset of what OperatorInstallSatisfied
-	// itself reads — exactly what WriteDependencies extracts for a run's own
-	// directory, used here only as a test fixture for an operator-owned one
-	// (production code never writes there; see opencode_plugin_deps.go's
-	// operatorInstallRisk doc comment).
-	if err := opencodeplugin.WriteDependencies(operatorOpenCode); err != nil {
-		t.Fatal(err)
-	}
+	writeSatisfiedOperatorDir(t, operatorOpenCode)
 	root := t.TempDir()
 	before := builtOpenCodeContent(t)
 	run := &OpenCodeRun{
@@ -395,7 +416,6 @@ func TestInstallNightgaugePluginDoesNotRiskASatisfiedOperatorDir(t *testing.T) {
 // exactly like one holding nothing at all (#1635/A11 round 8: only a
 // directory OperatorInstallSatisfied actually reports satisfied is exempt).
 func TestInstallNightgaugePluginStillRisksAnUnsatisfiedOperatorDir(t *testing.T) {
-	stubPluginDependencySeeder(t)
 	home := t.TempDir()
 	operatorOpenCode := filepath.Join(home, ".opencode")
 	markerDir := filepath.Join(operatorOpenCode, "node_modules", "@opencode-ai", "plugin")
@@ -403,7 +423,7 @@ func TestInstallNightgaugePluginStillRisksAnUnsatisfiedOperatorDir(t *testing.T)
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(markerDir, "package.json"),
-		[]byte(`{"name":"@opencode-ai/plugin","version":"`+opencodeplugin.DepsVersion+`"}`), 0o600); err != nil {
+		[]byte(`{"name":"@opencode-ai/plugin","version":"1.18.30"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	root := t.TempDir()

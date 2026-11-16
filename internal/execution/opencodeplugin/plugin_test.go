@@ -153,7 +153,7 @@ func TestWrite(t *testing.T) {
 	if entry != dir {
 		t.Errorf("entry = %q, want the plugin directory %s", entry, dir)
 	}
-	for _, rel := range []string{EntryFile, "nightgauge.js", filepath.Join("nightgauge", "gates.js")} {
+	for _, rel := range []string{EntryFile, "package.json", "nightgauge.js", filepath.Join("nightgauge", "gates.js")} {
 		p := filepath.Join(dir, rel)
 		info, err := os.Stat(p)
 		if err != nil {
@@ -169,6 +169,85 @@ func TestWrite(t *testing.T) {
 	}
 	if dirInfo.Mode().Perm() != 0o700 {
 		t.Errorf("plugin dir mode = %v, want 0700", dirInfo.Mode().Perm())
+	}
+}
+
+// TestVerifyInstalled (#3306 AC1/AC4): Write's output is a loadable plugin
+// directory; a file entry, a missing path, a directory without package.json
+// and a package.json whose main is not index.js all fail, naming the plugin.
+func TestVerifyInstalled(t *testing.T) {
+	written, err := Write(filepath.Join(t.TempDir(), "plugin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyInstalled(written); err != nil {
+		t.Fatalf("VerifyInstalled(Write output) = %v, want nil", err)
+	}
+	var pkg map[string]any
+	data, err := os.ReadFile(filepath.Join(written, "package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		t.Fatal(err)
+	}
+	if pkg["type"] != "module" || pkg["main"] != EntryFile {
+		t.Errorf("package.json = %v, want type module and main %s", pkg, EntryFile)
+	}
+	for _, k := range []string{"dependencies", "devDependencies", "peerDependencies", "optionalDependencies"} {
+		if _, ok := pkg[k]; ok {
+			t.Errorf("package.json declares %s; the plugin must need no npm package", k)
+		}
+	}
+
+	cases := map[string]func(t *testing.T) string{
+		"regular file": func(t *testing.T) string {
+			p := filepath.Join(t.TempDir(), "nightgauge.js")
+			if err := os.WriteFile(p, []byte("export default async () => ({})\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return p
+		},
+		"missing path": func(t *testing.T) string {
+			return filepath.Join(t.TempDir(), "never-created")
+		},
+		"no package.json": func(t *testing.T) string {
+			d := t.TempDir()
+			if err := os.WriteFile(filepath.Join(d, EntryFile), []byte("export {}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return d
+		},
+		"main names another file": func(t *testing.T) string {
+			d := t.TempDir()
+			if err := os.WriteFile(filepath.Join(d, EntryFile), []byte("export {}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(d, "package.json"), []byte(`{"main":"nightgauge.js"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return d
+		},
+		"no index.js": func(t *testing.T) string {
+			d := t.TempDir()
+			if err := os.WriteFile(filepath.Join(d, "package.json"), []byte(`{"main":"index.js"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return d
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := setup(t)
+			err := VerifyInstalled(dir)
+			var ie *IncompatibleError
+			if err == nil || !asIncompatibleError(err, &ie) {
+				t.Fatalf("VerifyInstalled(%s) = %v, want *IncompatibleError", dir, err)
+			}
+			if !strings.Contains(err.Error(), "Nightgauge OpenCode plugin") || !strings.Contains(err.Error(), "(plugin: "+dir+")") {
+				t.Errorf("error %q does not name the plugin and its path", err)
+			}
+		})
 	}
 }
 
@@ -252,6 +331,12 @@ func TestVerifyLoadedTable(t *testing.T) {
 				}
 				if !strings.Contains(err.Error(), "adapter_incompatible") {
 					t.Errorf("Error() = %q must contain the classifier's bare word", err.Error())
+				}
+				if !strings.Contains(err.Error(), "(plugin: /plugin/nightgauge.js)") {
+					t.Errorf("Error() = %q must name the plugin path", err.Error())
+				}
+				if tc.name == "missing sentinel" && !strings.Contains(err.Error(), "Nightgauge OpenCode plugin did not load") {
+					t.Errorf("Error() = %q must say the plugin did not load", err.Error())
 				}
 			}
 		})

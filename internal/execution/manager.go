@@ -813,61 +813,57 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 			if stageBudget.observe(event, stepAdded, tokenAcc) {
 				stageBudget.stop()
 			}
-			// Nightgauge OpenCode plugin handshake (#1635): step_start is the
-			// earliest point at which a tool call could possibly exist, so
-			// checking the instant the FIRST one is observed proves the
-			// plugin's init (and so its sentinel write) happened before any
-			// tool ran. A failure here kills the process group at once —
+			// Nightgauge OpenCode plugin handshake (#1635, #3306): the plugin's
+			// setup writes its sentinel during opencode's bootstrap, before
+			// any stream event, so checking at the FIRST parsed event of any
+			// type proves the plugin loaded before any tool could run, and
+			// never waits behind a first event that is not step_start. A failure here kills the process group at once —
 			// the marker itself is appended to stderr only after wg.Wait()
 			// (below), never from this goroutine, so it never races the
 			// stderr goroutine's own append to the same buffer.
 			if pluginHandshakeOK && event != nil {
-				switch event.Type {
-				case "step_start":
-					if !handshakeChecked {
-						handshakeChecked = true
-						if err := opencodeplugin.VerifyLoaded(pluginHandshake); err != nil {
-							// Kill the process group FIRST: openCodePluginHandshakeMarker
-							// runs `opencode --version` (bounded at 5s, but
-							// observed to take real, non-zero time) to name the
-							// binary in the failure marker. Computing that
-							// marker before signalling used to leave the
-							// stage's process group alive and ungated for the
-							// probe's whole duration — exactly the window a
-							// failed handshake must close first (ADR-022,
-							// #1635 fix round finding 3).
-							//
-							// killProcessTreeUntilGone, not a single
-							// signalProcessTree call: a single SIGKILL can miss
-							// a grandchild the stage forks in the same instant
-							// the signal is delivered — the fork completing
-							// after the kernel already decided who receives a
-							// pending group signal. Linux aborts a fork under a
-							// pending group kill; XNU (macOS) does not, so the
-							// new child joins the group, survives, keeps
-							// stdout open, and the stage hangs until it exits
-							// on its own (#1635 fix round finding 6, observed
-							// with opencode's own child-spawn timing: the first
-							// tool's child is typically forked within a few ms
-							// of step_start, i.e. right when this fires).
-							killProcessTreeUntilGone(cmd.Process, openCodeHandshakeKillWindow)
-							handshakeFailure = openCodePluginHandshakeMarker(err, cmd.Path)
-						}
+				if !handshakeChecked {
+					handshakeChecked = true
+					if err := opencodeplugin.VerifyLoaded(pluginHandshake); err != nil {
+						// Kill the process group FIRST: openCodePluginHandshakeMarker
+						// runs `opencode --version` (bounded at 5s, but
+						// observed to take real, non-zero time) to name the
+						// binary in the failure marker. Computing that
+						// marker before signalling used to leave the
+						// stage's process group alive and ungated for the
+						// probe's whole duration — exactly the window a
+						// failed handshake must close first (ADR-022,
+						// #1635 fix round finding 3).
+						//
+						// killProcessTreeUntilGone, not a single
+						// signalProcessTree call: a single SIGKILL can miss
+						// a grandchild the stage forks in the same instant
+						// the signal is delivered — the fork completing
+						// after the kernel already decided who receives a
+						// pending group signal. Linux aborts a fork under a
+						// pending group kill; XNU (macOS) does not, so the
+						// new child joins the group, survives, keeps
+						// stdout open, and the stage hangs until it exits
+						// on its own (#1635 fix round finding 6, observed
+						// with opencode's own child-spawn timing: the first
+						// tool's child is typically forked within a few ms
+						// of the first event, i.e. right when this fires).
+						killProcessTreeUntilGone(cmd.Process, openCodeHandshakeKillWindow)
+						handshakeFailure = openCodePluginHandshakeMarker(err, cmd.Path)
 					}
-				case "tool_use":
-					if firstToolUseAt.IsZero() {
-						// Prefer the tool's own start time (part.state.time.start,
-						// epoch milliseconds, ParseOpenCodeStreamLine's
-						// event.OpenCodeToolStartedAt) over this goroutine's
-						// wall clock: 1.18.30 emits tool_use only once a call
-						// has completed or errored, so "now" is always later
-						// than when the tool actually started, and a
-						// sentinel written in between would wrongly read as
-						// on time (#1635 fix round finding 4).
-						firstToolUseAt = time.Now()
-						if event.OpenCodeToolStartedAt > 0 {
-							firstToolUseAt = time.UnixMilli(event.OpenCodeToolStartedAt)
-						}
+				}
+				if event.Type == "tool_use" && firstToolUseAt.IsZero() {
+					// Prefer the tool's own start time (part.state.time.start,
+					// epoch milliseconds, ParseOpenCodeStreamLine's
+					// event.OpenCodeToolStartedAt) over this goroutine's
+					// wall clock: 1.18.30 emits tool_use only once a call
+					// has completed or errored, so "now" is always later
+					// than when the tool actually started, and a
+					// sentinel written in between would wrongly read as
+					// on time (#1635 fix round finding 4).
+					firstToolUseAt = time.Now()
+					if event.OpenCodeToolStartedAt > 0 {
+						firstToolUseAt = time.UnixMilli(event.OpenCodeToolStartedAt)
 					}
 				}
 			}

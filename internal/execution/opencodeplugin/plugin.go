@@ -13,7 +13,9 @@
 // handshake (VerifyLoaded, VerifyNotLate) lets the manager's stream loop
 // (internal/execution/manager.go) confirm the plugin actually initialized
 // before any tool call could run, and fail the stage closed — never silently
-// ungated — when it did not.
+// ungated — when it did not. VerifyInstalled checks the written directory
+// before spawn. The plugin imports only node:* built-ins and its own files,
+// so no npm package is installed beside it (#3306).
 package opencodeplugin
 
 import (
@@ -216,6 +218,44 @@ func (e *IncompatibleError) Error() string {
 
 // Kind reports incompatibleKind, matching adapters.OpenCodeIncompatible.
 func (e *IncompatibleError) Kind() string { return incompatibleKind }
+
+// VerifyInstalled checks, before spawn, that dir is the plugin directory
+// OpenCode 2.x will load: a directory holding EntryFile and a package.json
+// whose `main` is EntryFile (#3306). opencode 2.x only logs a WARN for a file
+// entry, a missing path or a directory it cannot load, then runs the stage
+// with no gate, so a bad install must fail the dispatch here instead.
+func VerifyInstalled(dir string) error {
+	fail := func(format string, args ...any) error {
+		return &IncompatibleError{
+			Reason:     "the Nightgauge OpenCode plugin is not installed as a loadable directory: " + fmt.Sprintf(format, args...),
+			PluginPath: dir,
+		}
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return fail("%v", err)
+	}
+	if !fi.IsDir() {
+		return fail("%s is a file; OpenCode 2.x loads only a plugin directory", dir)
+	}
+	if fi, err := os.Stat(filepath.Join(dir, EntryFile)); err != nil || !fi.Mode().IsRegular() {
+		return fail("%s has no regular %s", dir, EntryFile)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return fail("%v", err)
+	}
+	var pkg struct {
+		Main string `json:"main"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return fail("package.json did not parse: %v", err)
+	}
+	if pkg.Main != EntryFile {
+		return fail("package.json main is %q, not %q; OpenCode 2.x would load nothing", pkg.Main, EntryFile)
+	}
+	return nil
+}
 
 // VerifyLoaded is the step_start check: an opencode run never emits
 // tool_use before its first step_start event, so calling this the instant

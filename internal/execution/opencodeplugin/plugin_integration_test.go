@@ -494,7 +494,7 @@ func TestCompactionOnRealOpenCode(t *testing.T) {
 // config directory holding a custom tool that imports @opencode-ai/plugin —
 // OpenCode's own documented way to write one
 // (`import { tool } from "@opencode-ai/plugin"`) — is never touched by
-// Nightgauge at all: no WriteDependencies (run-directory-only by contract),
+// Nightgauge at all: no dependency seed (removed, #3306),
 // no MergeDependencies (removed this round), nothing. Round 5's merge tried
 // to keep such a directory both "satisfied" and import-resolvable at once
 // and a review found it fragile; round 6 does not attempt that trade at
