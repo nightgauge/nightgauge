@@ -55,7 +55,7 @@ func OperatorInstallSatisfied(dir string) bool {
 	if fi, err := os.Stat(filepath.Join(dir, "node_modules")); err != nil || !fi.IsDir() {
 		return false
 	}
-	pkgData, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	pkgData, err := os.ReadFile(filepath.Join(dir, ManifestFile))
 	if err != nil {
 		return false
 	}

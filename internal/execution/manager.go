@@ -657,8 +657,8 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	// structurally out of reach, so only the inherited case can still arm
 	// this watchdog), so offline — or against an unreachable registry —
 	// OpenCode's own install into one can block the CLI before it ever
-	// prints a byte: no step_start, so the plugin handshake above never even
-	// runs, and nothing on stderr says why. Bounded independently of the
+	// prints a byte: no first stream event, so the plugin handshake above
+	// never even runs, and nothing on stderr says why. Bounded independently of the
 	// stage's own timeout (opts.Timeout can be minutes; this cannot be, or
 	// "never a hang" is only true in the limit).
 	//
@@ -829,8 +829,8 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 			// measured on opencode v2.2.7, the CLI reads stdin to EOF before
 			// it bootstraps the instance and runs setup (no sentinel in 20s
 			// with stdin held open; one within 0.5s of EOF), so gating the
-			// stdin write on the sentinel deadlocks. A failure here kills the process group at once —
-			// the marker itself is appended to stderr only after wg.Wait()
+			// stdin write on the sentinel deadlocks. A failure here kills
+			// the process group at once — the marker itself is appended to stderr only after wg.Wait()
 			// (below), never from this goroutine, so it never races the
 			// stderr goroutine's own append to the same buffer.
 			if pluginHandshakeOK && event != nil {
@@ -976,10 +976,10 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	}
 	// Nightgauge OpenCode plugin handshake, exit check (#1635): re-stat the
 	// sentinel now the run has ended. Its mtime must precede the first
-	// tool_use this stream observed — a step_start check alone cannot see a
-	// sentinel written AFTER a tool already ran (a race the step_start check
+	// tool_use this stream observed — a first-event check alone cannot see a
+	// sentinel written AFTER a tool already ran (a race the first-event check
 	// resolves in the plugin's favor, since nothing had happened yet to
-	// gate). Skipped once the step_start check already failed: the marker is
+	// gate). Skipped once the first-event check already failed: the marker is
 	// already set, and re-deriving the same verdict would only risk masking
 	// it with a different one.
 	if pluginHandshakeOK && handshakeFailure == "" {
@@ -1195,7 +1195,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 		result.ExitCode = 1
 	}
 	// A failed Nightgauge OpenCode plugin handshake (#1635) must fail the
-	// stage even when the CLI itself exited 0: the step_start check kills the
+	// stage even when the CLI itself exited 0: the first-event check kills the
 	// process group, but a CLI that traps the signal and still exits 0 (or a
 	// handshake that only failed at the exit-time late-sentinel recheck,
 	// VerifyNotLate, after the process had already exited cleanly) must not
@@ -1535,7 +1535,7 @@ func signalProcessTree(proc *os.Process, sig syscall.Signal) bool {
 // loop. The race it closes resolves within single-digit milliseconds in
 // practice (the escaping child is one already mid-fork when the first
 // SIGKILL lands, observed 3-8ms after the group's leader emits the
-// step_start line this handshake reacts to), so this only needs to be long
+// first stream event this handshake reacts to), so this only needs to be long
 // enough that a slow CI host is never mistaken for an unkillable process.
 // killProcessTreeUntilGone cannot detect the race resolving and return
 // early (see its own doc comment), so every call runs the full window: this
@@ -1690,7 +1690,7 @@ var operatorInstallWatchdogObserver func(armed bool, bound time.Duration, end op
 //
 // A single SIGKILL is not enough for the #1635 plugin-handshake failure path
 // on darwin/XNU: opencode's shell leader was observed to fork its first
-// tool's child within a few milliseconds of the step_start line this
+// tool's child within a few milliseconds of the first stream event this
 // handshake check reacts to — i.e. right when the SIGKILL is sent. Linux
 // aborts a fork that lands under a pending group-kill signal; XNU does not,
 // so the new grandchild can complete its fork AFTER the kernel already

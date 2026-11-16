@@ -51,6 +51,11 @@ const PluginVersion = "2"
 // package.json `main` naming another file, loading nothing at all.
 const EntryFile = "index.js"
 
+// ManifestFile is the npm package manifest's file name: the one beside
+// EntryFile, whose `main` must name EntryFile, and the one
+// OperatorInstallSatisfied reads in an operator's config directory.
+const ManifestFile = "package.json"
+
 // HookNames are every registration nightgauge.js's setup makes, in order, as
 // "<service>:<name>": the handshake sentinel's "hooks" field, and what
 // TestPluginVersionAndHooksMatchGo compares plugin/nightgauge.js's own
@@ -225,9 +230,10 @@ func (e *IncompatibleError) Kind() string { return incompatibleKind }
 // entry, a missing path or a directory it cannot load, then runs the stage
 // with no gate, so a bad install must fail the dispatch here instead.
 func VerifyInstalled(dir string) error {
+	const notInstalledReason = "the Nightgauge OpenCode plugin is not installed as a loadable directory: "
 	fail := func(format string, args ...any) error {
 		return &IncompatibleError{
-			Reason:     "the Nightgauge OpenCode plugin is not installed as a loadable directory: " + fmt.Sprintf(format, args...),
+			Reason:     notInstalledReason + fmt.Sprintf(format, args...),
 			PluginPath: dir,
 		}
 	}
@@ -243,7 +249,7 @@ func VerifyInstalled(dir string) error {
 	} else if !fi.Mode().IsRegular() {
 		return fail("%s in %s is not a regular file", EntryFile, dir)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	data, err := os.ReadFile(filepath.Join(dir, ManifestFile))
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -251,18 +257,19 @@ func VerifyInstalled(dir string) error {
 		Main string `json:"main"`
 	}
 	if err := json.Unmarshal(data, &pkg); err != nil {
-		return fail("package.json did not parse: %v", err)
+		return fail("%s did not parse: %v", ManifestFile, err)
 	}
 	if pkg.Main != EntryFile {
-		return fail("package.json main is %q, not %q; OpenCode 2.x would load nothing", pkg.Main, EntryFile)
+		return fail("%s main is %q, not %q; OpenCode 2.x would load nothing",
+			ManifestFile, pkg.Main, EntryFile)
 	}
 	return nil
 }
 
 // VerifyLoaded is the first-event check: opencode runs the plugin's setup
 // during bootstrap, before its first stream event, so calling this the
-// instant the first event of any type is observed proves the plugin had already run its init (and so
-// written the sentinel) before any tool call could exist. The sentinel must
+// instant the first event of any type is observed proves the plugin had
+// already run its init (and so written the sentinel) before any tool call could exist. The sentinel must
 // carry this run's own nonce and the plugin version this binary embeds;
 // anything else means the plugin failed to load, loaded late, or a
 // stale/foreign sentinel is being read.

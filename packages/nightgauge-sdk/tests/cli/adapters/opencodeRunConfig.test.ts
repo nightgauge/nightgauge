@@ -548,11 +548,23 @@ describe("the plugin handshake on the SDK spawn path (#1804)", () => {
     );
   });
 
-  it("kills the run at its first step_start when the sentinel is missing", async () => {
+  it("kills the run at its first event (step_start) when the sentinel is missing", async () => {
     const stepStart = readFileSync(RESEARCH, "utf-8").split("\n")[0];
     const { worktree, query } = await stageFromGolden({
       sentinel: "none",
       runBody: `  printf '%s\\n' '${stepStart}'\n  sleep 30`,
+    });
+    const started = Date.now();
+    await expect(drain(query({ prompt: "p", options: { cwd: worktree } }))).rejects.toThrow(
+      /no plugin handshake sentinel/
+    );
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it("checks the sentinel at the first event of any type, not only step_start (#3306)", async () => {
+    const { worktree, query } = await stageFromGolden({
+      sentinel: "none",
+      runBody: `  printf '%s\\n' '{"type":"error","error":{"name":"APIError"}}'\n  sleep 30`,
     });
     const started = Date.now();
     await expect(drain(query({ prompt: "p", options: { cwd: worktree } }))).rejects.toThrow(

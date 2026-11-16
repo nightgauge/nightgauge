@@ -19,6 +19,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
@@ -1109,7 +1110,10 @@ func writeOpenCodeMachineConfig(t *testing.T, contents string) string {
 
 // openCodeFake is a fake `opencode` first on PATH. Each run records the
 // environment it received, NUL-separated, and the listing of its four XDG
-// directories, then runs extra, a shell fragment, and drains stdin.
+// directories, writes the plugin handshake sentinel a loaded Nightgauge
+// plugin would (#3306: the handshake now runs at the first stream event, so a
+// fake that skipped it was killed mid-output whenever the kill beat its next
+// line), then runs extra, a shell fragment, and drains stdin.
 type openCodeFake struct{ dir string }
 
 func installOpenCodeFake(t *testing.T, extra string) *openCodeFake {
@@ -1120,6 +1124,9 @@ func installOpenCodeFake(t *testing.T, extra string) *openCodeFake {
 echo invoked >> %[1]q/invocations.log
 env -0 > %[1]q/env.bin
 ls -ld "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" > %[1]q/dirs.txt 2>&1
+if [ -n "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL" ]; then
+  printf '{"nonce":"%%s","plugin_version":"`+opencodeplugin.PluginVersion+`","hooks":[]}' "$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+fi
 %[2]s
 cat > /dev/null
 exit 0
@@ -1705,6 +1712,12 @@ echo "ERROR leaked $GITHUB_TOKEN $OPENAI_API_KEY $DEEPSEEK_API_KEY $OPENCODE_SER
 						t.Errorf("%s does not show where %s was redacted:\n%s", where, name, out)
 					}
 				}
+			}
+			// A failed plugin handshake kills the fake at its first event, so
+			// whether the next line survives is a race (#3306): the fake must
+			// pass the handshake for the assertions below to mean anything.
+			if strings.Contains(result.Stderr, "adapter_incompatible") {
+				t.Fatalf("the plugin handshake failed, so the fake was killed mid-output:\n%s", result.Stderr)
 			}
 			if !strings.Contains(result.Stdout, "an ordinary line") {
 				t.Error("redaction removed an ordinary line")

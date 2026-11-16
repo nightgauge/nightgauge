@@ -25,7 +25,6 @@ package adapters
 // (the plugin needs no npm package at all, #3306).
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -82,7 +81,7 @@ func TestInstallNightgaugePluginRefusesAnInvalidDocument(t *testing.T) {
 			PluginDir:     filepath.Join(root, "config", "opencode", "plugin"),
 			RunDir:        root,
 		}
-		if err := InstallNightgaugePlugin(context.Background(), run, "", ""); err == nil {
+		if err := InstallNightgaugePlugin(run, "", ""); err == nil {
 			t.Errorf("%s: the plugin was added to a document 2.x would load with a control missing", name)
 		}
 		if run.Env[openCodeConfigContentEnvVar] != content {
@@ -101,7 +100,7 @@ func TestInstallNightgaugePluginAddsOnlyThePluginKey(t *testing.T) {
 		RunDir:        root,
 	}
 
-	if err := InstallNightgaugePlugin(context.Background(), run, "", "01890a5d-ac96-774b-bcce-b30209a81625"); err != nil {
+	if err := InstallNightgaugePlugin(run, "", "01890a5d-ac96-774b-bcce-b30209a81625"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -167,7 +166,7 @@ func TestInstallNightgaugePluginWithoutRunIDSkipsHandshake(t *testing.T) {
 		PluginDir:     filepath.Join(root, "config", "opencode", "plugin"),
 		RunDir:        root,
 	}
-	if err := InstallNightgaugePlugin(context.Background(), run, "", ""); err != nil {
+	if err := InstallNightgaugePlugin(run, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if run.Env[opencodeplugin.EnvNonce] != "" || run.Env[opencodeplugin.EnvSentinel] != "" {
@@ -193,7 +192,7 @@ func TestInstallNightgaugePluginRejectsUnparseableConfig(t *testing.T) {
 		PluginDir:     filepath.Join(root, "config", "opencode", "plugin"),
 		RunDir:        root,
 	}
-	if err := InstallNightgaugePlugin(context.Background(), run, "", "01890a5d-ac96-774b-bcce-b30209a81625"); err == nil {
+	if err := InstallNightgaugePlugin(run, "", "01890a5d-ac96-774b-bcce-b30209a81625"); err == nil {
 		t.Fatal("want an error decoding an unparseable per-run config")
 	}
 }
@@ -210,7 +209,7 @@ func TestInstallNightgaugePluginInstallsADirectoryWithPackageJSON(t *testing.T) 
 		PluginDir:     filepath.Join(root, "config", "opencode", "plugin"),
 		RunDir:        root,
 	}
-	if err := InstallNightgaugePlugin(context.Background(), run, "", "01890a5d-ac96-774b-bcce-b30209a81625"); err != nil {
+	if err := InstallNightgaugePlugin(run, "", "01890a5d-ac96-774b-bcce-b30209a81625"); err != nil {
 		t.Fatal(err)
 	}
 	entry := run.Env[opencodeplugin.EnvPluginPath]
@@ -262,7 +261,7 @@ func TestInstallNightgaugePluginFailsWhenPluginDirIsAFile(t *testing.T) {
 				PluginDir:     filepath.Join(root, "plugin"),
 				RunDir:        root,
 			}
-			err := InstallNightgaugePlugin(context.Background(), run, "", "01890a5d-ac96-774b-bcce-b30209a81633")
+			err := InstallNightgaugePlugin(run, "", "01890a5d-ac96-774b-bcce-b30209a81633")
 			var inc *opencodeplugin.IncompatibleError
 			if !errors.As(err, &inc) {
 				t.Fatalf("want an *opencodeplugin.IncompatibleError from VerifyInstalled, got %v", err)
@@ -306,7 +305,7 @@ func TestInstallNightgaugePluginNeverWritesOperatorHomeOpenCode(t *testing.T) {
 		RunDir:        root,
 		Home:          home,
 	}
-	if err := InstallNightgaugePlugin(context.Background(), run, "", "01890a5d-ac96-774b-bcce-b30209a81626"); err != nil {
+	if err := InstallNightgaugePlugin(run, "", "01890a5d-ac96-774b-bcce-b30209a81626"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(depsMarker(operatorOpenCode)); err == nil {
@@ -348,7 +347,7 @@ func TestInstallNightgaugePluginNeverCreatesOperatorHomeOpenCode(t *testing.T) {
 		RunDir:        root,
 		Home:          home,
 	}
-	if err := InstallNightgaugePlugin(context.Background(), run, "", "01890a5d-ac96-774b-bcce-b30209a81627"); err != nil {
+	if err := InstallNightgaugePlugin(run, "", "01890a5d-ac96-774b-bcce-b30209a81627"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".opencode")); err == nil {
@@ -382,7 +381,7 @@ func TestInstallNightgaugePluginNeverWritesInheritedConfigDir(t *testing.T) {
 		PluginDir: filepath.Join(root, "config", "opencode", "plugin"),
 		RunDir:    root,
 	}
-	if err := InstallNightgaugePlugin(context.Background(), run, "", "01890a5d-ac96-774b-bcce-b30209a81628"); err != nil {
+	if err := InstallNightgaugePlugin(run, "", "01890a5d-ac96-774b-bcce-b30209a81628"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(operatorConfig); err == nil {
@@ -401,7 +400,8 @@ func TestInstallNightgaugePluginNeverWritesInheritedConfigDir(t *testing.T) {
 // flagged a satisfied directory too, on a re-measurement that seeded only
 // the version marker and found the wait unchanged; driven directly against
 // the real 1.18.30 binary with the files this test seeds
-// (a superset of what OperatorInstallSatisfied itself reads), a satisfied
+// (exactly the node_modules/, package.json and package-lock.json that
+// OperatorInstallSatisfied reads), a satisfied
 // operator directory DOES get OpenCode's local, instant fast path (~1s for
 // `debug config`), the same as a run's own XDG-resolved config directory —
 // round 7's premise does not hold once the real predicate is what is
@@ -421,7 +421,7 @@ func TestInstallNightgaugePluginDoesNotRiskASatisfiedOperatorDir(t *testing.T) {
 		RunDir:        root,
 		Home:          home,
 	}
-	if err := InstallNightgaugePlugin(context.Background(), run, "", "01890a5d-ac96-774b-bcce-b30209a81631"); err != nil {
+	if err := InstallNightgaugePlugin(run, "", "01890a5d-ac96-774b-bcce-b30209a81631"); err != nil {
 		t.Fatal(err)
 	}
 	if got := run.OperatorInstallRisk; got != "" {
@@ -454,7 +454,7 @@ func TestInstallNightgaugePluginStillRisksAnUnsatisfiedOperatorDir(t *testing.T)
 		RunDir:        root,
 		Home:          home,
 	}
-	if err := InstallNightgaugePlugin(context.Background(), run, "", "01890a5d-ac96-774b-bcce-b30209a81632"); err != nil {
+	if err := InstallNightgaugePlugin(run, "", "01890a5d-ac96-774b-bcce-b30209a81632"); err != nil {
 		t.Fatal(err)
 	}
 	if got := run.OperatorInstallRisk; got != operatorOpenCode {

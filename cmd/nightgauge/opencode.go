@@ -260,7 +260,7 @@ func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapte
 	// spawns from its output verifies the minted handshake (#1648, #1804,
 	// opencodeHandshake.ts), against the sentinel path and nonce in env and
 	// the plugin_version printed beside them.
-	if err := adapters.InstallNightgaugePlugin(ctx, prepared, run.OutputFile, id); err != nil {
+	if err := adapters.InstallNightgaugePlugin(prepared, run.OutputFile, id); err != nil {
 		return nil, err
 	}
 	// The binary PreDispatch's version policy just vetted, resolved by the

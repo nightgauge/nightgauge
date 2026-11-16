@@ -591,7 +591,7 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 	// minted root and a real spawn, so it must still get a handshake, or a
 	// plugin that fails to load on that dispatch goes unnoticed (#1635 fix
 	// round finding 1/5).
-	if err := InstallNightgaugePlugin(ctx, run, req.Run.OutputFile, req.ID); err != nil {
+	if err := InstallNightgaugePlugin(run, req.Run.OutputFile, req.ID); err != nil {
 		return nil, err
 	}
 	root := &RunRoot{
@@ -605,6 +605,11 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 	}
 	return root, nil
 }
+
+// writeNightgaugePlugin is opencodeplugin.Write, a variable so a test can
+// hand InstallNightgaugePlugin an install that writes without error but
+// cannot load, and so reach the VerifyInstalled check below.
+var writeNightgaugePlugin = opencodeplugin.Write
 
 // InstallNightgaugePlugin writes the embedded Nightgauge OpenCode plugin
 // (internal/execution/opencodeplugin, #1635) into run's PluginDir and adds it
@@ -657,17 +662,12 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 // though it spawns nothing and so nothing ever verifies the handshake it
 // arms. This branch exists only so a direct, non-CLI caller with no run
 // identity of its own still gets a usable config back rather than an error.
-
-// writeNightgaugePlugin is opencodeplugin.Write, a variable so a test can
-// hand InstallNightgaugePlugin an install that writes without error but
-// cannot load, and so reach the VerifyInstalled check below.
-var writeNightgaugePlugin = opencodeplugin.Write
-
+//
 // The written directory is checked with opencodeplugin.VerifyInstalled before
 // it is referenced: opencode 2.x only logs a WARN for a plugin entry it cannot
 // load and then runs the stage ungated, so a bad install fails the dispatch
 // here, before spawn (#3306).
-func InstallNightgaugePlugin(ctx context.Context, run *OpenCodeRun, outputFile, runID string) error {
+func InstallNightgaugePlugin(run *OpenCodeRun, outputFile, runID string) error {
 	entry, err := writeNightgaugePlugin(run.PluginDir)
 	if err != nil {
 		return fmt.Errorf("opencode: writing the nightgauge plugin: %w", err)
