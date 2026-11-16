@@ -3898,6 +3898,44 @@ func (s *Server) registerMethods() {
 		return map[string]string{"status": "ok"}, nil
 	}
 
+	// pipeline.recordBacktrack persists one backward stage transition the
+	// extension's orchestrator took (#3081). The extension's PipelineState is
+	// rebuilt from Go snapshots, so a backtrack recorded only there was lost;
+	// here it lands on the run's RuntimeState and reaches the run record as
+	// `backtracks`. A scheduler-owned run records its own backtracks where its
+	// engine takes them, so the verb records nothing for one.
+	//
+	//ipc:method pipelineRecordBacktrack params:PipelineRecordBacktrackParams result:void skip
+	s.methods["pipeline.recordBacktrack"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p PipelineRecordBacktrackParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		if !state.IsPipelineStage(p.FromStage) || !state.IsPipelineStage(p.ToStage) {
+			return nil, fmt.Errorf("invalid params: fromStage %q and toStage %q must be pipeline stages", p.FromStage, p.ToStage)
+		}
+		res, err := s.resolveRun("pipeline.recordBacktrack", verbRunProgress, p.RunID, p.Repo, p.IssueNumber)
+		if err != nil {
+			return nil, err
+		}
+		if res.schedulerOwned {
+			return map[string]string{"status": "ok"}, nil
+		}
+		res.rs.RecordBacktrack(p.FromStage, p.ToStage, p.SignalType, p.Reason, time.Now())
+		repo := res.rs.TargetRepo()
+		if repo == "" {
+			repo = p.Repo
+		}
+		if repo != "" {
+			if stateDir := s.pipelineStateDir(repo); stateDir != "" {
+				if err := res.rs.Persist(stateDir); err != nil {
+					log.Printf("recordBacktrack: persist runtime snapshot failed (non-fatal): %v", err)
+				}
+			}
+		}
+		return map[string]string{"status": "ok"}, nil
+	}
+
 	// pipeline.recordStageGateResult is the single-authoritative-writer route
 	// for `nightgauge gate verify --record` (#377, ADR-017 R-1).
 	//

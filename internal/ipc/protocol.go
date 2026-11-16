@@ -1354,6 +1354,21 @@ type PipelineNotifyStageAliveParams struct {
 	RunID string `json:"runId,omitempty"`
 }
 
+// PipelineRecordBacktrackParams are parameters for pipeline.recordBacktrack
+// (#3081). One backward stage transition the extension's orchestrator took.
+// Go appends it to the run's RuntimeState, and the run record carries it as
+// `backtracks`, so it outlives the extension's rebuilt PipelineState.
+type PipelineRecordBacktrackParams struct {
+	Repo        string `json:"repo"`
+	IssueNumber int    `json:"issueNumber"`
+	FromStage   string `json:"fromStage"`
+	ToStage     string `json:"toStage"`
+	SignalType  string `json:"signalType,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+	// RunID is REQUIRED (ADR-017 Decision 1). RUN-PROGRESS class.
+	RunID string `json:"runId,omitempty"`
+}
+
 // PipelineRecordStageGateResultParams are parameters for
 // pipeline.recordStageGateResult (#377, ADR-017 R-1).
 //

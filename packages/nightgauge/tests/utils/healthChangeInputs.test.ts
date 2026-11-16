@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { readChangeSignals } from "../../src/utils/healthChangeInputs";
+import { ExecutionHistoryReader } from "../../src/utils/executionHistoryReader";
 import { mkFakeCloneLayout } from "../helpers/cloneLayout";
 
 let root: string;
@@ -20,6 +21,7 @@ const filter = {
 const jsonl = (rows: unknown[]) => rows.map((r) => JSON.stringify(r)).join("\n") + "\n";
 
 beforeEach(() => {
+  ExecutionHistoryReader.clearCache();
   root = fs.mkdtempSync(path.join(os.tmpdir(), "ng-change-inputs-"));
   pipeline = mkFakeCloneLayout(root).pipeline;
 });
@@ -118,6 +120,58 @@ describe("readChangeSignals", () => {
     expect(r?.planComparisons).toEqual([
       { issueNumber: 3, plannedFiles: ["n.ts", "m.ts"], mergedFiles: ["m.ts"] },
       { issueNumber: 4, plannedFiles: null, mergedFiles: [] },
+    ]);
+  });
+  it("reads planned files from the durable run record once planning-N.json is pruned (#3081)", async () => {
+    fs.writeFileSync(
+      path.join(pipeline, "survival-records.jsonl"),
+      jsonl([
+        {
+          merge_commit_sha: "abc1234",
+          issue_number: 9,
+          merged_at: "2026-03-05T00:00:00Z",
+          verdict: "survived",
+        },
+      ])
+    );
+    // No planning-9.json: only the run record knows what was planned.
+    fs.mkdirSync(path.join(pipeline, "history"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pipeline, "history", "2026-03-04.jsonl"),
+      jsonl([
+        {
+          schema_version: "2",
+          record_type: "run",
+          issue_number: 9,
+          title: "t",
+          branch: "feat/9-t",
+          base_branch: "main",
+          execution_mode: "automatic",
+          started_at: "2026-03-04T10:00:00Z",
+          completed_at: "2026-03-04T10:30:00Z",
+          total_duration_ms: 1800000,
+          outcome: "complete",
+          stages: {},
+          tokens: {
+            total_input: 1,
+            total_output: 1,
+            total_cache_read: 0,
+            total_cache_creation: 0,
+            estimated_cost_usd: 0.01,
+          },
+          routing: { complexity_score: 3, path: "standard", skip_stages: [] },
+          planned_files: ["a.go", "b.ts"],
+          recorded_at: "2026-03-04T10:30:00Z",
+        },
+      ])
+    );
+    const r = await readChangeSignals(
+      root,
+      filter,
+      vi.fn(async () => ["a.go"])
+    );
+    expect(r?.planComparisons).toEqual([
+      { issueNumber: 9, plannedFiles: ["a.go", "b.ts"], mergedFiles: ["a.go"] },
     ]);
   });
 });

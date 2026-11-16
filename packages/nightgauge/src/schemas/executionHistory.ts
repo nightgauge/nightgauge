@@ -57,6 +57,15 @@ export const HistoryHandoffEventSchema = z.object({
   estimated_cold_start_usd: z.number(),
 });
 
+/** One backward stage transition on a run record (#3081). */
+export const HistoryBacktrackEventSchema = z.object({
+  from_stage: z.string(),
+  to_stage: z.string(),
+  signal_type: z.string().optional(),
+  reason: z.string().optional(),
+  at: z.string(),
+});
+
 export const HistoryStageTokenUsageSchema = z.object({
   input: z.number().int().min(0),
   output: z.number().int().min(0),
@@ -761,6 +770,10 @@ export const ExecutionHistoryRunRecordSchema = z.object({
   stages: z.record(z.string(), HistoryStageDetailSchema),
   /** Session-lineage handoffs of the run (#55). */
   handoff_events: z.array(HistoryHandoffEventSchema).optional(),
+  /** Planned files from planning-<N>.json, kept after it is pruned (#3081). */
+  planned_files: z.array(z.string()).optional(),
+  /** Backward stage transitions the run took (#3081). */
+  backtracks: z.array(HistoryBacktrackEventSchema).optional(),
   tokens: TokensSchema,
 
   files: z
@@ -838,6 +851,10 @@ export const ExecutionHistoryRunRecordV2Schema = z.object({
   stages: z.record(z.string(), HistoryStageDetailSchema),
   /** Session-lineage handoffs of the run (#55). */
   handoff_events: z.array(HistoryHandoffEventSchema).optional(),
+  /** Planned files from planning-<N>.json, kept after it is pruned (#3081). */
+  planned_files: z.array(z.string()).optional(),
+  /** Backward stage transitions the run took (#3081). */
+  backtracks: z.array(HistoryBacktrackEventSchema).optional(),
   tokens: TokensSchema,
 
   /** Outcome classification for analytics (Issue #1005, #1047, #3267) */
@@ -865,6 +882,11 @@ export const ExecutionHistoryRunRecordV2Schema = z.object({
       // eligible. Paired with outcome="cancelled" and an empty
       // terminal_failure_kind on the run record.
       "deferred",
+      // An architecture-approval hold (#2756): a human pause, not a failure.
+      "awaiting_approval",
+      // A stop on an issue that was already closed (#3081): a skip, paired
+      // with outcome="cancelled" and terminal_failure_kind issue_closed.
+      "issue_closed",
     ])
     .optional(),
 

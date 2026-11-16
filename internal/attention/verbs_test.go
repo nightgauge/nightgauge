@@ -16,7 +16,7 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 		VerbIssueClose, VerbBudgetRaiseCeiling, VerbRunRetryWithEscalation,
 		VerbIssueApproveArchitecture, VerbDependabotEnableAlerts,
 		VerbWorkspaceAddRepo, VerbBlockedFindingClear, VerbPRUpdateBranch,
-		VerbDoctorApplyRemedy, VerbDoctorRecheck, VerbNoop,
+		VerbIssueRerunPostMerge, VerbDoctorApplyRemedy, VerbDoctorRecheck, VerbNoop,
 	}
 	for _, v := range registered {
 		if !IsRegisteredVerb(v) {
@@ -102,7 +102,7 @@ func TestIsCLIExecutableVerb(t *testing.T) {
 		VerbAutonomousComplete, VerbAutonomousClearIssueFailures, VerbProjectSyncStatus,
 		VerbIssueClose, VerbIssueApproveArchitecture, VerbDependabotEnableAlerts,
 		VerbWorkspaceAddRepo, VerbBlockedFindingClear, VerbPRUpdateBranch,
-		"unregistered.verb",
+		VerbIssueRerunPostMerge, "unregistered.verb",
 	}
 	for _, v := range daemonOnly {
 		if IsCLIExecutableVerb(v) {
@@ -694,5 +694,59 @@ func TestExecuteDoctorRecheck(t *testing.T) {
 	if err := ExecuteDoctorRecheck(context.Background(), gone, req, Option{ID: "recheck", Verb: VerbDoctorRecheck,
 		Args: map[string]any{DoctorOptionArgFingerprint: testDoctorFP, DoctorOptionArgRemedyID: "release"}}); err == nil {
 		t.Fatal("recheck accepted a remedy ID")
+	}
+}
+
+// --- issue.rerunPostMerge (#3081) ---------------------------------------------
+
+type rerunRecorder struct {
+	repo  string
+	issue int
+	calls int
+}
+
+func (r *rerunRecorder) RerunPostMerge(_ context.Context, repo string, issue int) error {
+	r.repo, r.issue = repo, issue
+	r.calls++
+	return nil
+}
+
+func TestExecuteRerunPostMerge_TargetsOnlyThePersistedContext(t *testing.T) {
+	req := &DecisionRequest{ID: "r1", Context: Context{Repo: "o/app", Issue: 12}}
+	opt := Option{ID: "rerun", Verb: VerbIssueRerunPostMerge}
+	rec := &rerunRecorder{}
+	if err := ExecuteRerunPostMerge(context.Background(), rec, req, opt, []string{"o/app"}); err != nil {
+		t.Fatalf("rerun: %v", err)
+	}
+	if rec.calls != 1 || rec.repo != "o/app" || rec.issue != 12 {
+		t.Fatalf("rerun targeted %s#%d (%d calls)", rec.repo, rec.issue, rec.calls)
+	}
+
+	refusals := map[string]func() error{
+		"args": func() error {
+			return ExecuteRerunPostMerge(context.Background(), rec, req,
+				Option{ID: "rerun", Verb: VerbIssueRerunPostMerge, Args: map[string]any{"issueNumber": 99}}, []string{"o/app"})
+		},
+		"wrong verb": func() error {
+			return ExecuteRerunPostMerge(context.Background(), rec, req, Option{ID: "x", Verb: VerbNoop}, []string{"o/app"})
+		},
+		"unconfigured repo": func() error {
+			return ExecuteRerunPostMerge(context.Background(), rec, req, opt, []string{"o/other"})
+		},
+		"no issue": func() error {
+			return ExecuteRerunPostMerge(context.Background(), rec,
+				&DecisionRequest{ID: "r2", Context: Context{Repo: "o/app"}}, opt, []string{"o/app"})
+		},
+		"no capability": func() error {
+			return ExecuteRerunPostMerge(context.Background(), nil, req, opt, []string{"o/app"})
+		},
+	}
+	for name, call := range refusals {
+		if err := call(); err == nil {
+			t.Errorf("%s: want a refusal", name)
+		}
+	}
+	if rec.calls != 1 {
+		t.Fatalf("a refused call reached the runner: %d calls", rec.calls)
 	}
 }

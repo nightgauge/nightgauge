@@ -152,10 +152,16 @@ type V2RunRecord struct {
 	// HandoffEvents lists every dispatch that started a new session lineage
 	// and so paid a cold prompt cache (#55), with its estimated cost.
 	HandoffEvents []HandoffEvent `json:"handoff_events,omitempty"`
-	Tokens        V2Tokens       `json:"tokens"`
-	OutcomeType   string         `json:"outcome_type,omitempty"`
-	Files         V2Files        `json:"files"`
-	Routing       V2Routing      `json:"routing"`
+	// PlannedFiles is planning-<N>.json's files_to_create then
+	// files_to_modify, captured when the record is built (#3081). Plan
+	// fidelity reads it after the planning context has been pruned.
+	PlannedFiles []string `json:"planned_files,omitempty"`
+	// Backtracks are the run's backward stage transitions (#3081).
+	Backtracks  []BacktrackEvent `json:"backtracks,omitempty"`
+	Tokens      V2Tokens         `json:"tokens"`
+	OutcomeType string           `json:"outcome_type,omitempty"`
+	Files       V2Files          `json:"files"`
+	Routing     V2Routing        `json:"routing"`
 	// BudgetEstimate is the pre-flight projection this run was dispatched
 	// against, persisted so accuracy can be measured from the corpus (#1213).
 	//
@@ -1779,6 +1785,8 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		Type:          typePtr,
 		Stages:        stages,
 		HandoffEvents: snap.HandoffEvents,
+		PlannedFiles:  readPlannedFiles(hw.root, snap.IssueNumber),
+		Backtracks:    snap.Backtracks,
 		Tokens: V2Tokens{
 			TotalInput:         accInput,
 			TotalOutput:        accOutput,

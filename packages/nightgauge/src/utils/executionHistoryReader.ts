@@ -216,6 +216,30 @@ export class ExecutionHistoryReader {
   }
 
   /**
+   * The planned file list each issue's latest run record carries (#3081):
+   * `planned_files`, captured from `planning-<N>.json` when the record was
+   * built, so plan fidelity survives the planning context being pruned. An
+   * issue with no record carrying the list is absent from the map.
+   */
+  static async plannedFilesByIssue(workspaceRoot: string): Promise<Map<number, string[]>> {
+    const out = new Map<number, string[]>();
+    try {
+      for (const r of await this.readAll(workspaceRoot)) {
+        if (r.record_type !== "run") continue;
+        const planned = (r as { planned_files?: unknown }).planned_files;
+        if (!Array.isArray(planned) || planned.length === 0) continue;
+        out.set(
+          r.issue_number,
+          planned.filter((f): f is string => typeof f === "string")
+        );
+      }
+    } catch {
+      // An unreadable history leaves the planning-context fallback in force.
+    }
+    return out;
+  }
+
+  /**
    * Aggregate total cost per issue across all pipeline runs.
    *
    * Groups run records by issue_number and sums estimated_cost_usd.

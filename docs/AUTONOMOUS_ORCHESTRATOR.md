@@ -1257,6 +1257,15 @@ halt data has one wire shape rather than two that can drift.
   There is nothing a human triages by also freezing the queue. Keyed on the
   typed `outOfScopeFinding` flag — the other producer of `blocked` (a
   pr-merge repo-config dead end) is a real fault and still halts.
+  While the finding defers the issue, pickup keeps its card open, raising it
+  again if it was resolved or expired, and clears the finding itself once every
+  native `blockedBy` edge of the issue is closed (#3081). A Ready issue held
+  only by a dependency closed without the validation marker, and a cycle of
+  open `blockedBy` edges, each raise a card as well; see
+  [ATTENTION_PRODUCERS.md](ATTENTION_PRODUCERS.md#scheduler-holds-that-used-to-be-silent-3081).
+  A run that stops `issue_closed` is a skip: the issue leaves the candidate
+  set (`closed-stop`, persisted as `closedStops`) until the graph shows the
+  close.
 - **Environmental, overload and network terminal kinds**:
   `stream_idle_timeout`, `rate_limit_quota_exhausted`, `network_unavailable`,
   `api_overloaded`, `api_connection_lost`, `github_network_outage`,

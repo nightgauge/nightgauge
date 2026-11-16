@@ -195,7 +195,10 @@ func printExitRecordsHuman(records []diagnostics.StageExitRecord) {
 			ts = t.Local().Format("2006-01-02 15:04:05")
 		}
 		status := "ok"
-		if !rec.Success {
+		if rec.IsSkip() {
+			// A stop on an already-closed issue is a skip, not a failure (#3081).
+			status = "skip/" + rec.TerminalKind
+		} else if !rec.Success {
 			status = "FAIL"
 			if rec.TerminalKind != "" {
 				status = "FAIL/" + rec.TerminalKind

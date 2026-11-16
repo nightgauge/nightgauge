@@ -727,3 +727,35 @@ open tracking issue adds it to the board again, so a failed board sync is
 repaired on the next pass. The card's key is `pr-X`, its context names the
 PR and the tracking issue, and its fingerprint is the parent and tracking
 issue numbers. The card retracts once the PR merges or closes.
+
+## Scheduler holds that used to be silent (#3081)
+
+Three autonomous-scheduler producers make a pickup hold visible. Each reads the
+whole dependency graph in the prioritize pass, not only the nodes the candidate
+loop reached, so its observed set is complete.
+
+- **`out-of-scope-blocker`, re-raised at pickup.** While a recorded blocked
+  finding defers an issue, pickup raises the card whenever none is open for the
+  issue, so a card that was resolved or expired comes back instead of the issue
+  deferring silently. The card stays event-shaped on purpose: a standing card a
+  human resolved is suppressed until its fingerprint moves, which is the silence
+  this prevents. When every native `blockedBy` edge of the issue is closed, the
+  scheduler deletes the finding itself, releases the operator hold, and resolves
+  the card with its `leave` option. A finding with no native edge is never
+  cleared automatically.
+- **`unvalidated-dependency`.** A closed dependency without the post-merge
+  validation marker that is the only thing holding at least one open Ready
+  issue. Standing, keyed `unvalidated-dependency:<owner/repo>#<N>` by the
+  dependency, so its dependents share one card. **Run post-merge hook** binds
+  `issue.rerunPostMerge`: empty arguments, the repository and the issue from the
+  card's `Context`. The daemon finds the dependency's latest merged closing PR
+  and runs the post-merge path a merged run runs. If that path leaves no marker
+  (main still red, say), the verb fails and the card stays.
+- **`dependency-cycle`.** A cycle of open native `blockedBy` edges, detected by
+  `detectDependencyCycles` (Tarjan's strongly connected components). Standing,
+  keyed by the cycle's sorted issues, with a fingerprint over its edges. It
+  offers one `issue.removeBlockedBy` option per edge, each carrying
+  `blockedRepo`, `blockedNumber`, `blockerRepo` and `blockerNumber`. A repository
+  named there must be in the configured set. The pass that no longer sees the
+  cycle retracts the card. The scheduler also records the cycles for doctor
+  ([NGD114](DOCTOR.md#ngd114)).

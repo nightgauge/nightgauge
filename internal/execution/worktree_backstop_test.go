@@ -43,7 +43,7 @@ func TestStateBackstop_ExcusesPipelineWorktreeRemoval(t *testing.T) {
 	}{
 		{"pipeline cleanup", func(m *Manager, _ string) error {
 			return m.CleanupWorktree("nightgauge/nightgauge", 2701)
-		}, 0, "(information) pipeline worktrees removed"},
+		}, 0, "(information) pipeline worktrees (and their serve claims) removed"},
 		{"unrecorded removal", func(_ *Manager, p string) error {
 			return os.RemoveAll(p)
 		}, 1, "removed paths from the machine-state directory"},
