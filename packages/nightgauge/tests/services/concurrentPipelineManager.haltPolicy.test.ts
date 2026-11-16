@@ -227,6 +227,7 @@ describe("queue-halt policy (ConcurrentPipelineManager)", () => {
       [
         "adapter_incompatible",
         "adapter_permission_rejected",
+        "adapter_provider_no_route",
         "context_window_exceeded",
         "dev_context_stale",
         "environment_halt",

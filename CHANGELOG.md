@@ -16,6 +16,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- An OpenCode 2.x stage whose provider keeps failing now stops in seconds and is named as a
+  provider failure (#3305). 2.x retries a provider 500 or a refused connection forever, writing
+  only `retry` events, so the stage used to wait for its stage timeout, or for the idle-stream
+  watchdog when a declared endpoint served it. The manager now stops the stage after 5 retries
+  or 90 s (`OpenCodeRetryMaxAttempts`, `OpenCodeRetryMaxElapsed`) with no step finished in
+  between. Three new terminal kinds come from OpenCode's own error type, never from its
+  message: `adapter_provider_transport` for a refused or dropped connection,
+  `adapter_provider_error` for any other provider error, and `adapter_provider_no_route` for a
+  model the provider config does not route. The no-route kind parks, because a retry asks for
+  the same model. The other two retry. The stream parser also reads 2.x's `retry` event, the
+  `subagent` tool name, the 2.x headless-rejection text and `state.metadata.providerCall`. On
+  2.2.7, OpenCode's `db` and top-level `export` commands no longer exist, so subagent usage is
+  recorded as partial until the usage fold is ported.
 - The OpenCode permission map is now built on OpenCode 2.x's own tool names (#3304). Before, it
   still emitted 1.x's `list` and `todowrite`, which 2.x has no tool for, and 2.x's `execute`,
   `question` and `write` got no rule of their own: `write` escaped the secret and

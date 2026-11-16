@@ -811,6 +811,17 @@ func (acc *TokenAccumulator) ParseGrokStreamLine(line string) (*StreamEvent, boo
 // only: a subagent's steps never appear in it, which is why the manager folds
 // child-session usage from `opencode export` after exit (opencode_usage.go).
 // There is no final usage event and no model or version field.
+//
+// OpenCode 2.x (2.2.7, adapters/testdata/opencode-cli/, #3305) keeps those
+// types and adds `retry`, written once per attempt while a provider request
+// is retried: top-level `attempt` (2 on the first retry), `nextRetryAt`
+// (epoch ms) and `error` {type, message, ...}. A provider 500 or a refused
+// connection retries without end, and an unknown model ends on one `error`
+// event with error.type `provider.no-route`. Only error.type is read: the
+// message can carry a host or a response body. 2.x also renames the `task`
+// tool to `subagent` and adds part.state.metadata.providerCall and
+// providerResult, each {executed: bool}: whether the provider, not opencode,
+// ran the tool.
 
 // openCodeEvent is one event of the stream.
 type openCodeEvent struct {
@@ -818,6 +829,25 @@ type openCodeEvent struct {
 	SessionID string          `json:"sessionID"`
 	Part      *openCodePart   `json:"part"`
 	Error     json.RawMessage `json:"error"`
+	// Attempt and NextRetryAt are a 2.x retry event's own fields (#3305).
+	Attempt     *int   `json:"attempt"`
+	NextRetryAt *int64 `json:"nextRetryAt"`
+}
+
+// openCodeEventError is the part of an error or retry event's `error` the
+// parser reads: its type, never its message.
+type openCodeEventError struct {
+	Type string `json:"type"`
+}
+
+// openCodeErrorType returns an error or retry event's error.type, or "" when
+// the event carries none or it is not an object.
+func openCodeErrorType(raw json.RawMessage) string {
+	var e openCodeEventError
+	if len(raw) == 0 || json.Unmarshal(raw, &e) != nil {
+		return ""
+	}
+	return e.Type
 }
 
 // openCodePart is the subset of an event's part the parser reads. The
@@ -834,9 +864,30 @@ type openCodePart struct {
 // openCodeToolState is a tool_use part's outcome. Error is compared with
 // OpenCode's own rejection message only; it is never copied anywhere.
 type openCodeToolState struct {
-	Status string              `json:"status"`
-	Error  string              `json:"error"`
-	Time   *openCodeToolTiming `json:"time"`
+	Status   string                `json:"status"`
+	Error    string                `json:"error"`
+	Time     *openCodeToolTiming   `json:"time"`
+	Metadata *openCodeToolMetadata `json:"metadata"`
+}
+
+// openCodeToolMetadata is the part of a 2.x tool_use part.state.metadata the
+// parser reads (#3305): whether the provider executed the call and returned
+// its result itself, as a provider-side tool does, rather than opencode
+// running it. Captured on 2.2.7 as {"executed": false} on every local tool.
+// Nothing else of the metadata (tool output, raw input) is declared.
+type openCodeToolMetadata struct {
+	ProviderCall   *openCodeProviderExecution `json:"providerCall"`
+	ProviderResult *openCodeProviderExecution `json:"providerResult"`
+}
+
+type openCodeProviderExecution struct {
+	Executed bool `json:"executed"`
+}
+
+// providerExecuted reports whether the provider ran the call.
+func (m *openCodeToolMetadata) providerExecuted() bool {
+	return m != nil && ((m.ProviderCall != nil && m.ProviderCall.Executed) ||
+		(m.ProviderResult != nil && m.ProviderResult.Executed))
 }
 
 // openCodeToolTiming is a tool_use part's state.time (#1635 fix round):
@@ -891,16 +942,28 @@ const openCodeRejectedToolError = "The user rejected permission to use this spec
 // success for a stage a permission-map "deny" actually stopped.
 const openCodeRuleDeniedToolErrorPrefix = "The user has specified a rule which prevents you from using this specific tool call."
 
+// openCodeHeadlessRejectedToolErrorPrefix is the error OpenCode 2.x gives a
+// tool call whose permission resolved to "ask" in a headless run (#3305,
+// captured on 2.2.7: adapters/testdata/opencode-cli/stream-tool-state.jsonl).
+// It replaces 1.18.30's openCodeRejectedToolError. A 2.x "deny" removes the
+// tool from the model's list instead (spike #3197 § 3), so no tool_use event
+// carries a "deny" rejection on 2.x.
+const openCodeHeadlessRejectedToolErrorPrefix = "This non-interactive run cannot ask the user for permission"
+
 // openCodeSubagentFailedPrefix starts the error 1.18.30 gives the parent's
 // `task` tool call when the subagent it started ended in error (#1744). The
 // subagent's own failure follows the task id; the parent session receives
 // all of it as an ordinary tool result and may carry on.
 const openCodeSubagentFailedPrefix = "Subagent failed"
 
+// openCodeSubagentTools are the tool names that start a subagent: 1.18.30's
+// `task` and 2.x's `subagent` (spike #3197 § 3).
+var openCodeSubagentTools = map[string]bool{"task": true, "subagent": true}
+
 // SubagentOnlyRejection reports whether every error the run's own session
 // saw was a failed subagent (#1744): no tool call of its own was rejected or
-// otherwise failed, at least one `task` call failed with "Subagent failed",
-// and the stream did not end on an error event. An auto-reject notice on
+// otherwise failed, at least one `task` or `subagent` call failed with
+// "Subagent failed", and the stream did not end on an error event. An auto-reject notice on
 // stderr in such a run is the subagent's, not the session's.
 func (s *OpenCodeStream) SubagentOnlyRejection() bool {
 	return s.RejectedToolCalls == 0 && s.OtherToolErrors == 0 && s.SubagentFailedTasks > 0 && !s.LastEventError
@@ -913,13 +976,14 @@ func (s *OpenCodeStream) SubagentOnlyRejection() bool {
 // "deny" text dynamically per call, and the interactive-feedback text trails
 // the "ask" text the same way.
 func openCodeIsRejectedToolError(errText string) bool {
-	return strings.HasPrefix(errText, openCodeRejectedToolError) || strings.HasPrefix(errText, openCodeRuleDeniedToolErrorPrefix)
+	return strings.HasPrefix(errText, openCodeRejectedToolError) || strings.HasPrefix(errText, openCodeRuleDeniedToolErrorPrefix) ||
+		strings.HasPrefix(errText, openCodeHeadlessRejectedToolErrorPrefix)
 }
 
-// openCodeKnownEvents are the event types opencode 1.18.30 writes.
+// openCodeKnownEvents are the event types opencode 1.18.30 and 2.x write.
 var openCodeKnownEvents = map[string]bool{
 	"step_start": true, "step_finish": true, "tool_use": true,
-	"text": true, "reasoning": true, "error": true,
+	"text": true, "reasoning": true, "error": true, "retry": true,
 }
 
 // OpenCodeDriftMarker prefixes every drift marker: evidence that OpenCode's
@@ -960,7 +1024,8 @@ type OpenCodeStream struct {
 	// LastEventError is true when the stream's last event was an "error"
 	// event: the session ended on an error, not a finished step.
 	LastEventError bool
-	// SubagentFailedTasks counts the run's own `task` tool calls that failed
+	// SubagentFailedTasks counts the run's own `task` (1.x) or `subagent`
+	// (2.x) tool calls that failed
 	// with OpenCode's "Subagent failed" error (#1744): a subagent the parent
 	// delegated to ended in error — on 1.18.30, when its own tool call was
 	// auto-rejected — and the parent session received that as a tool result
@@ -969,6 +1034,22 @@ type OpenCodeStream struct {
 	// OtherToolErrors counts the run's own tool calls that failed with any
 	// error other than a permission rejection or a subagent failure.
 	OtherToolErrors int
+	// ProviderExecutedToolCalls counts the run's own 2.x tool calls whose
+	// part.state.metadata says the provider executed them (#3305).
+	ProviderExecutedToolCalls int
+
+	// RetryEvents counts every 2.x `retry` event (#3305), and
+	// RetriesSinceProgress those since the last finished step or tool call:
+	// a provider that recovers resets it. MaxRetryAttempt is the highest
+	// `attempt` any of them carried.
+	RetryEvents          int
+	RetriesSinceProgress int
+	MaxRetryAttempt      int
+	// ProviderErrorType is the error.type of the last `error` event, or of
+	// the last `retry` event that carried one when no error event followed,
+	// such as provider.transport or provider.no-route. It is OpenCode's classification of the provider
+	// failure; the message beside it is never read.
+	ProviderErrorType string
 
 	// openRejections counts rejections not yet followed by recovery;
 	// completedSinceRejection is set by a completed tool call after one and
@@ -1057,7 +1138,28 @@ func (acc *TokenAccumulator) ParseOpenCodeStreamLine(line string) (*StreamEvent,
 	}
 	s.LastEventError = ev.Type == "error"
 	switch ev.Type {
+	case "error":
+		// An error event's own type replaces any earlier retry's, even when
+		// it has none: the session ended on this error, not on those retries.
+		s.ProviderErrorType = openCodeErrorType(ev.Error)
+	case "retry":
+		s.RetryEvents++
+		s.RetriesSinceProgress++
+		if ev.Attempt == nil {
+			s.Drift("a retry event has no attempt")
+		} else if *ev.Attempt > s.MaxRetryAttempt {
+			s.MaxRetryAttempt = *ev.Attempt
+		}
+		if t := openCodeErrorType(ev.Error); t == "" {
+			s.Drift("a retry event has no error.type")
+		} else {
+			s.ProviderErrorType = t
+		}
 	case "tool_use":
+		s.RetriesSinceProgress = 0
+		if ev.Part != nil && ev.Part.State != nil && ev.Part.State.Metadata.providerExecuted() {
+			s.ProviderExecutedToolCalls++
+		}
 		if ev.Part != nil && ev.Part.State != nil && ev.Part.State.Status == "error" &&
 			openCodeIsRejectedToolError(ev.Part.State.Error) {
 			s.RejectedToolCalls++
@@ -1069,7 +1171,7 @@ func (acc *TokenAccumulator) ParseOpenCodeStreamLine(line string) (*StreamEvent,
 			s.openRejections++
 			s.completedSinceRejection = false
 		} else if ev.Part != nil && ev.Part.State != nil && ev.Part.State.Status == "error" {
-			if ev.Part.Tool == "task" && strings.HasPrefix(ev.Part.State.Error, openCodeSubagentFailedPrefix) {
+			if openCodeSubagentTools[ev.Part.Tool] && strings.HasPrefix(ev.Part.State.Error, openCodeSubagentFailedPrefix) {
 				s.SubagentFailedTasks++
 			} else {
 				s.OtherToolErrors++
@@ -1079,6 +1181,7 @@ func (acc *TokenAccumulator) ParseOpenCodeStreamLine(line string) (*StreamEvent,
 		}
 	case "step_finish":
 		s.StepFinishes++
+		s.RetriesSinceProgress = 0
 		if s.completedSinceRejection {
 			s.RecoveredRejections += s.openRejections
 			s.openRejections = 0

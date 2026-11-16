@@ -549,6 +549,9 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  *  - `context_window_exceeded` — the prompt outgrew the model server's loaded context; parked, never retried on the same model and adapter (#1631)
  *  - `adapter_permission_rejected` — the adapter auto-rejected a tool the stage's allowed tools grant under an `ask` rule, OpenCode's `.env` read guard included; parked (#1631)
  *  - `adapter_incompatible` — the adapter's binary cannot serve the dispatch (version floor or unreadable version); parked (#1631)
+ *  - `adapter_provider_no_route` — OpenCode 2.x reported error type provider.no-route (an unrouted model); parked (#3305)
+ *  - `adapter_provider_transport` — OpenCode 2.x reported provider.transport, stopped past the retry bound or terminal; retryable (#3305)
+ *  - `adapter_provider_error` — any other provider.* error type OpenCode 2.x reported; retryable (#3305)
  *  - `environment_halt` — a project-declared preflight.environment check failed in Phase 0; parked (#101)
  *  - `gate_plugin_missing` — a bundled build's Claude stage did not load the Nightgauge plugin; parked (#2723)
  *
@@ -624,6 +627,9 @@ export const TerminalFailureKindSchema = z.enum([
   "context_window_exceeded", // Issue #1631 — the prompt outgrew the context the model server has the model loaded with; classified only from the adapter's failed-request line, never from model text
   "adapter_permission_rejected", // Issue #1631 — the adapter auto-rejected a tool the stage's allowed tools grant (#1624's marker) under an `ask` rule, OpenCode's `.env` read guard included, distinct from permission_denied
   "adapter_incompatible", // Issue #1631 — the adapter's binary cannot serve the dispatch (#1627's version floor / unreadable version)
+  "adapter_provider_no_route", // Issue #3305 — OpenCode 2.x reported error type provider.no-route; an unrouted model, parked
+  "adapter_provider_transport", // Issue #3305 — OpenCode 2.x reported provider.transport; retryable
+  "adapter_provider_error", // Issue #3305 — any other provider.* error type OpenCode 2.x reported; retryable
   "environment_halt", // Issue #101 — a project-declared preflight.environment check failed in Phase 0; the operator's environment, not the code
   "gate_plugin_missing", // Issue #2723 — a bundled build's Claude stage did not load the Nightgauge plugin exactly once; stopped before any work
 ]);

@@ -1906,3 +1906,199 @@ func TestOpenCodeStreamRejectionRecovery(t *testing.T) {
 		}
 	}
 }
+
+// openCode2xFixtureLines reads a real OpenCode 2.2.7 capture from the
+// adapter's evidence directory (#3305).
+func openCode2xFixtureLines(t *testing.T, name string) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("adapters", "testdata", "opencode-cli", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSpace(string(data)), "\n")
+}
+
+// TestParseOpenCode2xRetryStream parses the captured 2.2.7 retry storms
+// (#3305): attempts 2 to 6, each a `retry` event, with error.type
+// provider.internal (an HTTP 500) or provider.transport (a refused
+// connection). They are known events, so no drift, and the stream records
+// the attempts, the run of retries since progress and the provider's type.
+func TestParseOpenCode2xRetryStream(t *testing.T) {
+	for name, wantType := range map[string]string{
+		"stream-retry-internal.jsonl":  "provider.internal",
+		"stream-retry-transport.jsonl": "provider.transport",
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := parseOpenCode(openCode2xFixtureLines(t, name)).OpenCode()
+			if d := s.DriftMarkers(); len(d) != 0 {
+				t.Fatalf("drift = %q, want none", d)
+			}
+			if s.RetryEvents != 5 || s.RetriesSinceProgress != 5 || s.MaxRetryAttempt != 6 {
+				t.Errorf("retries = %d, since progress = %d, max attempt = %d; want 5, 5, 6",
+					s.RetryEvents, s.RetriesSinceProgress, s.MaxRetryAttempt)
+			}
+			if s.ProviderErrorType != wantType {
+				t.Errorf("ProviderErrorType = %q, want %q", s.ProviderErrorType, wantType)
+			}
+			if s.StepFinishes != 0 || s.LastEventError {
+				t.Errorf("step finishes = %d, last event error = %v; want 0, false", s.StepFinishes, s.LastEventError)
+			}
+		})
+	}
+}
+
+// TestParseOpenCode2xRetryProgressAndDrift pins what resets a run of retries
+// (a finished step or tool call) and what a retry event without its fields
+// records.
+func TestParseOpenCode2xRetryProgressAndDrift(t *testing.T) {
+	retry := openCode2xFixtureLines(t, "stream-retry-transport.jsonl")[1]
+	tool := openCode2xFixtureLines(t, "stream-tool-state.jsonl")[1]
+	s := parseOpenCode([]string{retry, retry, tool, retry}).OpenCode()
+	if s.RetryEvents != 3 || s.RetriesSinceProgress != 1 {
+		t.Errorf("after a tool call: retries = %d, since progress = %d; want 3, 1", s.RetryEvents, s.RetriesSinceProgress)
+	}
+	s = parseOpenCode([]string{`{"type":"retry","sessionID":"ses_x"}`}).OpenCode()
+	want := []string{OpenCodeDriftMarker + " a retry event has no attempt", OpenCodeDriftMarker + " a retry event has no error.type"}
+	if got := s.DriftMarkers(); !slices.Equal(got, want) {
+		t.Errorf("drift = %q, want %q", got, want)
+	}
+}
+
+// TestParseOpenCode2xToolState parses the captured 2.2.7 tool run (#3305):
+// a completed read, a shell call rejected headless under an "ask" rule with
+// 2.x's own text, and a read of a missing file. Every tool_use carries
+// part.state.metadata.providerCall/providerResult {executed: false}. The
+// evidence recorded: one rejected call naming `shell`, still open, one other
+// tool error, and no provider-executed call.
+func TestParseOpenCode2xToolState(t *testing.T) {
+	lines := openCode2xFixtureLines(t, "stream-tool-state.jsonl")
+	s := parseOpenCode(lines).OpenCode()
+	if d := s.DriftMarkers(); len(d) != 0 {
+		t.Fatalf("drift = %q, want none", d)
+	}
+	if s.RejectedToolCalls != 1 || s.RejectedTool != "shell" || s.OtherToolErrors != 1 || s.ProviderExecutedToolCalls != 0 {
+		t.Errorf("rejected = %d (%q), other errors = %d, provider-executed = %d; want 1 (shell), 1, 0",
+			s.RejectedToolCalls, s.RejectedTool, s.OtherToolErrors, s.ProviderExecutedToolCalls)
+	}
+	if !s.TerminalRejection() || s.StepFinishes != 4 {
+		t.Errorf("terminal rejection = %v, step finishes = %d; want true, 4", s.TerminalRejection(), s.StepFinishes)
+	}
+
+	// The same completed read, as a provider-side tool reports it.
+	executed := strings.Replace(lines[1], `"providerCall":{"executed":false}`, `"providerCall":{"executed":true}`, 1)
+	if executed == lines[1] {
+		t.Fatal("the captured tool_use has no providerCall to rewrite")
+	}
+	if got := parseOpenCode([]string{executed}).OpenCode().ProviderExecutedToolCalls; got != 1 {
+		t.Errorf("provider-executed = %d, want 1", got)
+	}
+}
+
+// TestParseOpenCode2xSubagent parses the captured 2.2.7 subagent run: the
+// parent's `subagent` tool call completed. A failed one, rewritten from it
+// with 1.x's "Subagent failed" error, counts as a failed subagent under its
+// 2.x name, as `task` does on 1.x.
+func TestParseOpenCode2xSubagent(t *testing.T) {
+	lines := openCode2xFixtureLines(t, "stream-subagent.jsonl")
+	s := parseOpenCode(lines).OpenCode()
+	if d := s.DriftMarkers(); len(d) != 0 || s.SubagentFailedTasks != 0 || s.OtherToolErrors != 0 {
+		t.Fatalf("drift = %q, failed subagents = %d, other errors = %d; want none", d, s.SubagentFailedTasks, s.OtherToolErrors)
+	}
+	var ev map[string]any
+	if err := json.Unmarshal([]byte(lines[1]), &ev); err != nil {
+		t.Fatal(err)
+	}
+	part := ev["part"].(map[string]any)
+	if part["tool"] != "subagent" {
+		t.Fatalf("captured tool = %v, want subagent", part["tool"])
+	}
+	state := part["state"].(map[string]any)
+	state["status"], state["error"] = "error", openCodeSubagentFailedPrefix+": the child session ended in error"
+	failed, _ := json.Marshal(ev)
+	if got := parseOpenCode([]string{string(failed)}).OpenCode().SubagentFailedTasks; got != 1 {
+		t.Errorf("failed subagents = %d, want 1", got)
+	}
+}
+
+// TestOpenCode2xNoRouteClassifies runs the captured 2.2.7 unknown-model
+// stream (one error event, error.type provider.no-route, exit 1) through
+// finish and apply: the stage's stderr ends with the provider-failure marker
+// for adapter_provider_no_route, and carries none of the provider's message.
+func TestOpenCode2xNoRouteClassifies(t *testing.T) {
+	lines := openCode2xFixtureLines(t, "stream-no-route.jsonl")
+	acc := parseOpenCode(lines)
+	if got := acc.OpenCode().ProviderErrorType; got != "provider.no-route" {
+		t.Fatalf("ProviderErrorType = %q, want provider.no-route", got)
+	}
+	bin := writeFakeOpenCode(t, "case \"$1\" in --version) echo 2.2.7 ;; db) echo '[]' ;; esac\n")
+	run := newOpenCodeRun(acc.OpenCode(), nil)
+	runRoot := t.TempDir()
+	run.fold = testFold(bin, runRoot)
+	outcome := run.finish(context.Background(), openCodeExit{bin: bin, env: run.fold.env, runRoot: runRoot,
+		exitCode: 1, dispatched: "stub/nope"}, acc)
+	result := runResultFromAccumulator(strings.Join(lines, "\n")+"\n", "", acc, &ServedModelTracker{})
+	result.ExitCode = 1
+	outcome.apply(result)
+	want := OpenCodeProviderFailureMarker + " adapter_provider_no_route: opencode reported error type provider.no-route; the session ended on that error\n"
+	if !strings.HasSuffix(result.Stderr, want) {
+		t.Errorf("stderr = %q, want it to end with %q", result.Stderr, want)
+	}
+	if strings.Contains(result.Stderr, "Model unavailable") || strings.Contains(result.Stderr, "stub/nope") {
+		t.Errorf("stderr carries the provider's message: %q", result.Stderr)
+	}
+	if result.RecoverableExit {
+		t.Error("RecoverableExit = true, want false: the session never ran a step")
+	}
+}
+
+// finishOpenCode2x parses lines and runs finish on them with a fake binary
+// whose fold finds no subagent, returning the classification marker.
+func finishOpenCode2x(t *testing.T, lines []string, exitCode int) string {
+	t.Helper()
+	acc := parseOpenCode(lines)
+	bin := writeFakeOpenCode(t, "case \"$1\" in --version) echo 2.2.7 ;; db) echo '[]' ;; esac\n")
+	run := newOpenCodeRun(acc.OpenCode(), nil)
+	runRoot := t.TempDir()
+	run.fold = testFold(bin, runRoot)
+	return run.finish(context.Background(), openCodeExit{bin: bin, env: run.fold.env, runRoot: runRoot,
+		exitCode: exitCode, dispatched: "stub/stub-model"}, acc).marker
+}
+
+// TestOpenCode2xTerminalErrorMarkers pins which terminal error events become
+// a provider-failure marker (#3305). Only the error event's own type counts:
+// a typeless error after a retry storm blames nothing, and a type that is
+// not a provider's yields no marker. A permission rejection still open at the
+// end is the more specific verdict and keeps its own marker.
+func TestOpenCode2xTerminalErrorMarkers(t *testing.T) {
+	retry := openCode2xFixtureLines(t, "stream-retry-transport.jsonl")[1]
+	errorOf := func(errJSON string) string {
+		return `{"type":"error","sessionID":"ses_fixture0000000000000000001","error":` + errJSON + `}`
+	}
+	rejected := openCode2xFixtureLines(t, "stream-tool-state.jsonl")[4]
+	cases := []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{"terminal transport error", []string{errorOf(`{"type":"provider.transport","message":"ECONNREFUSED"}`)},
+			OpenCodeProviderFailureMarker + " adapter_provider_transport:"},
+		{"typeless error after retries", []string{retry, retry, errorOf(`{"message":"gone"}`)}, ""},
+		{"string error after retries", []string{retry, errorOf(`"boom"`)}, ""},
+		{"not a provider's type", []string{errorOf(`{"type":"session.aborted"}`)}, ""},
+		{"rejection then provider error", []string{rejected, errorOf(`{"type":"provider.internal"}`)}, PermissionDeniedMarker + " tool=shell"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := finishOpenCode2x(t, c.lines, 1)
+			if (c.want == "") != (got == "") || !strings.HasPrefix(got, c.want) {
+				t.Errorf("marker = %q, want prefix %q", got, c.want)
+			}
+		})
+	}
+
+	// A retry whose error is not an object records drift and keeps no type.
+	s := parseOpenCode([]string{`{"type":"retry","sessionID":"ses_x","attempt":2,"error":"boom"}`}).OpenCode()
+	if s.ProviderErrorType != "" || !slices.Contains(s.DriftMarkers(), OpenCodeDriftMarker+" a retry event has no error.type") {
+		t.Errorf("ProviderErrorType = %q, drift = %q; want none and a no-error.type marker", s.ProviderErrorType, s.DriftMarkers())
+	}
+}

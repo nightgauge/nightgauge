@@ -700,6 +700,24 @@ const (
 	// ADR-022 § 20; a newer version is never refused). Mirrors
 	// adapters.OpenCodeIncompatible, the kind the refusal itself carries.
 	TerminalKindAdapterIncompatible = "adapter_incompatible"
+	// TerminalKindAdapterProviderNoRoute: OpenCode's provider config routes no
+	// model by the dispatched -m (#3305): 2.x ends the run on one error event,
+	// error.type `provider.no-route`, exit 1, and the parser writes
+	// `[opencode-provider-failure] adapter_provider_no_route`. It parks: the
+	// next attempt asks for the same unrouted model. Mirrors
+	// adapters.OpenCodeProviderNoRoute.
+	TerminalKindAdapterProviderNoRoute = "adapter_provider_no_route"
+	// TerminalKindAdapterProviderTransport: the provider endpoint refused or
+	// dropped the connection, error.type `provider.transport` (#3305), either
+	// as a retry storm the manager stopped past adapters.OpenCodeRetryMaxAttempts
+	// or adapters.OpenCodeRetryMaxElapsed, or as a terminal error event. An
+	// ordinary retryable failure: a server that comes back answers the next
+	// attempt. Mirrors adapters.OpenCodeProviderTransport.
+	TerminalKindAdapterProviderTransport = "adapter_provider_transport"
+	// TerminalKindAdapterProviderError: any other `provider.*` error.type
+	// (#3305), such as `provider.internal` for a provider 500 retried past the
+	// bound. Retryable. Mirrors adapters.OpenCodeProviderError.
+	TerminalKindAdapterProviderError = "adapter_provider_error"
 	// TerminalKindDevContextStale: FeatureDevGate found a dev-N.json older
 	// than the feature-dev stage it was judging (#2637) — the retry wrote no
 	// handoff and inherited the prior attempt's. Its contents are not this
@@ -733,7 +751,7 @@ const (
 func TerminalKindParks(kind string) bool {
 	switch kind {
 	case TerminalKindContextWindowExceeded, TerminalKindAdapterPermissionRejected, TerminalKindAdapterIncompatible,
-		TerminalKindEnvironmentHalt, TerminalKindDevContextStale, TerminalKindGatePluginMissing,
+		TerminalKindAdapterProviderNoRoute, TerminalKindEnvironmentHalt, TerminalKindDevContextStale, TerminalKindGatePluginMissing,
 		TerminalKindReviewCapReached, TerminalKindResumeNoOp:
 		return true
 	}
@@ -783,6 +801,10 @@ func TerminalKindRemediation(kind string) string {
 		return "a run resumed at pr-merge and found the PR already merged, so nothing was delivered; check the " +
 			"issue's remaining acceptance criteria and its stale pr-N.json in the pipeline state directory, " +
 			parkedReleaseStep + ", then move the issue from Backlog to Ready to re-run it"
+	case TerminalKindAdapterProviderNoRoute:
+		return "OpenCode's provider config routes no model by the name the stage was dispatched with " +
+			"(error type provider.no-route); fix the model id in the stage's routing or add the model to the " +
+			"provider's opencode config, " + parkedReleaseStep + " — a retry asks for the same model"
 	case TerminalKindAdapterIncompatible:
 		return "the adapter's binary cannot serve this dispatch; install a version at or above the floor the refusal names " +
 			"or pin the adapter's binary to it, " + parkedReleaseStep

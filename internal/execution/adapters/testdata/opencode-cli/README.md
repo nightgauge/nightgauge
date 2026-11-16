@@ -24,6 +24,59 @@ and update the table below in the same change.
 | Exit code   | 0                                                                           |
 | Redaction   | `capture.sh`; nothing needed redacting                                      |
 
+## OpenCode 2.2.7 stream captures (#3305)
+
+Real `opencode run --standalone --format json` stdout from 2.2.7, captured
+2026-11-16 on the host above. Each run used a throwaway `HOME`, the four XDG
+roots and `env -i`, with `OPENCODE_DISABLE_PROJECT_CONFIG=1` and
+`OPENCODE_DISABLE_AUTOUPDATE=1`, under a perl `alarm` in its own process group.
+The provider was a loopback OpenAI-compatible stub with a placeholder key.
+Every stream went through `../../../testdata/redact-opencode.jq`: session ids
+became placeholders and scratch paths became `/tmp/nightgauge-fixture`. Only
+stub text remains in the provider messages. `stream_test.go` and
+`opencode_retry_watchdog_test.go` in `internal/execution` parse them.
+
+| Fixture                        | Run                                                                                                   | Exit                    |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------- | ----------------------- |
+| `stream-no-route.jsonl`        | `-m stub/nope`: one `error` event, `error.type` `provider.no-route`                                   | 1                       |
+| `stream-retry-internal.jsonl`  | Stub answers HTTP 500: `step_start`, then `retry` attempts 2–6 with `error.type` `provider.internal`  | killed by alarm at 35 s |
+| `stream-retry-transport.jsonl` | `baseURL` on a closed port: `retry` attempts 2–6 with `error.type` `provider.transport`               | killed by alarm at 35 s |
+| `stream-tool-state.jsonl`      | `read` completed, `shell` rejected under `"bash":"ask"`, `read` of a missing file failed, then `stop` | 0                       |
+| `stream-subagent.jsonl`        | A `subagent` call (agent `general`) that completed, then `stop`                                       | 0                       |
+
+What the captures show:
+
+- `retry` carries top-level `attempt` (2 on the first retry), `nextRetryAt` (epoch ms)
+  and `error` {`type`, `message`, and for an HTTP error `status` and `response.body`}.
+  Attempts 2–6 arrived about 2, 4, 8 and 11 s apart, so the fifth retry lands about
+  24 s in. The `provider.transport` message carried no URL.
+- A tool call's `part.state` has `metadata.providerCall` and `metadata.providerResult`,
+  each `{"executed": false}` for every local tool. They say whether the provider ran
+  the tool, not whether it ran at all. `state.error` is still a string.
+- A headless `ask` rejection's error is "This non-interactive run cannot ask the user
+  for permission, so the request was rejected. Continue without this action." stderr
+  got one ANSI line: `! permission requested: shell (…); auto-rejecting`.
+- The subagent's session id is in `part.state.metadata.metadata.sessionID`.
+
+### Descendant-session usage on 2.2.7
+
+Re-verified against the data directory of the `stream-subagent.jsonl` run, with the
+commands the usage fold (`internal/execution/opencode_usage.go`) runs:
+
+| Fold step                                                       | Observed on 2.2.7                                                                                                                                                                                                 |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `opencode db "<openCodeSessionTreeQuery>" --format json --pure` | Fails, exit 1: there is no `db` subcommand. `--format` and `--pure` are "Unrecognized flag"                                                                                                                       |
+| `opencode export <session> --sanitize --pure`                   | Fails, exit 1: there is no top-level `export`, and `--pure` does not exist                                                                                                                                        |
+| `opencode session export <session> --sanitize`                  | Fails, exit 1: without `--standalone` it reaches for the managed background service ("Managed service port … is already in use")                                                                                  |
+| `opencode session export --standalone --sanitize <session>`     | Exit 0. `info` has `id`, `tokens`, `cost`, `model`, `outcome`, `location`, `projectID`, `time` and `title`. `info.tokens` is still `{input, output, reasoning, cache {read, write}}`, and `info.cost` is a number |
+| Session tree in `<data>/opencode/opencode.db`                   | The table is `session_v2`, not `session`. It keeps `parent_id`, and the child's row names the parent. It also holds `tokens_*` and `cost` columns                                                                 |
+| Parent vs child usage                                           | Parent `info.tokens` 30 in / 6 out (its two steps, 20/4, plus a title request). Child 20/4 (its two steps). The parent does not include the child's usage, so a fold must still add each descendant               |
+
+So the token shape `sessionUsage` reads is unchanged, but neither command the fold
+runs exists on 2.x. On 2.2.7 the fold records drift markers and a partial usage
+result. Porting the fold (`session export --standalone`, plus a way to list
+descendants without `db`) is recorded as discovered work from #3305.
+
 ## Behaviour observed on 1.18.30
 
 These observations were made on OpenCode 1.18.30, before the 2.x capture

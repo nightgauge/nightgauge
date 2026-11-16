@@ -283,6 +283,9 @@ export type TerminalFailureKind =
   | "adapter_permission_rejected" // Issue #1631 — the adapter auto-rejected a tool the stage's allowed tools grant (#1624's `[adapter-permission-rejected]` marker): an `ask` rule from OpenCode's own `.env` read guard or a repository's or the user's opencode.json, the same kind whatever tool it names. Distinct from permission_denied, which retries
   | "gate_plugin_missing" // Issue #2723 — a bundled build's Claude stage did not load the Nightgauge plugin exactly once (`[gate-plugin-missing]`); parked and excluded from the calibration corpus
   | "environment_halt" // Issue #101 — a project-declared preflight.environment check failed in Phase 0 (`[environment-halt]`); the operator's environment, not the code; parked and excluded from the calibration corpus
+  | "adapter_provider_no_route" // Issue #3305 — OpenCode 2.x reported error type provider.no-route: the provider config routes no model by the dispatched -m; parked
+  | "adapter_provider_transport" // Issue #3305 — OpenCode 2.x reported provider.transport (a refused or dropped connection), stopped past the retry bound or as a terminal error; retryable
+  | "adapter_provider_error" // Issue #3305 — any other provider.* error type OpenCode 2.x reported, such as provider.internal retried past the bound; retryable
   | "adapter_incompatible"; // Issue #1631 — the adapter's binary cannot serve the dispatch (below the compat floor or unreadable; #1627; a newer version is never refused); install a build at or above the floor
 
 /**
@@ -350,6 +353,9 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "adapter_permission_rejected",
   "environment_halt",
   "gate_plugin_missing",
+  "adapter_provider_no_route",
+  "adapter_provider_transport",
+  "adapter_provider_error",
   "adapter_incompatible",
 ];
 

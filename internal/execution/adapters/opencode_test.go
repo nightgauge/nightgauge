@@ -1018,3 +1018,30 @@ func TestOpenCodeDispatchModelMatchesTheModelFlag(t *testing.T) {
 		t.Errorf("a whitespace-only model exported NIGHTGAUGE_DISPATCH_MODEL=%q", v)
 	}
 }
+
+// TestOpenCodeRetryBoundsAndProviderKinds pins #3305's named constants: the
+// retry storm bound and the provider failure kinds the marker carries. The
+// orchestrator's terminal kinds mirror the kind words
+// (internal/orchestrator/opencode_failure_kinds_test.go).
+func TestOpenCodeRetryBoundsAndProviderKinds(t *testing.T) {
+	if OpenCodeRetryMaxAttempts != 5 || OpenCodeRetryMaxElapsed.Seconds() != 90 {
+		t.Errorf("retry bounds = %d / %v, want 5 / 1m30s", OpenCodeRetryMaxAttempts, OpenCodeRetryMaxElapsed)
+	}
+	for errType, want := range map[string]string{
+		"provider.no-route":  OpenCodeProviderNoRoute,
+		"provider.transport": OpenCodeProviderTransport,
+		"provider.internal":  OpenCodeProviderError,
+		"provider.auth":      OpenCodeProviderError,
+		"":                   "",
+		"session.aborted":    "",
+	} {
+		got, ok := OpenCodeProviderFailureKind(errType)
+		if got != want || ok != (want != "") {
+			t.Errorf("OpenCodeProviderFailureKind(%q) = %q, %v; want %q", errType, got, ok, want)
+		}
+	}
+	kinds := []string{OpenCodeProviderNoRoute, OpenCodeProviderTransport, OpenCodeProviderError}
+	if distinct := slices.Compact(slices.Sorted(slices.Values(kinds))); len(distinct) != len(kinds) {
+		t.Errorf("provider kinds are not distinct: %q", kinds)
+	}
+}
