@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/shurcooL/graphql"
@@ -22,7 +23,10 @@ type closingMergeQuery struct {
 		Issue *struct {
 			ClosedByPullRequestsReferences struct {
 				Nodes []struct {
-					Number      graphql.Int
+					Number     graphql.Int
+					Repository struct {
+						NameWithOwner graphql.String
+					}
 					Merged      graphql.Boolean
 					MergedAt    *graphql.String
 					MergeCommit *struct {
@@ -37,7 +41,9 @@ type closingMergeQuery struct {
 // LatestClosingMerge returns the merged closing pull request of issue
 // owner/repo#number with the greatest mergedAt, or nil when none has merged
 // (a manual close, say). A PR without a merge commit or a readable merge time
-// is skipped.
+// is skipped. GitHub also lists PRs from other repositories that reference
+// the issue (`Closes owner/repo#N`); only a PR in owner/repo itself counts
+// (#3352), matched case-insensitively, and an unattributable node is skipped.
 func (s *IssueService) LatestClosingMerge(ctx context.Context, owner, repo string, number int) (*ClosingMerge, error) {
 	graphQLNumber, err := checkedGraphQLInt("issue number", number)
 	if err != nil {
@@ -55,8 +61,12 @@ func (s *IssueService) LatestClosingMerge(ctx context.Context, owner, repo strin
 	if q.Repository.Issue == nil {
 		return nil, fmt.Errorf("read closing merges for %s/%s#%d: issue not found", owner, repo, number)
 	}
+	want := owner + "/" + repo
 	var latest *ClosingMerge
 	for _, n := range q.Repository.Issue.ClosedByPullRequestsReferences.Nodes {
+		if !strings.EqualFold(string(n.Repository.NameWithOwner), want) {
+			continue
+		}
 		if !bool(n.Merged) || n.MergeCommit == nil || n.MergeCommit.Oid == "" || n.MergedAt == nil {
 			continue
 		}

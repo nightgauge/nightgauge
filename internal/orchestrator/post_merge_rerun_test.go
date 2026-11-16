@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -95,5 +97,29 @@ func TestRerunPostMerge(t *testing.T) {
 
 	if err := (&Scheduler{}).RerunPostMerge(context.Background(), "o/app", 21); err == nil {
 		t.Fatal("no forge client and no reader: want an error")
+	}
+}
+
+// #3352: over the real issue service, a merged PR in another repository that
+// closes the issue is not a merge to validate, so the hook never runs.
+func TestRerunPostMergeIgnoresCrossRepoClosingMerge(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"nodes":[{"number":7,"repository":{"nameWithOwner":"other/app"},"merged":true,"mergedAt":"2026-11-02T12:00:00Z","mergeCommit":{"oid":"f0re1gn0"}}]}}}}}`))
+	}))
+	defer srv.Close()
+	ran := false
+	s := &Scheduler{client: gh.NewClientWithURL("t", srv.URL),
+		evaluatePostMergeFn: func(_ context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser,
+			_ hooks.EpicAutoCloser, _ hooks.PRVerifier, _ hooks.BoardSyncer, _ hooks.PostMergeInput) hooks.PostMergeResult {
+			ran = true
+			return hooks.PostMergeResult{ValidationMarker: hooks.ValidationMarkerWritten}
+		}}
+	err := s.RerunPostMerge(context.Background(), "o/app", 21)
+	if err == nil || !strings.Contains(err.Error(), "no merged pull request closes it") {
+		t.Fatalf("err = %v, want no merged pull request", err)
+	}
+	if ran {
+		t.Fatal("the post-merge hook ran against another repository's PR")
 	}
 }

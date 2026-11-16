@@ -3,6 +3,8 @@ package hooks
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
@@ -110,5 +112,38 @@ func TestPartialDeliveryMetListRoundTrips(t *testing.T) {
 	// Met list recorded even on the all-ticked early return.
 	if got := ParsePartialDeliveryMet(remainderComment(6, nil, []string{"x"}, false, false, false, true)); len(got) != 1 {
 		t.Errorf("all-ticked met = %q", got)
+	}
+}
+
+// issueServiceMerges answers LatestClosingMerge from a real issue service.
+type issueServiceMerges struct {
+	fakePartialReader
+	issues *gh.IssueService
+}
+
+func (r issueServiceMerges) LatestClosingMerge(ctx context.Context, owner, repo string, n int) (*gh.ClosingMerge, error) {
+	return r.issues.LatestClosingMerge(ctx, owner, repo, n)
+}
+
+// #3352: a cross-repository PR merged after the partial-delivery comment does
+// not retire the remainder.
+func TestPendingPartialDeliveryIgnoresCrossRepoMerge(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"nodes":[{"number":7,"repository":{"nameWithOwner":"other/r"},"merged":true,"mergedAt":"2026-11-02T12:00:00Z","mergeCommit":{"oid":"f0re1gn0"}}]}}}}}`))
+	}))
+	defer srv.Close()
+	t0 := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	r := issueServiceMerges{
+		fakePartialReader: fakePartialReader{comments: []trust.Comment{
+			{Body: remainderComment(5, []string{"c"}, nil, false, false, false, false), CreatedAt: t0}}},
+		issues: gh.NewIssueService(gh.NewClientWithURL("t", srv.URL)),
+	}
+	got, err := PendingPartialDelivery(context.Background(), r, "o", "r", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ClosedBy != 0 || !got.Pending {
+		t.Fatalf("got %+v, want pending with no closing PR", got)
 	}
 }
