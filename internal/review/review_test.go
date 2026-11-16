@@ -16,6 +16,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/preflight"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/scaffold"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -795,5 +796,112 @@ func TestRecordWithoutAnIssueContextLinksNoCriterion(t *testing.T) {
 	recs := filed(t, root)
 	if len(recs) != 1 || recs[0].Criterion != "" || recs[0].RunID != nil {
 		t.Fatalf("%+v", recs)
+	}
+}
+
+// threeSectionBody spreads its criteria over three headings, the #3081 shape a
+// model extraction truncated to the first section.
+const threeSectionBody = `## Summary
+
+Intro.
+
+## Acceptance Criteria
+
+- [ ] First section criterion.
+
+## Release criteria
+
+- [ ] Second section criterion.
+
+## Docs criteria
+
+- [ ] Third section criterion names docs/X.md.
+`
+
+func writeReconcile(t *testing.T, root, body string) []string {
+	t.Helper()
+	dir, err := layout.PipelineStateDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := preflight.ReconcileACs(root, 7, body)
+	if err := preflight.WriteACReconcile(res, filepath.Join(dir, "ac-reconcile-7.json")); err != nil {
+		t.Fatal(err)
+	}
+	texts := make([]string, len(res.AcceptanceCriteria))
+	for i, c := range res.AcceptanceCriteria {
+		texts[i] = c.Text
+	}
+	return texts
+}
+
+// TestIssueContextCarriesEveryReconciledCriterion (#3354): the bundle's issue
+// gets the report's criteria from all sections, in order, not the model's
+// one-item list, and keeps the other requirements keys.
+func TestIssueContextCarriesEveryReconciledCriterion(t *testing.T) {
+	root := repo(t)
+	writeIssueContext(t, root, "First section criterion.")
+	want := writeReconcile(t, root, threeSectionBody)
+	if len(want) != 3 {
+		t.Fatalf("parser found %d criteria: %v", len(want), want)
+	}
+	ic, err := loadIssueContext(root, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ic.criteria()
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("criteria %q, want %q", got, want)
+	}
+	if !strings.Contains(want[2], "Third section") {
+		t.Fatalf("order: %q", want)
+	}
+}
+
+// TestReconciledCriteriaKeepOtherRequirementsKeys: only the criteria list is
+// replaced, and a null requirements value does not panic.
+func TestReconciledCriteriaKeepOtherRequirementsKeys(t *testing.T) {
+	dir := t.TempDir()
+	report := `{"acceptance_criteria":[{"index":1,"text":"A."}]}`
+	if err := os.WriteFile(filepath.Join(dir, "ac-reconcile-7.json"), []byte(report), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ic := issueContext{Requirements: json.RawMessage(`{"acceptance_criteria":["x"],"constraints":["keep"]}`)}
+	got := ic.withReconciledCriteria(dir, 7)
+	if string(got.Requirements) != `{"acceptance_criteria":["A."],"constraints":["keep"]}` {
+		t.Fatalf("requirements %s", got.Requirements)
+	}
+	null := issueContext{Requirements: json.RawMessage(`null`)}.withReconciledCriteria(dir, 7)
+	if c := null.criteria(); len(c) != 1 || c[0] != "A." {
+		t.Fatalf("null requirements: %q", c)
+	}
+}
+
+// TestRecordResolvesACriterionBeyondTheModelList (#3354): "Criterion 3" names
+// the third section's criterion, which the model list did not hold.
+func TestRecordResolvesACriterionBeyondTheModelList(t *testing.T) {
+	root := repo(t)
+	writeIssueContext(t, root, "First section criterion.")
+	want := writeReconcile(t, root, threeSectionBody)
+	if _, err := Record(session(root, "t0"), "t0",
+		writeFindings(t, planFinding("Criterion 3: docs missing")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	recs := filed(t, root)
+	if len(recs) != 1 || recs[0].Criterion != want[2] {
+		t.Fatalf("records %+v, want criterion %q", recs, want[2])
+	}
+}
+
+// TestIssueContextWithoutAReportIsUnchanged: no report, the model list stands.
+func TestIssueContextWithoutAReportIsUnchanged(t *testing.T) {
+	root := repo(t)
+	writeIssueContext(t, root, "Only.")
+	ic, err := loadIssueContext(root, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ic.criteria(); len(got) != 1 || got[0] != "Only." {
+		t.Fatalf("%q", got)
 	}
 }

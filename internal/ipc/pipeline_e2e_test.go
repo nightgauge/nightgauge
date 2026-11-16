@@ -273,7 +273,7 @@ func writeGatePassingSkillOutput(workDir, worktreeDir string, issueNumber int, s
 		planFile := filepath.Join(plansDir, fmt.Sprintf("%d-test.md", issueNumber))
 		os.WriteFile(planFile, []byte("# plan\n"), 0o644) //nolint:errcheck
 		path := filepath.Join(pipelineDir, fmt.Sprintf("planning-%d.json", issueNumber))
-		body := fmt.Sprintf(`{"issue_number":%d,"plan_file":%q}`, issueNumber, planFile)
+		body := fmt.Sprintf(`{"issue_number":%d,"plan_file":%q,"files_to_modify":["a.go"]}`, issueNumber, planFile)
 		os.WriteFile(path, []byte(body), 0o644) //nolint:errcheck
 
 	case "feature-dev":

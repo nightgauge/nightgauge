@@ -243,6 +243,17 @@ describe("queue-halt policy (ConcurrentPipelineManager)", () => {
     expect(body).toMatch(/HALT_SKIP_PARKED\.has\(haltKind\)/);
   });
 
+  it("does not halt on a plan that lists no files (#3354)", () => {
+    // The feature-planning gate fails an empty plan with this reason; the
+    // scheduler wraps gate reasons into the slot's failure text.
+    const text =
+      "Stage feature-planning gate failed: [not-pipeline-actionable] plan lists no files to create or modify";
+    expect(classifyTerminalKind(text)).toBe("not_pipeline_actionable");
+    expect(resolveHaltKind(text, false)).toBe("not_pipeline_actionable");
+    const body = methodBody(source, "private async haltQueueOnSlotFailure(");
+    expect(body).toContain('if (haltKind === "not_pipeline_actionable") {');
+  });
+
   it("keeps exactly one deliberate raw-text condition, in any form, and says why", () => {
     // A bare Anthropic "session/usage limit" with no model named is a shape the
     // RECORD does not classify — Go returns "" for it — so the halt branch

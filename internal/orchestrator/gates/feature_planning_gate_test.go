@@ -21,7 +21,7 @@ func TestFeaturePlanningGate_Pass_AbsolutePath(t *testing.T) {
 		t.Fatalf("write plan: %v", err)
 	}
 	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "planning-42.json"), map[string]any{
-		"plan_file": planFile,
+		"plan_file": planFile, "files_to_modify": []string{"a.go"},
 	})
 
 	gr := FeaturePlanningGate{}.Verify(context.Background(), 42, ws)
@@ -39,7 +39,7 @@ func TestFeaturePlanningGate_Pass_RelativePath(t *testing.T) {
 		t.Fatalf("write plan: %v", err)
 	}
 	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "planning-42.json"), map[string]any{
-		"plan_file": "42-rel.md",
+		"plan_file": "42-rel.md", "files_to_modify": []string{"a.go"},
 	})
 
 	gr := FeaturePlanningGate{}.Verify(context.Background(), 42, ws)
@@ -59,7 +59,7 @@ func TestFeaturePlanningGate_LinkedWorktree(t *testing.T) {
 	plan := filepath.Join(layouttest.MkPlansDir(t, wt), "42-plan.md")
 	writeFile(t, plan, "# plan\n")
 	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, wt), "planning-42.json"), map[string]any{
-		"plan_file": plan,
+		"plan_file": plan, "files_to_modify": []string{"a.go"},
 	})
 	if gr := (FeaturePlanningGate{}).Verify(context.Background(), 42, wt); !gr.Passed {
 		t.Fatalf("plan in the plans directory failed from a linked worktree: reason=%q evidence=%v",
@@ -148,7 +148,7 @@ func TestFeaturePlanningGate_SkillSaidSuccessButPlanEmpty(t *testing.T) {
 		t.Fatalf("write empty plan: %v", err)
 	}
 	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "planning-42.json"), map[string]any{
-		"plan_file": planFile,
+		"plan_file": planFile, "files_to_modify": []string{"a.go"},
 	})
 
 	gr := FeaturePlanningGate{}.Verify(context.Background(), 42, ws)
@@ -229,5 +229,43 @@ func TestFeaturePlanningGate_PublicationChecksNewModifiedPaths(t *testing.T) {
 	gr := FeaturePlanningGate{}.Verify(context.Background(), 42, ws)
 	if gr.Passed || gr.TerminalKind != TerminalKindNotPipelineActionable {
 		t.Fatalf("a not-yet-existing modify path must be checked; passed=%v kind=%q", gr.Passed, gr.TerminalKind)
+	}
+}
+
+// TestFeaturePlanningGate_EmptyPlan (#3354): a plan naming no file fails as
+// not_pipeline_actionable quoting its approach, unless it is verify-and-close;
+// one planned file passes.
+func TestFeaturePlanningGate_EmptyPlan(t *testing.T) {
+	ws := t.TempDir()
+	planFile := filepath.Join(layouttest.PlansDir(t, ws), "42-thing.md")
+	writeFile(t, planFile, "# plan\n")
+	ctxPath := filepath.Join(layouttest.PipelineDir(t, ws), "planning-42.json")
+
+	writeJSON(t, ctxPath, map[string]any{
+		"plan_file": planFile, "approach": "record via empty commit",
+		"files_to_create": []string{}, "files_to_modify": []string{},
+	})
+	gr := FeaturePlanningGate{}.Verify(context.Background(), 42, ws)
+	if gr.Passed || gr.TerminalKind != TerminalKindNotPipelineActionable || gr.Reason != emptyPlanReason {
+		t.Fatalf("empty plan: passed=%v kind=%q reason=%q", gr.Passed, gr.TerminalKind, gr.Reason)
+	}
+	// The marker is what the extension's text classifier reads (#3354).
+	if !strings.HasPrefix(gr.Reason, "[not-pipeline-actionable] ") {
+		t.Fatalf("reason %q lacks the not-pipeline-actionable marker", gr.Reason)
+	}
+	if len(gr.Evidence) == 0 || gr.Evidence[0] != "approach: record via empty commit" {
+		t.Fatalf("evidence %v does not quote the approach", gr.Evidence)
+	}
+
+	writeJSON(t, ctxPath, map[string]any{"plan_file": planFile, "approach": "verify-and-close"})
+	if gr := (FeaturePlanningGate{}).Verify(context.Background(), 42, ws); !gr.Passed {
+		t.Fatalf("verify-and-close failed: %q", gr.Reason)
+	}
+
+	writeJSON(t, ctxPath, map[string]any{
+		"plan_file": planFile, "approach": "x", "files_to_modify": []string{"a.go"},
+	})
+	if gr := (FeaturePlanningGate{}).Verify(context.Background(), 42, ws); !gr.Passed {
+		t.Fatalf("one-file plan failed: %q %v", gr.Reason, gr.Evidence)
 	}
 }

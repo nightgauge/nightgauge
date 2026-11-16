@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/deliverable"
 )
@@ -20,6 +21,10 @@ import (
 //     denied or unclassified path fails as not_pipeline_actionable, parking the
 //     issue for an owner publication decision instead of spending dev and
 //     validate to reach the same verdict in ci-local.
+//  4. The plan names at least one file to create or modify (#3354). A plan
+//     with neither, other than verify-and-close (#708), dispatches feature-dev
+//     to implement nothing; it fails as not_pipeline_actionable, quoting the
+//     approach, so the issue parks for its owner instead of halting the queue.
 type FeaturePlanningGate struct{}
 
 // Name implements StageGate.
@@ -41,6 +46,7 @@ func (FeaturePlanningGate) Verify(_ context.Context, issueNumber int, workspace 
 
 		var planCtx struct {
 			PlanFile      string   `json:"plan_file"`
+			Approach      string   `json:"approach"`
 			FilesToCreate []string `json:"files_to_create"`
 			FilesToModify []string `json:"files_to_modify"`
 		}
@@ -82,11 +88,35 @@ func (FeaturePlanningGate) Verify(_ context.Context, issueNumber int, workspace 
 				fmt.Sprintf("plan_file=%s", planCtx.PlanFile),
 			}, KindNoOp, ""
 		}
+		if len(planCtx.FilesToCreate) == 0 && len(planCtx.FilesToModify) == 0 &&
+			planCtx.Approach != verifyAndCloseApproach {
+			return false, emptyPlanReason, []string{
+				"approach: " + clipLine(planCtx.Approach, maxApproachEvidence),
+				fmt.Sprintf("plan_file=%s", planCtx.PlanFile),
+			}, KindFail, TerminalKindNotPipelineActionable
+		}
 		return true, "planning context references non-empty plan_file", []string{
 			fmt.Sprintf("plan_file=%s", planCtx.PlanFile),
 			fmt.Sprintf("size=%d", stat.Size()),
 		}, KindOK, ""
 	})
+}
+
+const (
+	// verifyAndCloseApproach plans legitimately change no file (#708).
+	verifyAndCloseApproach = "verify-and-close"
+	// emptyPlanReason is the gate reason for a plan naming no file (#3354).
+	emptyPlanReason     = "[not-pipeline-actionable] plan lists no files to create or modify"
+	maxApproachEvidence = 300
+)
+
+// clipLine is s on one line, at most n runes.
+func clipLine(s string, n int) string {
+	r := []rune(strings.Join(strings.Fields(s), " "))
+	if len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return string(r)
 }
 
 // checkPlannedPublication runs the publication boundary over every path the
