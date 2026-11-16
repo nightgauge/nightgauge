@@ -658,12 +658,17 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 // arms. This branch exists only so a direct, non-CLI caller with no run
 // identity of its own still gets a usable config back rather than an error.
 
+// writeNightgaugePlugin is opencodeplugin.Write, a variable so a test can
+// hand InstallNightgaugePlugin an install that writes without error but
+// cannot load, and so reach the VerifyInstalled check below.
+var writeNightgaugePlugin = opencodeplugin.Write
+
 // The written directory is checked with opencodeplugin.VerifyInstalled before
 // it is referenced: opencode 2.x only logs a WARN for a plugin entry it cannot
 // load and then runs the stage ungated, so a bad install fails the dispatch
 // here, before spawn (#3306).
 func InstallNightgaugePlugin(ctx context.Context, run *OpenCodeRun, outputFile, runID string) error {
-	entry, err := opencodeplugin.Write(run.PluginDir)
+	entry, err := writeNightgaugePlugin(run.PluginDir)
 	if err != nil {
 		return fmt.Errorf("opencode: writing the nightgauge plugin: %w", err)
 	}
@@ -683,7 +688,7 @@ func InstallNightgaugePlugin(ctx context.Context, run *OpenCodeRun, outputFile, 
 	// amendment 2026-09-15, narrowed AC1: an earlier round did, and the
 	// review that found the seed it fell back to left an operator's own
 	// `import ... from "@opencode-ai/plugin"` unresolvable — see
-	// opencode_plugin_deps.go's package doc comment). OpenCode's own install
+	// ADR-022's narrowed-AC1 amendment). OpenCode's own install
 	// into its own config directories is the operator's environment, exactly
 	// as in the operator's own OpenCode runs. operatorInstallRisk only READS
 	// (never writes) whether either directory is in play AND does not already

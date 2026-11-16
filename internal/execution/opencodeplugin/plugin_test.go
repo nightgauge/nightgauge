@@ -211,6 +211,23 @@ func TestVerifyInstalled(t *testing.T) {
 		"missing path": func(t *testing.T) string {
 			return filepath.Join(t.TempDir(), "never-created")
 		},
+		"index.js is a directory": func(t *testing.T) string {
+			d := t.TempDir()
+			if err := os.Mkdir(filepath.Join(d, EntryFile), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			return d
+		},
+		"package.json does not parse": func(t *testing.T) string {
+			d := t.TempDir()
+			if err := os.WriteFile(filepath.Join(d, EntryFile), []byte("export {}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(d, "package.json"), []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return d
+		},
 		"no package.json": func(t *testing.T) string {
 			d := t.TempDir()
 			if err := os.WriteFile(filepath.Join(d, EntryFile), []byte("export {}\n"), 0o600); err != nil {

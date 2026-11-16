@@ -3511,6 +3511,32 @@ input}`, with a file tool's path at `input.path`. A file tool with no string
   on `session.execution.succeeded` or `.failed` (2.x has no `session.idle`),
   and the run can exit before the plugin sees a child's result.
 
+## The plugin installs as a directory and fails closed (amendment 2026-11-15, #3306)
+
+This supersedes the #1635 amendment's "Handshake" paragraph where it names the
+first `step_start` event, and its "Per-run-root seed, trimmed archive"
+paragraph in full.
+
+- **Install.** The plugin is written as a directory with a `package.json`
+  (`"type": "module"`, `"main": "index.js"`, no dependencies).
+  `opencodeplugin.VerifyInstalled` checks it before spawn. A file entry, a
+  missing path, or a directory without a regular `index.js` or a parseable
+  `package.json` naming it fails the dispatch as `adapter_incompatible`, with
+  an error naming the plugin. OpenCode 2.x only logs a `WARN` for an entry it
+  cannot load and then runs ungated.
+- **Seed removed.** The plugin imports only `node:*` built-ins, so
+  `depsdata/` (the 1.18.30 archive, its README and `regenerate`) and
+  `WriteDependencies` are deleted. `OperatorInstallSatisfied` and the
+  operator-install watchdog stay until 2.x is measured there.
+- **Handshake at the first event.** `RunStage` verifies the sentinel at the
+  first parsed stream event of any type, not only `step_start`. The prompt is
+  not held back until the sentinel appears. On opencode v2.2.7 the CLI reads
+  stdin to EOF before it bootstraps and runs `setup`: with stdin held open no
+  sentinel appeared in 20s, and with stdin closed one appeared within 0.5s.
+  Gating the stdin write on the sentinel would deadlock. The first event can
+  therefore arrive while the first model request is in flight, but no tool
+  runs before the check.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special

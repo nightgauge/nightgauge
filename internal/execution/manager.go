@@ -817,7 +817,12 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 			// setup writes its sentinel during opencode's bootstrap, before
 			// any stream event, so checking at the FIRST parsed event of any
 			// type proves the plugin loaded before any tool could run, and
-			// never waits behind a first event that is not step_start. A failure here kills the process group at once —
+			// never waits behind a first event that is not step_start. The
+			// prompt cannot be held back until the sentinel appears instead:
+			// measured on opencode v2.2.7, the CLI reads stdin to EOF before
+			// it bootstraps the instance and runs setup (no sentinel in 20s
+			// with stdin held open; one within 0.5s of EOF), so gating the
+			// stdin write on the sentinel deadlocks. A failure here kills the process group at once —
 			// the marker itself is appended to stderr only after wg.Wait()
 			// (below), never from this goroutine, so it never races the
 			// stderr goroutine's own append to the same buffer.

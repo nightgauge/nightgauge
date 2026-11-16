@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -204,5 +205,81 @@ func TestOpenCodePluginHandshakeRunsWithoutRunIdentity(t *testing.T) {
 	}
 	if !processGroupDead(pid) {
 		t.Errorf("the fake opencode (pid %d) or its process group is still alive after the handshake failure", pid)
+	}
+}
+
+// TestOpenCodePluginLoadMarkerAtFirstEvent covers AC3's present and absent
+// cases with the ordering measured on opencode v2.2.7 (#3306): the CLI reads
+// the prompt from stdin to EOF, and only then bootstraps the instance, which
+// runs the plugin's setup and writes the sentinel. Each fake drains stdin
+// first for that reason. The absent case's first event is an `error`, not a
+// step_start: the check fires on the first parsed event of any type, so a
+// plugin that did not load is caught however the run starts. Red if the
+// manager checked only at step_start (the absent case would exit 0 with no
+// marker) or if it checked before the plugin's setup could run (the present
+// case would fail).
+func TestOpenCodePluginLoadMarkerAtFirstEvent(t *testing.T) {
+	sentinel := `printf '{"nonce":"%s","plugin_version":"` + opencodeplugin.PluginVersion +
+		`","hooks":[]}' "$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"`
+	cases := []struct {
+		name     string
+		body     string
+		wantFail bool
+	}{
+		{
+			name: "present",
+			body: "cat > /dev/null\n" + sentinel + "\n" +
+				`echo '{"type":"step_start","sessionID":"s1"}'` + "\n" +
+				`echo '{"type":"step_finish","sessionID":"s1"}'`,
+		},
+		{
+			name: "absent",
+			body: "cat > /dev/null\n" +
+				`echo '{"type":"error","sessionID":"s1","error":{"type":"x","message":"x"}}'` + "\n" +
+				"sleep 30",
+			wantFail: true,
+		},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateOpenCodeHome(t)
+			t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+			writeOpenCodeMachineConfig(t, openCodeMachineConfig)
+			workspace := openCodeWorkspace(t)
+			installHandshakeFake(t, "", tc.body)
+			runID := fmt.Sprintf("01890a5d-ac96-774b-bcce-b30209a8171%d", i)
+			runtime := state.NewRuntimeState("nightgauge/nightgauge", 3306, "item-3306", runID)
+
+			var result *adapters.RunResult
+			var err error
+			started := time.Now()
+			stderr := captureStderr(t, func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+				defer cancel()
+				opts := openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", runtime)
+				result, err = NewManager(workspace, adapters.NewOpenCodeAdapter()).RunStage(ctx, opts)
+			})
+			combined := stderr
+			if result != nil {
+				combined += result.Stderr
+			}
+			failed := strings.Contains(combined, "adapter_incompatible")
+			if failed != tc.wantFail {
+				t.Fatalf("adapter_incompatible marker present=%v, want %v\nerr=%v\nstderr=%s",
+					failed, tc.wantFail, err, combined)
+			}
+			if !tc.wantFail {
+				if err != nil || result == nil || result.ExitCode != 0 {
+					t.Fatalf("the loaded run did not succeed: err=%v result=%+v", err, result)
+				}
+				return
+			}
+			if time.Since(started) > 15*time.Second {
+				t.Errorf("RunStage took %s; the absent marker must kill the stage at the first event", time.Since(started))
+			}
+			if !strings.Contains(combined, "opencode-plugin") || !strings.Contains(combined, "sentinel") {
+				t.Errorf("the failure does not name the plugin and its sentinel:\n%s", combined)
+			}
+		})
 	}
 }

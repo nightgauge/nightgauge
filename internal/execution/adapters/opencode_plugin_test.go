@@ -27,6 +27,7 @@ package adapters
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -230,31 +231,49 @@ func TestInstallNightgaugePluginInstallsADirectoryWithPackageJSON(t *testing.T) 
 	}
 }
 
-// TestInstallNightgaugePluginFailsWhenPluginDirIsAFile (#3306 AC4): a plugin
-// path that is a regular file (the 1.x file entry) fails the dispatch before
-// spawn, the error names the plugin, and the config is left unchanged.
+// TestInstallNightgaugePluginFailsWhenPluginDirIsAFile (#3306 AC4): an
+// install whose entry is a regular file (the 1.x file entry) fails the
+// dispatch before spawn with an IncompatibleError naming the plugin, and
+// the config is left unchanged. writeNightgaugePlugin is swapped so the
+// write itself succeeds: only VerifyInstalled can reject it.
 func TestInstallNightgaugePluginFailsWhenPluginDirIsAFile(t *testing.T) {
-	root := t.TempDir()
-	pluginDir := filepath.Join(root, "plugin")
-	if err := os.WriteFile(pluginDir, []byte("export default async () => ({})\n"), 0o600); err != nil {
-		t.Fatal(err)
+	cases := map[string]func(dir string) (string, error){
+		"file entry": func(dir string) (string, error) {
+			f := filepath.Join(filepath.Dir(dir), "nightgauge.js")
+			return f, os.WriteFile(f, []byte("export default async () => ({})\n"), 0o600)
+		},
+		"directory without package.json": func(dir string) (string, error) {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				return "", err
+			}
+			return dir, os.WriteFile(filepath.Join(dir, opencodeplugin.EntryFile), []byte("export default {}\n"), 0o600)
+		},
 	}
-	before := builtOpenCodeContent(t)
-	run := &OpenCodeRun{
-		ConfigContent: before,
-		Env:           map[string]string{openCodeConfigContentEnvVar: before},
-		PluginDir:     pluginDir,
-		RunDir:        root,
-	}
-	err := InstallNightgaugePlugin(context.Background(), run, "", "01890a5d-ac96-774b-bcce-b30209a81633")
-	if err == nil {
-		t.Fatal("want an error when the plugin path is a regular file")
-	}
-	if !strings.Contains(err.Error(), "nightgauge plugin") || !strings.Contains(err.Error(), pluginDir) {
-		t.Errorf("error %q does not name the plugin and its path %s", err, pluginDir)
-	}
-	if run.ConfigContent != before {
-		t.Error("the per-run config changed despite the failed install")
+	for name, write := range cases {
+		t.Run(name, func(t *testing.T) {
+			orig := writeNightgaugePlugin
+			writeNightgaugePlugin = write
+			t.Cleanup(func() { writeNightgaugePlugin = orig })
+			root := t.TempDir()
+			before := builtOpenCodeContent(t)
+			run := &OpenCodeRun{
+				ConfigContent: before,
+				Env:           map[string]string{openCodeConfigContentEnvVar: before},
+				PluginDir:     filepath.Join(root, "plugin"),
+				RunDir:        root,
+			}
+			err := InstallNightgaugePlugin(context.Background(), run, "", "01890a5d-ac96-774b-bcce-b30209a81633")
+			var inc *opencodeplugin.IncompatibleError
+			if !errors.As(err, &inc) {
+				t.Fatalf("want an *opencodeplugin.IncompatibleError from VerifyInstalled, got %v", err)
+			}
+			if !strings.Contains(err.Error(), "did not install") {
+				t.Errorf("error %q does not say the plugin did not install", err)
+			}
+			if run.ConfigContent != before {
+				t.Error("the per-run config changed despite the failed install")
+			}
+		})
 	}
 }
 

@@ -238,8 +238,10 @@ func VerifyInstalled(dir string) error {
 	if !fi.IsDir() {
 		return fail("%s is a file; OpenCode 2.x loads only a plugin directory", dir)
 	}
-	if fi, err := os.Stat(filepath.Join(dir, EntryFile)); err != nil || !fi.Mode().IsRegular() {
-		return fail("%s has no regular %s", dir, EntryFile)
+	if fi, err := os.Stat(filepath.Join(dir, EntryFile)); err != nil {
+		return fail("%v", err)
+	} else if !fi.Mode().IsRegular() {
+		return fail("%s in %s is not a regular file", EntryFile, dir)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
 	if err != nil {
@@ -257,9 +259,9 @@ func VerifyInstalled(dir string) error {
 	return nil
 }
 
-// VerifyLoaded is the step_start check: an opencode run never emits
-// tool_use before its first step_start event, so calling this the instant
-// that event is observed proves the plugin had already run its init (and so
+// VerifyLoaded is the first-event check: opencode runs the plugin's setup
+// during bootstrap, before its first stream event, so calling this the
+// instant the first event of any type is observed proves the plugin had already run its init (and so
 // written the sentinel) before any tool call could exist. The sentinel must
 // carry this run's own nonce and the plugin version this binary embeds;
 // anything else means the plugin failed to load, loaded late, or a
@@ -297,9 +299,9 @@ func VerifyLoaded(cfg HandshakeConfig) error {
 // VerifyNotLate re-checks the same sentinel once the run has exited: its
 // mtime must precede firstToolUse, the moment a caller first observed a
 // tool_use event on the run's stream. A late sentinel means some tool ran
-// before this exact file was written — VerifyLoaded's step_start check alone
+// before this exact file was written — VerifyLoaded's first-event check alone
 // cannot see that, since it only proves a sentinel existed by the first
-// step_start, not that it stayed the one gating every tool after it.
+// stream event, not that it stayed the one gating every tool after it.
 //
 // firstToolUse.IsZero() (no tool call was ever observed) always passes:
 // there is nothing a late sentinel could have let through.
