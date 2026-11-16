@@ -1994,6 +1994,37 @@ func TestParseOpenCode2xToolState(t *testing.T) {
 	}
 }
 
+// TestParseOpenCode2xToolEvidence collects one redacted record per tool_use
+// event of the captured 2.2.7 tool run (#3305), and counts the calls past
+// adapters.OpenCodeToolEvidenceMaxCalls instead of keeping them.
+func TestParseOpenCode2xToolEvidence(t *testing.T) {
+	lines := openCode2xFixtureLines(t, "stream-tool-state.jsonl")
+	s := parseOpenCode(lines).OpenCode()
+	if d := s.DriftMarkers(); len(d) != 0 {
+		t.Fatalf("drift = %q, want none", d)
+	}
+	var got []string
+	for _, r := range s.ToolEvidence {
+		got = append(got, r.Tool+"/"+r.CallID+"/"+r.Status)
+	}
+	if want := []string{"read/call_1/completed", "shell/call_2/error", "read/call_3/error"}; !slices.Equal(got, want) {
+		t.Errorf("tool evidence = %q, want %q", got, want)
+	}
+	if s.ToolEvidenceDropped != 0 {
+		t.Errorf("dropped = %d, want 0", s.ToolEvidenceDropped)
+	}
+
+	many := make([]string, adapters.OpenCodeToolEvidenceMaxCalls+3)
+	for i := range many {
+		many[i] = lines[1]
+	}
+	s = parseOpenCode(many).OpenCode()
+	if len(s.ToolEvidence) != adapters.OpenCodeToolEvidenceMaxCalls || s.ToolEvidenceDropped != 3 {
+		t.Errorf("past the cap: kept %d, dropped %d; want %d, 3",
+			len(s.ToolEvidence), s.ToolEvidenceDropped, adapters.OpenCodeToolEvidenceMaxCalls)
+	}
+}
+
 // TestParseOpenCode2xSubagent parses the captured 2.2.7 subagent run: the
 // parent's `subagent` tool call completed. A failed one, rewritten from it
 // with 1.x's "Subagent failed" error, counts as a failed subagent under its

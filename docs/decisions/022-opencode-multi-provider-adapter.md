@@ -3582,6 +3582,16 @@ Decided:
   subcommand, its export is `session export --standalone`, and the session
   table is `session_v2`. A 2.x stage's subagent usage is recorded as partial
   until the fold is ported. `info.tokens` and `info.cost` keep their shape.
+- **A failed run keeps one redacted record per tool call.** The stream parser
+  reads each `tool_use` event's tool, call id, session, `state.status`,
+  `state.time`, `metadata.providerCall`/`providerResult` and the subagent's
+  `metadata.metadata.sessionID` into `tool-calls.jsonl` in the run root, and
+  the failure preserve copies it with the session database. Tool input,
+  output, raw input, content and error text are never read. A stage records at
+  most `adapters.OpenCodeToolEvidenceMaxCalls` (500) calls and counts the rest
+  in a trailing `{"dropped":N}` line. This amends § 22's "usage only": the
+  record is facts about calls, not transcript, and it leaves the run only with
+  a failure's evidence.
 
 ## Implementation
 
