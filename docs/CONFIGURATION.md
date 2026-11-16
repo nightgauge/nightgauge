@@ -2011,7 +2011,7 @@ could be captured — the action escalates with the specific conflicting files.
 
 | Key                                                      | Type    | Default | Description                                                                                                                  |
 | -------------------------------------------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `pipeline.recovery.conflict_recovery.enabled`            | boolean | `true`  | Gate the conflict-recovery loop.                                                                                             |
+| `pipeline.recovery.conflict_recovery.enabled`            | boolean | `true`  | Gate the conflict-recovery loop. Merge-group code-failure recovery is not gated by it (#3339).                               |
 | `pipeline.recovery.conflict_recovery.max_dev_redispatch` | integer | `2`     | Max feature-dev re-dispatches before escalating with the specific files. Env override: `NIGHTGAUGE_CONFLICT_MAX_REDISPATCH`. |
 
 ```yaml

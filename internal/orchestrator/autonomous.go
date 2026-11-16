@@ -6683,7 +6683,13 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				as.state.Safety = &safetySnap
 			}
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.sidelineHalt(genCtx, repo, issue, "pr-merge: PR was not merged") })
+			// A PR parked in In review is invisible without a card (#3339).
+			// Raised inline on the board-op goroutine, which never holds as.mu.
+			as.goTrackedBoardOp(func(genCtx context.Context) {
+				if pr := as.sidelineHalt(genCtx, repo, issue, "pr-merge: PR was not merged"); pr > 0 {
+					as.raiseAttention(BuildPrMergeParkedBlock(repo, issue, pr, "", detail))
+				}
+			})
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -7073,17 +7079,21 @@ func (as *AutonomousScheduler) humanHoldFor(repo string, issue int) string {
 // edge (see evaluateDeps). A failed or inconclusive PR query fails toward the
 // safer state: "In progress", never asserting a PR exists on an unconfirmed
 // query. See #281.
-func (as *AutonomousScheduler) sidelineHalt(parent context.Context, repo string, issue int, reason string) {
+//
+// It returns the PR number it parked the issue behind in In review, 0 when it
+// chose In progress, so a caller can raise a card naming that PR (#3339).
+func (as *AutonomousScheduler) sidelineHalt(parent context.Context, repo string, issue int, reason string) int {
 	ctx, cancel := context.WithTimeout(parent, boardRecoveryTimeout)
 	defer cancel()
 	openPRs, ok := as.openPRMergeStatesForRepo(ctx, repo)
 	if ok {
 		if pr, hasPR := openPRs[issue]; hasPR {
 			as.moveIssueToInReview(parent, repo, issue, pr.Number)
-			return
+			return pr.Number
 		}
 	}
 	as.moveIssueToInProgress(parent, repo, issue, reason)
+	return 0
 }
 
 // RecoverOrphanedRunning is the exported entry point for startup orphan

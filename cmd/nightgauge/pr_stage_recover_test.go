@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
@@ -43,7 +44,7 @@ func TestRunPrStageRecover_Outcomes(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			out, err := runPrStageRecover(context.Background(), ws, 5, 9, "reason",
+			out, err := runPrStageRecover(context.Background(), ws, 5, 9, "reason", "",
 				func(context.Context, recovery.StageFailure) (recovery.RecoveryResult, bool) {
 					return tc.res, tc.matched
 				})
@@ -104,7 +105,7 @@ func TestRunPrStageRecover_RealRegistryRewindsARealConflict(t *testing.T) {
 	reason := fmt.Sprintf("%s: %s", pmstages.ReasonMergeQueueFailed,
 		pmstages.MergeQueueConflictReason("main", pr, "DIRTY"))
 	registry := recovery.Default(ws, unusedMergeRunner{t}, nil)
-	out, err := runPrStageRecover(context.Background(), ws, issue, pr, reason,
+	out, err := runPrStageRecover(context.Background(), ws, issue, pr, reason, "run-1",
 		func(ctx context.Context, f recovery.StageFailure) (recovery.RecoveryResult, bool) {
 			return registry.TryRecover(ctx, f, 0)
 		})
@@ -167,7 +168,7 @@ func TestRunPrStageRecover_ClearsStaleConflictContext(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := runPrStageRecover(context.Background(), ws, 5, 9, "r",
+	_, err := runPrStageRecover(context.Background(), ws, 5, 9, "r", "",
 		func(context.Context, recovery.StageFailure) (recovery.RecoveryResult, bool) {
 			if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 				t.Error("stale context must be gone before recovery runs")
@@ -184,5 +185,129 @@ func TestPrMergeBudget_RecoveryCoversCIWaitPlusMerge(t *testing.T) {
 	b := prMergeBudget(ws)
 	if b.RecoveryClientTimeoutMs <= b.ClientTimeoutMs {
 		t.Fatalf("recovery %d must exceed merge client %d", b.RecoveryClientTimeoutMs, b.ClientTimeoutMs)
+	}
+}
+
+// seedCodeFailure writes the record pr-merge leaves for a code-failure removal
+// and returns the refusal reason it would report.
+func seedCodeFailure(t *testing.T, dir string, issue, pr int, job, step string) string {
+	t.Helper()
+	rec := pmstages.MergeQueueFailureRecord{
+		IssueNumber: issue, PRNumber: pr, Class: "code",
+		Check: job, Step: step, LogExcerpt: "FAIL TestThing: want 1, got 2",
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, pmstages.MergeQueueFailureFile(issue)), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return pmstages.MergeQueueCodeFailureReason(pmstages.MergeGroupVerdict{Job: job, Step: step})
+}
+
+func writeConflictRecoveryDisabled(t *testing.T, ws string) {
+	t.Helper()
+	cfgDir := filepath.Join(ws, ".nightgauge")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := "pipeline:\n  recovery:\n    conflict_recovery:\n      enabled: false\n"
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRunPrStageRecover_CodeFailureRewindsOncePerCheck drives the verb over the
+// real recovery.Default registry: the first removal for a check rewinds with
+// the MERGE_QUEUE_CODE_FAILURE signal, the second for the same check and run
+// escalates (#3198 bound, #3339), even with conflict recovery disabled.
+func TestRunPrStageRecover_CodeFailureRewindsOncePerCheck(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("conflict_recovery_disabled=%v", disabled), func(t *testing.T) {
+			ws, dir := recoverWorkspace(t)
+			if disabled {
+				writeConflictRecoveryDisabled(t, ws)
+				if recovery.GetConflictRecoveryEnabled(ws) {
+					t.Fatal("harness: conflict recovery should read as disabled")
+				}
+			}
+			const issue, pr = 5, 7
+			reason := seedCodeFailure(t, dir, issue, pr, "test", "Run go test")
+			registry := recovery.Default(ws, unusedMergeRunner{t}, nil)
+			try := func(ctx context.Context, f recovery.StageFailure) (recovery.RecoveryResult, bool) {
+				return registry.TryRecover(ctx, f, 0)
+			}
+
+			out, err := runPrStageRecover(context.Background(), ws, issue, pr, reason, "run-1", try)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.Outcome != prRecoverRewind || out.Action != recovery.MergeQueueCodeFailureAction {
+				t.Fatalf("first removal: outcome=%s action=%s (%+v)", out.Outcome, out.Action, out)
+			}
+			var signal struct {
+				SignalType           string   `json:"signal_type"`
+				BacktrackTargetStage string   `json:"backtrack_target_stage"`
+				Rationale            string   `json:"rationale"`
+				Evidence             []string `json:"evidence"`
+			}
+			if err := json.Unmarshal(out.BacktrackSignal, &signal); err != nil {
+				t.Fatalf("backtrack_signal %s: %v", out.BacktrackSignal, err)
+			}
+			if signal.SignalType != recovery.MergeQueueCodeFailureSignal || signal.BacktrackTargetStage != "feature-dev" {
+				t.Errorf("signal = %s", out.BacktrackSignal)
+			}
+			joined := strings.Join(signal.Evidence, "\n")
+			for _, want := range []string{`"test"`, `"Run go test"`, "FAIL TestThing"} {
+				if !strings.Contains(joined, want) {
+					t.Errorf("evidence lacks %s: %q", want, joined)
+				}
+			}
+
+			again, err := runPrStageRecover(context.Background(), ws, issue, pr, reason, "run-1", try)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if again.Outcome != prRecoverEscalated {
+				t.Fatalf("second removal for the same check must escalate, got %s (%+v)", again.Outcome, again)
+			}
+		})
+	}
+}
+
+func TestRunPrStageRecover_CodeFailureWithoutRunIDEscalates(t *testing.T) {
+	ws, dir := recoverWorkspace(t)
+	reason := seedCodeFailure(t, dir, 5, 7, "test", "Run go test")
+	out, err := runPrStageRecover(context.Background(), ws, 5, 7, reason, "",
+		func(context.Context, recovery.StageFailure) (recovery.RecoveryResult, bool) {
+			t.Error("recovery must not run without a run id")
+			return recovery.RecoveryResult{}, false
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Outcome != prRecoverEscalated || !strings.Contains(out.Reason, "run id") {
+		t.Fatalf("out = %+v", out)
+	}
+}
+
+// TestRunPrStageRecover_CodeFailureKeepsConflictContext: a code-failure
+// refusal is not a new conflict, so it must not delete a conflict context.
+func TestRunPrStageRecover_CodeFailureKeepsConflictContext(t *testing.T) {
+	ws, dir := recoverWorkspace(t)
+	path := filepath.Join(dir, fmt.Sprintf("conflict-context-%d.json", 5))
+	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reason := seedCodeFailure(t, dir, 5, 7, "test", "Run go test")
+	if _, err := runPrStageRecover(context.Background(), ws, 5, 7, reason, "run-1",
+		func(context.Context, recovery.StageFailure) (recovery.RecoveryResult, bool) {
+			return recovery.RecoveryResult{}, false
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("code-failure recovery removed the conflict context: %v", err)
 	}
 }

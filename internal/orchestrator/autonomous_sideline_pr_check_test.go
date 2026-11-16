@@ -6,6 +6,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // Tests for sidelineHalt (#281): the architecture-approval and
@@ -121,5 +124,65 @@ func TestSidelineHalt_QueryFails_FailsToInProgress(t *testing.T) {
 	got := buf.String()
 	if !strings.Contains(got, "move-to-in-progress:") {
 		t.Errorf("query failure must fail toward In progress, got log: %q", got)
+	}
+}
+
+// parkedCards returns the open pr-merge-parked cards for repo#issue.
+func parkedCards(t *testing.T, as *AutonomousScheduler, repo string, issue int) []attention.DecisionRequest {
+	t.Helper()
+	var out []attention.DecisionRequest
+	for _, r := range openRequests(t, as) {
+		if r.IdempotencyKey == keyPrMergeParked(repo, issue) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// TestOnPipelineComplete_PrMergeUnmerged_RaisesParkedCard pins #3339: a failed
+// pr-merge parked in In review behind an open PR raises a card naming the PR
+// and the refusal, while a halt with no PR (In progress) raises none.
+func TestOnPipelineComplete_PrMergeUnmerged_RaisesParkedCard(t *testing.T) {
+	const reason = `merge-queue-failed: merge-group code failure: job "test" step "Run go test" failed`
+	for _, tc := range []struct {
+		name   string
+		prList string
+		want   int
+	}{
+		{"open PR parks in In review with a card", `[{"number":42,"headRefName":"feat/900-x","mergeStateStatus":"BLOCKED"}]`, 1},
+		{"no PR moves to In progress without a card", `[]`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			as := heldTestScheduler(t)
+			as.attention = attention.New(layouttest.Repo(t))
+			stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
+				if ghArgsContain(args, "list") {
+					return []byte(tc.prList), nil
+				}
+				return []byte("[]"), nil
+			})
+			addRunning(as, "O/app", 900, "x")
+			as.onPipelineComplete("O/app", 900, false, false, TerminalKindPrMergeUnmerged, reason, false)
+			as.drainBackground()
+
+			cards := parkedCards(t, as, "O/app", 900)
+			if len(cards) != tc.want {
+				t.Fatalf("got %d parked cards, want %d", len(cards), tc.want)
+			}
+			if tc.want == 0 {
+				return
+			}
+			c := cards[0]
+			// onPipelineComplete holds no run id; the card carries none.
+			if c.Context.RunID != "" || c.Context.TraceRef != nil {
+				t.Errorf("card run = %q / %+v, want none", c.Context.RunID, c.Context.TraceRef)
+			}
+			if c.Context.PR != 42 || c.Context.Issue != 900 || c.Context.Blocker != reason {
+				t.Errorf("card context = %+v", c.Context)
+			}
+			if !strings.Contains(c.Title, "PR #42") || !strings.Contains(c.Body, reason) {
+				t.Errorf("card title/body = %q / %q", c.Title, c.Body)
+			}
+		})
 	}
 }

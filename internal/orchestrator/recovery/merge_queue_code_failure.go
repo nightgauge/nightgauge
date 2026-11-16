@@ -43,13 +43,17 @@ func NewMergeQueueCodeFailure() *MergeQueueCodeFailure {
 	return &MergeQueueCodeFailure{now: time.Now}
 }
 
-// mergeQueueCodeFailureSignal is the feedback signal type this action writes.
+// MergeQueueCodeFailureSignal is the feedback signal type this action writes.
 // It is a warning, not blocking: the rewind is this action's own, so the
 // generic post-stage backtrack evaluator must not act on it again.
-const mergeQueueCodeFailureSignal = "MERGE_QUEUE_CODE_FAILURE"
+const MergeQueueCodeFailureSignal = "MERGE_QUEUE_CODE_FAILURE"
+
+// MergeQueueCodeFailureAction is the action's Name(), which `pr-stage recover`
+// reports as `action` (#3339).
+const MergeQueueCodeFailureAction = "merge-queue-code-failure"
 
 // Name implements RecoveryAction.
-func (a *MergeQueueCodeFailure) Name() string { return "merge-queue-code-failure" }
+func (a *MergeQueueCodeFailure) Name() string { return MergeQueueCodeFailureAction }
 
 // CapExempt implements recovery.CapExempt: the action keeps its own bound,
 // one rewind per check, so the global per-run pool must not pre-empt it.
@@ -73,9 +77,15 @@ func (a *MergeQueueCodeFailure) Matches(failure StageFailure) bool {
 }
 
 func isQueueCodeFailure(failure StageFailure) bool {
-	combined := strings.ToLower(failure.Reason + " " + failure.StageError + " " + strings.Join(failure.Evidence, " "))
-	return strings.Contains(combined, pmstages.ReasonMergeQueueFailed) &&
-		strings.Contains(combined, strings.ToLower(pmstages.MergeQueueCodeFailureMarker))
+	return IsQueueCodeFailureText(failure.Reason + " " + failure.StageError + " " + strings.Join(failure.Evidence, " "))
+}
+
+// IsQueueCodeFailureText reports whether text carries pr-merge's merge-group
+// code-failure refusal (#3198). `pr-stage recover` classifies with it (#3339).
+func IsQueueCodeFailureText(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, pmstages.ReasonMergeQueueFailed) &&
+		strings.Contains(lower, strings.ToLower(pmstages.MergeQueueCodeFailureMarker))
 }
 
 // mergeQueueCodeRewinds is the on-disk bound: rewinds spent per failed
@@ -217,7 +227,7 @@ func (a *MergeQueueCodeFailure) appendFeedback(path string, rec pmstages.MergeQu
 		evidence = append(evidence, "The job log could not be read; reproduce the check locally on the branch merged with the base.")
 	}
 	fb.Signals = append(fb.Signals, feedbackSignalOnDisk{
-		SignalType:           mergeQueueCodeFailureSignal,
+		SignalType:           MergeQueueCodeFailureSignal,
 		EmittedByStage:       string(state.StagePRMerge),
 		BacktrackTargetStage: string(state.StageFeatureDev),
 		Rationale:            fmt.Sprintf("The merge queue removed the PR: check %q failed in the repository's own step %q on the merge-group commit. Fix the code so the check passes on the branch merged with its base.", rec.Check, rec.Step),

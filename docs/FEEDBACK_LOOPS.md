@@ -21,6 +21,13 @@ guard — prevent infinite revision loops.
 | `MODEL_ESCALATION_NEEDED`       | feature-dev, feature-validate | blocking            | Retry same stage with next model in escalation path                                                                   | null (same-stage retry)  |
 | `ACCEPTANCE_CRITERIA_AMBIGUOUS` | feature-validate              | blocking            | Backtrack to feature-planning                                                                                         | feature-planning         |
 | `CONFLICT_RESOLUTION_NEEDED`    | pr-merge                      | blocking            | Backtrack to **feature-dev** on the same branch to resolve a rebase conflict (#4072)                                  | feature-dev              |
+| `MERGE_QUEUE_CODE_FAILURE`      | pr-merge                      | warning             | Rewind to **feature-dev** with the failed merge-group job's log, once per check per run (#3198, #3339)                | feature-dev              |
+
+`MERGE_QUEUE_CODE_FAILURE` is written by the `merge-queue-code-failure`
+recovery ([AUTO_TRIAGE.md](AUTO_TRIAGE.md) row 2a), which performs the rewind
+itself, so it is a warning the post-stage evaluator does not act on again. Its
+bound is the `merge-queue-code-rewinds-{N}.json` ledger, on both orchestration
+paths.
 
 ### `CONFLICT_RESOLUTION_NEEDED` (#4072)
 

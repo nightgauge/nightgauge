@@ -1716,3 +1716,27 @@ func TestReviewCapRecordRendersPathsAsCodeSpans(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildPrMergeParkedBlock pins the parked-PR card's identity (#3339).
+func TestBuildPrMergeParkedBlock(t *testing.T) {
+	const reason = "merge-queue-failed: merge-group code failure: job \"test\""
+	req := BuildPrMergeParkedBlock("octocat/acme", 42, 99, "run-1", reason)
+	if req.IdempotencyKey != "pr-merge-parked:octocat/acme#42" || req.Producer != ProducerPrMergeParked {
+		t.Errorf("key = %q", req.IdempotencyKey)
+	}
+	if req.IdempotencyKey == BuildBranchProtectionBlock("octocat/acme", 42, 99, "run-1", reason).IdempotencyKey {
+		t.Error("parked card must not share the branch-protection key")
+	}
+	if req.Kind != attention.KindUnblock || req.Severity != attention.SeverityBlockingRun {
+		t.Errorf("kind/severity = %s/%s", req.Kind, req.Severity)
+	}
+	if req.Context.Issue != 42 || req.Context.PR != 99 || req.Context.Blocker != reason || req.Context.Stage != "pr-merge" {
+		t.Errorf("context = %+v", req.Context)
+	}
+	if !strings.Contains(req.Title, "#42") || !strings.Contains(req.Title, "PR #99") || !strings.Contains(req.Body, reason) {
+		t.Errorf("title/body = %q / %q", req.Title, req.Body)
+	}
+	if len(req.Options) == 0 || req.Options[0].Verb != attention.VerbAutonomousClearIssueFailures {
+		t.Errorf("options = %+v", req.Options)
+	}
+}
