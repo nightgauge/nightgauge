@@ -43,19 +43,29 @@ func prRecoverDefaultTimeoutSec(workspace string) int {
 }
 
 // runPrStageRecover runs the shared registry for a refused pr-merge. try is the
-// registry call, a seam for tests.
+// registry call, a seam for tests. runID names the pipeline run: the
+// code-failure rewind is bounded once per check per run (#3198), so a
+// code-failure refusal without one escalates rather than rewinding unbounded.
 func runPrStageRecover(
 	ctx context.Context,
 	workspace string,
 	issue, pr int,
-	reason string,
+	reason, runID string,
 	try func(context.Context, recovery.StageFailure) (recovery.RecoveryResult, bool),
 ) (prRecoverResultJSON, error) {
 	out := prRecoverResultJSON{
 		ConflictingFiles: []string{},
 		MaxDevRedispatch: recovery.GetConflictMaxDevRedispatch(workspace),
 	}
-	if !recovery.GetConflictRecoveryEnabled(workspace) {
+	codeFailure := recovery.IsQueueCodeFailureText(reason)
+	if codeFailure && runID == "" {
+		out.Outcome = prRecoverEscalated
+		out.Reason = "merge-group code failure with no run id; the once-per-check rewind bound cannot hold"
+		return out, nil
+	}
+	// recovery.Default registers the code-failure action unconditionally;
+	// only conflict recovery is gated by conflict_recovery.enabled.
+	if !codeFailure && !recovery.GetConflictRecoveryEnabled(workspace) {
 		out.Outcome = prRecoverUnmatched
 		out.Reason = "pipeline.recovery.conflict_recovery.enabled is false"
 		return out, nil
@@ -65,14 +75,17 @@ func runPrStageRecover(
 	if err != nil {
 		return out, fmt.Errorf("resolve pipeline state dir: %w", err)
 	}
-	// This refusal is a new conflict. A context left by an earlier one would
-	// send feature-dev at stale blobs.
-	contextPath := filepath.Join(pipelineDir, fmt.Sprintf("conflict-context-%d.json", issue))
-	if err := os.Remove(contextPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return out, fmt.Errorf("clear stale conflict context: %w", err)
+	if !codeFailure {
+		// This refusal is a new conflict. A context left by an earlier one
+		// would send feature-dev at stale blobs.
+		contextPath := filepath.Join(pipelineDir, fmt.Sprintf("conflict-context-%d.json", issue))
+		if err := os.Remove(contextPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return out, fmt.Errorf("clear stale conflict context: %w", err)
+		}
 	}
 
 	res, matched := try(ctx, recovery.StageFailure{
+		RunID:       runID,
 		Stage:       state.StagePRMerge,
 		GateKind:    gates.KindNoOp,
 		Reason:      reason,
@@ -94,7 +107,11 @@ func runPrStageRecover(
 	case res.Recovered:
 		out.Outcome = prRecoverRecovered
 	case res.FollowUp == recovery.FollowUpStageCanResume:
-		signal, err := readConflictSignal(filepath.Join(pipelineDir, fmt.Sprintf("feedback-%d.json", issue)))
+		signalType := conflictResolutionSignal
+		if res.Action == recovery.MergeQueueCodeFailureAction {
+			signalType = recovery.MergeQueueCodeFailureSignal
+		}
+		signal, err := readRewindSignal(filepath.Join(pipelineDir, fmt.Sprintf("feedback-%d.json", issue)), signalType)
 		if err != nil {
 			out.Outcome = prRecoverEscalated
 			out.Reason = fmt.Sprintf("%s; no usable rewind signal: %v", res.Reason, err)
@@ -121,8 +138,8 @@ func conflictingFiles(evidence []string) []string {
 	return files
 }
 
-// readConflictSignal returns the newest CONFLICT_RESOLUTION_NEEDED signal.
-func readConflictSignal(path string) (json.RawMessage, error) {
+// readRewindSignal returns the newest signal of signalType in the feedback file.
+func readRewindSignal(path, signalType string) (json.RawMessage, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -137,26 +154,29 @@ func readConflictSignal(path string) (json.RawMessage, error) {
 		var head struct {
 			SignalType string `json:"signal_type"`
 		}
-		if json.Unmarshal(file.Signals[i], &head) == nil && head.SignalType == conflictResolutionSignal {
+		if json.Unmarshal(file.Signals[i], &head) == nil && head.SignalType == signalType {
 			return file.Signals[i], nil
 		}
 	}
-	return nil, fmt.Errorf("%s has no %s signal", filepath.Base(path), conflictResolutionSignal)
+	return nil, fmt.Errorf("%s has no %s signal", filepath.Base(path), signalType)
 }
 
 // prStageRecoverCmd runs `nightgauge pr-stage recover`.
 func prStageRecoverCmd() *cobra.Command {
 	var (
 		reason     string
+		runID      string
 		workdir    string
 		outputJSON bool
 		timeoutSec int
 	)
 	cmd := &cobra.Command{
 		Use:   "recover <issue-number>",
-		Short: "Run conflict recovery for a refused pr-merge — the TS-path recovery seam (#2841)",
+		Short: "Run merge-queue recovery for a refused pr-merge — the TS-path recovery seam (#2841, #3339)",
 		Long: `Run the recovery registry the Go scheduler uses against a merge-queue conflict
-refusal, so the VS Code path shares its actions instead of porting them.
+or merge-group code-failure refusal, so the VS Code path shares its actions
+instead of porting them. Pass --run-id: a code failure rewinds to feature-dev
+once per failed check per run, and escalates without a run id.
 Outcome is recovered, rewind (with backtrack_signal), escalated or unmatched.
 Exit 0 means a result was produced; the caller reads outcome, not the exit code.`,
 		Args:         cobra.ExactArgs(1),
@@ -181,7 +201,7 @@ Exit 0 means a result was produced; the caller reads outcome, not the exit code.
 			try := func(ctx context.Context, f recovery.StageFailure) (recovery.RecoveryResult, bool) {
 				return registry.TryRecover(ctx, f, 0)
 			}
-			out, err := runPrStageRecover(ctx, workspace, issue, readPrNumber(workspace, issue), reason, try)
+			out, err := runPrStageRecover(ctx, workspace, issue, readPrNumber(workspace, issue), reason, runID, try)
 			if err != nil {
 				return err
 			}
@@ -198,6 +218,7 @@ Exit 0 means a result was produced; the caller reads outcome, not the exit code.
 		},
 	}
 	cmd.Flags().StringVar(&reason, "reason", "", "The refusal reason pr-merge reported")
+	cmd.Flags().StringVar(&runID, "run-id", "", "The pipeline run id; bounds the code-failure rewind once per check per run")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit JSON instead of human output")
 	cmd.Flags().IntVar(&timeoutSec, "timeout", 0, "Overall timeout in seconds (default: derived from the pr-merge budget)")

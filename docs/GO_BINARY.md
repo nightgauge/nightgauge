@@ -3257,17 +3257,25 @@ nightgauge pr-stage review-round end <issue> [--workdir W]
 # Whether a re-dispatch can resume at feature-validate, restoring preserved work
 nightgauge pr-stage resume-point <issue> [--workdir W]
 
-# Run conflict recovery for a refused pr-merge; read `outcome`, not the exit code
-nightgauge pr-stage recover <issue> --reason <text> [--workdir W] [--json]
+# Run merge-queue recovery (conflict or merge-group code failure) for a refused
+# pr-merge; read `outcome`, not the exit code
+nightgauge pr-stage recover <issue> --reason <text> [--run-id <id>] [--workdir W] [--json]
 ```
 
-`pr-stage recover` reports one of four outcomes:
+`pr-stage recover` reports one of four outcomes, and `action` names the recovery
+that ran:
 
 - `recovered`: recovery landed the merge.
-- `rewind`: re-dispatch feature-dev on the same branch using `backtrack_signal`, at most
-  `max_dev_redispatch` times.
-- `escalated`: recovery could not resolve the conflict; `conflicting_files` names the files.
-- `unmatched`: no recovery action applies, or conflict recovery is disabled.
+- `rewind`: re-dispatch feature-dev on the same branch using `backtrack_signal`. A
+  conflict (`CONFLICT_RESOLUTION_NEEDED`) rewinds at most `max_dev_redispatch` times. A
+  merge-group code failure (`MERGE_QUEUE_CODE_FAILURE`, `action`
+  `merge-queue-code-failure`) rewinds once per failed check per `--run-id`, bounded by
+  `merge-queue-code-rewinds-{N}.json` (#3198, #3339).
+- `escalated`: recovery could not resolve the refusal: an unresolved conflict
+  (`conflicting_files` names the files), a second removal for a check already sent back,
+  or a code failure with no `--run-id`.
+- `unmatched`: no recovery action applies, or the refusal is a conflict and conflict
+  recovery is disabled. `conflict_recovery.enabled` does not gate code failures.
 
 ### PR Operations
 

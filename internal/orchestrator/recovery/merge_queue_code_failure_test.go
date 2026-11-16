@@ -169,7 +169,7 @@ func TestMergeQueueCodeFailure_KeepsExistingSignals(t *testing.T) {
 		t.Fatalf("got %+v", res)
 	}
 	fb := readFeedbackSignals(t, ws, codeFailureIssue)
-	if len(fb.Signals) != 2 || fb.Signals[0].SignalType != "PLAN_REVISION_NEEDED" || fb.Signals[1].SignalType != mergeQueueCodeFailureSignal {
+	if len(fb.Signals) != 2 || fb.Signals[0].SignalType != "PLAN_REVISION_NEEDED" || fb.Signals[1].SignalType != MergeQueueCodeFailureSignal {
 		t.Errorf("signals = %+v", fb.Signals)
 	}
 }

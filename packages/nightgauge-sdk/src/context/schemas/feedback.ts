@@ -52,6 +52,9 @@ export const PipelineFeedbackSignalTypeSchema = z.enum([
   "MODEL_ESCALATION_NEEDED",
   "ACCEPTANCE_CRITERIA_AMBIGUOUS",
   "CONFLICT_RESOLUTION_NEEDED",
+  // Written by the Go MergeQueueCodeFailure recovery (#3198) and carried into
+  // feature-dev by the VS Code rewind (#3339).
+  "MERGE_QUEUE_CODE_FAILURE",
   "OPERATOR_STEER",
   "NOT_PIPELINE_ACTIONABLE",
 ]);

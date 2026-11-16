@@ -1305,6 +1305,39 @@ func BuildBranchProtectionBlock(repo string, issue, prNumber int, runID, reason 
 	}
 }
 
+// ProducerPrMergeParked names the parked-PR producer (#3339).
+const ProducerPrMergeParked = "pr-merge-parked"
+
+func keyPrMergeParked(repo string, issue int) string {
+	return fmt.Sprintf("%s:%s#%d", ProducerPrMergeParked, repo, issue)
+}
+
+// BuildPrMergeParkedBlock is the card for a failed pr-merge whose issue the
+// scheduler parked in In review behind its open PR (#3339). Without it the
+// issue sits off the dispatch path with nothing in the Action Center. The key
+// is distinct from the branch-protection card: that one is raised on a punt,
+// this one when the run failed.
+func BuildPrMergeParkedBlock(repo string, issue, prNumber int, runID, reason string) attention.DecisionRequest {
+	return attention.DecisionRequest{
+		IdempotencyKey: keyPrMergeParked(repo, issue),
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("#%d: PR #%d parked in In review — pr-merge failed", issue, prNumber),
+		Body: fmt.Sprintf("pr-merge failed and PR #%d was parked in In review: %s. Fix the PR or its checks on GitHub, then retry.",
+			prNumber, reason),
+		Producer: ProducerPrMergeParked,
+		Context:  attention.Context{Repo: repo, Issue: issue, PR: prNumber, RunID: runID, Stage: "pr-merge", Blocker: reason, TraceRef: runTraceRef(runID)},
+		Options: []attention.Option{
+			{ID: "retry-after-fix", Label: "Retry after fix", Verb: attention.VerbAutonomousClearIssueFailures,
+				Args: map[string]any{"key": fmt.Sprintf("%s#%d", repo, issue), "then": "autonomous.rescan"}, Style: attention.StylePrimary},
+			noopOption("wait", "Wait — human fixing"),
+		},
+		DefaultAction: attention.ExpireNoop,
+		ExpiresAt:     expiryFromNow(48 * time.Hour),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Tell the pipeline what to do differently on retry"},
+	}
+}
+
 // raiseBranchProtectionBlock surfaces a pr-merge punt caused by branch
 // protection / a required check. unblock kind: it needs a human to fix.
 func (s *Scheduler) raiseBranchProtectionBlock(repo string, issue, prNumber int, runID, reason string) {

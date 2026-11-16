@@ -22,6 +22,7 @@ import type { PipelineStateService } from "../../src/services/PipelineStateServi
 import type { Logger } from "../../src/utils/logger";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
+import * as fs from "fs";
 import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 // Skip the live-adapter auth preflight (no CLI auth in the test env).
@@ -1159,6 +1160,88 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
     expect(result.failedStage).toBe("pr-merge");
     expect(result.terminalKind).toBe("merge_conflict");
     expect(result.error?.message).toContain(text);
+  });
+
+  // ── Merge-group code failure (#3339) ──────────────────────────────────
+  //
+  // Red-proof: dropping the code-failure arm (isRecoverableQueueRefusal back
+  // to conflict-only) leaves the verb uncalled and the run failed.
+
+  const CODE_REASON =
+    'merge-queue-failed: merge-group code failure: job "test" step "Run go test" failed in the repository\'s own check';
+  const codeRefused = { ...refused, reason: CODE_REASON };
+  const codeRewind = {
+    outcome: "rewind",
+    action: "merge-queue-code-failure",
+    reason: "merge-group code failure in the PR's own check",
+    conflicting_files: [],
+    // 0: a code rewind that went through the conflict counter would halt at
+    // once, so the rewind tests below prove the Go ledger is the only bound.
+    max_dev_redispatch: 0,
+    backtrack_signal: {
+      signal_type: "MERGE_QUEUE_CODE_FAILURE",
+      emitted_by_stage: "pr-merge",
+      backtrack_target_stage: "feature-dev",
+      rationale: "check test failed",
+      evidence: ["Job log excerpt:\nFAIL TestThing"],
+      severity: "warning",
+    },
+  };
+  const runWithRunId = async (runId: string | null) => {
+    mockSkillSuccess();
+    const state = createMockStateService("pr-merge");
+    vi.mocked(state.getRunId).mockReturnValue(runId);
+    const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+    orchestrator.setWorktreeOverride(WORKTREE);
+    const result = await orchestrator.runPipeline(300);
+    const stages = vi.mocked(runStageSkillHeadless).mock.calls.map((c) => c[0]);
+    return { state, result, stages };
+  };
+
+  it("a merge-group code failure rewinds to feature-dev with the signal, passing --run-id", async () => {
+    prStageMergeQueue.value = [codeRefused];
+    prStageRecover.value = [codeRewind];
+    const writes = vi.spyOn(fs, "writeFileSync");
+    const { state, result, stages } = await runWithRunId("run-abc");
+
+    const args = verbs("recover")[0].args;
+    expect(args).toContain(CODE_REASON);
+    expect(args[args.indexOf("--run-id") + 1]).toBe("run-abc");
+    expect(stages).toContain("feature-dev");
+    expect(stages).not.toContain("pr-merge");
+    expect(verbs("merge")).toHaveLength(2);
+    expect(state.failStage).not.toHaveBeenCalled();
+    expect(result.failedStage).toBeUndefined();
+    const feedback = writes.mock.calls.find((c) => String(c[0]).includes("feedback-300"));
+    expect(String(feedback?.[1])).toContain("MERGE_QUEUE_CODE_FAILURE");
+    expect(String(feedback?.[1])).toContain("FAIL TestThing");
+  });
+
+  it("is bounded by the Go ledger, not max_dev_redispatch: escalated fails the run as a plain refusal", async () => {
+    prStageMergeQueue.value = [codeRefused, codeRefused];
+    prStageRecover.value = [
+      codeRewind,
+      { outcome: "escalated", reason: "already sent back to feature-dev once" },
+    ];
+    const { result, stages } = await runWithRunId("run-abc");
+
+    expect(stages.filter((s) => s === "feature-dev")).toHaveLength(1);
+    expect(stages).not.toContain("pr-merge");
+    expect(result.failedStage).toBe("pr-merge");
+    expect(result.terminalKind).toBeUndefined();
+    expect(result.error?.message).toContain("deterministic pr-merge refused");
+    expect(result.error?.message).toContain("already sent back to feature-dev once");
+    expect(result.error?.message).not.toContain("[merge-conflict]");
+  });
+
+  it("omits --run-id when the run has none, so Go escalates", async () => {
+    prStageMergeQueue.value = [codeRefused];
+    prStageRecover.value = [{ outcome: "escalated", reason: "no run id" }];
+    const { result } = await runWithRunId(null);
+
+    expect(verbs("recover")[0].args).not.toContain("--run-id");
+    expect(result.failedStage).toBe("pr-merge");
+    expect(result.terminalKind).toBeUndefined();
   });
 
   it("a non-conflict refusal stays a plain refusal with no recovery", async () => {

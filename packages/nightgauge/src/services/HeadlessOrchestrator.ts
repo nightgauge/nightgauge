@@ -211,7 +211,10 @@ type PrStageSettledOutcome =
       maxDevRedispatch: number;
       reason: string;
       files: string[];
-    };
+    }
+  // A merge-group code failure (#3339). The Go ledger bounds it once per
+  // check per run, so no TS counter or oscillation guard applies.
+  | { kind: "queue-code-rewind"; signal: PipelineFeedbackSignal };
 import { formatZodErrorsForPrompt } from "../utils/zodErrorFormatter";
 import {
   BudgetEnforcer,
@@ -1304,19 +1307,43 @@ export function toNightgaugeAdapter(
   }
 }
 
-/** `nightgauge pr-stage recover --json` (#2841). */
+/**
+ * `nightgauge pr-stage recover --json` (#2841, #3339). `action` names the Go
+ * recovery that ran; a `rewind` carries the signal it wrote — a
+ * CONFLICT_RESOLUTION_NEEDED for a conflict, MERGE_QUEUE_CODE_FAILURE (job,
+ * step, log excerpt in `evidence`) for a merge-group code failure.
+ */
 interface PrStageRecoverResult {
   outcome: "recovered" | "rewind" | "escalated" | "unmatched";
+  action?: string;
   reason?: string;
   conflicting_files?: string[];
   backtrack_signal?: PipelineFeedbackSignal;
   max_dev_redispatch?: number;
 }
 
+/** pmstages.ReasonMergeQueueFailed (internal/orchestrator/stages/prmerge.go). */
+const REASON_MERGE_QUEUE_FAILED = "merge-queue-failed";
+/** pmstages.MergeQueueCodeFailureMarker (stages/prmerge_queue_failure.go). */
+const MERGE_QUEUE_CODE_FAILURE_MARKER = "merge-group code failure";
+
 /** Mirrors isQueueConflict in internal/orchestrator/recovery. */
 function isQueueConflictRefusal(reason: string): boolean {
   const lower = reason.toLowerCase();
-  return lower.includes("merge-queue-failed") && lower.includes("merge conflict with");
+  return lower.includes(REASON_MERGE_QUEUE_FAILED) && lower.includes("merge conflict with");
+}
+
+/** Mirrors recovery.IsQueueCodeFailureText (#3198). */
+function isQueueCodeFailureRefusal(reason: string): boolean {
+  const lower = reason.toLowerCase();
+  return (
+    lower.includes(REASON_MERGE_QUEUE_FAILED) && lower.includes(MERGE_QUEUE_CODE_FAILURE_MARKER)
+  );
+}
+
+/** A merge-queue refusal the Go registry can recover (#2841, #3339). */
+function isRecoverableQueueRefusal(reason: string): boolean {
+  return isQueueConflictRefusal(reason) || isQueueCodeFailureRefusal(reason);
 }
 
 /** `[merge-conflict]` classifies as `merge_conflict` for the card and the retro. */
@@ -4964,17 +4991,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     stageStartTime: number,
     opts: { afterSkillSession?: boolean } = {}
   ): Promise<
-    | { kind: "llm" }
-    | { kind: "handled"; result: StageRunResult }
-    | { kind: "deferred"; error: Error }
-    | { kind: "refused"; error: Error; terminalKind?: string }
-    | {
-        kind: "conflict-rewind";
-        signal: PipelineFeedbackSignal;
-        maxDevRedispatch: number;
-        reason: string;
-        files: string[];
-      }
+    { kind: "llm" } | { kind: "handled"; result: StageRunResult } | PrStageSettledOutcome
   > {
     if (stage !== "pr-create" && stage !== "pr-merge") {
       return { kind: "llm" };
@@ -5169,16 +5186,41 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // Refused → a deterministic gate declined the merge (generated steering on
     // the PR head, issue 1675). Never fall through to the LLM skill, which
     // could merge the same head; fail the stage with the classified reason.
-    if (parsed.path === "refused" && stage === "pr-merge" && isQueueConflictRefusal(reason)) {
-      // A queue conflict is recoverable (#2841). The Go registry decides how;
-      // this path only reacts, and never falls through to the LLM skill.
-      const recovery = await this.recoverQueueConflict(
+    if (parsed.path === "refused" && stage === "pr-merge" && isRecoverableQueueRefusal(reason)) {
+      // A queue conflict (#2841) or merge-group code failure (#3339) is
+      // recoverable. The Go registry decides how; this path only reacts, and
+      // never falls through to the LLM skill.
+      const recovery = await this.recoverQueueRefusal(
         binary,
         issueNumber,
         reason,
         workdir,
         recoveryTimeoutMs
       );
+      if (isQueueCodeFailureRefusal(reason)) {
+        this.stageExecutionPaths.set(stage, { path: "deterministic", puntReason: reason });
+        if (recovery.outcome === "rewind" && recovery.backtrack_signal) {
+          return { kind: "queue-code-rewind", signal: recovery.backtrack_signal };
+        }
+        // The Go ledger said no (second removal for this check, or no run id):
+        // a plain refusal, not a merge conflict.
+        const codeErr = new Error(
+          `deterministic pr-merge refused: ${reason}` +
+            (recovery.reason ? `; ${recovery.reason}` : "")
+        );
+        this.logger.warn("Merge-group code failure not rewound — failing the stage", {
+          issueNumber,
+          outcome: recovery.outcome,
+        });
+        if (this.stateService) {
+          try {
+            await this.stateService.failStage(stage, codeErr.message);
+          } catch {
+            // Non-critical — the caller still breaks the loop.
+          }
+        }
+        return { kind: "refused", error: codeErr };
+      }
       if (recovery.outcome === "recovered") {
         parsed = { ...parsed, path: "merged" };
       } else if (recovery.outcome === "rewind" && recovery.backtrack_signal) {
@@ -11246,22 +11288,26 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
-   * Run `pr-stage recover` for a queue conflict (#2841). A verb that errors or
-   * emits non-JSON reports `escalated`: a refused head stays refused.
+   * Run `pr-stage recover` for a queue conflict (#2841) or merge-group code
+   * failure (#3339). The run id lets the Go ledger bound the code-failure
+   * rewind once per check per run. A verb that errors or emits non-JSON
+   * reports `escalated`: a refused head stays refused.
    */
-  private async recoverQueueConflict(
+  private async recoverQueueRefusal(
     binary: string,
     issueNumber: number,
     reason: string,
     workdir: string,
     timeoutMs: number
   ): Promise<PrStageRecoverResult> {
+    const runId = this.stateService?.getRunId();
     const args = [
       "pr-stage",
       "recover",
       String(issueNumber),
       "--reason",
       reason,
+      ...(runId ? ["--run-id", runId] : []),
       "--workdir",
       workdir,
       "--json",
@@ -11351,7 +11397,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * The stage-reset half of a backtrack: feedback file, replay guards, state
    * record. Conflict rewinds call it directly because their edge is bounded by
    * `max_dev_redispatch`, not by `max_backtracks` or the oscillation guard
-   * (#2841), mirroring RetryEngine.MaxConflictRedispatch.
+   * (#2841), mirroring RetryEngine.MaxConflictRedispatch. Merge-group
+   * code-failure rewinds call it directly too: their bound is the Go ledger
+   * `merge-queue-code-rewinds-{N}.json`, once per check per run (#3339).
    */
   private async rewindToBacktrackTarget(
     signal: PipelineFeedbackSignal,
@@ -13399,6 +13447,20 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         const settleRunnerOutcome = async (
           outcome: PrStageSettledOutcome
         ): Promise<"break" | "continue"> => {
+          if (outcome.kind === "queue-code-rewind") {
+            // Bounded by the Go ledger (#3339): no conflict counter, no
+            // oscillation guard, no backtrackCount. Each check gets one
+            // rewind per run, so every such rewind is that check's attempt 1.
+            const firstAttemptForCheck = 1;
+            stageIndex =
+              (await this.rewindToBacktrackTarget(
+                outcome.signal,
+                stage,
+                issueNumber,
+                firstAttemptForCheck
+              )) - 1;
+            return "continue";
+          }
           if (outcome.kind === "conflict-rewind") {
             if (this.conflictRedispatchCount >= outcome.maxDevRedispatch) {
               failedStage = stage;

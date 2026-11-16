@@ -265,6 +265,16 @@ on core, #2225). The runner therefore:
    files is unioned onto a merge of the base, without an LLM stage. Rewinds to
    feature-dev stop at `max_dev_redispatch`, and an unresolved conflict halts as
    `merge_conflict`, naming the files on the card and in the retro (#2841).
+   A merge-group code failure (`merge-queue-failed: merge-group code failure: …`)
+   takes the same route on both paths: `pr-stage recover --run-id <run>` rewinds
+   to feature-dev once per failed check per run with the job's log excerpt in a
+   `MERGE_QUEUE_CODE_FAILURE` signal (#3198, #3339). The bound is the Go ledger
+   `merge-queue-code-rewinds-{N}.json`, not `max_dev_redispatch`. A second
+   removal for the same check, or a call without a run id, escalates and fails
+   the run as a plain refusal. `conflict_recovery.enabled` gates conflicts only.
+   When a failed pr-merge parks the issue in In review behind its open PR, the
+   scheduler raises a `pr-merge-parked:<repo>#<issue>` Action Center card
+   naming the PR and the refusal.
    An `UNMERGEABLE` entry on a PR that still reads `MERGEABLE` or `UNKNOWN`
    is blocked behind an entry ahead, so the wait continues. If GitHub removes
    that entry while the PR reads `MERGEABLE`, the wait re-enqueues it; once
