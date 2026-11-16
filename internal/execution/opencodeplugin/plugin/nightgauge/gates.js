@@ -509,7 +509,16 @@ export async function toolExecuteBefore(ctx, arg) {
   if (kind === "shell") {
     // workflow-gate, careful-gate (#1635), stage-gate, in hooks.json's
     // PreToolUse:Bash order — first deny wins.
-    const command = typeof args.command === "string" ? args.command : "";
+    // An empty command is nothing to check for every verb below, so a call
+    // whose input names no string command is blocked closed, as requirePath
+    // does for file tools: a shell argument under another key must never be
+    // gated as an empty command and allowed.
+    if (typeof args.command !== "string" || args.command === "") {
+      throw new Error(
+        `${WORKFLOW_MARKER} ${tool} names no input.command, the only command argument OpenCode 2.x's ${tool} takes; the call is blocked closed`
+      );
+    }
+    const command = args.command;
     const payload = { tool_name: "Bash", cwd, tool_input: { command } };
     runGateVerb(["hook", "workflow-gate"], payload, cwd, WORKFLOW_MARKER);
     runGateVerb(["hook", "careful-gate"], payload, cwd, MARKER);

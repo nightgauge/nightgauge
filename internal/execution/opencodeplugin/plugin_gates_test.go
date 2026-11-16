@@ -708,7 +708,8 @@ func TestCaseFoldedDeny(t *testing.T) {
 
 // TestMalformedArgumentsBlockClosed: a file tool whose 2.x input names no
 // string path (missing, empty, another key such as 1.x's filePath, or no
-// input at all) is blocked closed rather than gated as an empty path, and a
+// input at all) is blocked closed rather than gated as an empty path, a shell
+// call naming no string command is blocked closed likewise, and a
 // non-string tool id is refused as unknown.
 func TestMalformedArgumentsBlockClosed(t *testing.T) {
 	node := requireNode(t)
@@ -721,6 +722,9 @@ func TestMalformedArgumentsBlockClosed(t *testing.T) {
 		{"edit", `{"path":"","oldString":"a","newString":"b"}`},
 		{"write", `{"path":7,"content":"x"}`},
 		{"write", `null`},
+		{"shell", `{}`},
+		{"shell", `{"cmd":"git push"}`},
+		{"shell", `{"command":""}`},
 	} {
 		t.Run(tc.tool+" "+tc.args, func(t *testing.T) {
 			res := runToolHarness(t, node, t.TempDir(), tc.tool, tc.args, allow, home)
