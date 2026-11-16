@@ -1022,6 +1022,13 @@ type Scheduler struct {
 	// ensured. nil -> the real ensureEpicBranchForItem.
 	epicBranchEnsurer func(ctx context.Context, workspaceRoot string, item types.BoardItem) string
 
+	// epicMergeChecker reports whether item.Repo's default branch can take an
+	// epic MERGE (#3358). nil -> gh.SettingsService.CheckEpicMerge on s.client.
+	// Successful probes are cached per repository in epicMergeCache.
+	epicMergeChecker func(ctx context.Context, repo string) (gh.EpicMergeCheck, error)
+	epicMergeMu      sync.Mutex
+	epicMergeCache   map[string]gh.EpicMergeCheck
+
 	// StageRunner abstracts skill execution (auto mode vs IPC mode)
 	stageRunner StageRunner
 
@@ -11560,6 +11567,16 @@ func (s *Scheduler) ensureEpicBranchForItem(ctx context.Context, workspaceRoot s
 		log.Printf("#%d: auto_create_epic_branch disabled — skipping epic branch creation", item.Number)
 		return ""
 	}
+	// A default branch that refuses merge commits would land the whole epic as
+	// one squashed commit (#3358). Skip the epic branch so each story lands on
+	// the default branch as its own squash commit. A probe error fails open:
+	// MergeEpicPR re-checks and refuses before any squash.
+	if check, ok := s.epicMergeCheck(ctx, item.Repo); ok && !check.Allowed {
+		line := fmt.Sprintf("epic branch skipped: %s cannot take an epic %s (%s); stories merge to %s one squash commit each",
+			check.Base, check.Method, check.Reason, check.Base)
+		log.Printf("#%d: %s", item.Number, line)
+		return line
+	}
 
 	gitSvc, err := git.NewService(workspaceRoot)
 	if err != nil {
@@ -11591,6 +11608,39 @@ func (s *Scheduler) ensureEpicBranchForItem(ctx context.Context, workspaceRoot s
 		log.Printf("#%d: epic branch already exists: %s", item.Number, branchName)
 	}
 	return ""
+}
+
+// epicMergeCheck returns the cached or freshly probed epic-merge policy for
+// repo. ok is false when no probe is available or it failed (logged).
+func (s *Scheduler) epicMergeCheck(ctx context.Context, repo string) (gh.EpicMergeCheck, bool) {
+	s.epicMergeMu.Lock()
+	c, hit := s.epicMergeCache[repo]
+	s.epicMergeMu.Unlock()
+	if hit {
+		return c, true
+	}
+	checker := s.epicMergeChecker
+	if checker == nil {
+		if s.client == nil {
+			return gh.EpicMergeCheck{}, false
+		}
+		checker = func(ctx context.Context, repo string) (gh.EpicMergeCheck, error) {
+			owner, name := splitOwnerRepo(repo)
+			return gh.NewSettingsService(s.client).CheckEpicMerge(ctx, owner, name)
+		}
+	}
+	c, err := checker(ctx, repo)
+	if err != nil {
+		log.Printf("epic merge policy probe for %s failed (creating the epic branch as before): %v", repo, err)
+		return gh.EpicMergeCheck{}, false
+	}
+	s.epicMergeMu.Lock()
+	defer s.epicMergeMu.Unlock()
+	if s.epicMergeCache == nil {
+		s.epicMergeCache = map[string]gh.EpicMergeCheck{}
+	}
+	s.epicMergeCache[repo] = c
+	return c, true
 }
 
 // logEpicBranchFailure logs an epic-branch auto-create failure and returns the

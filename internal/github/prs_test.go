@@ -528,13 +528,20 @@ func TestPRService_CreateEpicPR_ListPRsError(t *testing.T) {
 // read (#2214) for a base branch without a queue.
 const noMergeQueueResponse = `{"data":{"node":{"id":"EPIC_PR_ID","number":5,"state":"OPEN","baseRefName":"main","isMergeQueueEnabled":false,"isInMergeQueue":false,"mergeCommit":null,"mergeQueueEntry":null}}}`
 
+// epicMergeAllowedREST answers MergeEpicPR's merge-policy check (#3358) for a
+// repository that permits merge commits on its default branch.
+var epicMergeAllowedREST = map[string]string{
+	"GET /repos/o/r":                     `{"full_name":"o/r","allow_merge_commit":true,"allow_squash_merge":true,"default_branch":"main"}`,
+	"GET /repos/o/r/rules/branches/main": `[]`,
+}
+
 func TestPRService_MergeEpicPR_Success(t *testing.T) {
 	// MergePRWithStrategy("MERGE") + DeleteBranch(ref found + deleted)
 	mergeResponse := `{"data":{"mergePullRequest":{"pullRequest":{"id":"EPIC_PR_ID","state":"MERGED"}}}}`
 	refQueryResponse := `{"data":{"repository":{"ref":{"id":"REF_NODE_ID"}}}}`
 	deleteResponse := `{"data":{"deleteRef":{"clientMutationId":null}}}`
 
-	client, cleanup := mockGraphQLServer(t, noMergeQueueResponse, mergeResponse, refQueryResponse, deleteResponse)
+	client, cleanup := mockForgeServer(t, epicMergeAllowedREST, noMergeQueueResponse, mergeResponse, refQueryResponse, deleteResponse)
 	defer cleanup()
 
 	svc := NewPRService(client)
@@ -549,7 +556,7 @@ func TestPRService_MergeEpicPR_DeleteBranchFailureIsNonFatal(t *testing.T) {
 	// Simulate branch already gone (idempotent path)
 	refNotFoundResponse := `{"data":{"repository":{"ref":null}}}`
 
-	client, cleanup := mockGraphQLServer(t, noMergeQueueResponse, mergeResponse, refNotFoundResponse)
+	client, cleanup := mockForgeServer(t, epicMergeAllowedREST, noMergeQueueResponse, mergeResponse, refNotFoundResponse)
 	defer cleanup()
 
 	svc := NewPRService(client)
@@ -561,7 +568,7 @@ func TestPRService_MergeEpicPR_DeleteBranchFailureIsNonFatal(t *testing.T) {
 func TestPRService_MergeEpicPR_MergeError(t *testing.T) {
 	response := `{"errors":[{"message":"Pull request is not mergeable"}]}`
 
-	client, cleanup := mockGraphQLServer(t, response)
+	client, cleanup := mockForgeServer(t, epicMergeAllowedREST, response)
 	defer cleanup()
 
 	svc := NewPRService(client)

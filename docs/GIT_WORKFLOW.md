@@ -630,18 +630,22 @@ Epics use a two-tier merge strategy to preserve sub-issue granularity on main:
 1. **Sub-issue PRs → epic branch**: Squash merge (configured via
    `pr.merge_strategy`, default: `squash`). Each sub-issue becomes one clean
    commit on the epic branch.
-2. **Epic branch → main**: Regular merge commit (configured via
-   `pr.epic_merge_strategy`, default: `merge`). This preserves all individual
-   sub-issue commits on main, keeping them independently revertable and
-   bisectable.
+2. **Epic branch → main**: Always a merge commit (`MERGE`). This preserves all
+   individual sub-issue commits on main, keeping them independently revertable
+   and bisectable.
 
-Configure in `.nightgauge/config.yaml`:
+**A default branch that refuses merge commits gets no epic branch.** Before
+creating `epic/<N>-*`, the scheduler reads the repository setting
+`allow_merge_commit`, the default branch's `pull_request` rule
+`allowed_merge_methods`, and its merge-queue `merge_method`. If any of them
+refuses `MERGE`, no epic branch is created, stage evidence names the refusing
+setting, and each story lands on the default branch as its own squash commit.
 
-```yaml
-pr:
-  merge_strategy: squash # Sub-issue PRs (default: squash)
-  epic_merge_strategy: merge # Epic → main (default: merge)
-```
+The epic merge re-checks the same policy. An epic whose merge is refused stays
+open with outcome `integration_merge_refused` and is never squashed; the
+operator changes the setting or merges the epic by hand. The scheduler caches
+each repository's policy for the life of its process, so restart it after
+re-enabling merge commits for new epics to get an epic branch again.
 
 **Why not squash the epic?** Squashing the epic→main merge would collapse all
 sub-issue work into a single commit, losing the ability to revert or bisect
