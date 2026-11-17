@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-11-17
+
 ### Security
 
 - Tree-view hover tooltips no longer trust Markdown built from issue titles, branches, blocker titles or error text (#3369). Seven items set `isTrusted = true` and inserted those values raw, so anyone who could open an issue on a watched repository could plant a live `command:` link in a tooltip. Trust is removed, and every forge- or agent-derived value a views tooltip shows is escaped (or shown as a code span) through a new `markdownEscape` helper that mirrors the Go `attention.EscapeMarkdown`/`CodeSpan`. Action Center tooltips link a card URL only when it is `https:`. A guard test fails if any file under `src/views/` marks a tooltip trusted.
@@ -1686,7 +1688,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.4...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.6...HEAD
+[0.8.6]: https://github.com/nightgauge/nightgauge/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.5
 [0.8.4]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.4
 [0.8.3]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.3

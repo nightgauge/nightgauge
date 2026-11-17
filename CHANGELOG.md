@@ -14,6 +14,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-11-17
 ### Changed
 
 - Base skills no longer pin subagent models. The `model: "haiku"`/`"sonnet"` pins and the Sonnet-vs-Opus cost notes in test-gen, health-check, security-audit, refactor-rewrite, test-scaffold, dep-modernize, backlog-preflight, the auto-fix loop and the feature-planning and feature-dev includes are replaced by one routing line in the Anthropic overlay, so non-Claude adapters no longer read Claude tier names. `preflight skill-overlays` now scans every skill, include and shared block for model-conditional prose, catches quoted model pins, and fails on a hit (#82).
@@ -9394,7 +9395,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.4...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.6...HEAD
+[0.8.6]: https://github.com/nightgauge/nightgauge/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.5
 [0.8.4]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.4
 [0.8.3]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.3
