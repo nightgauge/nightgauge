@@ -1347,12 +1347,15 @@ func TestOpenCodeSpawnWithholdsInheritedOpenCodeVariablesAndForeignKeys(t *testi
 		t.Fatal("an unrelated inherited variable did not reach the child, so its recorded environment proves nothing")
 	}
 	for k := range inherited {
-		if k == "OPENCODE_SERVER_PASSWORD" || k == "OPENCODE_CONFIG_CONTENT" {
+		if k == "OPENCODE_SERVER_PASSWORD" || k == "OPENCODE_CONFIG_CONTENT" || k == "OPENCODE_MODELS_PATH" {
 			continue // the adapter sets its own; checked below
 		}
 		if v, ok := env[k]; ok {
 			t.Errorf("%s reached the opencode child (%d bytes); no inherited OpenCode variable may", k, len(v))
 		}
+	}
+	if p := env["OPENCODE_MODELS_PATH"]; strings.Contains(p, sentinel) || filepath.Base(p) != filepath.Base(adapters.OpenCodeModelsCatalogPath("")) {
+		t.Errorf("the child did not get the pinned models catalog in place of the inherited one: %q", p)
 	}
 	if p := env["OPENCODE_SERVER_PASSWORD"]; p == "" || strings.Contains(p, sentinel) {
 		t.Error("the child did not get the adapter's own server password in place of the inherited one")

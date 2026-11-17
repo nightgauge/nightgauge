@@ -224,6 +224,17 @@ export const OPENCODE_SERVER_PASSWORD_ENV = "OPENCODE_SERVER_PASSWORD";
 export const OPENCODE_CONFIG_CONTENT_ENV = "OPENCODE_CONFIG_CONTENT";
 
 /**
+ * The pinned models catalog `EnsureOpenCodeRunRoot` writes into the run root,
+ * whose path `OpenCodeIsolationEnv` exports
+ * (`openCodeModelsPathEnv` in internal/execution/adapters/opencode_models_catalog.go),
+ * so a run reads the catalog its credential policy was derived from and
+ * never fetches one (#3315). Its value is a per-run path, never an operator
+ * path, so forwarding it carries no leak; an inherited value never reaches
+ * the child.
+ */
+export const OPENCODE_MODELS_PATH_ENV = "OPENCODE_MODELS_PATH";
+
+/**
  * The nightgauge plugin's path and handshake variables, the TS twin of
  * `opencodeplugin.EnvPluginPath` / `EnvNonce` / `EnvSentinel`
  * (internal/execution/opencodeplugin/plugin.go): `InstallNightgaugePlugin`
@@ -310,6 +321,7 @@ const OPENCODE_RUN_ENV_NAMES: ReadonlySet<string> = new Set<string>([
   ...OPENCODE_ISOLATION_XDG,
   ...OPENCODE_DISABLE_FLAGS,
   OPENCODE_CONFIG_CONTENT_ENV,
+  OPENCODE_MODELS_PATH_ENV,
   OPENCODE_DISABLE_PROJECT_CONFIG_ENV,
   OPENCODE_HOME_ENV,
   "OPENCODE_CONFIG_DIR",

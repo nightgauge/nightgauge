@@ -1279,8 +1279,8 @@ func openCodeUnpastableRefs(content string, lookup func(string) (string, bool)) 
 }
 
 // openCodeAnthropicModelRefusal refuses an anthropic model whose entry the
-// per-run config cannot pin (ADR-022 § 17). On 1.18.30 a model entry in any
-// config layer defines the model, and one the bundled catalog does not list
+// per-run config cannot pin (ADR-022 § 17). Observed on 1.18.30, and not
+// re-checked on 2.2.7, a model entry in any config layer defines the model, and one the bundled catalog does not list
 // then has no limits, so OpenCode never compacts its session. A fast-mode
 // entry is one OpenCode derives from a base model and sends under the base
 // model's id with options and a header of its own: pinning the entry's own id
@@ -1303,7 +1303,7 @@ func openCodeAnthropicModelRefusal(model, modelID string) error {
 		}
 		slices.Sort(dispatchable)
 		return fmt.Errorf(
-			"model %q is refused: the anthropic models of OpenCode's bundled catalog (opencode 1.18.30) do not include %q, so OpenCode knows no limits for it, and it never compacts a session whose context limit is 0. "+
+			"model %q is refused: the anthropic models of OpenCode's bundled catalog (opencode "+openCodeCatalogVersion+") do not include %q, so OpenCode knows no limits for it, and it never compacts a session whose context limit is 0. "+
 				"Dispatch a model the catalog lists: anthropic/ followed by %s",
 			model, modelID, strings.Join(dispatchable, ", "))
 	case served != modelID:

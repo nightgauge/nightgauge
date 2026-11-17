@@ -3,10 +3,11 @@
 package adapters
 
 // The catalog snapshots (opencode_catalog_env.go, opencode_catalog_anthropic.go)
-// read again from the installed opencode binary, pinned to the version they
-// were read from:
+// and the pinned models catalog they are derived from
+// (opencode-models-catalog.json.gz), checked against the installed opencode
+// binary of the version they were captured from:
 //
-//	go test -tags opencode_integration ./internal/execution/adapters/ -run 'OpenCodeCatalogEnvMatchesTheBinary|OpenCodeAnthropicModelsMatchTheBinary' -count=1
+//	go test -tags opencode_integration ./internal/execution/adapters/ -run 'OpenCodeCatalogEnvMatchesTheBinary|OpenCodeReadsThePinnedCatalog|OpenCodeAnthropicModelsMatchTheBinary' -count=1
 
 import (
 	"encoding/json"
@@ -15,15 +16,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
 )
-
-// openCodeCatalogVersion (const, "1.18.30") now lives in opencode_preflight.go
-// (non-test), shared with the runtime preflight checks it also pins.
 
 // openCodeCatalogBinary resolves the installed opencode binary. On CI a
 // missing binary fails the test rather than skipping it: CI installs the
@@ -40,30 +37,10 @@ func openCodeCatalogBinary(t *testing.T) string {
 	return path
 }
 
-// skipOpenCodeCatalogPortPending skips a re-read on the max_tested OpenCode
-// 2.x binary while openCodeCatalogPortPending holds: 2.x bundles no catalog in
-// the shape these tests read, so the 1.18.30 snapshots stand until the port.
-func skipOpenCodeCatalogPortPending(t *testing.T, installed string) {
+// openCodeCatalogBinaryVersion fails unless the installed binary is the
+// version the pinned catalog was captured from.
+func openCodeCatalogBinaryVersion(t *testing.T, path string) {
 	t.Helper()
-	m, err := openCodeManifest()
-	if err == nil && openCodeCatalogPortPending != "" && installed == m.MaxTested {
-		t.Skipf("opencode %s bundles no catalog to re-read; ported by %s", installed, openCodeCatalogPortPending)
-	}
-}
-
-// openCodeCatalogEntryRE matches one provider entry of the catalog bundled in
-// the binary, as its source is minified: id:"<key>",env:["<VAR>",...].
-var openCodeCatalogEntryRE = regexp.MustCompile(`id:"([a-z0-9._-]+)",env:\[([^\]]*)\]`)
-
-// openCodeQuotedRE matches one quoted variable name in an entry's env list.
-var openCodeQuotedRE = regexp.MustCompile(`"([^"]+)"`)
-
-// TestOpenCodeCatalogEnvMatchesTheBinary: the credential policy withholds what
-// the bundled catalog binds (ADR-022 § 8), so the snapshot must be the
-// binary's catalog exactly. A different binary fails rather than skips, and a
-// mismatch prints the entries to paste into opencode_catalog_env.go.
-func TestOpenCodeCatalogEnvMatchesTheBinary(t *testing.T) {
-	path := openCodeCatalogBinary(t)
 	cmd := exec.Command(path, "--version")
 	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
 	out, err := cmd.Output()
@@ -71,146 +48,197 @@ func TestOpenCodeCatalogEnvMatchesTheBinary(t *testing.T) {
 		t.Fatalf("opencode --version: %v", err)
 	}
 	if v, _ := ParseOpenCodeVersion(string(out)); v != openCodeCatalogVersion {
-		skipOpenCodeCatalogPortPending(t, v)
-		t.Fatalf("opencode %s is installed; the catalog snapshot was read from %s. Re-read it before changing the pin", v, openCodeCatalogVersion)
+		t.Fatalf("opencode %s is installed; the pinned catalog was captured from %s. Re-capture it before changing the pin (testdata/opencode-cli/README.md)", v, openCodeCatalogVersion)
 	}
-	// PATH may hold a link to the platform binary.
-	binary, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(binary)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got := map[string][]string{}
-	for _, m := range openCodeCatalogEntryRE.FindAllSubmatch(raw, -1) {
-		var vars []string
-		for _, v := range openCodeQuotedRE.FindAllSubmatch(m[2], -1) {
-			vars = append(vars, string(v[1]))
-		}
-		key := string(m[1])
-		if prev, ok := got[key]; ok && !slices.Equal(prev, vars) {
-			t.Fatalf("the binary holds two catalog entries for %q with different variables: %q and %q", key, prev, vars)
-		}
-		got[key] = vars
-	}
-	if len(got) == 0 {
-		t.Fatalf("no catalog entry found in %s; the pattern no longer matches its catalog", binary)
-	}
-
-	var diff []string
-	for key, vars := range got {
-		if want, ok := openCodeCatalogEnv[key]; !ok || !slices.Equal(want, vars) {
-			diff = append(diff, fmt.Sprintf("binary %q = %q, snapshot = %q", key, vars, openCodeCatalogEnv[key]))
-		}
-	}
-	for key := range openCodeCatalogEnv {
-		if _, ok := got[key]; !ok {
-			diff = append(diff, fmt.Sprintf("snapshot %q is not in the binary's catalog", key))
-		}
-	}
-	if len(diff) == 0 {
-		return
-	}
-	sort.Strings(diff)
-	keys := make([]string, 0, len(got))
-	for key := range got {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	var entries strings.Builder
-	for _, key := range keys {
-		quoted := make([]string, len(got[key]))
-		for i, v := range got[key] {
-			quoted[i] = fmt.Sprintf("%q", v)
-		}
-		fmt.Fprintf(&entries, "\t%q: {%s},\n", key, strings.Join(quoted, ", "))
-	}
-	t.Errorf("the catalog snapshot differs from the binary's catalog:\n  %s\nopenCodeCatalogEnv entries read from the binary (gofmt after pasting):\n%s",
-		strings.Join(diff, "\n  "), entries.String())
 }
 
-// openCodeModelsVerbose runs the installed opencode's `models <provider>
-// --verbose` with the model fetch off, as in a run, under a throwaway HOME,
-// with content as OPENCODE_CONFIG_CONTENT when it is not empty, and returns
-// each model it prints, keyed by its "<provider>/<model>" line.
-func openCodeModelsVerbose(t *testing.T, provider, content string) map[string]map[string]any {
+// openCodeModels runs the installed opencode's `models --standalone`, the
+// listing 2.2.7 accepts (no provider argument, no --verbose), in throwaway
+// HOME and XDG directories with the model fetch off, as in a run. With pinned,
+// OPENCODE_MODELS_PATH names a written copy of the pinned catalog, as in a
+// run; without it, the binary reads the catalog it bundles. content, when set,
+// is OPENCODE_CONFIG_CONTENT, and vars are set to a placeholder. It returns
+// the "<provider>/<model>" lines it prints.
+func openCodeModels(t *testing.T, path string, pinned bool, content string, vars ...string) []string {
 	t.Helper()
-	path := openCodeCatalogBinary(t)
-	cmd := exec.Command(path, "models", provider, "--verbose")
-	cmd.Dir = t.TempDir()
-	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin", "OPENCODE_DISABLE_MODELS_FETCH=1",
-		"OPENCODE_DISABLE_AUTOUPDATE=1", "ANTHROPIC_API_KEY=fake-anthropic-credential-1625"}
-	if content != "" {
-		cmd.Env = append(cmd.Env, "OPENCODE_CONFIG_CONTENT="+content)
+	if !pinned {
+		return openCodeModelsFrom(t, path, nil, content, vars...)
 	}
+	data, err := openCodeModelsCatalogJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return openCodeModelsFrom(t, path, data, content, vars...)
+}
+
+// openCodeModelsFrom is openCodeModels with catalog, when not nil, written as
+// the file OPENCODE_MODELS_PATH names.
+func openCodeModelsFrom(t *testing.T, path string, catalog []byte, content string, vars ...string) []string {
+	t.Helper()
+	dir := t.TempDir()
+	env := []string{"HOME=" + filepath.Join(dir, "home"), "PATH=/usr/bin:/bin", "TMPDIR=" + filepath.Join(dir, "tmp")}
+	for _, x := range openCodeXDGDirs {
+		env = append(env, x.env+"="+filepath.Join(dir, x.dir))
+	}
+	for _, sub := range []string{"home", "tmp"} {
+		if err := os.Mkdir(filepath.Join(dir, sub), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, flag := range openCodeDisableFlags {
+		env = append(env, flag+"=1")
+	}
+	env = append(env, openCodeDisableProjectConfig+"=1")
+	if catalog != nil {
+		if err := os.WriteFile(OpenCodeModelsCatalogPath(dir), catalog, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		env = append(env, openCodeModelsPathEnv+"="+OpenCodeModelsCatalogPath(dir))
+	}
+	if content != "" {
+		env = append(env, openCodeConfigContentEnvVar+"="+content)
+	}
+	for _, v := range vars {
+		env = append(env, v+"="+openCodeProbePlaceholder)
+	}
+	cmd := exec.Command(path, "models", openCodeStandaloneFlag, "--print-logs")
+	cmd.Dir = dir
+	cmd.Env = env
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	raw, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("opencode models %s --verbose: %v\n%s", provider, err, raw)
+		t.Fatalf("opencode models --standalone: %v\n%s", err, stderr.String())
 	}
-	models := map[string]map[string]any{}
-	lines := strings.Split(string(raw), "\n")
-	for i := 0; i+1 < len(lines); i++ {
-		if lines[i+1] != "{" {
-			continue
-		}
-		name := strings.TrimSpace(lines[i])
-		end := i + 1
-		for end < len(lines) && lines[end] != "}" {
-			end++
-		}
-		var m map[string]any
-		if err := json.Unmarshal([]byte(strings.Join(lines[i+1:end+1], "\n")), &m); err != nil {
-			t.Fatalf("`opencode models %s --verbose` printed %s in a form this parser does not know: %v", provider, name, err)
-		}
-		models[name] = m
-		i = end
+	if strings.Contains(stderr.String(), "failed to parse") {
+		t.Fatalf("opencode skipped part of the catalog:\n%s", stderr.String())
 	}
-	if len(models) == 0 {
-		t.Fatalf("`opencode models %s --verbose` printed no model:\n%s", provider, raw)
+	var lines []string
+	for _, l := range strings.Split(string(raw), "\n") {
+		if l = strings.TrimSpace(l); strings.Contains(l, "/") {
+			lines = append(lines, l)
+		}
 	}
-	return models
+	return lines
+}
+
+// openCodeListedProviders is the set of provider keys a listing names.
+func openCodeListedProviders(lines []string) map[string]bool {
+	keys := map[string]bool{}
+	for _, l := range lines {
+		key, _, _ := strings.Cut(l, "/")
+		keys[key] = true
+	}
+	return keys
+}
+
+// TestOpenCodeCatalogEnvMatchesTheBinary: the credential policy withholds what
+// the catalog a run reads binds (ADR-022 § 8), so openCodeCatalogEnv must be
+// what the installed binary does with that catalog. Three checks:
+//
+//   - the pinned catalog is the one the binary bundles: with every variable
+//     set, it lists the same models from the pinned file as from its own;
+//   - the binary reads the pinned file: a model removed from a copy of it is
+//     no longer listed (the known-bad case);
+//   - set alone, each variable loads only providers openCodeCatalogEnv binds
+//     it to, so no variable makes a provider reachable that the policy does
+//     not know (a binding 2.2.7 makes in code included, openCodeCodeBoundEnv).
+func TestOpenCodeCatalogEnvMatchesTheBinary(t *testing.T) {
+	path := openCodeCatalogBinary(t)
+	openCodeCatalogBinaryVersion(t, path)
+	all := slices.Sorted(maps.Keys(openCodeCatalogEnvNames))
+
+	bundled := openCodeModels(t, path, false, "", all...)
+	pinned := openCodeModels(t, path, true, "", all...)
+	if !slices.Equal(bundled, pinned) {
+		t.Fatalf("the pinned catalog is not the one opencode %s bundles: it lists %d models from its own and %d from the pinned file; re-capture it (testdata/opencode-cli/README.md)",
+			openCodeCatalogVersion, len(bundled), len(pinned))
+	}
+	for key := range openCodeListedProviders(pinned) {
+		if _, ok := openCodeCatalogEnv[key]; !ok {
+			t.Errorf("opencode lists provider %q, which openCodeCatalogEnv does not hold", key)
+		}
+	}
+
+	// Without a variable set, only providers that need none are listed.
+	baseline := openCodeListedProviders(openCodeModels(t, path, true, ""))
+
+	var diff []string
+	for _, v := range all {
+		for key := range openCodeListedProviders(openCodeModels(t, path, true, "", v)) {
+			if !baseline[key] && !slices.Contains(openCodeCatalogEnv[key], v) {
+				diff = append(diff, fmt.Sprintf("%s alone loads %q, and openCodeCatalogEnv[%q] = %q", v, key, key, openCodeCatalogEnv[key]))
+			}
+		}
+	}
+	if len(diff) > 0 {
+		sort.Strings(diff)
+		t.Errorf("opencode %s binds variables the policy does not; add each to openCodeCodeBoundEnv and re-derive openCodeCatalogEnv:\n  %s",
+			openCodeCatalogVersion, strings.Join(diff, "\n  "))
+	}
+}
+
+// TestOpenCodeReadsThePinnedCatalog is the known-bad case for the check
+// above: a model removed from the pinned file disappears from the listing, so
+// a run reads OPENCODE_MODELS_PATH rather than the bundled catalog.
+func TestOpenCodeReadsThePinnedCatalog(t *testing.T) {
+	path := openCodeCatalogBinary(t)
+	openCodeCatalogBinaryVersion(t, path)
+	data, err := openCodeModelsCatalogJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalog map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	var models map[string]json.RawMessage
+	if err := json.Unmarshal(catalog[openCodeAnthropicKey]["models"], &models); err != nil {
+		t.Fatal(err)
+	}
+	const dropped = "claude-sonnet-5-5"
+	delete(models, dropped)
+	if catalog[openCodeAnthropicKey]["models"], err = json.Marshal(models); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := json.Marshal(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := openCodeModelsFrom(t, path, changed, "", "ANTHROPIC_API_KEY")
+	if slices.Contains(listed, openCodeAnthropicKey+"/"+dropped) {
+		t.Errorf("%s/%s is listed although the file OPENCODE_MODELS_PATH names drops it: opencode did not read the file", openCodeAnthropicKey, dropped)
+	}
+	if !slices.Contains(listed, openCodeAnthropicKey+"/claude-opus-5-5") {
+		t.Errorf("the changed catalog lists no other anthropic model: %q", listed)
+	}
 }
 
 // TestOpenCodeAnthropicModelsMatchTheBinary: the per-run config pins the id
 // OpenCode sends for an anthropic model, and refuses one it cannot pin
-// (ADR-022 § 17), from openCodeAnthropicModels, so the snapshot must be the
-// binary's anthropic models and the ids it sends for them exactly. A mismatch
-// prints the entries to paste into opencode_catalog_anthropic.go. The pin must
-// also change nothing about a model it accepts: each one resolves, under the
-// per-run config the builder makes for it, exactly as it does with none.
+// (ADR-022 § 17), from openCodeAnthropicModels, so its keys must be exactly
+// the anthropic models the binary lists from the pinned catalog. Each model
+// the pin accepts must also stay listed under the per-run config the builder
+// makes for it.
+//
+// 2.2.7's `models` prints no served id and no limits (it has no --verbose), so
+// the ids each entry is sent under, a fast-mode entry's base id included, are
+// read from the pinned catalog the binary was shown to read
+// (openCodeParseCatalog, TestOpenCodeReadsThePinnedCatalog), not from a
+// listing.
 func TestOpenCodeAnthropicModelsMatchTheBinary(t *testing.T) {
 	path := openCodeCatalogBinary(t)
-	cmd := exec.Command(path, "--version")
-	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("opencode --version: %v", err)
-	}
-	if v, _ := ParseOpenCodeVersion(string(out)); v != openCodeCatalogVersion {
-		skipOpenCodeCatalogPortPending(t, v)
-		t.Fatalf("opencode %s is installed; the anthropic snapshot was read from %s. Re-read it before changing the pin", v, openCodeCatalogVersion)
-	}
+	openCodeCatalogBinaryVersion(t, path)
 
-	catalog := openCodeModelsVerbose(t, openCodeAnthropicKey, "")
-	got := map[string]string{}
-	for name, m := range catalog {
-		id, ok := strings.CutPrefix(name, openCodeAnthropicKey+"/")
-		api, _ := m["api"].(map[string]any)
-		served, _ := api["id"].(string)
-		if !ok || served == "" {
-			t.Fatalf("`opencode models anthropic --verbose` printed %s with api %v", name, m["api"])
+	var got []string
+	for _, l := range openCodeModels(t, path, true, "", "ANTHROPIC_API_KEY") {
+		if id, ok := strings.CutPrefix(l, openCodeAnthropicKey+"/"); ok {
+			got = append(got, id)
 		}
-		got[id] = served
 	}
-	if !maps.Equal(got, openCodeAnthropicModels) {
-		var entries strings.Builder
-		for _, id := range slices.Sorted(maps.Keys(got)) {
-			fmt.Fprintf(&entries, "\t%q: %q,\n", id, got[id])
-		}
-		t.Errorf("the anthropic snapshot differs from the binary's catalog\nopenCodeAnthropicModels entries read from the binary (gofmt after pasting):\n%s", entries.String())
+	slices.Sort(got)
+	if want := slices.Sorted(maps.Keys(openCodeAnthropicModels)); !slices.Equal(got, want) {
+		t.Errorf("opencode lists the anthropic models %q from the pinned catalog; openCodeAnthropicModels holds %q", got, want)
 	}
 
 	for _, id := range slices.Sorted(maps.Keys(openCodeAnthropicModels)) {
@@ -227,11 +255,8 @@ func TestOpenCodeAnthropicModelsMatchTheBinary(t *testing.T) {
 			t.Errorf("%s: %v", model, err)
 			continue
 		}
-		pinned := openCodeModelsVerbose(t, openCodeAnthropicKey, built.Content)[model]
-		want, _ := json.Marshal(catalog[model])
-		have, _ := json.Marshal(pinned)
-		if string(want) != string(have) {
-			t.Errorf("%s resolves differently under its per-run config:\n  catalog: %s\n  pinned:  %s", model, want, have)
+		if !slices.Contains(openCodeModels(t, path, true, built.Content, "ANTHROPIC_API_KEY"), model) {
+			t.Errorf("%s is not listed under its per-run config", model)
 		}
 	}
 }
