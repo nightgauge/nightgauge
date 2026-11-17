@@ -23,6 +23,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 - The pull-request review comment's footer no longer says it does not block merging. It now states that hold findings (every blocker, and a correctness major on `README*`, `docs/**` or `packages/*/package.json`) stop `pr-merge` from merging, matching the enqueue review gate (#2730), and that other findings do not (#2836).
 
+### Security
+
+- The lockfile takes `@azure/identity` 4.14.1 and `@azure/msal-node` 7.x, clearing GHSA-xcx6-jx8p-x3h5 and its npm audit allow-list entry. GHSA-fc5q-39xc-vjpf (picomatch, no patched release) and GHSA-g3hv-75wg-m249 (minimatch, the fix is a major its parents do not accept) are waived until 2026-12-17 as dev-only; the audit threshold is unchanged (#2492).
+
 ## [0.8.6] - 2026-11-17
 
 ### Added
