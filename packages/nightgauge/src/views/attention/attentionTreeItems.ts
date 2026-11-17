@@ -20,6 +20,7 @@ import type {
   AttentionContext,
 } from "../../services/IpcClientBase";
 import { attentionCardUrl } from "./attentionLinks";
+import { escapeMarkdown, safeHttpsHref } from "../markdownEscape";
 
 /** Base type for all Action Center tree items — every node knows its children. */
 export abstract class AttentionTreeItem extends vscode.TreeItem {
@@ -292,13 +293,14 @@ export class AttentionRequestTreeItem extends AttentionTreeItem {
     // only option is "dismiss", following it is the operator's actual next
     // action, and a link they have to retype is not an affordance.
     md.isTrusted = false;
-    md.appendMarkdown(`**${title}**\n\n`);
+    md.appendMarkdown(`**${escapeMarkdown(title)}**\n\n`);
     if (body) md.appendMarkdown(`${body}\n\n`);
     const url = attentionCardUrl(this.request);
-    if (url) md.appendMarkdown(`[Open in browser](${url})\n\n`);
+    const href = safeHttpsHref(url);
+    if (href) md.appendMarkdown(`[Open in browser](${href})\n\n`);
     if (lifecycle.muted) {
       md.appendMarkdown(
-        `_Muted by ${lifecycle.muted.actor || "an operator"} — re-alerts if the condition changes._\n\n`
+        `_Muted by ${escapeMarkdown(lifecycle.muted.actor || "an operator")} — re-alerts if the condition changes._\n\n`
       );
     }
     const since = conditionTime(this.request);
@@ -310,7 +312,7 @@ export class AttentionRequestTreeItem extends AttentionTreeItem {
     } else if (observedAge) {
       md.appendMarkdown(`_First observed ${observedAge} — condition onset unknown_\n\n`);
     }
-    md.appendMarkdown(`_Producer: ${producer}_`);
+    md.appendMarkdown(`_Producer: ${escapeMarkdown(producer)}_`);
     return md;
   }
 }

@@ -141,7 +141,7 @@ describe("CompletedIssueTreeItem — undetermined branch (#448)", () => {
   it("renders a real branch unchanged", () => {
     const text = tooltipText(new CompletedIssueTreeItem(completed("feat/42-dark-mode")));
 
-    expect(text).toContain("**Branch:** feat/42-dark-mode");
+    expect(text).toContain("**Branch:** `feat/42-dark-mode`");
     expect(text).not.toContain(UNDETERMINED_BRANCH_LABEL);
   });
 });
@@ -158,7 +158,7 @@ describe("FailedIssueTreeItem — undetermined branch (#448)", () => {
   it("renders a real branch unchanged", () => {
     const text = tooltipText(new FailedIssueTreeItem(failed("feat/43-auth")));
 
-    expect(text).toContain("**Branch:** feat/43-auth");
+    expect(text).toContain("**Branch:** `feat/43-auth`");
     expect(text).not.toContain(UNDETERMINED_BRANCH_LABEL);
   });
 });

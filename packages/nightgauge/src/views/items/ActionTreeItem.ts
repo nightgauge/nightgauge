@@ -7,6 +7,7 @@
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import { BaseTreeItem } from "./BaseTreeItem";
+import { escapeMarkdown } from "../markdownEscape";
 
 /**
  * Action item types
@@ -114,7 +115,7 @@ export class ActionTreeItem extends BaseTreeItem {
       description: message,
     });
 
-    item.tooltip = new vscode.MarkdownString(`**Error:**\n\n${message}`);
+    item.tooltip = new vscode.MarkdownString(`**Error:**\n\n${escapeMarkdown(message)}`);
 
     return item;
   }
@@ -147,7 +148,7 @@ export class ActionTreeItem extends BaseTreeItem {
 
     item.tooltip = new vscode.MarkdownString(
       `**Pipeline Running**\n\n` +
-        `Currently executing: **${stageName}**\n\n` +
+        `Currently executing: **${escapeMarkdown(stageName)}**\n\n` +
         `The pipeline view will update when the stage context is established.`
     );
 

@@ -8,6 +8,7 @@
 import * as vscode from "vscode";
 import { BaseTreeItem } from "./BaseTreeItem";
 import { DependencyTreeItem, type BlockingIssue } from "./DependencyTreeItem";
+import { escapeMarkdown } from "../markdownEscape";
 
 /**
  * Section type for dependency grouping
@@ -58,7 +59,6 @@ export class DependencySectionTreeItem extends BaseTreeItem {
     issues: BlockingIssue[]
   ): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
-    md.isTrusted = true;
 
     if (sectionType === "blockedBy") {
       md.appendMarkdown(`**Blocked by ${issues.length} issue(s)**\n\n`);
@@ -70,7 +70,7 @@ export class DependencySectionTreeItem extends BaseTreeItem {
 
     for (const issue of issues) {
       const stateIcon = issue.state === "OPEN" ? "🔴" : "✅";
-      md.appendMarkdown(`${stateIcon} #${issue.number}: ${issue.title}\n`);
+      md.appendMarkdown(`${stateIcon} #${issue.number}: ${escapeMarkdown(issue.title)}\n`);
     }
 
     return md;

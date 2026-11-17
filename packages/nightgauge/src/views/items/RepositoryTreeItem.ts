@@ -12,6 +12,7 @@ import * as vscode from "vscode";
 import { BaseTreeItem } from "./BaseTreeItem";
 import type { Repository } from "../../models/Repository";
 import type { AutonomousRepoPause } from "../../services/IpcClientBase";
+import { escapeMarkdown } from "../markdownEscape";
 
 /**
  * Tree item representing a repository in the workspace
@@ -343,17 +344,17 @@ export class RepositoryTreeItem extends BaseTreeItem {
       lines.push("");
       lines.push("\u26A0\ufe0f **Autonomous dispatch is halted for this repository**");
       const cause = this.halt.issue
-        ? `Issue #${this.halt.issue} failed at ${this.halt.stage || "an unknown stage"}`
-        : this.halt.reason || "unknown";
+        ? `Issue #${this.halt.issue} failed at ${escapeMarkdown(this.halt.stage || "an unknown stage")}`
+        : escapeMarkdown(this.halt.reason || "unknown");
       lines.push(`Cause: ${cause}`);
       if (this.halt.issue && this.halt.reason) {
-        lines.push(`Reason: ${this.halt.reason}`);
+        lines.push(`Reason: ${escapeMarkdown(this.halt.reason)}`);
       }
       if (this.halt.triggeredBy) {
-        lines.push(`Raised by: ${this.halt.triggeredBy}`);
+        lines.push(`Raised by: ${escapeMarkdown(this.halt.triggeredBy)}`);
       }
       if (this.halt.pausedAt) {
-        lines.push(`Halted at: ${this.halt.pausedAt}`);
+        lines.push(`Halted at: ${escapeMarkdown(String(this.halt.pausedAt))}`);
       }
       lines.push("");
       lines.push(

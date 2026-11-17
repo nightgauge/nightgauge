@@ -11,6 +11,7 @@
 import * as vscode from "vscode";
 import type { QueryableIssue } from "@nightgauge/sdk";
 import { BaseTreeItem } from "./items/BaseTreeItem";
+import { escapeMarkdown, codeSpan } from "./markdownEscape";
 
 /**
  * Tree item displaying a summary of query results
@@ -23,7 +24,7 @@ export class QueryResultSummaryItem extends BaseTreeItem {
 
     this.description = `${executionTimeMs}ms`;
     this.tooltip = new vscode.MarkdownString();
-    this.tooltip.appendMarkdown(`**Query:** \`${query}\`\n\n`);
+    this.tooltip.appendMarkdown(`**Query:** ${codeSpan(query)}\n\n`);
     this.tooltip.appendMarkdown(`**Results:** ${matchCount} matched of ${totalCount} total\n\n`);
     this.tooltip.appendMarkdown(`**Execution time:** ${executionTimeMs}ms`);
 
@@ -72,25 +73,25 @@ export class QueryResultIssueItem extends BaseTreeItem {
 
     // Rich tooltip
     const tooltip = new vscode.MarkdownString();
-    tooltip.appendMarkdown(`**#${issue.number}** ${issue.title}\n\n`);
+    tooltip.appendMarkdown(`**#${issue.number}** ${escapeMarkdown(issue.title)}\n\n`);
     if (issue.priority) {
-      tooltip.appendMarkdown(`**Priority:** ${issue.priority}\n\n`);
+      tooltip.appendMarkdown(`**Priority:** ${escapeMarkdown(issue.priority)}\n\n`);
     }
     if (issue.size) {
-      tooltip.appendMarkdown(`**Size:** ${issue.size}\n\n`);
+      tooltip.appendMarkdown(`**Size:** ${escapeMarkdown(issue.size)}\n\n`);
     }
     if (issue.status) {
-      tooltip.appendMarkdown(`**Status:** ${issue.status}\n\n`);
+      tooltip.appendMarkdown(`**Status:** ${escapeMarkdown(issue.status)}\n\n`);
     }
     if (issue.assignee) {
-      tooltip.appendMarkdown(`**Assignee:** ${issue.assignee}\n\n`);
+      tooltip.appendMarkdown(`**Assignee:** ${escapeMarkdown(issue.assignee)}\n\n`);
     }
     if (issue.labels.length > 0) {
-      tooltip.appendMarkdown(`**Labels:** ${issue.labels.join(", ")}\n\n`);
+      tooltip.appendMarkdown(`**Labels:** ${issue.labels.map(codeSpan).join(", ")}\n\n`);
     }
     if (issue.updatedAt) {
       const updated = new Date(issue.updatedAt).toLocaleDateString();
-      tooltip.appendMarkdown(`**Updated:** ${updated}\n\n`);
+      tooltip.appendMarkdown(`**Updated:** ${escapeMarkdown(updated)}\n\n`);
     }
     this.tooltip = tooltip;
 
@@ -150,7 +151,7 @@ export class QueryResultErrorItem extends BaseTreeItem {
     this.description = errorMessage;
 
     const tooltip = new vscode.MarkdownString();
-    tooltip.appendMarkdown(`**Error:** ${errorMessage}\n\n`);
+    tooltip.appendMarkdown(`**Error:** ${escapeMarkdown(errorMessage)}\n\n`);
     tooltip.appendMarkdown("Click to open the query dialog and try again.");
     this.tooltip = tooltip;
 

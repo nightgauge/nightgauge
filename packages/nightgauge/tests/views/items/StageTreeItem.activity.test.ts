@@ -110,7 +110,7 @@ describe("StageTreeItem activity", () => {
     expect(iconOf(item)).toEqual({ id: "arrow-circle-up", color: "charts.purple" });
     expect(activityChildren(item).map((c) => c.label)).toEqual(["sonnet → opus (gate_failed)"]);
     const tooltip = (item.tooltip as vscode.MarkdownString).value;
-    expect(tooltip).toContain("sonnet → opus (gate_failed)");
+    expect(tooltip).toContain("sonnet → opus (gate\\_failed)");
   });
 
   it("tooltip escapes backslashes, pipes and newlines in table cells", () => {

@@ -21,6 +21,7 @@ import * as vscode from "vscode";
 import * as path from "node:path";
 import { BaseTreeItem } from "./BaseTreeItem";
 import type { KnowledgeRecallHit } from "../../services/IpcClientBase";
+import { escapeMarkdown, codeSpan } from "../markdownEscape";
 
 const SNIPPET_MAX = 100;
 
@@ -74,11 +75,11 @@ export class KnowledgeSearchResultItem extends BaseTreeItem {
 
     this.tooltip = new vscode.MarkdownString(
       [
-        `**${label}**`,
+        `**${escapeMarkdown(label)}**`,
         "",
-        snippet ? `> ${snippet}` : "_No matching line._",
+        snippet ? `> ${escapeMarkdown(snippet)}` : "_No matching line._",
         "",
-        `\`${hit.path}\``,
+        codeSpan(hit.path),
         "",
         `BM25 relevance ${hit.score.toFixed(2)}`,
       ].join("\n")

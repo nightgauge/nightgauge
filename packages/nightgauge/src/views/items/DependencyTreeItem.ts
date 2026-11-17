@@ -7,6 +7,7 @@
 
 import * as vscode from "vscode";
 import { BaseTreeItem } from "./BaseTreeItem";
+import { escapeMarkdown } from "../markdownEscape";
 
 /**
  * Blocking issue data from GitHub API
@@ -84,11 +85,10 @@ export class DependencyTreeItem extends BaseTreeItem {
    */
   private createTooltip(): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
-    md.isTrusted = true;
 
     md.appendMarkdown(`**Blocking Issue:** #${this.blockingIssue.number}\n\n`);
-    md.appendMarkdown(`**Title:** ${this.blockingIssue.title}\n\n`);
-    md.appendMarkdown(`**State:** ${this.blockingIssue.state}\n\n`);
+    md.appendMarkdown(`**Title:** ${escapeMarkdown(this.blockingIssue.title)}\n\n`);
+    md.appendMarkdown(`**State:** ${escapeMarkdown(this.blockingIssue.state)}\n\n`);
 
     if (this.blockingIssue.state === "OPEN") {
       md.appendMarkdown(`⚠️ This issue must be completed before work can begin.\n\n`);

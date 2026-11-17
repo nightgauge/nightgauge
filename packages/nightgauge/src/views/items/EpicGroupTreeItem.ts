@@ -11,6 +11,7 @@ import { ReadyIssueTreeItem } from "./ReadyIssueTreeItem";
 import type { ReadyIssue, BlockingIssue } from "../../services/ProjectBoardService";
 import { isBlocked, getBlockerTitles } from "../../utils/dependencyUtils";
 import { repoFromIssueUrl, type RepoIssueRef } from "../../utils/epicRef";
+import { escapeMarkdown } from "../markdownEscape";
 
 /**
  * Epic information for display
@@ -244,10 +245,9 @@ export class EpicGroupTreeItem extends BaseTreeItem {
    */
   private createTooltip(issues: ReadyIssue[]): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
-    md.isTrusted = true;
 
     if (this.epic) {
-      md.appendMarkdown(`**Epic #${this.epic.number}** - ${this.epic.title}\n\n`);
+      md.appendMarkdown(`**Epic #${this.epic.number}** - ${escapeMarkdown(this.epic.title)}\n\n`);
     } else {
       md.appendMarkdown(`**Standalone Issues**\n\n`);
       md.appendMarkdown(`Issues not linked to any epic\n\n`);
@@ -262,7 +262,7 @@ export class EpicGroupTreeItem extends BaseTreeItem {
       md.appendMarkdown(`**🔒 Blocked By:**\n\n`);
       for (const blocker of this.epic.blockedBy) {
         const stateIcon = blocker.state === "OPEN" ? "🔴" : "✅";
-        md.appendMarkdown(`- ${stateIcon} #${blocker.number}: ${blocker.title}\n`);
+        md.appendMarkdown(`- ${stateIcon} #${blocker.number}: ${escapeMarkdown(blocker.title)}\n`);
       }
       md.appendMarkdown(`\n`);
     }
@@ -297,7 +297,7 @@ export class EpicGroupTreeItem extends BaseTreeItem {
       md.appendMarkdown(`**Issues:**\n\n`);
       for (const issue of issues.slice(0, 5)) {
         const priorityIcon = issue.priority === "P0" ? "🔴" : issue.priority === "P1" ? "🟠" : "🔵";
-        md.appendMarkdown(`- ${priorityIcon} #${issue.number}: ${issue.title}\n`);
+        md.appendMarkdown(`- ${priorityIcon} #${issue.number}: ${escapeMarkdown(issue.title)}\n`);
       }
 
       if (issues.length > 5) {

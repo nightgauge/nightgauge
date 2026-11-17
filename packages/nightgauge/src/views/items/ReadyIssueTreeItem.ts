@@ -15,6 +15,7 @@ import {
   getDependabotType,
   getDependencyPackageInfo,
 } from "../../utils/dependabotUtils";
+import { escapeMarkdown, codeSpan } from "../markdownEscape";
 
 /**
  * Priority icon display configuration
@@ -224,9 +225,8 @@ export class ReadyIssueTreeItem extends BaseTreeItem {
    */
   private createTooltip(showDependencies: boolean = true): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
-    md.isTrusted = true;
 
-    md.appendMarkdown(`**#${this.issue.number}** - ${this.issue.title}\n\n`);
+    md.appendMarkdown(`**#${this.issue.number}** - ${escapeMarkdown(this.issue.title)}\n\n`);
 
     // Issue #2486: Dependabot-specific tooltip section
     const tooltipDepType = getDependabotType(this.issue.labels);
@@ -237,7 +237,7 @@ export class ReadyIssueTreeItem extends BaseTreeItem {
       const pkgInfo = getDependencyPackageInfo(this.issue.title);
       if (pkgInfo) {
         md.appendMarkdown(
-          `**Package:** \`${pkgInfo.name}\` — \`${pkgInfo.from}\` → \`${pkgInfo.to}\`\n\n`
+          `**Package:** ${codeSpan(pkgInfo.name)} — ${codeSpan(pkgInfo.from)} → ${codeSpan(pkgInfo.to)}\n\n`
         );
       }
 
@@ -247,15 +247,17 @@ export class ReadyIssueTreeItem extends BaseTreeItem {
     }
 
     if (this.issue.status) {
-      md.appendMarkdown(`**Status:** ${this.issue.status}\n\n`);
+      md.appendMarkdown(`**Status:** ${escapeMarkdown(this.issue.status)}\n\n`);
     }
 
     if (this.issue.priority) {
-      md.appendMarkdown(`**Priority:** ${this.formatPriority(this.issue.priority)}\n\n`);
+      md.appendMarkdown(
+        `**Priority:** ${escapeMarkdown(this.formatPriority(this.issue.priority))}\n\n`
+      );
     }
 
     if (this.issue.size) {
-      md.appendMarkdown(`**Size:** ${this.formatSize(this.issue.size)}\n\n`);
+      md.appendMarkdown(`**Size:** ${escapeMarkdown(this.formatSize(this.issue.size))}\n\n`);
     }
 
     // Add "Blocked By" section if issue has blockers
@@ -263,7 +265,9 @@ export class ReadyIssueTreeItem extends BaseTreeItem {
       md.appendMarkdown(`**🔒 Blocked By:**\n\n`);
       for (const blockingIssue of this.issue.blockedBy) {
         const stateIcon = blockingIssue.state === "OPEN" ? "🔴" : "✅";
-        md.appendMarkdown(`- ${stateIcon} #${blockingIssue.number}: ${blockingIssue.title}\n`);
+        md.appendMarkdown(
+          `- ${stateIcon} #${blockingIssue.number}: ${escapeMarkdown(blockingIssue.title)}\n`
+        );
       }
       md.appendMarkdown(`\n`);
     }
@@ -273,7 +277,9 @@ export class ReadyIssueTreeItem extends BaseTreeItem {
       md.appendMarkdown(`**🔗 Blocks:**\n\n`);
       for (const blockedIssue of this.issue.blocks) {
         const stateIcon = blockedIssue.state === "OPEN" ? "🔴" : "✅";
-        md.appendMarkdown(`- ${stateIcon} #${blockedIssue.number}: ${blockedIssue.title}\n`);
+        md.appendMarkdown(
+          `- ${stateIcon} #${blockedIssue.number}: ${escapeMarkdown(blockedIssue.title)}\n`
+        );
       }
       md.appendMarkdown(`\n`);
     }
@@ -283,7 +289,7 @@ export class ReadyIssueTreeItem extends BaseTreeItem {
         .filter(
           (l) => !l.startsWith("priority:") && !l.startsWith("size:") && !l.startsWith("status:")
         )
-        .map((l) => `\`${l}\``);
+        .map((l) => codeSpan(l));
       if (displayLabels.length > 0) {
         md.appendMarkdown(`**Labels:** ${displayLabels.join(", ")}\n\n`);
       }
