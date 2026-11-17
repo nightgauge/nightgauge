@@ -11,6 +11,7 @@ and this project adheres to
 
 ### Fixed
 
+- The pre-flight cost estimate is now the p75 of the 30 most recent completed whole runs of the same size, narrowed to the same model routing once 5 such runs exist, instead of a sum of per-stage p75s that came out about 4x the actual cost and the same for S and M issues (#3364). The estimate is published whether it is above or below the static figure. The per-stage sum is used only when fewer than 3 same-size runs have completed. Replayed against 229 completed runs since 2026-11-01, 87% of estimates land within 2x of the actual, with a median estimate/actual of 1.18. `scripts/backtest-cost-estimate.ts` reproduces those numbers.
 - Backtracks taken by the extension's orchestrator are now kept in the run record, and the health plan-fidelity metric reads the planned files from the run record once `planning-<N>.json` has been pruned (#3081).
 - A merge-group code failure now sends the run back to feature-dev with the failed job's log excerpt, once per failing check, instead of failing the run (#3339).
 - OpenCode setup now installs the plugin's `index.js` entry, which OpenCode 2.x loads, so the extension-installed plugin gates OpenCode 2.x runs (#3302).

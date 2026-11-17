@@ -194,7 +194,7 @@ known direction.
 | provider                     | `providerForAdapter(resolveStageAdapter(...))` | pricing a grok run at Claude rates biases the estimate by the ratio between two rate cards         |
 | per-stage effort             | the resolved mode envelope and stage pins      | effort re-derived from the size label makes two differently-dispatched runs cost the same on paper |
 | `(stage, model)` calibration | `stage-model-calibration.json` as of run start | any run finishing in between rewrites a bucket                                                     |
-| history p75                  | `ExecutionHistoryReader.getCostByIssue`        | same                                                                                               |
+| history p75                  | `ExecutionHistoryReader.getCompletedRunCosts`  | same                                                                                               |
 
 **Provider pricing is never substituted.** `ratesForProviderTier(provider,
 band)` returns `undefined` when a provider serves no model in a band, and the
@@ -208,18 +208,24 @@ which _is_ in the registry at $0, prices as a real 0.
 **`budget_estimate_source`** records which input produced the published number,
 so a reader can tell a calibrated estimate from an uncalibrated one:
 
-| Source           | Condition                                                         | Threshold                 |
-| ---------------- | ----------------------------------------------------------------- | ------------------------- |
-| `unpriced`       | any non-skipped stage has no registry rate                        | —                         |
-| `stage-model`    | a `(stage, model)` cell qualified                                 | **5** samples in the cell |
-| `historical-p75` | comparable runs exist **and** their p75 exceeds the static figure | **3** comparable runs     |
-| `static`         | nothing else qualified                                            | —                         |
+| Source           | Condition                                                           | Threshold                      |
+| ---------------- | ------------------------------------------------------------------- | ------------------------------ |
+| `unpriced`       | any non-skipped stage has no registry rate                          | —                              |
+| `historical-p75` | completed whole runs of the same size exist (above or below static) | **3** same-size completed runs |
+| `stage-model`    | no whole-run cohort, and a `(stage, model)` cell qualified          | **5** samples in the cell      |
+| `historical-p75` | per-issue fallback cohort, and its p75 exceeds the static figure    | **3** comparable issues        |
+| `static`         | nothing else qualified                                              | —                              |
 
-The two thresholds genuinely differ — 3 for the whole-run history cohort, 5 for
-a per-stage cell — because a cell is a narrower slice of the same corpus. A p75
-_below_ the static figure is ignored: the static table has never over-estimated
-in this corpus, so that means the cohort is not comparable, not that runs got
-cheap.
+The whole-run cohort (#3364) is the p75 of the **30** most recent completed
+runs of the issue's size, narrowed to runs on the same model routing once **5**
+such runs exist; the summary names it `Historical p75 (S)` or
+`Historical p75 (S, same routing)`. It comes before `stage-model` because that
+source is a sum of per-stage p75s, and p75s do not add: each stage's tail is a
+different run, so the sum came out about 4x the actual and the same for every
+size. A whole-run cohort is published below the static figure too, since runs
+of the same size are comparable by construction. The per-issue fallback
+(`getCostByIssue`, which sums every attempt on an issue) keeps its "only above
+static" rule.
 
 The published `estimatedCost` and the ceiling ratio are now the **same number**.
 Before #1213 they were not: the ratio used the p75 while the published estimate
@@ -227,6 +233,12 @@ used the static table, so the gate warned on one figure and the notification
 rendered another — and the published number never improved with history, which
 is how a median 3.9x under-estimate (#112) survived unnoticed.
 `staticEstimatedCost` is always retained beside it for comparison.
+
+**Back-testing it**: `npx tsx scripts/backtest-cost-estimate.ts [--since
+<ISO date>] [--history <dir>] [--json]` replays each completed run in the
+clone's pipeline history against its prior runs only, and exits 1 unless at
+least 60% of estimates land within 2x of the actual with a median
+estimate/actual in 0.8–1.5.
 
 **Measuring it**: `nightgauge cost accuracy [--days N] [--json]` reports median
 and p90 of actual/estimate over the run corpus, grouped by size, by provider and

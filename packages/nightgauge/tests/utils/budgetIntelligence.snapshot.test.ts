@@ -34,6 +34,7 @@ vi.mock("../../src/utils/resolvers/monitoringResolver", () => ({
 vi.mock("../../src/utils/executionHistoryReader", () => ({
   ExecutionHistoryReader: {
     getCostByIssue: vi.fn().mockResolvedValue([]),
+    getCompletedRunCosts: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -463,5 +464,47 @@ describe("the PUBLISHED estimate is the calibrated one (#1213)", () => {
     expect(snap.provider).toBeTruthy();
     expect(snap.adapter).toBeTruthy();
     expect(snap.stageEfforts).toBeDefined();
+  });
+});
+
+describe("whole-run cohort p75 leads the published estimate (#3364)", () => {
+  const mockedCompleted = vi.mocked(ExecutionHistoryReader.getCompletedRunCosts);
+  const run = (size: string, cost: number, day: number) => ({
+    totalCostUsd: cost,
+    sizeLabel: size,
+    stageModels: {},
+    recordedAt: `2026-11-${String(day).padStart(2, "0")}T00:00:00Z`,
+  });
+
+  beforeEach(() => {
+    liveMode.value = "elevated";
+    liveCalibration.value = null;
+    vi.clearAllMocks();
+    mockedHistory.mockResolvedValue([]);
+    mockedCompleted.mockResolvedValue([]);
+  });
+
+  it("publishes the whole-run p75 even when it is BELOW the static figure", async () => {
+    mockedCompleted.mockResolvedValue([1, 2, 3, 4].map((d) => run("M", 0.01 * d, d)));
+    // The per-issue fallback would have published 50; the whole-run cohort wins.
+    mockedHistory.mockResolvedValue(historyRuns("M", [20, 30, 40, 50, 107]));
+
+    const result = await runPreFlightBudgetCheck(METADATA, 75, "/workspace");
+
+    expect(result.estimateSource).toBe("historical-p75");
+    expect(result.estimatedCost).toBeCloseTo(0.03, 10);
+    expect(result.estimatedCost).toBeLessThan(result.staticEstimatedCost);
+    expect(result.historicalSource).toBe("same-size");
+    expect(result.summary).toContain("Historical p75 (M): $0.03 (4 runs)");
+    expect(mockedHistory).not.toHaveBeenCalled();
+  });
+
+  it("ignores other sizes and falls back when the size cohort is too small", async () => {
+    mockedCompleted.mockResolvedValue([run("S", 5, 1), run("S", 6, 2), run("S", 7, 3)]);
+
+    const result = await runPreFlightBudgetCheck(METADATA, 75, "/workspace");
+
+    expect(result.estimateSource).toBe("static");
+    expect(result.summary).toContain("Historical p75: UNCALIBRATED");
   });
 });

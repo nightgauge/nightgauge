@@ -593,6 +593,96 @@ describe("ExecutionHistoryReader", () => {
     });
   });
 
+  describe("getCompletedRunCosts() (#3364)", () => {
+    function runLine(o: {
+      outcome?: string;
+      cost?: number;
+      size?: string | null;
+      at: string;
+      perStage?: Record<string, { model?: string }>;
+    }): string {
+      const perStage = Object.fromEntries(
+        Object.entries(o.perStage ?? {}).map(([k, v]) => [
+          k,
+          { input: 1, output: 1, cache_read: 0, cache_creation: 0, cost_usd: 0.1, ...v },
+        ])
+      );
+      return JSON.stringify({
+        schema_version: "2",
+        record_type: "run",
+        issue_number: 42,
+        title: "t",
+        branch: "feat/42-t",
+        base_branch: "main",
+        execution_mode: "automatic",
+        started_at: o.at,
+        completed_at: o.at,
+        total_duration_ms: 1,
+        outcome: o.outcome ?? "complete",
+        stages: {},
+        tokens: {
+          total_input: 1,
+          total_output: 1,
+          total_cache_read: 0,
+          total_cache_creation: 0,
+          estimated_cost_usd: o.cost ?? 5,
+          per_stage: perStage,
+        },
+        files: { read_count: 0, written_count: 0 },
+        routing: { complexity_score: 3, path: "standard", skip_stages: [] },
+        is_recovery: false,
+        type: "feature",
+        size: o.size === undefined ? "M" : o.size,
+        recorded_at: o.at,
+      });
+    }
+
+    it("keeps one row per completed priced run, newest first, with stage models", async () => {
+      vi.mocked(fs.readdir).mockResolvedValue(["2026-11-01.jsonl"] as any);
+      vi.mocked(fs.readFile).mockResolvedValue(
+        [
+          runLine({ at: "2026-11-01T01:00:00Z", cost: 4 }),
+          runLine({ at: "2026-11-01T02:00:00Z", outcome: "failed", cost: 9 }),
+          runLine({ at: "2026-11-01T03:00:00Z", cost: 0 }),
+          runLine({
+            at: "2026-11-01T04:00:00Z",
+            cost: 6,
+            size: "S",
+            perStage: { "feature-dev": { model: "claude-opus-5-5" }, "pr-create": {} },
+          }),
+        ].join("\n") + "\n"
+      );
+
+      const rows = await ExecutionHistoryReader.getCompletedRunCosts(workspaceRoot);
+
+      expect(rows).toEqual([
+        {
+          totalCostUsd: 6,
+          sizeLabel: "S",
+          stageModels: { "feature-dev": "claude-opus-5-5" },
+          recordedAt: "2026-11-01T04:00:00Z",
+        },
+        { totalCostUsd: 4, sizeLabel: "M", stageModels: {}, recordedAt: "2026-11-01T01:00:00Z" },
+      ]);
+    });
+
+    it("truncates to limit and returns [] when history cannot be read", async () => {
+      vi.mocked(fs.readdir).mockResolvedValue(["2026-11-01.jsonl"] as any);
+      vi.mocked(fs.readFile).mockResolvedValue(
+        [runLine({ at: "2026-11-01T01:00:00Z" }), runLine({ at: "2026-11-01T02:00:00Z" })].join(
+          "\n"
+        ) + "\n"
+      );
+      const rows = await ExecutionHistoryReader.getCompletedRunCosts(workspaceRoot, 1);
+      expect(rows.map((r) => r.recordedAt)).toEqual(["2026-11-01T02:00:00Z"]);
+
+      ExecutionHistoryReader.clearCache();
+      vi.spyOn(ExecutionHistoryReader, "readAll").mockRejectedValue(new Error("boom"));
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(await ExecutionHistoryReader.getCompletedRunCosts(workspaceRoot)).toEqual([]);
+    });
+  });
+
   describe("getCostByIssue()", () => {
     // Helper: build a minimal v2 run JSONL line
     function makeV2RunLine(
