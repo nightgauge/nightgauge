@@ -22,6 +22,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 - The pull-request review comment's footer no longer says it does not block merging. It now states that hold findings (every blocker, and a correctness major on `README*`, `docs/**` or `packages/*/package.json`) stop `pr-merge` from merging, matching the enqueue review gate (#2730), and that other findings do not (#2836).
 
+### Removed
+
+- The repository no longer carries `.codex/commands/` and `.codex/prompts/`. Codex reads neither directory — it runs Nightgauge stages as `$<skill-name>` skills — and the prompts README named an install script that no longer exists (#2921).
+
 ## [0.8.6] - 2026-11-17
 
 ### Added
