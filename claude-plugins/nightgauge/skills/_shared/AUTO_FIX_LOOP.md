@@ -285,9 +285,6 @@ on a stack of 22 pre-existing failures it could not have known were not its).
 **This is the ONLY probabilistic step in the auto-fix loop.** Based on failure
 type and logs, generate an appropriate fix.
 
-**Subagent Model**: When spawning a Task subagent for fix generation, specify
-`model: "sonnet"` to use a cost-optimized model.
-
 | Failure Type | Fix Approach                                           |
 | ------------ | ------------------------------------------------------ |
 | `lint`       | Run linter with --fix, or manually fix reported issues |

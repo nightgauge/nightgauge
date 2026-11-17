@@ -302,35 +302,30 @@ Requirements:
 
 #### Step 4.2: Launch Parallel Subagents
 
-**Subagent Model**: When spawning parallel subagents for test generation,
-specify `model: "sonnet"` on each Task invocation to use a cost-optimized model.
-Sonnet provides sufficient quality for test generation while reducing token
-costs compared to Opus.
-
 ```
 Launching test generation subagents...
 
-[1/3] Unit Test Subagent: Running (model: sonnet)
-[2/3] Integration Test Subagent: Running (model: sonnet)
-[3/3] E2E Test Subagent: Running (model: sonnet, skipped if --skip-e2e)
+[1/3] Unit Test Subagent: Running
+[2/3] Integration Test Subagent: Running
+[3/3] E2E Test Subagent: Running (skipped if --skip-e2e)
 ```
 
-Use the `Task` tool to spawn subagents with `model: "sonnet"`:
+Use the `Task` tool to spawn the subagents:
 
 ```
 Launch 3 subagents in parallel:
 
-1. Unit test generator (model: sonnet):
+1. Unit test generator:
    - Focus: Individual functions
    - Scope: All target files
    - Output: test files in appropriate locations
 
-2. Integration test generator (model: sonnet):
+2. Integration test generator:
    - Focus: Component interactions
    - Scope: Service/route combinations
    - Output: integration test files
 
-3. E2E test generator (model: sonnet, unless --skip-e2e):
+3. E2E test generator (unless --skip-e2e):
    - Focus: User flows
    - Scope: Critical paths
    - Output: E2E test files

@@ -17,8 +17,8 @@ the composer is
 > block, the extension's migration onto the composer, and the shared provider
 > and Anthropic overlays (#81), and the `nightgauge-model-watch` intake (#83)
 > have shipped, and `nightgauge preflight skill-overlays` gates them (#80).
-> Base-skill prose extraction (#82) and the overlay-delta evals (#84) are still
-> open — see [What the gate enforces](#8-what-the-gate-enforces).
+> Base-skill prose extraction (#82) has shipped; the overlay-delta evals (#84)
+> are still open — see [What the gate enforces](#8-what-the-gate-enforces).
 
 ## 1. The mental model
 
@@ -277,19 +277,19 @@ if it exists. There is no adapter for which that is not knowable.
 `scripts/ci-local.sh`, and `TestSkillOverlays_WorkingTreeIsClean` runs it over
 `skills/` in CI. Every finding names the file, the rule, the problem and the fix.
 
-| Rule                    | Fails when                                                                                                 | Severity |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------- | -------- |
-| `overlay-key`           | a fragment's key is not a registry provider or live id (under `hosts/`: a known adapter)                   | fail     |
-| `overlay-budget`        | a fragment exceeds 4608 bytes                                                                              | fail     |
-| `overlay-registry-fact` | a fragment restates its model's `behavior` fact (thinking default, effort default, disable ceiling) (#544) | fail     |
-| `thinking-effort`       | a configured stage (model, effort) pair breaks the thinking interlock with thinking disabled               | fail     |
-| `base-skill-purity`     | a stage `SKILL.md` line outside fenced code names a model or carries size-conditional prose                | warn     |
-| `overlay-override`      | a whole-file `<key>.SKILL.md` override exists (listed as a drift liability)                                | warn     |
+| Rule                    | Fails when                                                                                                                                                                           | Severity |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
+| `overlay-key`           | a fragment's key is not a registry provider or live id (under `hosts/`: a known adapter)                                                                                             | fail     |
+| `overlay-budget`        | a fragment exceeds 4608 bytes                                                                                                                                                        | fail     |
+| `overlay-registry-fact` | a fragment restates its model's `behavior` fact (thinking default, effort default, disable ceiling) (#544)                                                                           | fail     |
+| `thinking-effort`       | a configured stage (model, effort) pair breaks the thinking interlock with thinking disabled                                                                                         | fail     |
+| `base-skill-purity`     | a base skill line (`SKILL.md`, `_includes/*.md`, `_shared/*.md`) outside frontmatter and fenced code names a model, quotes a `model: "<tier>"` pin or carries size-conditional prose | fail     |
+| `overlay-override`      | a whole-file `<key>.SKILL.md` override exists (listed as a drift liability)                                                                                                          | warn     |
 
 Band names, deprecated ids and typos each get their own message. Exempt a
 base-skill line with `<!-- overlay-exempt: reason -->` on it or the line above;
 an empty reason is itself a finding, and exempt lines are listed in the output.
-Purity stays warn-only until #82 triages the existing hits. Exit `0` means no
+Overlay fragments are never scanned for purity. Exit `0` means no
 blocking finding, `1` a blocking finding, `2` the check could not run.
 
 ## 9. The coverage gap

@@ -983,7 +983,7 @@ nightgauge preflight skill-anti-patterns --root . [--json]
 # Fail when a skill embeds a non-portable (VSCode-extension) binary path
 nightgauge preflight skill-portability --root . [--json]
 # ADR 016 overlay gate: rules overlay-key, overlay-budget, overlay-registry-fact,
-# thinking-effort (fail); base-skill-purity, overlay-override (warn). Exit 0/1/2.
+# thinking-effort, base-skill-purity (fail); overlay-override (warn). Exit 0/1/2.
 nightgauge preflight skill-overlays --skills-root skills [--json]
 
 # Fail when disabled thinking is paired with an effort the model rejects (#76)

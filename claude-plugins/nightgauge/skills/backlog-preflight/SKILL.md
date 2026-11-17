@@ -129,7 +129,7 @@ Three-layer check:
    `preflight.environment` (#101); opt-in, silent when none are declared
 
 The binary discovery cascade below is **provider-neutral** (issue 4029): it works
-identically under every adapter (Claude, Codex, Gemini, …) and references no
+identically under every adapter (Claude, Codex, Gemini, …) and references no <!-- overlay-exempt: names adapters, not models -->
 VSCode-extension-specific path. The host that spawns the skill (the VSCode
 extension's `skillRunner`, or the Go `nightgauge` binary in auto/CLI mode)
 resolves the binary authoritatively and exports `NIGHTGAUGE_BIN`, which
@@ -439,7 +439,6 @@ if [ "$FOCUS" = "all" ] || [ "$FOCUS" = "drift" ]; then
 
     # Spawn Task subagent for semantic drift detection
     # The AI agent executing this skill invokes the Task tool here with:
-    #   model: sonnet
     #   prompt: |
     #     Analyze these issues for technology contradictions against the repo docs.
     #     Only report DEFINITIVE contradictions supported by direct text evidence.

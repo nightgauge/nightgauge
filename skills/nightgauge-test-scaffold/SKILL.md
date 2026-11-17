@@ -566,7 +566,7 @@ For each selected file:
 
 #### Step 4.3: Spawn Parallel Subagents
 
-Use the `Task` tool with `model: "sonnet"` to spawn parallel subagents for
+Use the `Task` tool to spawn parallel subagents for
 independent test file generation. Make all independent file creation calls in a
 single message.
 
@@ -897,7 +897,7 @@ For each package in `PACKAGES`:
 1. Run Phases 1-6 scoped to the package directory
 2. Compute per-package gap analysis and risk scores
 
-Use the `Task` tool with `model: "haiku"` to spawn parallel subagents for
+Use the `Task` tool to spawn parallel subagents for
 independent per-package analysis. Each subagent receives: package path,
 ecosystem detected, test frameworks, and generation parameters.
 

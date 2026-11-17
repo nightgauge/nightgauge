@@ -92,11 +92,6 @@ For files with no dependencies on other new files, use the `Task` tool to spawn
 parallel subagents. Make all independent file creation calls in a single
 message.
 
-**Subagent Model**: When spawning parallel subagents for independent file
-creation, specify `model: "sonnet"` on each Task invocation to use a
-cost-optimized model for implementation work. Sonnet provides sufficient quality
-for code generation tasks while reducing token costs compared to Opus.
-
 Each subagent receives: file path, purpose from PLAN.md, requirements from
 PLAN.md, and applicable standards from docs/.
 
@@ -294,7 +289,7 @@ else
 
   # Step 4.5.3: Generate E2E test scaffolding via Task subagent
   #
-  # Spawn a Task subagent (model: "haiku") with the list of modified UI files,
+  # Spawn a Task subagent with the list of modified UI files,
   # the detected E2E framework, and the test directory. The subagent generates
   # 2-3 test scenario suggestions per UI file (max 10 total), focusing on
   # user journeys, form submissions, navigation flows, and visible state

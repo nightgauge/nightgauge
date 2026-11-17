@@ -14,9 +14,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- Base skills no longer pin subagent models. The `model: "haiku"`/`"sonnet"` pins and the Sonnet-vs-Opus cost notes in test-gen, health-check, security-audit, refactor-rewrite, test-scaffold, dep-modernize, backlog-preflight, the auto-fix loop and the feature-planning and feature-dev includes are replaced by one routing line in the Anthropic overlay, so non-Claude adapters no longer read Claude tier names. `preflight skill-overlays` now scans every skill, include and shared block for model-conditional prose, catches quoted model pins, and fails on a hit (#82).
+
 ### Added
 
-- `nightgauge preflight skill-overlays` gates the base-skill/overlay split (ADR 016, #80). It fails an overlay keyed to a band name, a deprecated id or a typo; a fragment over 4608 bytes; a fragment that restates a registry behavior fact; and a configured stage effort that breaks the thinking interlock. Model-conditional prose in a stage `SKILL.md` is reported as a warning until #82 triages it, and `<!-- overlay-exempt: reason -->` now exempts a line. The gate runs in `scripts/ci-local.sh` and, through a working-tree test, in CI. The dead `grok-build-0.1` shared fragment is removed.
+- `nightgauge preflight skill-overlays` gates the base-skill/overlay split (ADR 016, #80). It fails an overlay keyed to a band name, a deprecated id or a typo; a fragment over 4608 bytes; a fragment that restates a registry behavior fact; and a configured stage effort that breaks the thinking interlock. Model-conditional prose in a base skill fails it (blocking since #82), and `<!-- overlay-exempt: reason -->` now exempts a line. The gate runs in `scripts/ci-local.sh` and, through a working-tree test, in CI. The dead `grok-build-0.1` shared fragment is removed.
 
 ### Security
 

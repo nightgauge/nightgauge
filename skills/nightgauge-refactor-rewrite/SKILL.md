@@ -1118,7 +1118,7 @@ For each component/package:
 2. Produce a per-component recommendation
 3. Identify which components to refactor and which to rewrite
 
-Use the `Task` tool with `model: "haiku"` to spawn parallel subagents for
+Use the `Task` tool to spawn parallel subagents for
 independent per-component assessments.
 
 #### Step 7.5: Build Risk/Benefit Matrix
@@ -1408,7 +1408,7 @@ For each package in `PACKAGES`:
 1. Run Phases 2-7 scoped to the package directory
 2. Compute per-package scores and recommendations
 
-Use the `Task` tool with `model: "haiku"` to spawn parallel subagents for
+Use the `Task` tool to spawn parallel subagents for
 independent package assessments. Each subagent receives: package path, ecosystem
 detected, dimensions to assess, and team/timeline parameters.
 

@@ -302,7 +302,6 @@ if [ "$FOCUS" = "all" ] || [ "$FOCUS" = "drift" ]; then
 
     # Spawn Task subagent for semantic drift detection
     # The AI agent executing this skill invokes the Task tool here with:
-    #   model: sonnet
     #   prompt: |
     #     Analyze these issues for technology contradictions against the repo docs.
     #     Only report DEFINITIVE contradictions supported by direct text evidence.

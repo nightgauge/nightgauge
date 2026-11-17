@@ -129,14 +129,14 @@ func TestSkillOverlays_RegistryFact(t *testing.T) {
 	}
 }
 
-func TestSkillOverlays_PurityWarnsAndHonoursExempt(t *testing.T) {
+func TestSkillOverlays_PurityBlocksAndHonoursExempt(t *testing.T) {
 	root := t.TempDir()
 	skill := "nightgauge-feature-dev/SKILL.md"
 	writeOverlayFile(t, root, skill, "# Dev\n\nOn Opus 5, skip the review.\n\n```bash\necho Opus\n```\n")
 	r := runOverlays(t, root)
 	got := findingsFor(r, RuleBaseSkillPurity)
-	if len(got) != 1 || got[0].Severity != OverlaySeverityWarn || got[0].Line != 3 || r.Blocking() {
-		t.Fatalf("want one warn on line 3, got %+v", r.Findings)
+	if len(got) != 1 || got[0].Severity != OverlaySeverityFail || got[0].Line != 3 || !r.Blocking() {
+		t.Fatalf("want one blocking finding on line 3, got %+v", r.Findings)
 	}
 
 	writeOverlayFile(t, root, skill, "# Dev\n<!-- overlay-exempt: names the tier band in config docs -->\nOn Opus 5, skip the review.\n")
@@ -227,5 +227,46 @@ func TestSkillOverlays_MoreFactAndPurityPatterns(t *testing.T) {
 	got := findingsFor(r, RuleBaseSkillPurity)
 	if len(got) != 1 || got[0].Line != 1 || len(r.Exempt) != 1 || r.Exempt[0].Line != 2 {
 		t.Fatalf("purity: %+v exempt=%+v", got, r.Exempt)
+	}
+}
+
+func TestSkillOverlays_PurityScope(t *testing.T) {
+	cases := []struct {
+		name, file, body string
+		want             int
+	}{
+		{"non-stage skill", "nightgauge-test-gen/SKILL.md", "Run it on Sonnet.\n", 1},
+		{"include", "nightgauge-feature-dev/_includes/impl.md", "Run it on Haiku.\n", 1},
+		{"shared block", "_shared/AUTO_FIX_LOOP.md", "Run it on Opus.\n", 1},
+		{"overlay not scanned", "_shared/_overlays/anthropic.md", "Run it on Sonnet.\n", 0},
+		{"skill overlay not scanned", "nightgauge-test-gen/_overlays/anthropic.md", "Run it on Sonnet.\n", 0},
+		{"frontmatter skipped", "nightgauge-test-gen/SKILL.md", "---\nmodel: \"haiku\"\ndescription: runs on Sonnet\n---\n# X\n", 0},
+		{"after frontmatter", "nightgauge-test-gen/SKILL.md", "---\nname: x\n---\nruns on Sonnet\n", 1},
+		{"unterminated frontmatter", "nightgauge-test-gen/SKILL.md", "---\nRun it on Sonnet.\n", 1},
+		{"include thematic break", "nightgauge-test-gen/_includes/a.md", "---\nRun it on Sonnet.\n---\n", 1},
+		{"non-md include", "nightgauge-test-gen/_includes/notes.txt", "Run it on Sonnet.\n", 0},
+		{"nested shared dir", "_shared/sub/x.md", "Run it on Sonnet.\n", 0},
+		{"quoted prose pin", "nightgauge-test-gen/SKILL.md", "Use `Task` with `model: \"haiku\"`.\n", 1},
+		{"escaped pin", "nightgauge-test-gen/SKILL.md", "Use Task with model: \\\"sonnet\\\".\n", 1},
+		{"fenced pin", "nightgauge-test-gen/SKILL.md", "```\nTask (model: \"haiku\")\n```\n", 0},
+		{"unquoted prose pin", "nightgauge-test-gen/SKILL.md", "Running (model: sonnet)\n", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeOverlayFile(t, root, c.file, c.body)
+			if got := findingsFor(runOverlays(t, root), RuleBaseSkillPurity); len(got) != c.want {
+				t.Fatalf("want %d purity findings, got %+v", c.want, got)
+			}
+		})
+	}
+}
+
+func TestSkillOverlays_SharedSkillScannedOnce(t *testing.T) {
+	root := t.TempDir()
+	writeOverlayFile(t, root, "_shared/SKILL.md", "Run it on Sonnet.\n")
+	r := runOverlays(t, root)
+	if got := findingsFor(r, RuleBaseSkillPurity); len(got) != 1 || r.FilesChecked != 1 {
+		t.Fatalf("want one finding from one file, got %+v checked=%d", got, r.FilesChecked)
 	}
 }
