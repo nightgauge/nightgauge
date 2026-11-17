@@ -1936,8 +1936,15 @@ run_step "state-backstop.sh regression suite" bash scripts/test-state-backstop.s
 # go test's 10m default (#2269). That default is sized for one package on a
 # quiet box; this gate admits concurrent gates on purpose and accepts that
 # they run slower. internal/execution and internal/orchestrator are the
-# longest serial suites (no t.Parallel) and spend their time spawning git and
-# shell fakes, so their wall time grows with contention for the CPU:
+# longest suites and spend their time spawning git and shell fakes, so their
+# wall time grows with contention for the CPU. internal/orchestrator's tests
+# call t.Parallel() unless they touch shared state (#3144), but one process
+# forks under Go's process-wide fork lock, so its spawns still run one at a
+# time and the package gains far less than its test count suggests:
+#
+#   2026-11-16, 30-core Apple M, one package alone, load 4-8, before -> after
+#   #3144: internal/orchestrator 187s -> 132s plain, 241s -> 281s race
+#   (unsharded); its 8 gate shard steps 4 at a time, 142s -> 133s.
 #
 #   2026-09-29, 12-core Apple M, one package alone, load 25-130:
 #     internal/execution    124s plain, 146s race; 64-71s CPU incl. children,

@@ -21,6 +21,8 @@ func closedReadyGraph(state string) *depgraph.Graph {
 }
 
 func TestIssueClosedStop_DispatchesAtMostOnceAcrossCycles(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride:    allWritersGate(),
 		config:               AutonomousConfig{MaxConcurrent: 3},
@@ -77,6 +79,8 @@ func TestIssueClosedStop_DispatchesAtMostOnceAcrossCycles(t *testing.T) {
 }
 
 func TestIssueClosedStop_NotCountedAsFailedRun(t *testing.T) {
+	t.Parallel()
+
 	// The run record books it as a cancelled skip.
 	rec := state.V2RunRecord{Outcome: "failed", TerminalFailureKind: TerminalKindIssueClosed}
 	ApplyNonFailureOutcome(&rec)

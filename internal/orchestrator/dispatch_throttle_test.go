@@ -16,6 +16,8 @@ func throttleAt(max int, resumeAt *time.Time) *platform.WorkspaceThrottle {
 // The dispatch ceiling follows the workspace throttle (#2352): set, raised
 // above the configured concurrency, cleared, unknown, and past its resumeAt.
 func TestDispatchThrottle_Ceiling(t *testing.T) {
+	t.Parallel()
+
 	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
 	d := NewDispatchThrottle()
 	d.now = func() time.Time { return now }
@@ -74,6 +76,8 @@ func TestDispatchThrottle_Ceiling(t *testing.T) {
 // what it learned. A known throttle stays known through a later failed read,
 // and a lost session makes it unknown again.
 func TestDispatchThrottle_ReportsAFollowedThrottleNotReadYet(t *testing.T) {
+	t.Parallel()
+
 	d := NewDispatchThrottle()
 	if th, known, unread := d.Report(); th != nil || known || unread {
 		t.Fatalf("followed by nothing: %v %v %v, want unknown, not unread", th, known, unread)
@@ -97,6 +101,8 @@ func TestDispatchThrottle_ReportsAFollowedThrottleNotReadYet(t *testing.T) {
 }
 
 func TestDispatchThrottle_AnnouncesChangesAndTheLift(t *testing.T) {
+	t.Parallel()
+
 	d := NewDispatchThrottle()
 	changes := make(chan struct{}, 16)
 	d.OnChange(func() { changes <- struct{}{} })
@@ -180,6 +186,8 @@ func (fakeLiftTimer) Stop() bool { return true }
 // running pipeline is never counted out: a cap below the running count opens
 // nothing until enough finish.
 func TestAutonomousScheduler_DispatchCeilingFollowsTheThrottle(t *testing.T) {
+	t.Parallel()
+
 	newScheduler := func() *AutonomousScheduler {
 		return &AutonomousScheduler{
 			trustGateOverride: allWritersGate(),
@@ -230,6 +238,8 @@ func TestAutonomousScheduler_DispatchCeilingFollowsTheThrottle(t *testing.T) {
 // The auto-scheduler loop starts nothing while as many pipelines run as the
 // throttle allows (#2352).
 func TestScheduler_ThrottleHoldsDispatch(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{repoRunning: map[string]int{}}
 	if s.throttleHoldsDispatch() {
 		t.Fatal("no throttle set: dispatch held")
@@ -258,6 +268,8 @@ func TestScheduler_ThrottleHoldsDispatch(t *testing.T) {
 // without one, what its cap leaves above the running ones with one, and
 // nothing at or above the cap.
 func TestScheduler_ThrottleRoom(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{repoRunning: map[string]int{"o/a": 1}}
 	if got := s.throttleRoom(3); got != 3 {
 		t.Fatalf("no throttle: room = %d, want 3", got)
@@ -290,6 +302,8 @@ func TestScheduler_ThrottleRoom(t *testing.T) {
 // A wave's sub-issues wait while the throttle holds dispatch, and the wait
 // ends with the context (#2352).
 func TestScheduler_WaitForThrottleRoom(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{repoRunning: map[string]int{"o/a": 1}}
 	d := NewDispatchThrottle()
 	s.SetDispatchThrottle(d)
@@ -309,6 +323,8 @@ func TestScheduler_WaitForThrottleRoom(t *testing.T) {
 // Pending queue items reserve board-scan slots only while fillSlots can still
 // take them (#2717): fresh, and in a repository that is not halted. With one
 // run and a ceiling of 3, two stuck items used to stop the whole fleet.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestAutonomousScheduler_PendingReservationIsBoundedAndHaltAware(t *testing.T) {
 	newScheduler := func(items ...QueueItem) *AutonomousScheduler {
 		return &AutonomousScheduler{
@@ -372,6 +388,8 @@ func TestAutonomousScheduler_PendingReservationIsBoundedAndHaltAware(t *testing.
 // The `no effective slots available` line reports the pending queue items and
 // how many held a slot, so a stall behind queue reservations is visible in the
 // log rather than reading as "running=1" with nothing else to go on (#2717).
+//
+// Serial: swaps package var reconcileExecGh (via newBaselineSweepScheduler).
 func TestRunCycle_NoSlotsLogReportsPendingCount(t *testing.T) {
 	eval := &fakeBaselineEvaluator{green: map[string]bool{}}
 	now := time.Now().UTC()

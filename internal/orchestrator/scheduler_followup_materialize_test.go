@@ -14,6 +14,8 @@ import (
 )
 
 func TestStageList_NonSpikeIssueIncludesFollowupMaterialize(t *testing.T) {
+	t.Parallel()
+
 	got := appendPostMergeStages(types.BoardItem{Number: 1, Labels: []string{"type:feature"}}, fullStageOrder())
 	want := append(fullStageOrder(), state.StageFollowupMaterialize)
 	if !equalStages(got, want) {
@@ -30,6 +32,8 @@ func TestStageList_NonSpikeIssueIncludesFollowupMaterialize(t *testing.T) {
 }
 
 func TestFollowupCaptureHasRecords_SkipsEmptyCapture(t *testing.T) {
+	t.Parallel()
+
 	ws := t.TempDir()
 	gittest.InitRepo(t, ws, "-q")
 	if followupCaptureHasRecords(ws, 9) {
@@ -68,6 +72,8 @@ func (c *captureEmitter) Emit(kind trace.Kind, stage string, payload any) {
 
 // The empty-capture skip leaves a trace (#2638); it used to leave nothing.
 func TestRecordFollowupSkip_EmitsStageSkipTrace(t *testing.T) {
+	t.Parallel()
+
 	var em captureEmitter
 	recordFollowupSkip(&em, 9)
 	if len(em.got) != 1 {

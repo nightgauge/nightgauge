@@ -14,6 +14,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- `internal/orchestrator`'s tests now run in parallel, apart from the ones that set the environment, swap a package-level seam, redirect the standard logger or wait on a short wall-clock deadline (#3144). Each serial test says why in a `// Serial:` comment, and a new policy test fails when a parallel test reaches shared state or a test has no reason. The package's plain `go test` drops from 187s to 132s on 30 cores. The gain is limited because Go forks one subprocess at a time per process and these tests spawn git constantly. The unsharded race pass is slower, 241s to 281s, and the gate's 8 sharded orchestrator steps barely change (142s to 133s).
+
 ### Fixed
 
 - The pre-flight cost estimate is now the p75 of the 30 most recent completed whole runs of the same size, narrowed to the same model routing once 5 such runs exist, instead of a sum of per-stage p75s that came out about 4x the actual cost and the same for S and M issues (#3364). The estimate is published whether it is above or below the static figure. The per-stage sum is used only when fewer than 3 same-size runs have completed. Replayed against 229 completed runs since 2026-11-01, 87% of estimates land within 2x of the actual, with a median estimate/actual of 1.18. `scripts/backtest-cost-estimate.ts` reproduces those numbers.

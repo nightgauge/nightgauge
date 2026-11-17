@@ -171,6 +171,8 @@ func buildWaveTestScheduler(t *testing.T, tmpDir string, issueSvc *mockEpicIssue
 }
 
 func TestWaveOrchestrator_NewWaveOrchestrator(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	wo := newWaveOrchestrator(s, 100, "nightgauge/test", 0, 0)
 
@@ -198,6 +200,8 @@ func TestWaveOrchestrator_NewWaveOrchestrator(t *testing.T) {
 }
 
 func TestWaveOrchestrator_ExtractFileRefs(t *testing.T) {
+	t.Parallel()
+
 	body := `This issue modifies:
 - packages/sdk/src/orchestrator/PipelineOrchestrator.ts
 - internal/orchestrator/scheduler.go
@@ -211,6 +215,8 @@ Also touches packages/vscode/src/services/IpcClient.ts`
 }
 
 func TestWaveOrchestrator_FetchSubIssueDetails(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	issueSvc := newMockEpicIssueSvc()
 
@@ -257,6 +263,8 @@ func TestWaveOrchestrator_FetchSubIssueDetails(t *testing.T) {
 }
 
 func TestWaveOrchestrator_DetectDependencies_WithBlockedBy(t *testing.T) {
+	t.Parallel()
+
 	issueSvc := newMockEpicIssueSvc()
 	s := &Scheduler{issueSvc: issueSvc}
 	wo := newWaveOrchestrator(s, 100, "Org/repo", 4, 0)
@@ -294,6 +302,8 @@ func TestWaveOrchestrator_DetectDependencies_WithBlockedBy(t *testing.T) {
 }
 
 func TestWaveOrchestrator_BuildSummary(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	wo := newWaveOrchestrator(s, 100, "test", 4, 0)
 
@@ -350,6 +360,8 @@ func TestWaveOrchestrator_BuildSummary(t *testing.T) {
 }
 
 func TestWaveOrchestrator_PersistWavePlan(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{
 		trustGate: allWritersGate(),
@@ -402,6 +414,8 @@ func TestWaveOrchestrator_PersistWavePlan(t *testing.T) {
 }
 
 func TestWaveOrchestrator_PersistWaveStatus(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{
 		trustGate: allWritersGate(),
@@ -446,6 +460,8 @@ func TestWaveOrchestrator_PersistWaveStatus(t *testing.T) {
 }
 
 func TestWaveOrchestrator_DispatchItem_NonEpic(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := gitWorkspace(t)
 	issueSvc := newMockEpicIssueSvc()
 	runner := &trackingStageRunner{behavior: "succeed"}
@@ -470,6 +486,8 @@ func TestWaveOrchestrator_DispatchItem_NonEpic(t *testing.T) {
 }
 
 func TestWaveOrchestrator_DispatchItem_EpicSequentialFallback(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	issueSvc := newMockEpicIssueSvc()
 	runner := &trackingStageRunner{behavior: "succeed"}
@@ -520,6 +538,8 @@ func TestWaveOrchestrator_DispatchItem_EpicSequentialFallback(t *testing.T) {
 }
 
 func TestWaveOrchestrator_RunEpicWaves_ParallelExecution(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := gitWorkspace(t)
 	issueSvc := newMockEpicIssueSvc()
 	runner := &trackingStageRunner{behavior: "succeed"}
@@ -587,6 +607,8 @@ func TestWaveOrchestrator_RunEpicWaves_ParallelExecution(t *testing.T) {
 }
 
 func TestWaveOrchestrator_RunEpicWaves_NoOpenSubIssues(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	issueSvc := newMockEpicIssueSvc()
 	runner := &trackingStageRunner{behavior: "succeed"}
@@ -628,6 +650,8 @@ func TestWaveOrchestrator_RunEpicWaves_NoOpenSubIssues(t *testing.T) {
 }
 
 func TestWaveOrchestrator_WaveSuccessCount(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	wo := newWaveOrchestrator(s, 100, "test", 4, 0)
 
@@ -645,6 +669,8 @@ func TestWaveOrchestrator_WaveSuccessCount(t *testing.T) {
 }
 
 func TestWaveOrchestrator_BudgetForIssue(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	wo := newWaveOrchestrator(s, 100, "test", 4, 1_000_000)
 
@@ -669,6 +695,8 @@ func TestWaveOrchestrator_BudgetForIssue(t *testing.T) {
 // --- scaleAgents tests ---
 
 func TestScaleAgents_IdealConcurrency(t *testing.T) {
+	t.Parallel()
+
 	cfg := ScalingConfig{MaxConcurrent: 6, MinBudgetPerAgent: 100_000}
 	decision := scaleAgents(4, 1_000_000, cfg)
 
@@ -687,6 +715,8 @@ func TestScaleAgents_IdealConcurrency(t *testing.T) {
 }
 
 func TestScaleAgents_ConfigCeiling(t *testing.T) {
+	t.Parallel()
+
 	cfg := ScalingConfig{MaxConcurrent: 3, MinBudgetPerAgent: 100_000}
 	decision := scaleAgents(8, 1_000_000, cfg)
 
@@ -699,6 +729,8 @@ func TestScaleAgents_ConfigCeiling(t *testing.T) {
 }
 
 func TestScaleAgents_BudgetConstraint(t *testing.T) {
+	t.Parallel()
+
 	cfg := ScalingConfig{MaxConcurrent: 10, MinBudgetPerAgent: 100_000}
 	// Budget only supports 3 agents (300K / 100K)
 	decision := scaleAgents(8, 300_000, cfg)
@@ -715,6 +747,8 @@ func TestScaleAgents_BudgetConstraint(t *testing.T) {
 }
 
 func TestScaleAgents_BudgetOverridesConfigCeiling(t *testing.T) {
+	t.Parallel()
+
 	cfg := ScalingConfig{MaxConcurrent: 6, MinBudgetPerAgent: 100_000}
 	// Config ceiling is 6, but budget only supports 2
 	decision := scaleAgents(8, 200_000, cfg)
@@ -728,6 +762,8 @@ func TestScaleAgents_BudgetOverridesConfigCeiling(t *testing.T) {
 }
 
 func TestScaleAgents_FloorAtOne(t *testing.T) {
+	t.Parallel()
+
 	cfg := ScalingConfig{MaxConcurrent: 6, MinBudgetPerAgent: 100_000}
 	// Budget too small for even 1 agent at the min threshold
 	decision := scaleAgents(4, 50_000, cfg)
@@ -738,6 +774,8 @@ func TestScaleAgents_FloorAtOne(t *testing.T) {
 }
 
 func TestScaleAgents_ZeroBudgetIgnored(t *testing.T) {
+	t.Parallel()
+
 	cfg := ScalingConfig{MaxConcurrent: 6, MinBudgetPerAgent: 100_000}
 	// remainingBudget=0 means budget tracking is not active
 	decision := scaleAgents(4, 0, cfg)
@@ -751,6 +789,8 @@ func TestScaleAgents_ZeroBudgetIgnored(t *testing.T) {
 }
 
 func TestScaleAgents_ZeroMinBudgetIgnored(t *testing.T) {
+	t.Parallel()
+
 	cfg := ScalingConfig{MaxConcurrent: 6, MinBudgetPerAgent: 0}
 	decision := scaleAgents(4, 100_000, cfg)
 
@@ -760,6 +800,8 @@ func TestScaleAgents_ZeroMinBudgetIgnored(t *testing.T) {
 }
 
 func TestScaleAgents_WaveSizeOne(t *testing.T) {
+	t.Parallel()
+
 	cfg := DefaultScalingConfig()
 	decision := scaleAgents(1, 1_000_000, cfg)
 
@@ -772,6 +814,8 @@ func TestScaleAgents_WaveSizeOne(t *testing.T) {
 }
 
 func TestScaleAgents_DefaultConfig(t *testing.T) {
+	t.Parallel()
+
 	cfg := DefaultScalingConfig()
 	if cfg.MaxConcurrent != 6 {
 		t.Errorf("default MaxConcurrent = %d, want 6", cfg.MaxConcurrent)
@@ -784,6 +828,8 @@ func TestScaleAgents_DefaultConfig(t *testing.T) {
 // --- runWaveScaled batching tests ---
 
 func TestRunWaveScaled_FastPath(t *testing.T) {
+	t.Parallel()
+
 	// When concurrency >= wave size, should delegate to runWaveParallel
 	tmpDir := layouttest.Repo(t)
 	issueSvc := newMockEpicIssueSvc()
@@ -809,6 +855,8 @@ func TestRunWaveScaled_FastPath(t *testing.T) {
 }
 
 func TestRunWaveScaled_Batching(t *testing.T) {
+	t.Parallel()
+
 	// When concurrency < wave size, should batch
 	tmpDir := layouttest.Repo(t)
 	issueSvc := newMockEpicIssueSvc()
@@ -847,6 +895,8 @@ func TestRunWaveScaled_Batching(t *testing.T) {
 }
 
 func TestRunWaveScaled_ConcurrencyOne(t *testing.T) {
+	t.Parallel()
+
 	// Concurrency = 1 should run all issues sequentially (1 per batch)
 	tmpDir := layouttest.Repo(t)
 	issueSvc := newMockEpicIssueSvc()
@@ -879,6 +929,8 @@ func TestRunWaveScaled_ConcurrencyOne(t *testing.T) {
 // --- ScalingConfig from config tests ---
 
 func TestWaveOrchestrator_ScalingConfigFromScheduler(t *testing.T) {
+	t.Parallel()
+
 	customCfg := &ScalingConfig{MaxConcurrent: 8, MinBudgetPerAgent: 200_000}
 	s := &Scheduler{scalingConfig: customCfg}
 	wo := newWaveOrchestrator(s, 100, "test", 0, 0)
@@ -890,6 +942,8 @@ func TestWaveOrchestrator_ScalingConfigFromScheduler(t *testing.T) {
 }
 
 func TestWaveOrchestrator_ScalingConfigDefaults(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{} // No scalingConfig set
 	wo := newWaveOrchestrator(s, 100, "test", 0, 0)
 
@@ -902,6 +956,8 @@ func TestWaveOrchestrator_ScalingConfigDefaults(t *testing.T) {
 }
 
 func TestWaveOrchestrator_ScalingDecisionCallback(t *testing.T) {
+	t.Parallel()
+
 	var captured *ScalingDecision
 	s := &Scheduler{
 		trustGate: allWritersGate(),
@@ -963,6 +1019,8 @@ func (o *runningObservingIssueSvc) GetIssueWithRelations(ctx context.Context, ow
 // dispatch, and then no more at once than its cap (#2352), even when the
 // wave's own concurrency would run them all together.
 func TestRunWaveScaled_HeldToTheWorkspaceThrottle(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	runner := &trackingStageRunner{behavior: "succeed"}
 	s := buildWaveTestScheduler(t, tmpDir, newMockEpicIssueSvc(), runner)

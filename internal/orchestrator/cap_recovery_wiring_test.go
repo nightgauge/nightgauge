@@ -16,6 +16,8 @@ import (
 // call site can render a different card for the same condition.
 
 func TestCapFallbackCardDelegatesToTheSharedBuilder(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name string
 		d    CapRecoveryDecision
@@ -63,6 +65,8 @@ func TestCapFallbackCardDelegatesToTheSharedBuilder(t *testing.T) {
 // surfaces through the quota-cooldown reason, and a second card would tell the
 // operator the same thing twice.
 func TestACoolDownRaisesNoCard(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	s.raiseCapFallback(types.BoardItem{Repo: "octocat/acme", Number: 42}, nil,
 		state.StageFeaturePlanning,
@@ -77,6 +81,8 @@ func TestACoolDownRaisesNoCard(t *testing.T) {
 // carries the DESTINATION, so a run that walks fable → opus → sonnet reports
 // both moves instead of folding the second into the first.
 func TestTwoDescentsOnOneStageAreTwoCards(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	item := types.BoardItem{Repo: "octocat/acme", Number: 42}
 	rt := &state.RuntimeState{RunID: "run-1"}
@@ -107,6 +113,8 @@ func TestTwoDescentsOnOneStageAreTwoCards(t *testing.T) {
 // TestTheCardNamesTheStageAndTheDestination keeps the title readable at a
 // glance in the Action Center list, where the body is not shown.
 func TestTheCardNamesTheStageAndTheDestination(t *testing.T) {
+	t.Parallel()
+
 	hop := BuildCapFallback("octocat/acme", 42, "run-1", state.StageFeatureDev, CapRecoveryDecision{
 		Verdict: CapRecoveryHopProvider, NextAdapter: "grok", Why: "why",
 	})

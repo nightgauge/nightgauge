@@ -31,6 +31,8 @@ func twoRepoDeps(bodies map[int]string) affinityDeps {
 }
 
 func TestRepoAffinity(t *testing.T) {
+	t.Parallel()
+
 	bodies := map[int]string{
 		// AC1: every resolving path lives only in the sibling.
 		1: "Fix `src/ext/one.ts` and src/ext/two.ts.\n## Acceptance criteria\n- [ ] lib/three.ts works",
@@ -85,6 +87,8 @@ func TestRepoAffinity(t *testing.T) {
 
 // AC4: a git failure fails open.
 func TestRepoAffinity_FileSetErrorDispatches(t *testing.T) {
+	t.Parallel()
+
 	deps := twoRepoDeps(map[int]string{1: "Fix src/ext/one.ts and src/ext/two.ts"})
 	deps.files = func(string) (map[string]bool, error) { return nil, errors.New("not a git repo") }
 	s := &Scheduler{affinityDeps: deps}
@@ -95,6 +99,8 @@ func TestRepoAffinity_FileSetErrorDispatches(t *testing.T) {
 
 // AC5: a single-repo workspace never reads the body.
 func TestRepoAffinity_SingleRepoIsNoOp(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{affinityDeps: affinityDeps{
 		repoPaths: func() map[string]string { return map[string]string{"o/r": "/r"} },
 		body: func(context.Context, string, string, int) (string, error) {
@@ -109,6 +115,8 @@ func TestRepoAffinity_SingleRepoIsNoOp(t *testing.T) {
 
 // AC1 end to end: PickNext skips a misfiled Ready issue and returns the next.
 func TestPickNext_SkipsMisfiledIssue(t *testing.T) {
+	t.Parallel()
+
 	srv := readyItemsServer(t)
 	defer srv.Close()
 	client := gh.NewClientWithURL("test-token", srv.URL)

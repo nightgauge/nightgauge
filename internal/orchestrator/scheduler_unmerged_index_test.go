@@ -69,6 +69,8 @@ func conflictedIndexRepo(t *testing.T) string {
 // TestHasUnmergedIndex_RealConflict pins the predicate against real git: a
 // conflicted index answers true, a clean one false.
 func TestHasUnmergedIndex_RealConflict(t *testing.T) {
+	t.Parallel()
+
 	dir := conflictedIndexRepo(t)
 	if !hasUnmergedIndex(dir) {
 		t.Fatal("fixture precondition: the index must be unmerged after the failed merge")
@@ -85,6 +87,8 @@ func TestHasUnmergedIndex_RealConflict(t *testing.T) {
 // rescue must refuse rather than stage the conflict away, and the refusal must
 // be an ERROR so the caller does not book the run as auto-recovered.
 func TestRecoverUncommittedWork_RefusesUnmergedIndex(t *testing.T) {
+	t.Parallel()
+
 	dir := conflictedIndexRepo(t)
 
 	// The scheduler's terminal defer only calls the rescue when this says yes,

@@ -15,6 +15,8 @@ import (
 // used to dispatch every stage with the workspace root as its working
 // directory — the operator's primary checkout (#1907). Every dispatch must name
 // the run's linked worktree.
+//
+// Serial: sets the environment (via isolateRoutingEnv).
 func TestRunPipeline_DocsOnlyFastTrackRunsInALinkedWorktree(t *testing.T) {
 	isolateRoutingEnv(t)
 	root := gitWorkspace(t)
@@ -52,6 +54,8 @@ func TestRunPipeline_DocsOnlyFastTrackRunsInALinkedWorktree(t *testing.T) {
 
 // When the run worktree cannot be provisioned the run is refused before any
 // dispatch; it never falls back to the primary checkout.
+//
+// Serial: sets the environment (via isolateRoutingEnv).
 func TestRunPipeline_RefusesWithoutARunWorktree(t *testing.T) {
 	isolateRoutingEnv(t)
 	root := gitWorkspace(t)

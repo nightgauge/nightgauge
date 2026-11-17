@@ -113,6 +113,8 @@ func enableAdaptiveStallRecovery(t *testing.T, root string) {
 // TestStallRecovery_FirstStallTriggersRewind verifies the happy path:
 // feature-dev stalls once, the scheduler synthesizes a feedback signal,
 // rewinds to feature-planning, and succeeds on the retry.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestStallRecovery_FirstStallTriggersRewind(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	root := gitWorkspace(t)
@@ -165,6 +167,8 @@ func TestStallRecovery_FirstStallTriggersRewind(t *testing.T) {
 // TestStallRecovery_SecondStallIsTerminal verifies that a run which stalls
 // on both attempts terminates without a third try, recording stall_kill +
 // stall-killed-after-retry on the failed stage.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestStallRecovery_SecondStallIsTerminal(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	root := gitWorkspace(t)
@@ -215,6 +219,8 @@ func TestStallRecovery_SecondStallIsTerminal(t *testing.T) {
 
 // A stage stopped at its cap takes the same first retry and books its own kind
 // and category on the second kill (#2812).
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestStallRecovery_SecondCapKillBooksStageCapKill(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	root := gitWorkspace(t)
@@ -256,6 +262,8 @@ func TestStallRecovery_SecondCapKillBooksStageCapKill(t *testing.T) {
 //
 // #3020 — default flipped to true; this test now writes an explicit
 // `adaptive_stall_recovery: false` to assert the opt-out path.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestStallRecovery_DisabledFlagDoesNotRetry(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	root := gitWorkspace(t)
@@ -303,6 +311,8 @@ func TestStallRecovery_DisabledFlagDoesNotRetry(t *testing.T) {
 // TestStallRecovery_CostCapKillIsNeverRetried verifies cost-cap precedence:
 // a kill marked with the cost-cap error string is terminal even when
 // adaptive stall-recovery is enabled.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestStallRecovery_CostCapKillIsNeverRetried(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	root := gitWorkspace(t)
@@ -335,6 +345,8 @@ func TestStallRecovery_CostCapKillIsNeverRetried(t *testing.T) {
 // stall in pr-create (whose backtrack_target_stage is not feature-planning)
 // does NOT trigger a retry — the heuristic skips the rewind branch.
 func TestStallRecovery_StallInNonRewindableStageIsTerminal(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	enableAdaptiveStallRecovery(t, root)
 

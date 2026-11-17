@@ -54,6 +54,7 @@ const openCodeReadinessModel = "lmstudio/qwen/qwen3.8-27b"
 
 // ─── resolveOpenCodeReadiness unit coverage ──────────────────────────────
 
+// Serial: swaps package var openCodeReadinessLoadSettings (via withOpenCodeReadinessConfig).
 func TestResolveOpenCodeReadiness_ServerDownIsNetworkUnavailable(t *testing.T) {
 	server := newLMStudioStub(t, nil)
 	server.Close() // closed before any request — connection refused
@@ -75,6 +76,7 @@ func TestResolveOpenCodeReadiness_ServerDownIsNetworkUnavailable(t *testing.T) {
 	}
 }
 
+// Serial: swaps package var openCodeReadinessLoadSettings (via withOpenCodeReadinessConfig).
 func TestResolveOpenCodeReadiness_ModelNotLoadedIsModelUnavailable(t *testing.T) {
 	server := newLMStudioStub(t, []openCodeReadinessLMStudioModel{
 		{ID: "qwen/qwen3.8-27b", State: "not-loaded"},
@@ -98,6 +100,7 @@ func TestResolveOpenCodeReadiness_ModelNotLoadedIsModelUnavailable(t *testing.T)
 	}
 }
 
+// Serial: swaps package var openCodeReadinessLoadSettings (via withOpenCodeReadinessConfig).
 func TestResolveOpenCodeReadiness_InjectedContextZeroIsModelUnavailable(t *testing.T) {
 	server := newLMStudioStub(t, []openCodeReadinessLMStudioModel{
 		{ID: "qwen/qwen3.8-27b", State: "loaded", LoadedContextLength: 32768},
@@ -122,6 +125,7 @@ func TestResolveOpenCodeReadiness_InjectedContextZeroIsModelUnavailable(t *testi
 	}
 }
 
+// Serial: swaps package var openCodeReadinessLoadSettings (via withOpenCodeReadinessConfig).
 func TestResolveOpenCodeReadiness_InjectedContextLargerThanLoadedIsModelUnavailable(t *testing.T) {
 	server := newLMStudioStub(t, []openCodeReadinessLMStudioModel{
 		{ID: "qwen/qwen3.8-27b", State: "loaded", LoadedContextLength: 8192},
@@ -142,6 +146,7 @@ func TestResolveOpenCodeReadiness_InjectedContextLargerThanLoadedIsModelUnavaila
 	}
 }
 
+// Serial: swaps package var openCodeReadinessLoadSettings (via withOpenCodeReadinessConfig).
 func TestResolveOpenCodeReadiness_ReadyWhenLoadedAndFits(t *testing.T) {
 	server := newLMStudioStub(t, []openCodeReadinessLMStudioModel{
 		{ID: "qwen/qwen3.8-27b", State: "loaded", LoadedContextLength: 32768},
@@ -164,6 +169,8 @@ func TestResolveOpenCodeReadiness_ReadyWhenLoadedAndFits(t *testing.T) {
 // probed: the machine-tier config below declares only "lmstudio", so
 // "anthropic/claude-opus-4-8" matches no endpoint and is left to PreDispatch's
 // own checks.
+//
+// Serial: swaps package var openCodeReadinessLoadSettings (via withOpenCodeReadinessConfig).
 func TestResolveOpenCodeReadiness_HostedModelIsUntouched(t *testing.T) {
 	withOpenCodeReadinessConfig(t, config.OpenCodeConfig{
 		Provider: "lm-studio", BaseURL: "http://127.0.0.1:0", // never dialed
@@ -202,6 +209,8 @@ func newOpenAICompatibleStub(t *testing.T, ids ...string) *httptest.Server {
 // about to dispatch to, never "some local server somewhere" — endpoint A down
 // and endpoint B up on the same machine-tier config must produce different
 // verdicts.
+//
+// Serial: swaps package var openCodeReadinessLoadSettings (via withOpenCodeReadinessConfig).
 func TestOpenCodeReadinessPerEndpoint(t *testing.T) {
 	down := newOpenAICompatibleStub(t, "qwen3-coder:30b")
 	down.Close()
@@ -231,6 +240,8 @@ func TestOpenCodeReadinessPerEndpoint(t *testing.T) {
 // ollama endpoint is served by Ollama's hosted service, so it is refused
 // before spawn with the ollama-cloud remediation, and the endpoint is never
 // probed (#1679).
+//
+// Serial: swaps package var openCodeReadinessLoadSettings (via withOpenCodeReadinessConfig).
 func TestOpenCodeReadinessRefusesOllamaCloudModel(t *testing.T) {
 	withOpenCodeReadinessConfig(t, config.OpenCodeConfig{
 		Endpoints: []config.OpenCodeEndpointConfig{
@@ -251,6 +262,8 @@ func TestOpenCodeReadinessRefusesOllamaCloudModel(t *testing.T) {
 // runner is ever called, with the network_unavailable kind and a booked
 // stage error — not the generic subagent_crash a spawned-and-then-failed
 // opencode process would have landed as.
+//
+// Serial: swaps package var openCodeReadinessLoadSettings (via withOpenCodeReadinessConfig).
 func TestOpenCodeReadinessRefusal_NeverDispatches(t *testing.T) {
 	server := newLMStudioStub(t, nil)
 	server.Close()
@@ -319,6 +332,8 @@ func TestOpenCodeReadinessRefusal_NeverDispatches(t *testing.T) {
 // #1608 — feature-dev does not commit) must recover that work into a commit
 // even though the refusal that stops the run is model_unavailable, not
 // validation_error.
+//
+// Serial: swaps package var openCodeReadinessLoadSettings (via withOpenCodeReadinessConfig).
 func TestOpenCodeReadinessRefusal_ModelUnavailable_RescuesUncommittedWork(t *testing.T) {
 	server := newLMStudioStub(t, []openCodeReadinessLMStudioModel{
 		{ID: "qwen/qwen3.8-27b", State: "not-loaded"},

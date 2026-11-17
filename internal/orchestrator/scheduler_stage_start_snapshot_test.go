@@ -85,6 +85,8 @@ func (o stageStartObservation) String() string {
 // scheduler_run_identity_test.go as the only place a test can observe on-disk
 // state a run tears down when it completes.
 func TestRunPipeline_PersistsTheRuntimeSnapshotAtStageStart(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	runner := &runIDCapturingRunner{}
 	s := newRunIdentityTestScheduler(t, root, runner)
@@ -167,6 +169,8 @@ func TestRunPipeline_PersistsTheRuntimeSnapshotAtStageStart(t *testing.T) {
 // right now", which is exactly true at stage start — the same discipline the
 // extension path already applies on a stage's terminal transition.
 func TestRunPipeline_StageStartSnapshotDoesNotAssertADeadStageChild(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	runner := &runIDCapturingRunner{}
 	s := newRunIdentityTestScheduler(t, root, runner)
@@ -246,6 +250,8 @@ func TestRunPipeline_StageStartSnapshotDoesNotAssertADeadStageChild(t *testing.T
 // them would dispatch nothing and every assertion here would pass vacuously,
 // which the len(observed) == 0 guard below refuses.
 func TestRunPipeline_StageStartSnapshotLandsInTheRunsTargetRepo(t *testing.T) {
+	t.Parallel()
+
 	primary := gitWorkspace(t)
 	target := gitWorkspace(t)
 
@@ -356,6 +362,8 @@ func TestRunPipeline_StageStartSnapshotLandsInTheRunsTargetRepo(t *testing.T) {
 // and drives a real feature-validate → feature-dev rewind through a feedback
 // signal, the way the product does.
 func TestRunPipeline_RedispatchedStageSnapshotRendersRunning(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	runner := &runIDCapturingRunner{}
 	s := newRunIdentityTestScheduler(t, root, runner)

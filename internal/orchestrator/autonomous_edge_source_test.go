@@ -14,6 +14,8 @@ import (
 // GraphQL relation changed nothing, because the body re-created the edge on
 // every graph rebuild (#126).
 func TestDescribeEdgeSource(t *testing.T) {
+	t.Parallel()
+
 	const repo = "owner/repo"
 
 	g := depgraph.NewGraph()

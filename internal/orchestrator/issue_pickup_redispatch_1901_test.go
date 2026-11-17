@@ -15,6 +15,8 @@ import (
 // continue on the first branch. Exactly one branch for the issue may exist on
 // origin afterwards.
 func TestDeterministicIssuePickup_RedispatchReusesExistingBranch(t *testing.T) {
+	t.Parallel()
+
 	root := pickupRepo(t)
 
 	wt1 := filepath.Join(t.TempDir(), "wt1")

@@ -8,6 +8,8 @@ import (
 )
 
 func TestEffectivePrereqContextType(t *testing.T) {
+	t.Parallel()
+
 	skipped := func(stages ...state.PipelineStage) *state.RuntimeState {
 		rs := &state.RuntimeState{}
 		for _, s := range stages {
@@ -55,6 +57,8 @@ func TestEffectivePrereqContextType(t *testing.T) {
 }
 
 func TestSchedulerSkippableStages(t *testing.T) {
+	t.Parallel()
+
 	t.Run("maps planning and validate", func(t *testing.T) {
 		got := schedulerSkippableStages([]string{"feature-planning", "feature-validate"})
 		if !got[state.StageFeaturePlanning] || !got[state.StageFeatureValidate] {
@@ -82,6 +86,8 @@ func TestSchedulerSkippableStages(t *testing.T) {
 // path — IS skippable, which is exactly why the owner had to move somewhere
 // that is not.
 func TestCommitOwnerStageIsNeverSkippable(t *testing.T) {
+	t.Parallel()
+
 	routes := [][]string{
 		{"feature-planning", "feature-validate"},              // the observed trivial route
 		{"feature-planning", "feature-validate", "pr-create"}, // a change_rule that also lists the owner
@@ -110,6 +116,8 @@ func routingWorkspace(t *testing.T, routingBlock string) string {
 }
 
 func TestDeriveRoutingDecision_DocsSkips(t *testing.T) {
+	t.Parallel()
+
 	// No routing block → built-in defaults apply; a type:docs item matches the
 	// docs-only default rule and skips planning + validate.
 	dir := routingWorkspace(t, "")
@@ -129,6 +137,8 @@ func TestDeriveRoutingDecision_DocsSkips(t *testing.T) {
 }
 
 func TestDeriveRoutingDecision_ConfigOnlySkips(t *testing.T) {
+	t.Parallel()
+
 	dir := routingWorkspace(t, "")
 	d := deriveRoutingDecision(dir, types.BoardItem{
 		Number: 2,
@@ -154,6 +164,8 @@ func TestDeriveRoutingDecision_ConfigOnlySkips(t *testing.T) {
 }
 
 func TestDeriveRoutingDecision_ForceFullPipeline(t *testing.T) {
+	t.Parallel()
+
 	// force_full_pipeline disables all skipping even for a docs change.
 	dir := routingWorkspace(t, "routing:\n  force_full_pipeline: true\n")
 	d := deriveRoutingDecision(dir, types.BoardItem{
@@ -168,6 +180,8 @@ func TestDeriveRoutingDecision_ForceFullPipeline(t *testing.T) {
 }
 
 func TestDeriveRoutingDecision_RiskFloor(t *testing.T) {
+	t.Parallel()
+
 	// A high-risk label floors the route and forces the full pipeline.
 	dir := routingWorkspace(t, "")
 	d := deriveRoutingDecision(dir, types.BoardItem{
@@ -185,6 +199,8 @@ func TestDeriveRoutingDecision_RiskFloor(t *testing.T) {
 }
 
 func TestDeriveRoutingDecision_CodeNoSkip(t *testing.T) {
+	t.Parallel()
+
 	// A standard code feature matches no rule and skips nothing.
 	dir := routingWorkspace(t, "")
 	d := deriveRoutingDecision(dir, types.BoardItem{

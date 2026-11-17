@@ -12,6 +12,8 @@ import (
 // (resolveDispatchModel) are one selection. With no runtime override in force
 // (fresh retry engine, no downgrade), they must agree for every mode, size,
 // routed tier, configured stage model and floor.
+//
+// Serial: sets the environment.
 func TestPlannedStageModel_EqualsDispatch(t *testing.T) {
 	modes := []string{"elevated", "efficiency", "maximum"}
 	decisions := map[string]routing.Decision{
@@ -70,6 +72,8 @@ func TestPlannedStageModel_EqualsDispatch(t *testing.T) {
 // reported: under the default elevated mode the router's run-wide tier says
 // sonnet, but feature-dev's built-in stage default (#2512) dispatches opus. The
 // recorded prediction must be opus, or every such run books a phantom miss.
+//
+// Serial: sets the environment.
 func TestPlannedStageModel_ElevatedSonnetPredictsOpus(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "elevated")

@@ -75,6 +75,8 @@ func newFirstCauseScheduler(root string, runner StageRunner) *Scheduler {
 // the cost of this bug is a second full stage dispatch, so that is the thing
 // that must not happen.
 func TestAuthFailureDoesNotEscalateModel(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	seedRefusalRepo(t, root, allRefusalStageSkills)
 
@@ -97,6 +99,8 @@ func TestAuthFailureDoesNotEscalateModel(t *testing.T) {
 // still happen here — otherwise the assertion above would pass on a build that
 // had simply removed escalation, and would prove nothing about the gate.
 func TestCapabilityFailureStillEscalates(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	seedRefusalRepo(t, root, allRefusalStageSkills)
 
@@ -126,6 +130,8 @@ func TestCapabilityFailureStillEscalates(t *testing.T) {
 // which sends whoever reads the record at the wrong problem — and the record is
 // what docs/OUTCOME_RECORDING.md and the retro path consume.
 func TestPostConditionFailureRecordsTheFirstCause(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	seedRefusalRepo(t, root, allRefusalStageSkills)
 
@@ -165,6 +171,8 @@ func TestPostConditionFailureRecordsTheFirstCause(t *testing.T) {
 // pointing the corpus at the pipeline's output contract instead of at the
 // machine's credentials.
 func TestPostConditionFailureRecordsTheFirstCauseKind(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	seedRefusalRepo(t, root, allRefusalStageSkills)
 
@@ -190,6 +198,8 @@ func TestPostConditionFailureRecordsTheFirstCauseKind(t *testing.T) {
 // row, the assertion above would also pass on a build that had simply renamed
 // validation_error.
 func TestPostConditionFailureWithoutAFirstCauseStillRecordsValidationError(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	seedRefusalRepo(t, root, allRefusalStageSkills)
 
@@ -238,6 +248,8 @@ Drafted the pickup summary.
 // stage's evidence. The stage tail here deliberately names no credential
 // problem, so the only way either assertion can pass is through that routing.
 func TestSchedulerObservedPushFailureReachesTheRunRecord(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	seedRefusalRepo(t, root, allRefusalStageSkills)
 
@@ -280,6 +292,8 @@ func TestSchedulerObservedPushFailureReachesTheRunRecord(t *testing.T) {
 // epic-branch ensure that SUCCEEDS must add nothing to the stage's evidence, so
 // the run above cannot be passing because the seam is wired unconditionally.
 func TestSchedulerObservedEpicBranchSuccessRecordsNothing(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	seedRefusalRepo(t, root, allRefusalStageSkills)
 

@@ -39,6 +39,8 @@ func (r *redMainReader) GetRequiredCheckNames(context.Context, string, string, s
 // the verdict on the run record, the verdict on the survival record, and a
 // merge-commit-checks card in the Action Center.
 func TestVerifyPRMergeForStage_ObservesMainAndRecordsTheVerdict(t *testing.T) {
+	t.Parallel()
+
 	launchRoot := layouttest.Repo(t)
 	targetRoot := layouttest.Repo(t)
 	s := newBreadcrumbScheduler(t, launchRoot, targetRoot)
@@ -100,6 +102,8 @@ func TestVerifyPRMergeForStage_ObservesMainAndRecordsTheVerdict(t *testing.T) {
 // no reader (and so cannot reach api.github.com by omission); NewScheduler
 // installs the real one.
 func TestCheckEpicCompletion_WiresTheMainCheckReaderThroughTheSeam(t *testing.T) {
+	t.Parallel()
+
 	var got hooks.PostMergeInput
 	capture := func(_ context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser, _ hooks.EpicAutoCloser,
 		_ hooks.PRVerifier, _ hooks.BoardSyncer, in hooks.PostMergeInput) hooks.PostMergeResult {

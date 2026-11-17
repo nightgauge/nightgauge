@@ -113,6 +113,8 @@ func twoRepoUnrefinedIssuesServer(t *testing.T) *httptest.Server {
 // second candidate is still cooldown-free), which is the exact starvation
 // #502 reports.
 func TestRunRefinementCycle_RotatesScanStartAcrossCycles(t *testing.T) {
+	t.Parallel()
+
 	srv := twoRepoUnrefinedIssuesServer(t)
 	defer srv.Close()
 

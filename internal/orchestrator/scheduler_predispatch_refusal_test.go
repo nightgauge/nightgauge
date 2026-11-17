@@ -162,6 +162,8 @@ func recordForIssue(t *testing.T, root string, issueNumber int) *state.V2RunReco
 // scheduler.go, and autonomous.go's onPipelineComplete wrapper all index
 // StageErrors by the CURRENT stage.
 func TestPrerequisiteMissingRefusal_RecordsTheReasonUnderTheCurrentStage(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	for _, dir := range []string{
 		"nightgauge-issue-pickup",
@@ -268,6 +270,8 @@ func TestPrerequisiteMissingRefusal_RecordsTheReasonUnderTheCurrentStage(t *test
 // any skills root, so skillrender.Render returns an error and there is no
 // prompt to dispatch.
 func TestSkillRenderFailureRefusal_RecordsTheReasonUnderTheCurrentStage(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	// Deliberately NOT writing nightgauge-feature-planning: the run reaches
 	// feature-planning with its prerequisite satisfied and fails to compose the
@@ -526,6 +530,8 @@ func assertRefusalRescuedTheWork(t *testing.T, root string, runner *refusalCaptu
 // the site set terminalFailureKind and returned, which is exactly the condition
 // that switches the terminal defer's rescue off.
 func TestPrerequisiteMissingRefusal_RescuesUncommittedWork(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	seedRefusalRepo(t, root, allRefusalStageSkills)
 	workFile := seedUncommittedDevWork(t, root)
@@ -555,6 +561,8 @@ func TestPrerequisiteMissingRefusal_RescuesUncommittedWork(t *testing.T) {
 // so the stage is refused before dispatch with the entire implementation
 // uncommitted on disk.
 func TestSkillRenderFailureRefusal_RescuesUncommittedWork(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	// Every stage skill EXCEPT feature-validate's.
 	var withoutValidate []string
@@ -592,6 +600,8 @@ func TestSkillRenderFailureRefusal_RescuesUncommittedWork(t *testing.T) {
 // unconditional reclassification that would launder every pre-dispatch refusal
 // into a recoverable non-event.
 func TestPreDispatchRefusal_CleanWorktreeStaysValidationError(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	seedRefusalRepo(t, root, allRefusalStageSkills)
 	commitsBefore := len(gitLog(t, root))
@@ -673,6 +683,8 @@ const contextBudgetMediumBytes = 600_000
 // tier "sonnet", 1,000,000 tokens — tied by claude-opus-5 and
 // claude-fable-5-1, none strictly bigger). No re-route candidate exists, so
 // the stage is refused on the FIRST Fit failure with no re-render attempted.
+//
+// Serial: sets the environment.
 func TestContextBudgetRefusal_NoLargerModelRefusesImmediately(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_PR_MERGE", "sonnet")
 
@@ -724,6 +736,8 @@ func TestContextBudgetRefusal_NoLargerModelRefusesImmediately(t *testing.T) {
 // exactly two Fit evaluations happen — the original and the re-routed
 // candidate's — and the stage is refused after exactly one hop, never a
 // second.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestContextBudgetRefusal_ReRouteStillFailsRefusesAfterOneHop(t *testing.T) {
 	root := gitWorkspace(t)
 	writeBigSkillFile(t, root, "nightgauge-issue-pickup", contextBudgetBigBytes)
@@ -752,6 +766,8 @@ func TestContextBudgetRefusal_ReRouteStillFailsRefusesAfterOneHop(t *testing.T) 
 // (haiku, 200000 tokens by default routing) with content that fails haiku's
 // budget but fits after the one re-route hop to the provider's biggest
 // window — the stage dispatches on the re-routed model, never refused.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestContextBudgetRefusal_SuccessfulReRouteDispatches(t *testing.T) {
 	root := t.TempDir()
 	writeBigSkillFile(t, root, "nightgauge-issue-pickup", contextBudgetMediumBytes)
@@ -779,6 +795,8 @@ func TestContextBudgetRefusal_SuccessfulReRouteDispatches(t *testing.T) {
 // skillData.ContextWindow is 0 and the fit check takes ADR 023 §4's
 // unknown-window branch: dispatch proceeds unchecked, and the branch taken is
 // logged so a trace can tell "checked and passed" from "not checked".
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestContextBudgetRefusal_UnknownWindowFailsOpenAndLogsTheBranch(t *testing.T) {
 	root := gitWorkspace(t)
 	for _, dir := range []string{
@@ -864,6 +882,8 @@ func runCapacityScenario(t *testing.T, number int, configYAML string) (*refusalC
 // before are not capped; feature-dev, resolving to a 32k model, is refused
 // before spawn — the ADR 023 capacity table caps a 32k window at S — and
 // classified context_window_exceeded with a recovery of decompose.
+//
+// Serial: swaps package var openCodeReadinessLoadSettings (via runCapacityScenario).
 func TestCapacityRefusal_PlannerOnlySizeRefusedAtTheSizeSensitiveStage(t *testing.T) {
 	runner, root, logs := runCapacityScenario(t, 1655, "")
 
@@ -902,6 +922,8 @@ func TestCapacityRefusal_PlannerOnlySizeRefusedAtTheSizeSensitiveStage(t *testin
 // reject_action: soft-route the same issue moves to the first
 // capacity_fallback_models entry whose window admits M — the 131k model,
 // not the distinct 32k model listed ahead of it — and dispatches there.
+//
+// Serial: swaps package var openCodeReadinessLoadSettings (via runCapacityScenario).
 func TestCapacityRefusal_SoftRouteDispatchesToTheFallback(t *testing.T) {
 	cfg := "pipeline:\n  size_gate:\n    routes:\n      reject_action: soft-route\n" +
 		"      capacity_fallback_models:\n        - local32/qwen-32k-b\n        - local131/qwen-131k\n"
@@ -925,6 +947,8 @@ func TestCapacityRefusal_SoftRouteDispatchesToTheFallback(t *testing.T) {
 // Claude adapter's default routing is not refused. issue-pickup and
 // pr-create run on haiku (200k, whose cap is L), but they are not
 // size-sensitive; the size-sensitive stages resolve to 1M-window models.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestCapacityGate_OnlySizeSensitiveStagesAreCapped(t *testing.T) {
 	root := t.TempDir()
 	seedRefusalRepo(t, root, allRefusalStageSkills)
@@ -953,6 +977,8 @@ func TestCapacityGate_OnlySizeSensitiveStagesAreCapped(t *testing.T) {
 // TestCapacityRefusal_KnownSizeRefusedAtTheFirstStage: a size known before
 // planning (a size:XL label) against a feature-dev model whose window caps
 // it (haiku, 200k → L) is refused at issue-pickup, before any stage spawns.
+//
+// Serial: sets the environment.
 func TestCapacityRefusal_KnownSizeRefusedAtTheFirstStage(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "haiku")
 	root := t.TempDir()

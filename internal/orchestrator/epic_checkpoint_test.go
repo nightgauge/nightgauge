@@ -24,6 +24,8 @@ import (
 // reached never. This asserts the CONSTRUCTOR installs the wiring, so deleting
 // the registration fails here rather than in production six weeks later.
 func TestNewAutonomousScheduler_WiresEpicCheckpointIntoScheduler(t *testing.T) {
+	t.Parallel()
+
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
 	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	as.trustGateOverride = allWritersGate()
@@ -65,6 +67,8 @@ func TestNewAutonomousScheduler_WiresEpicCheckpointIntoScheduler(t *testing.T) {
 // paused unconditionally would pass the test above — and would stop the fleet
 // for operators who explicitly opted out.
 func TestEpicCheckpoint_DisabledDoesNotLatch(t *testing.T) {
+	t.Parallel()
+
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
 	cfg := DefaultAutonomousConfig()
 	cfg.SafetyRails = &SafetyConfig{RateLimitPerHour: 100, EpicCheckpoint: false}
@@ -88,6 +92,8 @@ func TestEpicCheckpoint_DisabledDoesNotLatch(t *testing.T) {
 // produce a new fingerprint on almost every evaluation and re-alert a condition
 // the operator had already muted.
 func TestSafetyRailKind_FingerprintsAreStable(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct{ reason, want string }{
 		{"budget ceiling exceeded: used 412300 + estimate 0 > ceiling 500000", "budget-ceiling"},
 		{"budget ceiling exceeded: used 499999 + estimate 0 > ceiling 500000", "budget-ceiling"},
@@ -126,6 +132,8 @@ func TestSafetyRailKind_FingerprintsAreStable(t *testing.T) {
 // or Resume explicitly". There was no card. With the epic checkpoint now firing
 // on every epic close, a routine completion reaches this path.
 func TestRaiseSafetyRailTrip_RaisesABlockingFleetCard(t *testing.T) {
+	t.Parallel()
+
 	store := attention.New(layouttest.Repo(t))
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	as.trustGateOverride = allWritersGate()
@@ -178,6 +186,8 @@ func TestRaiseSafetyRailTrip_RaisesABlockingFleetCard(t *testing.T) {
 // to the config package's. They are written down in two places because an import
 // cycle prevents one from reading the other.
 func TestEpicCheckpointDefaults_AgreeAcrossPackages(t *testing.T) {
+	t.Parallel()
+
 	if got := DefaultSafetyConfig().EpicCheckpoint; got != config.DefaultEpicCheckpoint {
 		t.Errorf("orchestrator default = %v, config.DefaultEpicCheckpoint = %v — an omitted "+
 			"key and an absent safety_rails block would resolve differently",
@@ -194,6 +204,8 @@ func TestEpicCheckpointDefaults_AgreeAcrossPackages(t *testing.T) {
 // This drives `checkEpicCompletion` itself, so removing that call site fails
 // here.
 func TestCheckEpicCompletion_LatchesTheCheckpoint(t *testing.T) {
+	t.Parallel()
+
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
 	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	as.trustGateOverride = allWritersGate()
@@ -225,6 +237,8 @@ func TestCheckEpicCompletion_LatchesTheCheckpoint(t *testing.T) {
 // callback used to receive the sub-issue's repository, so the IPC server read
 // that repository's same-numbered issue and opened the epic PR there (#2377).
 func TestCheckEpicCompletion_NamesACrossRepoEpicInItsOwnRepository(t *testing.T) {
+	t.Parallel()
+
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
 	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	as.trustGateOverride = allWritersGate()
@@ -260,6 +274,8 @@ func TestCheckEpicCompletion_NamesACrossRepoEpicInItsOwnRepository(t *testing.T)
 // hook resolved it against. It used to name the merged sub-issue's
 // repository, which for an epic elsewhere is a different issue (#2350
 // review).
+//
+// Serial: sets the environment.
 func TestCheckEpicCompletion_ReadyToShipNamesTheEpicInItsOwnRepository(t *testing.T) {
 	// Buffered and filtered below: the alert is sent from a detached
 	// goroutine that reads the webhook env var only when it runs, so an
@@ -309,6 +325,8 @@ func TestCheckEpicCompletion_ReadyToShipNamesTheEpicInItsOwnRepository(t *testin
 // this, a fix that latched on every post-merge call would pass the test above
 // and stop the fleet on every single merge.
 func TestCheckEpicCompletion_DoesNotLatchWithoutAutoClose(t *testing.T) {
+	t.Parallel()
+
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
 	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	as.trustGateOverride = allWritersGate()
@@ -336,6 +354,8 @@ func TestCheckEpicCompletion_DoesNotLatchWithoutAutoClose(t *testing.T) {
 // fire; now that it can, an operator acknowledging an epic pause must not erase
 // a budget or circuit-breaker refusal that has nothing to do with it.
 func TestResumeCheckpoint_LeavesOtherRailsAlone(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{EpicCheckpoint: true, CircuitBreakerMax: 3})
 
 	// A circuit-breaker refusal, with no checkpoint pause in play.

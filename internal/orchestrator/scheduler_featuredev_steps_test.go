@@ -89,6 +89,8 @@ var subSessionPhaseRE = regexp.MustCompile(`^sub-session-(\d+) \(in=(\d+) out=(\
 // AC6: the durable run record carries one phase entry per sub-session, with a
 // duration and its tokens, attributed to feature-dev, and the tokens sum to
 // the stage's own total. The feature-dev gate runs once, after the last step.
+//
+// Serial: swaps package var resolveFeatureDevStepPolicy.
 func TestScheduler_FeatureDevSubSessions_RecordedAsPhases(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	orig := resolveFeatureDevStepPolicy
@@ -222,6 +224,8 @@ func withMachineOpenCodeConfig(t *testing.T, body string) {
 // real machine-tier config file, it engages the policy. A hosted model on
 // the same machine still resolves no window here.
 func TestOpenCodeDispatchWindow_LocalModelEngagesSubSessions(t *testing.T) {
+	t.Parallel()
+
 	server := newLoadedLMStudioStub(t, "qwen/qwen3.8-27b", 131072)
 	withMachineOpenCodeConfig(t, fmt.Sprintf("opencode:\n  provider: lm-studio\n  base_url: %s\n  limit:\n    context: 131072\n", server.URL))
 
@@ -240,6 +244,8 @@ func TestOpenCodeDispatchWindow_LocalModelEngagesSubSessions(t *testing.T) {
 // The same finding end to end: a run whose feature-dev dispatches the local
 // model through the OpenCode adapter runs one session per plan task, with the
 // real window resolution and the real policy — nothing forces it on.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestScheduler_FeatureDevSubSessions_EngageForLocalOpenCodeModel(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	server := newLoadedLMStudioStub(t, "qwen/qwen3.8-27b", 131072)

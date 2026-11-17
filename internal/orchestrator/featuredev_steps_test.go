@@ -24,6 +24,9 @@ import (
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
+// Serial (file): every step test runs real sessions against a shared stage
+// timeout of a minute or less, which parallel load can spend (#2950).
+
 const stepIssue = 1651
 
 // stepFixture is a git workspace with a planning context naming a plan file.
@@ -450,6 +453,8 @@ func TestFeatureDevSteps_IntermediateStopHookSentinelIsCleared(t *testing.T) {
 }
 
 // Should-fix 6: the operator opt-out keeps one session.
+//
+// Serial: sets the environment.
 func TestFeatureDevSteps_OptOut(t *testing.T) {
 	run := func(t *testing.T, root string) int {
 		f := newStepFixture(t, "One", "Two")

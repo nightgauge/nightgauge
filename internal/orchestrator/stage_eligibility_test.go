@@ -13,6 +13,8 @@ import (
 // Here the issue is an outsider's whose approval was voided by an edit after
 // it was queued: the run stops before its first stage dispatches anything.
 func TestRunPipeline_StopsBeforeAStageWhenTheIssueIsNoLongerVouchedFor(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	s := terminalSkipScheduler(t, root, "unused")
 	runner := newStallStageRunner(map[state.PipelineStage]int{}, "")
@@ -36,6 +38,8 @@ func TestRunPipeline_StopsBeforeAStageWhenTheIssueIsNoLongerVouchedFor(t *testin
 
 // The same run proceeds when a writer vouches for the issue.
 func TestRunPipeline_RunsAStageWhenTheIssueIsVouchedFor(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	s := terminalSkipScheduler(t, root, "unused")
 	runner := newStallStageRunner(map[state.PipelineStage]int{}, "")

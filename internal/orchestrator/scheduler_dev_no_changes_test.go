@@ -81,6 +81,8 @@ func (r *honestReportEmptyDiskRunner) ran(stage state.PipelineStage) bool {
 //
 // Post-fix the run must die at feature-dev's own gate, and feature-validate must
 // never be invoked at all — that is where the $0.87 goes.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestScheduler_FeatureDev_NoChangesProduced_FailsBeforeValidate(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	root := gitWorkspace(t)
@@ -191,6 +193,8 @@ func TestScheduler_FeatureDev_NoChangesProduced_FailsBeforeValidate(t *testing.T
 // record replay, the SDK health classifier) would disagree with the gate about
 // what the same failure was.
 func TestClassifyTerminalKind_DevProducedNoChanges(t *testing.T) {
+	t.Parallel()
+
 	errText := "premature turn end: stage exited 0 with no state change (gate no-op): " +
 		"[dev-produced-no-changes] dev reported file changes but produced none in the stage workspace"
 	if got := ClassifyTerminalKind(errText); got != TerminalKindDevProducedNoChanges {
@@ -214,6 +218,8 @@ func TestClassifyTerminalKind_DevProducedNoChanges(t *testing.T) {
 // file the pipeline wrote itself could launder any real defect into a
 // non-event, and sweep pipeline state into the user's branch on the way out.
 func TestHasUncommittedWork_IgnoresBookkeeping(t *testing.T) {
+	t.Parallel()
+
 	repo := gitWorkspace(t)
 
 	if hasUncommittedWork(repo) {

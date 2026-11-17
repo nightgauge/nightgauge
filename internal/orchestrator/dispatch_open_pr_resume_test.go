@@ -14,6 +14,8 @@ import (
 // issue's open, not-blocked PR — CLEAN or DIRTY — is kept by number so its
 // dispatch can resume at pr-merge; a BLOCKED PR, a fork PR, and an issue with
 // no PR are not.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestRefreshBlockedReadyPRs_RecordsReadyOpenPRs(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if !ghArgsContain(args, "list") {
@@ -52,6 +54,8 @@ func TestRefreshBlockedReadyPRs_RecordsReadyOpenPRs(t *testing.T) {
 // TestLocalDispatcher_PassesOpenPRNumber (#2541): the dispatch callback
 // receives the candidate's open PR number.
 func TestLocalDispatcher_PassesOpenPRNumber(t *testing.T) {
+	t.Parallel()
+
 	got := -1
 	d := NewLocalDispatcher(func(_, _ string, _ int, _ string, pr int) { got = pr }, nil)
 	if _, err := d.Dispatch(context.Background(), CandidateItem{Repo: "acme/app", Number: 7, OpenPRNumber: 42}); err != nil {
@@ -65,6 +69,8 @@ func TestLocalDispatcher_PassesOpenPRNumber(t *testing.T) {
 // TestQueueAdd_CarriesOpenPRNumber (#2541): the field survives the queue so
 // the extension's dequeued item carries it.
 func TestQueueAdd_CarriesOpenPRNumber(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	s.QueueAdd(QueueEntry{Repo: "app", IssueNumber: 7, OpenPRNumber: 42}, QueueEntry{Repo: "app", IssueNumber: 8})
 	if s.queue[0].OpenPRNumber != 42 || s.queue[1].OpenPRNumber != 0 {
@@ -79,6 +85,8 @@ func resumeStages() []state.PipelineStage {
 // TestDispatchedPRResumeIndex (#2541): the Go CLI path starts at pr-merge only
 // when the dispatched PR is confirmed open on the issue's branch, and restores
 // pr-{N}.json from it; otherwise every stage runs.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestDispatchedPRResumeIndex(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -120,6 +128,8 @@ func TestDispatchedPRResumeIndex(t *testing.T) {
 
 // TestDispatchedPRResumeIndex_LocalFileDoesNotOutrankForge (#2878): pr-{N}.json
 // outlives the merge, so it resumes only a PR the forge confirms OPEN.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestDispatchedPRResumeIndex_LocalFileDoesNotOutrankForge(t *testing.T) {
 	cases := []struct {
 		name    string

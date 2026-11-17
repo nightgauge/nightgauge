@@ -33,6 +33,8 @@ import (
 // diff would be circularly late: successful pr-merge runs have already landed
 // on main by then and would all look like zero-line changes.
 func TestRecordOutcome_UsesPreMergeLinesCapturedAtPRCreate(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	gittest.Run(t, root, "init", "-b", "main")
 	gittest.Run(t, root, "config", "user.email", "test@example.com")
@@ -108,6 +110,8 @@ func readCorpus(t *testing.T, root string) []learning.Outcome {
 // #215/#232 already scope per-repo) described runs the corpus beside it never
 // saw.
 func TestRecordOutcome_LandsInTheRunsTargetRepo(t *testing.T) {
+	t.Parallel()
+
 	launchRoot := layouttest.Repo(t)
 	targetRepoRoot := layouttest.Repo(t)
 
@@ -131,6 +135,8 @@ func TestRecordOutcome_LandsInTheRunsTargetRepo(t *testing.T) {
 // root. "No resolvable root" and "recorded" cannot share a code path, or a
 // misrouted run silently pollutes whatever root happened to be handy.
 func TestRecordOutcome_NoRootRecordsNothing(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{recordOutcomes: true}
 	item := types.BoardItem{Number: 78, Repo: "acme/widget"}
 	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id", testRunID()).Snapshot()
@@ -161,6 +167,8 @@ func TestRecordOutcome_NoRootRecordsNothing(t *testing.T) {
 // reverse) — see TestLearningOutcomeFor_SizePresenceMatchesTheSchedulerWriter
 // in internal/ipc.
 func TestRecordOutcome_SizePresenceFollowsTheRoutersResolutionOrder(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name              string
 		score             int
@@ -217,6 +225,8 @@ func TestRecordOutcome_SizePresenceFollowsTheRoutersResolutionOrder(t *testing.T
 // bands. Both halves must now be independent, normalized, and absent when
 // unknown.
 func TestRecordOutcome_ModelPairIsMeasuredNotCopied(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name          string
 		predicted     string
@@ -277,6 +287,8 @@ func TestRecordOutcome_ModelPairIsMeasuredNotCopied(t *testing.T) {
 // pickup_recommendation.dev_model used to yield "sonnet", which reached the
 // corpus indistinguishable from a router that genuinely chose sonnet.
 func TestLoadIssueContext_DoesNotFabricateAPrediction(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	dir := layouttest.PipelineDir(t, root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

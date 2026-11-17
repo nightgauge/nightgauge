@@ -34,6 +34,8 @@ func (s *stubGate) Verify(_ context.Context, _ int, _ string) gates.GateResult {
 // advertised — WithStageGates replaces the registry, and nil restores the
 // default. Issue #3266.
 func TestScheduler_WithStageGates_Override(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{stageGates: gates.Default()}
 
 	stub := &stubGate{name: "issue-pickup", passed: false, reason: "rejected"}
@@ -63,6 +65,8 @@ func TestScheduler_WithStageGates_Override(t *testing.T) {
 // This mirrors the scheduler's integration logic without spinning up the
 // full runPipeline plumbing.
 func TestScheduler_GateFailure_ConvertsToStageFailure(t *testing.T) {
+	t.Parallel()
+
 	stage := state.StageFeatureDev
 	rs := state.NewRuntimeState("o/r", 42, "item-1", testRunID())
 	rs.BeginStage(stage)
@@ -106,6 +110,8 @@ func TestScheduler_GateFailure_ConvertsToStageFailure(t *testing.T) {
 // work actually landed (PR merged). The reconciliation must clear the error so
 // the operator is not paged and autonomous is not paused on completed work.
 func TestScheduler_TerminalFailure_ReconciledByGate(t *testing.T) {
+	t.Parallel()
+
 	stage := state.StagePRMerge
 	rs := state.NewRuntimeState("o/r", 3806, "item-1", testRunID())
 	rs.BeginStage(stage)
@@ -145,6 +151,8 @@ func TestScheduler_TerminalFailure_ReconciledByGate(t *testing.T) {
 // TestScheduler_TerminalFailure_GateAlsoFails confirms a genuine terminal
 // failure (gate also fails — the PR was never merged) is NOT reconciled.
 func TestScheduler_TerminalFailure_GateAlsoFails(t *testing.T) {
+	t.Parallel()
+
 	stage := state.StagePRMerge
 	rs := state.NewRuntimeState("o/r", 477, "item-1", testRunID())
 	rs.BeginStage(stage)
@@ -186,6 +194,8 @@ func TestScheduler_TerminalFailure_GateAlsoFails(t *testing.T) {
 // genuinely-open path is pinned by
 // TestScheduler_NonTerminalFailure_GenuinelyOpen_NotReconciled.
 func TestScheduler_NonTerminalFailure_NotReconciled(t *testing.T) {
+	t.Parallel()
+
 	if isTerminalStage(state.StageFeatureValidate) {
 		t.Errorf("feature-validate must not be treated as a terminal stage")
 	}
@@ -201,6 +211,8 @@ func TestScheduler_NonTerminalFailure_NotReconciled(t *testing.T) {
 // reports passed=true, the runtime records the result, and no synthetic
 // error is created.
 func TestScheduler_GatePass_DoesNotErrorOut(t *testing.T) {
+	t.Parallel()
+
 	stage := state.StageIssuePickup
 	rs := state.NewRuntimeState("o/r", 42, "item-1", testRunID())
 	rs.BeginStage(stage)
@@ -231,6 +243,8 @@ func TestScheduler_GatePass_DoesNotErrorOut(t *testing.T) {
 // marked recoverable is handed to the stage's post-condition gate; any other
 // non-zero exit, a cancelled stage, or a stage without a gate is not.
 func TestRecoveredExitDefersToGate(t *testing.T) {
+	t.Parallel()
+
 	gate := &stubGate{name: "issue-pickup", passed: true}
 	recoverable := &StageRunResult{ExitCode: 1, RecoverableExit: true}
 	for _, tc := range []struct {

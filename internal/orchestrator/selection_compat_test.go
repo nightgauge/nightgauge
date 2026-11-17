@@ -181,6 +181,7 @@ func envStageKey(stage string) string {
 	return string(out)
 }
 
+// Serial: sets the environment (via computeSelectionCompat).
 func TestSelectionCompatGolden(t *testing.T) {
 	got := computeSelectionCompat(t)
 

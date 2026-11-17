@@ -82,6 +82,8 @@ func (f *forkFixture) clone() string {
 // established at the stage boundary, from the branch's base, WITHOUT the
 // worktree having produced or pushed anything.
 func TestCheckBranchFork_DetectsWorktreeBaseBehindRemoteHead(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 	const branch = "fix/163-orphaned-push"
 
@@ -117,6 +119,8 @@ func TestCheckBranchFork_DetectsWorktreeBaseBehindRemoteHead(t *testing.T) {
 // exercises the `merge-base --is-ancestor` leg rather than the missing-object
 // leg, so a fork is caught whether or not the object was ever fetched.
 func TestCheckBranchFork_DetectsForkAfterFetch(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 	const branch = "fix/163-diverged"
 
@@ -141,6 +145,8 @@ func TestCheckBranchFork_DetectsForkAfterFetch(t *testing.T) {
 // is reachable from the local tip and the next stage proceeds. A pre-flight
 // that fires here would block every healthy run.
 func TestCheckBranchFork_CleanWhenRemoteHeadIsAncestor(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 	const branch = "feat/ordinary"
 
@@ -162,6 +168,8 @@ func TestCheckBranchFork_CleanWhenRemoteHeadIsAncestor(t *testing.T) {
 // TestCheckBranchFork_CleanWhenRemoteBranchAbsent covers the first push of a
 // run: origin has no such branch, so there is nothing to fork from.
 func TestCheckBranchFork_CleanWhenRemoteBranchAbsent(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 	const branch = "feat/never-pushed"
 	gittest.Run(t, f.work, "checkout", "-b", branch)
@@ -176,6 +184,8 @@ func TestCheckBranchFork_CleanWhenRemoteBranchAbsent(t *testing.T) {
 // comparison degrades to unknown, never to forked. The pre-flight blocks a run;
 // an offline laptop or a missing branch must not be able to trigger that.
 func TestCheckBranchFork_FailsOpen(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 
 	cases := []struct {
@@ -210,6 +220,8 @@ func TestCheckBranchFork_FailsOpen(t *testing.T) {
 // contained in its local history, which is the proof of ownership, so origin's
 // copy is dropped and the next attempt starts from a clean base.
 func TestReclaimOrphanedRemoteBranch_DropsThePipelinesOwnPush(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 	const branch = "fix/163-killed-mid-push"
 
@@ -242,6 +254,8 @@ func TestReclaimOrphanedRemoteBranch_DropsThePipelinesOwnPush(t *testing.T) {
 // the two apart, and a commit that is not contained is left standing for the
 // fork pre-flight to report.
 func TestReclaimOrphanedRemoteBranch_LeavesACommitTheRunNeverAuthored(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 	const branch = "fix/163-operator-push"
 
@@ -277,6 +291,8 @@ func TestReclaimOrphanedRemoteBranch_LeavesACommitTheRunNeverAuthored(t *testing
 // shared base for every sub-issue in the epic, so one sub-issue's failure must
 // not remove the ground its siblings stand on.
 func TestReclaimOrphanedRemoteBranch_RefusesProtectedBranches(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 	for _, branch := range []string{"main", "master", "develop", "HEAD", "epic/142-wave-one"} {
 		res := ReclaimOrphanedRemoteBranch(context.Background(), f.work, branch)
@@ -296,6 +312,8 @@ func TestReclaimOrphanedRemoteBranch_RefusesProtectedBranches(t *testing.T) {
 // TestReclaimOrphanedRemoteBranch_NoopWhenNothingWasPushed covers the common
 // failed run: it never got as far as pushing, so there is no orphan.
 func TestReclaimOrphanedRemoteBranch_NoopWhenNothingWasPushed(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 	const branch = "feat/never-pushed"
 	gittest.Run(t, f.work, "checkout", "-b", branch)
@@ -315,6 +333,8 @@ func TestReclaimOrphanedRemoteBranch_NoopWhenNothingWasPushed(t *testing.T) {
 // unprovable — without the local branch there is no ancestry to check, and a
 // remote head of unknown provenance is exactly what must be preserved.
 func TestReclaimOrphanedRemoteBranch_DeclinesWhenLocalBranchIsGone(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 	const branch = "fix/163-local-gone"
 
@@ -370,6 +390,8 @@ func selfForkFixture(t *testing.T, branch string) (*forkFixture, string) {
 }
 
 func TestReconcileSelfFork_RecoversRebasedPRBranch(t *testing.T) {
+	t.Parallel()
+
 	const branch = "fix/2669-rebased"
 	f, remote := selfForkFixture(t, branch)
 	ctx := context.Background()
@@ -400,6 +422,8 @@ func TestReconcileSelfFork_RecoversRebasedPRBranch(t *testing.T) {
 }
 
 func TestReconcileSelfFork_GenuineForkIsLeftAlone(t *testing.T) {
+	t.Parallel()
+
 	const branch = "fix/2699-genuine"
 	f, _ := selfForkFixture(t, branch)
 	ctx := context.Background()
@@ -428,6 +452,8 @@ func TestReconcileSelfFork_GenuineForkIsLeftAlone(t *testing.T) {
 // A merge of the base into origin's copy adds nothing the rebased local tree
 // lacks, so it is a self-fork: the shape the freshness check itself produces.
 func TestReconcileSelfFork_OriginBaseMergeIsRecovered(t *testing.T) {
+	t.Parallel()
+
 	const branch = "fix/2699-merge"
 	f, _ := selfForkFixture(t, branch)
 	op := f.clone()
@@ -443,6 +469,8 @@ func TestReconcileSelfFork_OriginBaseMergeIsRecovered(t *testing.T) {
 
 // A merge that brings content the local tree lacks stays a genuine fork.
 func TestReconcileSelfFork_OriginMergeWithForeignContentIsForked(t *testing.T) {
+	t.Parallel()
+
 	const branch = "fix/2699-merge-foreign"
 	f, _ := selfForkFixture(t, branch)
 	op := f.clone()
@@ -467,6 +495,8 @@ func TestReconcileSelfFork_OriginMergeWithForeignContentIsForked(t *testing.T) {
 // origin would call this a self-fork and bury origin's work. Run both ways round
 // because which base `git merge-base` names depends on the history.
 func TestReconcileSelfFork_CrissCrossIsForked(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct{ name, localFile, originFile string }{
 		{"local-first", "x.txt", "y.txt"},
 		{"origin-first", "y.txt", "x.txt"},
@@ -497,6 +527,8 @@ func TestReconcileSelfFork_CrissCrossIsForked(t *testing.T) {
 // Plain merges give both tips both files, so the content test alone would call
 // this a self-fork. The history is still a criss-cross and stays a fork.
 func TestReconcileSelfFork_CrissCrossWithEqualTreesIsForked(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 	const branch = "fix/2749-crisscross"
 	gittest.Run(t, f.work, "checkout", "-b", "side-x", "origin/main")
@@ -523,6 +555,8 @@ func TestReconcileSelfFork_CrissCrossWithEqualTreesIsForked(t *testing.T) {
 }
 
 func TestReconcileSelfFork_CleanWhenFastForward(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 	const branch = "fix/2699-clean"
 	gittest.Run(t, f.work, "checkout", "-b", branch)
@@ -535,6 +569,8 @@ func TestReconcileSelfFork_CleanWhenFastForward(t *testing.T) {
 }
 
 func TestPreserveStrandedTip_SurvivesBranchDeletion(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 	const branch = "fix/2699-stranded"
 	gittest.Run(t, f.work, "checkout", "-b", branch)
@@ -564,6 +600,8 @@ func patchIDOf(t *testing.T, dir, rev string) string {
 }
 
 func TestReconcileSelfFork_RefusesProtectedBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 	for _, b := range []string{"main", "epic/42-x", "develop"} {
 		if res := ReconcileSelfFork(context.Background(), f.work, b); res.Outcome != SelfForkUnknown ||
@@ -574,6 +612,8 @@ func TestReconcileSelfFork_RefusesProtectedBranch(t *testing.T) {
 }
 
 func TestRollbackSelfFork_RestoresLocalTip(t *testing.T) {
+	t.Parallel()
+
 	const branch = "fix/2699-rollback"
 	f, _ := selfForkFixture(t, branch)
 	local := gittest.Run(t, f.work, "rev-parse", "HEAD")

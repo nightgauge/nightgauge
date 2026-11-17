@@ -80,6 +80,8 @@ func captureReconcileLog(t *testing.T) *bytes.Buffer {
 // cmd.Dir = repoRoot), so a scan rooted only at the launch root never sees it
 // and the run looks orphaned.
 func TestActiveWorktreeIssues_SeesCrossRepoWorktree(t *testing.T) {
+	t.Parallel()
+
 	launchRoot := worktreeRepo(t, 401)
 	siblingRoot := worktreeRepo(t, 402)
 
@@ -104,6 +106,8 @@ func TestActiveWorktreeIssues_SeesCrossRepoWorktree(t *testing.T) {
 // TestActiveWorktreeIssues_UndeterminedPaths covers the three ways the old
 // implementation returned an empty map that was indistinguishable from "no
 // worktrees exist".
+//
+// Serial: sets the environment.
 func TestActiveWorktreeIssues_UndeterminedPaths(t *testing.T) {
 	t.Run("no roots configured", func(t *testing.T) {
 		s := &Scheduler{}
@@ -146,6 +150,8 @@ func TestActiveWorktreeIssues_UndeterminedPaths(t *testing.T) {
 // longer exists genuinely holds no worktrees. Undetermining on it would let one
 // deleted sibling permanently disable compose reconciliation.
 func TestActiveWorktreeIssues_MissingRootIsSkipped(t *testing.T) {
+	t.Parallel()
+
 	root := worktreeRepo(t, 404)
 	s := &Scheduler{
 		trustGate:         allWritersGate(),
@@ -166,6 +172,8 @@ func TestActiveWorktreeIssues_MissingRootIsSkipped(t *testing.T) {
 // --remove-orphans` — it returned no error while destroying a live run's named
 // volumes, so an error-only assertion would pass against it. Assert the side
 // effect: zero teardowns.
+//
+// Serial: sets the environment.
 func TestReconcileOrphanedCompose_UndeterminedTearsDownNothing(t *testing.T) {
 	notARepo := t.TempDir()
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(notARepo))
@@ -201,6 +209,8 @@ func TestReconcileOrphanedCompose_UndeterminedTearsDownNothing(t *testing.T) {
 // the method with a hand-built set would assert nothing about the roots the
 // union actually covers.
 func TestReconcileOrphanedCompose_CrossRepoRunSurvives(t *testing.T) {
+	t.Parallel()
+
 	launchRoot := worktreeRepo(t, 601)
 	siblingRoot := worktreeRepo(t, 602)
 
@@ -296,6 +306,8 @@ func dockerCalls(t *testing.T, logPath string) string {
 // because the seams are unexported fields that cannot be injected before
 // NewScheduler runs loadQueue — this is the PRODUCTION attach path, defaults and
 // all (#399's lesson).
+//
+// Serial: sets the environment (via installRecordingDocker).
 func TestNewScheduler_ConstructionTearsDownNoContainers(t *testing.T) {
 	// issue-909 has no worktree in this repo, so pre-fix the constructor
 	// classified it as orphaned and tore it down.
@@ -323,6 +335,8 @@ func s0(root string) *Scheduler { return &Scheduler{workspaceRoot: root} }
 // named volumes — went down as an "orphan". The candidate set is now bounded by
 // each project's compose ConfigFiles, and every skip is logged: the skip line is
 // the only evidence that the pass was narrower than `compose ls` looks.
+//
+// Serial: redirects the standard logger (via captureReconcileLog).
 func TestComposeReconcile_SkipsProjectOutsideRoots(t *testing.T) {
 	rootA := worktreeRepo(t, 1) // the scanned root
 	rootB := worktreeRepo(t, 2) // a repo this workspace does not know
@@ -422,6 +436,8 @@ func TestComposeReconcile_SkipsProjectOutsideRoots(t *testing.T) {
 
 // TestComposeReconcile_PrefixIsNotContainment: `/ws/repo` must not vouch for
 // `/ws/repo-other`. A string-prefix check would.
+//
+// Serial: redirects the standard logger (via captureReconcileLog).
 func TestComposeReconcile_PrefixIsNotContainment(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, "repo")
@@ -452,6 +468,8 @@ func TestComposeReconcile_PrefixIsNotContainment(t *testing.T) {
 // TestComposeReconcile_BoundIsTheReceiversRoots pins that the bound uses the
 // SAME roots the in-flight union was built from: a project inside a sibling
 // root the receiver resolved is still a candidate, not a skip.
+//
+// Serial: redirects the standard logger (via captureReconcileLog).
 func TestComposeReconcile_BoundIsTheReceiversRoots(t *testing.T) {
 	launchRoot := worktreeRepo(t, 11)
 	siblingRoot := worktreeRepo(t, 12)

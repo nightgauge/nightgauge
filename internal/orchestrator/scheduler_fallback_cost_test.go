@@ -11,6 +11,8 @@ import (
 // scheduler.go (when actualCostUsd == 0) will never silently pass zero cost
 // to the IPC stage.complete event when real tokens were consumed.
 func TestFallbackCostCalculation(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		model        string
 		inputTokens  int
@@ -34,6 +36,8 @@ func TestFallbackCostCalculation(t *testing.T) {
 // so the Go fallback does not generate spurious non-zero costs for cache-hit
 // or skipped stages.
 func TestFallbackCostZeroTokens(t *testing.T) {
+	t.Parallel()
+
 	cost := tokens.CalculateCost("claude-sonnet-4-6", tokens.TokenCounts{})
 	if cost != 0 {
 		t.Errorf("CalculateCost with zero tokens = %f; want 0", cost)

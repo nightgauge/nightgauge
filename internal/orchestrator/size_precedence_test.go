@@ -26,6 +26,8 @@ func writeSizePlanningContext(t *testing.T, root string, issue int, body string)
 // The precedence itself: label, then the planner's assessment, then the
 // estimator — and nothing at all when no source produced a recognized bucket.
 func TestResolveRunSize_Precedence(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name       string
 		board      string
@@ -56,6 +58,8 @@ func TestResolveRunSize_Precedence(t *testing.T) {
 // and the only way it survives is for BOTH halves to be recorded. Nothing
 // relabels: the label is the human's input to the router.
 func TestResolveRunSize_RecordsDisagreementWithoutResolvingIt(t *testing.T) {
+	t.Parallel()
+
 	res := ResolveRunSize("", []string{"size:S"}, "L", "")
 	if res.Size != "S" || res.Source != SizeSourceLabel {
 		t.Fatalf("resolved %q/%q, want the LABEL to win", res.Size, res.Source)
@@ -76,6 +80,8 @@ func TestResolveRunSize_RecordsDisagreementWithoutResolvingIt(t *testing.T) {
 // there; it never saw the planner's assessment, so bucketing that run's score
 // would record the router's M default under a new name.
 func TestOutcomePredictedSize_PerSource(t *testing.T) {
+	t.Parallel()
+
 	label := ResolveRunSize("", []string{"size:XL"}, "", "")
 	if got := OutcomePredictedSize(label, 8); got != "large" {
 		t.Errorf("label-sourced = %q, want \"large\" (the score's bucket)", got)
@@ -115,6 +121,8 @@ func TestOutcomePredictedSize_PerSource(t *testing.T) {
 // Provenance for a value that was never recorded reads, to a consumer scanning
 // populated fields, as a row that has a prediction.
 func TestOutcomeSizeSource_EmptyWheneverThePredictionIs(t *testing.T) {
+	t.Parallel()
+
 	if got := OutcomeSizeSource(ResolveRunSize("", []string{"size:M"}, "", ""), 5); got != SizeSourceLabel {
 		t.Errorf("OutcomeSizeSource = %q, want %q", got, SizeSourceLabel)
 	}
@@ -133,6 +141,8 @@ func TestOutcomeSizeSource_EmptyWheneverThePredictionIs(t *testing.T) {
 // nearest match — an invented size reaches the corpus indistinguishable from a
 // real one.
 func TestPlannerSizeFromAssessment(t *testing.T) {
+	t.Parallel()
+
 	if got := PlannerSizeFromAssessment("m", 8); got != "M" {
 		t.Errorf("= %q, want \"M\" — an explicit size_label outranks the score", got)
 	}
@@ -152,6 +162,8 @@ func TestPlannerSizeFromAssessment(t *testing.T) {
 // UNGATED estimator source would make the resolved size never absent and retire
 // the #112 "no size at all" warning into dead code.
 func TestEstimatorSize_GatedOnItsOwnConfidence(t *testing.T) {
+	t.Parallel()
+
 	if got := EstimatorSize("Fix a typo", "", []string{"type:docs"}); got != "" {
 		t.Errorf("EstimatorSize with one signal = %q, want \"\" — a \"low\" confidence is the estimator "+
 			"saying it had nothing to work with, and rule 2 spells that \"\"", got)
@@ -165,6 +177,8 @@ func TestEstimatorSize_GatedOnItsOwnConfidence(t *testing.T) {
 // RunSizeResolution is the function BOTH terminal writers call, and it reads
 // the planner's assessment off the run's own planning-{N}.json.
 func TestRunSizeResolution_ReadsThePlanFromDisk(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	writeSizePlanningContext(t, root, 1429, `{"complexity_assessment":{"size_label":"L","computed_score":5}}`)
 
@@ -183,6 +197,8 @@ func TestRunSizeResolution_ReadsThePlanFromDisk(t *testing.T) {
 // that fires on nearly every run is a warning an operator learns to scroll past
 // — which is what it had become.
 func TestRunSizeResolution_AbsentFromEverySource(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	res := RunSizeResolution(root, "", "acme/widget", 7, "", []string{"type:bug"}, "Fix it", "")
 	if res.Size != "" || res.Source != "" {
@@ -203,6 +219,8 @@ func (f *fakeLabeler) ApplySizeLabel(_ context.Context, owner, repo string, numb
 
 // The label write: a size-less issue gets the planner's assessment, in one call.
 func TestBackfillPlannerSizeLabel_AppliesToSizelessIssue(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	writeSizePlanningContext(t, root, 1429, `{"complexity_assessment":{"size_label":"L","computed_score":5}}`)
 	labeler := &fakeLabeler{}
@@ -221,6 +239,8 @@ func TestBackfillPlannerSizeLabel_AppliesToSizelessIssue(t *testing.T) {
 // human's input to the router; the disagreement is recorded on the run record
 // instead, and is not resolved by relabelling.
 func TestBackfillPlannerSizeLabel_NeverRelabels(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	writeSizePlanningContext(t, root, 12, `{"complexity_assessment":{"size_label":"L"}}`)
 
@@ -238,6 +258,8 @@ func TestBackfillPlannerSizeLabel_NeverRelabels(t *testing.T) {
 
 // No assessment, no write — and no fabricated size either.
 func TestBackfillPlannerSizeLabel_NoAssessment(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	writeSizePlanningContext(t, root, 3, `{"complexity_assessment":{"size_label":null,"computed_score":4}}`)
 	labeler := &fakeLabeler{}
@@ -254,6 +276,8 @@ func TestBackfillPlannerSizeLabel_NoAssessment(t *testing.T) {
 // A forge refusal is reported, never fatal: a run whose size label could not be
 // written is exactly as well off as every run before this existed.
 func TestBackfillPlannerSizeLabel_ForgeFailureIsNonFatal(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	writeSizePlanningContext(t, root, 4, `{"complexity_assessment":{"size_label":"M"}}`)
 	labeler := &fakeLabeler{err: errors.New("REST 422: label size:M not found")}
@@ -267,6 +291,8 @@ func TestBackfillPlannerSizeLabel_ForgeFailureIsNonFatal(t *testing.T) {
 // A repo slug that is not owner/name cannot address the REST endpoint, and a
 // half-built path must not be sent.
 func TestBackfillPlannerSizeLabel_RequiresOwnerName(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	writeSizePlanningContext(t, root, 5, `{"complexity_assessment":{"size_label":"M"}}`)
 	labeler := &fakeLabeler{}

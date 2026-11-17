@@ -139,6 +139,7 @@ func buildTelemetryTestScheduler(t *testing.T, tmpDir string, svc telemetryServi
 	return s
 }
 
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestTelemetryStageStartedEmitted(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	tmpDir := t.TempDir()
@@ -168,6 +169,7 @@ func TestTelemetryStageStartedEmitted(t *testing.T) {
 	}
 }
 
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestTelemetryStageErrorEmitted(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	tmpDir := t.TempDir()
@@ -202,6 +204,7 @@ func TestTelemetryStageErrorEmitted(t *testing.T) {
 	}
 }
 
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestTelemetryStageErrorNotEmittedOnEscalation(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	tmpDir := t.TempDir()
@@ -229,6 +232,8 @@ func TestTelemetryStageErrorNotEmittedOnEscalation(t *testing.T) {
 }
 
 func TestTelemetryStageCompletedEmitted(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := gitWorkspace(t)
 	mock := &mockTelemetry{}
 	// Only create the skill file for issue-pickup. After it succeeds (and the
@@ -262,6 +267,7 @@ func TestTelemetryStageCompletedEmitted(t *testing.T) {
 	}
 }
 
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestTelemetryPipelineDoneEmittedViaDefer(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	tmpDir := t.TempDir()
@@ -293,6 +299,7 @@ func TestTelemetryPipelineDoneEmittedViaDefer(t *testing.T) {
 	}
 }
 
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestTelemetryDisabledNoEventsEmitted(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	tmpDir := t.TempDir()
@@ -311,6 +318,7 @@ func TestTelemetryDisabledNoEventsEmitted(t *testing.T) {
 	}
 }
 
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestTelemetryNilServiceNoPanic(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	tmpDir := t.TempDir()
@@ -327,6 +335,8 @@ func TestTelemetryNilServiceNoPanic(t *testing.T) {
 }
 
 func TestTelemetryServiceInterfaceSatisfied(t *testing.T) {
+	t.Parallel()
+
 	// Compile-time assertion: *platform.TelemetryService satisfies telemetryService.
 	// If this test file compiles, the interface is satisfied.
 	var _ telemetryService = (*platform.TelemetryService)(nil)
@@ -335,6 +345,8 @@ func TestTelemetryServiceInterfaceSatisfied(t *testing.T) {
 // TestPersistQueueSyncsSnapshot verifies persistQueue mirrors the queue to the
 // platform, mapping status/priority and filtering terminal items.
 func TestPersistQueueSyncsSnapshot(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := gitWorkspace(t)
 	mock := &mockTelemetry{}
 	s := buildTelemetryTestScheduler(t, tmpDir, mock, &mockAlwaysSucceedStageRunner{}, nil)
@@ -371,6 +383,8 @@ func TestPersistQueueSyncsSnapshot(t *testing.T) {
 // TestPersistQueueNoSyncWhenTelemetryDisabled verifies the sync is gated by the
 // telemetry flag.
 func TestPersistQueueNoSyncWhenTelemetryDisabled(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 	mock := &mockTelemetry{}
 	s := buildTelemetryTestScheduler(t, tmpDir, mock, &mockAlwaysSucceedStageRunner{}, nil)
@@ -388,6 +402,8 @@ func TestPersistQueueNoSyncWhenTelemetryDisabled(t *testing.T) {
 // TestPersistQueueNilTelemetryNoPanic verifies persistQueue is safe with no
 // telemetry service configured.
 func TestPersistQueueNilTelemetryNoPanic(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 	s := buildTelemetryTestScheduler(t, tmpDir, nil, &mockAlwaysSucceedStageRunner{}, nil)
 	s.telemetrySvc = nil
@@ -398,6 +414,8 @@ func TestPersistQueueNilTelemetryNoPanic(t *testing.T) {
 }
 
 func TestQueueStatusToPlatform(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]string{
 		"processing": "processing",
 		"pending":    "pending",
@@ -415,6 +433,8 @@ func TestQueueStatusToPlatform(t *testing.T) {
 }
 
 func TestQueuePriorityFromLabels(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		labels []string
 		want   string
@@ -436,6 +456,8 @@ func TestQueuePriorityFromLabels(t *testing.T) {
 // TestCacheHitRateInV2Record verifies that per-stage cache_hit_rate is correctly
 // populated when recording V2 history via the history writer (Issue #2459).
 func TestCacheHitRateInV2Record(t *testing.T) {
+	t.Parallel()
+
 	rs := state.NewRuntimeState("nightgauge/nightgauge", 2459, "item-test", testRunID())
 
 	rs.BeginStage(state.StageIssuePickup)

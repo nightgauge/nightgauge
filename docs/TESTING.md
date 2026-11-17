@@ -757,6 +757,45 @@ reports green having run zero of its cases), and on a `*.test.ts` under
 `require("vscode")`, which only resolves inside an extension host). All three
 shapes are exercised by `scripts/test-check-test-runner-coverage.sh`.
 
+### Parallel tests in internal/orchestrator (#3144)
+
+Every top-level `Test` in `internal/orchestrator` calls `t.Parallel()` as its
+first statement unless it must run serially. A test must run serially when its
+body, or any same-package function it calls or references, does any of these:
+
+1. sets the environment, the working directory or the standard logger
+   (`t.Setenv`, `t.Chdir`, `os.Setenv`, `os.Chdir`, `log.SetOutput`,
+   `log.SetFlags`, or `githubtest.New`, which calls `t.Setenv`);
+2. assigns to a package-level variable, such as the
+   `old := x; x = stub; t.Cleanup(...)` swap of a seam like `reconcileExecGh`;
+3. asserts on wall-clock time, such as a deadline of a few seconds, or uses a
+   fixed path or port outside `t.TempDir()`. Load stretches a parallel test
+   many times over, so keep these serial (#2950).
+
+A serial test says why, in one of two forms:
+
+```go
+// TestX checks ...
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
+func TestX(t *testing.T) {
+```
+
+or, once for a whole file, as a top-level comment before its first test:
+
+```go
+// Serial (file): every test here drives the config watcher's package interval.
+```
+
+`parallel_policy_test.go` enforces cases 1 and 2. It type-checks the package
+and fails when a parallel test reaches a hazard, naming the call chain, or when
+a test is neither parallel nor carries a reason. It cannot see case 3, state held
+in another package, or a hazard reached only through an interface method, a
+func-typed field or a package-level func var. To report a new helper in another
+package that sets the environment, add it to `parallelEnvCalls`. Serial tests all run before the
+parallel ones start, so a parallel test may read a variable a serial test
+swaps.
+
 ### A test that passes alone and fails in the suite is order-dependent, not flaky
 
 "Flaky" invites a re-run. Order dependence does not go away on a re-run — it

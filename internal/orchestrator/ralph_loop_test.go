@@ -7,6 +7,8 @@ import (
 )
 
 func TestRalphLoop_MaxIterations(t *testing.T) {
+	t.Parallel()
+
 	cfg := RalphConfig{
 		MaxIterations: 2,
 		TokenBudget:   100000,
@@ -43,6 +45,8 @@ func TestRalphLoop_MaxIterations(t *testing.T) {
 }
 
 func TestRalphLoop_TokenBudget(t *testing.T) {
+	t.Parallel()
+
 	cfg := RalphConfig{
 		MaxIterations: 10,
 		TokenBudget:   500,
@@ -64,6 +68,8 @@ func TestRalphLoop_TokenBudget(t *testing.T) {
 }
 
 func TestRalphLoop_Timeout(t *testing.T) {
+	t.Parallel()
+
 	cfg := RalphConfig{
 		MaxIterations: 10,
 		TokenBudget:   100000,
@@ -85,6 +91,8 @@ func TestRalphLoop_Timeout(t *testing.T) {
 }
 
 func TestRalphLoop_Success_EndsLoop(t *testing.T) {
+	t.Parallel()
+
 	cfg := DefaultRalphConfig()
 	rl := NewRalphLoopController(cfg)
 	rl.Start()
@@ -101,6 +109,8 @@ func TestRalphLoop_Success_EndsLoop(t *testing.T) {
 }
 
 func TestRalphLoop_NotActive(t *testing.T) {
+	t.Parallel()
+
 	rl := NewRalphLoopController(DefaultRalphConfig())
 	// Don't call Start()
 
@@ -111,6 +121,8 @@ func TestRalphLoop_NotActive(t *testing.T) {
 }
 
 func TestRalphLoop_Reset(t *testing.T) {
+	t.Parallel()
+
 	rl := NewRalphLoopController(DefaultRalphConfig())
 	rl.Start()
 	rl.RecordIteration(false, 500)
@@ -136,6 +148,8 @@ func TestRalphLoop_Reset(t *testing.T) {
 // added in Issue #3198. The test must pass under `go test -race`; any
 // regression that drops a mutex will be caught by the detector.
 func TestRalphLoopController_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
 	cfg := RalphConfig{
 		MaxIterations: 1000,
 		TokenBudget:   10000000,
@@ -192,6 +206,8 @@ func TestRalphLoopController_ConcurrentAccess(t *testing.T) {
 }
 
 func TestRalphLoop_TokensAccumulate(t *testing.T) {
+	t.Parallel()
+
 	rl := NewRalphLoopController(DefaultRalphConfig())
 	rl.Start()
 

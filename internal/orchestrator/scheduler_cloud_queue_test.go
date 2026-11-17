@@ -23,6 +23,8 @@ func cloudQueueScheduler(t *testing.T) (*Scheduler, *fakeTelemetry) {
 }
 
 func TestQueueAddIfAbsent_AddsOnce(t *testing.T) {
+	t.Parallel()
+
 	s, _ := cloudQueueScheduler(t)
 	if !s.QueueAddIfAbsent(QueueItem{Repo: "acme/web", IssueNumber: 7, Title: "t"}) {
 		t.Fatal("first add reported not added")
@@ -39,6 +41,8 @@ func TestQueueAddIfAbsent_AddsOnce(t *testing.T) {
 }
 
 func TestQueueHas_MatchesRepositoryCaseInsensitively(t *testing.T) {
+	t.Parallel()
+
 	s, _ := cloudQueueScheduler(t)
 	s.QueueAddItem(QueueItem{Repo: "acme/web", IssueNumber: 7})
 	if !s.QueueHas("ACME/Web", 7) {
@@ -52,6 +56,8 @@ func TestQueueHas_MatchesRepositoryCaseInsensitively(t *testing.T) {
 // Only a waiting item is taken back: one a dispatch took, or one paused, is
 // left where it is.
 func TestQueueWithdrawWaiting(t *testing.T) {
+	t.Parallel()
+
 	s, _ := cloudQueueScheduler(t)
 	s.QueueAddItem(
 		QueueItem{Repo: "acme/web", IssueNumber: 1},
@@ -78,6 +84,8 @@ func TestQueueWithdrawWaiting(t *testing.T) {
 // so the machine's row keeps it; any other item's priority still comes from
 // its labels.
 func TestQueueSync_ReportsTheRequestedPriority(t *testing.T) {
+	t.Parallel()
+
 	s, ft := cloudQueueScheduler(t)
 	s.QueueAddIfAbsent(QueueItem{Repo: "acme/web", IssueNumber: 1, Labels: []string{"priority:low"}, RequestedPriority: "critical"})
 	s.QueueAddIfAbsent(QueueItem{Repo: "acme/web", IssueNumber: 2, Labels: []string{"priority:high"}})

@@ -10,6 +10,8 @@ import (
 
 // A run the member queued private (#2400) carries private on its first stage
 // event, on every later event and on its completion record.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestSchedulerPrivateQueueItemRunCarriesVisibility(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	tmpDir := t.TempDir()
@@ -48,6 +50,8 @@ func TestSchedulerPrivateQueueItemRunCarriesVisibility(t *testing.T) {
 
 // A run the autonomous scheduler starts from the board on its own has no
 // queue item and names no visibility, which the service reads as team.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestSchedulerBoardPickedRunIsTeam(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	tmpDir := t.TempDir()
@@ -79,6 +83,8 @@ func TestSchedulerBoardPickedRunIsTeam(t *testing.T) {
 // The queue snapshot pushed to the hosted service names a private item's
 // visibility and omits a team item's.
 func TestPersistQueueSyncCarriesVisibility(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := gitWorkspace(t)
 	mock := &mockTelemetry{}
 	s := buildTelemetryTestScheduler(t, tmpDir, mock, &mockAlwaysSucceedStageRunner{}, nil)
@@ -109,6 +115,8 @@ func TestPersistQueueSyncCarriesVisibility(t *testing.T) {
 // A private request raises the waiting item it duplicates, and nothing
 // lowers a private item.
 func TestQueueAddRaisesVisibilityNeverLowers(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := gitWorkspace(t)
 	s := buildTelemetryTestScheduler(t, tmpDir, &mockTelemetry{}, &mockAlwaysSucceedStageRunner{}, nil)
 	s.workspaceRoot = tmpDir

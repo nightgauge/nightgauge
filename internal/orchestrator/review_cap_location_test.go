@@ -42,6 +42,8 @@ func renderLocation(loc reviewCapLocation) string {
 }
 
 func TestReviewCapLocationWorktreePresentWithUncommitted(t *testing.T) {
+	t.Parallel()
+
 	checkout, wt := reviewCapFixture(t, 1)
 	for _, f := range []string{"a.go", "b.go"} {
 		if err := os.WriteFile(filepath.Join(wt, f), []byte("x"), 0o644); err != nil {
@@ -62,6 +64,8 @@ func TestReviewCapLocationWorktreePresentWithUncommitted(t *testing.T) {
 }
 
 func TestReviewCapLocationWorktreeRemovedWithCommits(t *testing.T) {
+	t.Parallel()
+
 	checkout, wt := reviewCapFixture(t, 3)
 	runCapGit(t, checkout, "worktree", "remove", wt)
 	loc := probeReviewCapLocation(checkout, wt, 3059)
@@ -81,6 +85,8 @@ func TestReviewCapLocationWorktreeRemovedWithCommits(t *testing.T) {
 }
 
 func TestReviewCapLocationWorktreeRemovedNoCommits(t *testing.T) {
+	t.Parallel()
+
 	checkout, wt := reviewCapFixture(t, 0)
 	runCapGit(t, checkout, "worktree", "remove", wt)
 	body := renderLocation(probeReviewCapLocation(checkout, wt, 3059))
@@ -91,6 +97,8 @@ func TestReviewCapLocationWorktreeRemovedNoCommits(t *testing.T) {
 }
 
 func TestReviewCapLocationGitFailureClaimsNothing(t *testing.T) {
+	t.Parallel()
+
 	notGit := t.TempDir()
 	loc := probeReviewCapLocation(notGit, filepath.Join(notGit, "gone"), 3059)
 	if loc.Err == nil {
@@ -104,6 +112,8 @@ func TestReviewCapLocationGitFailureClaimsNothing(t *testing.T) {
 }
 
 func TestReviewCapRemediationPointsToCard(t *testing.T) {
+	t.Parallel()
+
 	text := TerminalKindRemediation(TerminalKindReviewCapReached)
 	if strings.Contains(text, "uncommitted in") || !strings.Contains(text, "card") {
 		t.Errorf("remediation = %q", text)
@@ -111,6 +121,8 @@ func TestReviewCapRemediationPointsToCard(t *testing.T) {
 }
 
 func TestReviewCapLocationDetachedWorktreeStillNamesTheBranch(t *testing.T) {
+	t.Parallel()
+
 	checkout, wt := reviewCapFixture(t, 2)
 	runCapGit(t, wt, "checkout", "-q", "--detach")
 	body := renderLocation(probeReviewCapLocation(checkout, wt, 3059))

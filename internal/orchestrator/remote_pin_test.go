@@ -54,6 +54,8 @@ func (f *remotePinFakes) deps() RemotePinDeps {
 }
 
 func TestRemotePinAcceptsACatalogModel(t *testing.T) {
+	t.Parallel()
+
 	f := newRemotePinFakes()
 	if err := ValidateRemotePin("opencode", remotePinLocalModel, f.deps()); err != nil {
 		t.Fatalf("a model in the local catalog was refused: %v", err)
@@ -64,6 +66,8 @@ func TestRemotePinAcceptsACatalogModel(t *testing.T) {
 }
 
 func TestRemotePinNoFieldsIsNoRequest(t *testing.T) {
+	t.Parallel()
+
 	f := newRemotePinFakes()
 	f.usable = false
 	if err := ValidateRemotePin("", "", f.deps()); err != nil {
@@ -72,6 +76,8 @@ func TestRemotePinNoFieldsIsNoRequest(t *testing.T) {
 }
 
 func TestRemotePinRefusalsNameTheCause(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name, adapter, model, want string
 		setup                      func(*remotePinFakes)
@@ -105,6 +111,8 @@ func TestRemotePinRefusalsNameTheCause(t *testing.T) {
 // must refuse it: removing the leading-dash check turns the --auto and -m
 // rows red, because the pattern then refuses them with another reason.
 func TestRemotePinShapeRefusedFirst(t *testing.T) {
+	t.Parallel()
+
 	long := "lmstudio/" + strings.Repeat("a", 300-len("lmstudio/"))
 	for _, tc := range []struct{ adapter, model, want string }{
 		{"opencode", "-m", "must not start with '-'"},
@@ -135,6 +143,8 @@ func TestRemotePinShapeRefusedFirst(t *testing.T) {
 }
 
 func TestRemotePinAdapterWithoutModel(t *testing.T) {
+	t.Parallel()
+
 	f := newRemotePinFakes()
 	if err := ValidateRemotePin("opencode", "", f.deps()); err != nil {
 		t.Fatalf("an adapter-only request was refused: %v", err)
@@ -148,6 +158,8 @@ func TestRemotePinAdapterWithoutModel(t *testing.T) {
 // ids, because the extension executes the pin, and every entry must resolve
 // in the Go registry, which supplies Agentic and ValidateModel.
 func TestRemotePinAllowListMatchesTheExtension(t *testing.T) {
+	t.Parallel()
+
 	src, err := os.ReadFile(filepath.Join("..", "..", "packages", "nightgauge", "src", "config", "schema.ts"))
 	if err != nil {
 		t.Fatalf("read schema.ts: %v", err)
@@ -180,6 +192,8 @@ func TestRemotePinAllowListMatchesTheExtension(t *testing.T) {
 // one: machine policy refuses, it never substitutes. The operator's own
 // adapter, in either vocabulary, is accepted.
 func TestRemotePinOperatorPinnedAdapter(t *testing.T) {
+	t.Parallel()
+
 	f := newRemotePinFakes()
 	f.operator = "claude-headless"
 	err := ValidateRemotePin("opencode", remotePinLocalModel, f.deps())
@@ -198,6 +212,8 @@ func TestRemotePinOperatorPinnedAdapter(t *testing.T) {
 // ceiling is refused, never clamped. A local model has no tier and is never
 // refused by a ceiling.
 func TestRemotePinAbovePerformanceCeiling(t *testing.T) {
+	t.Parallel()
+
 	f := newRemotePinFakes()
 	f.ceilings = map[state.PipelineStage]string{state.StageFeatureValidate: "sonnet"}
 	for _, model := range []string{"opus", "fable"} {
@@ -218,6 +234,8 @@ func TestRemotePinAbovePerformanceCeiling(t *testing.T) {
 // What reaches the hosted service is a fixed category and at most an adapter
 // id or variable names: never the model, a probe's output or a remediation.
 func TestRemotePinPublicDetailIsACategory(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		adapter, model, want string
 		setup                func(*remotePinFakes)

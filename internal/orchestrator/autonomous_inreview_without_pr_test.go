@@ -13,6 +13,8 @@ import (
 // `autonomous status`. A repo whose PR query failed stays in the plain bucket:
 // nobody looked, so it is not reported as "no PR".
 func TestPrioritize_SplitsInReviewWithoutOpenPR(t *testing.T) {
+	t.Parallel()
+
 	g := depgraph.NewGraph()
 	add := func(repo string, n int) {
 		g.Nodes[fmt.Sprintf("%s#%d", repo, n)] = &depgraph.Node{

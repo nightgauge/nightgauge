@@ -74,6 +74,8 @@ func gitLog(t *testing.T, dir string) []string {
 // generic token-budget heuristic — "PIPELINE BUDGET CEILING" lowercased
 // contains the substring "budget ceiling".
 func TestClassifyTerminalKind_RecoverableKinds(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		err  string
@@ -177,6 +179,8 @@ func TestClassifyTerminalKind_RecoverableKinds(t *testing.T) {
 // reaching for a forbidden foreground `sleep` wait loop) must route as
 // retryable, must NOT increment LifetimeIssueFailures, and must NOT trip
 // haltQueueOnSlotFailure — even across a burst on the same issue.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestOnPipelineComplete_PermissionDenied_TransientNoPauseNoCascade(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
@@ -216,6 +220,8 @@ func TestOnPipelineComplete_PermissionDenied_TransientNoPauseNoCascade(t *testin
 // TestHasUncommittedWork verifies clean vs dirty detection and the empty-path
 // guard.
 func TestHasUncommittedWork(t *testing.T) {
+	t.Parallel()
+
 	if hasUncommittedWork("") {
 		t.Error("hasUncommittedWork(\"\") = true, want false")
 	}
@@ -236,6 +242,8 @@ func TestHasUncommittedWork(t *testing.T) {
 }
 
 func TestHasUncommittedWork_IgnoresOnlyGeneratedCodexSteering(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	gitInitRepo(t, dir)
 	managed := "<!-- BEGIN NIGHTGAUGE MANAGED STEERING -->\ngenerated\n<!-- END NIGHTGAUGE MANAGED STEERING -->\n"
@@ -258,6 +266,8 @@ func TestHasUncommittedWork_IgnoresOnlyGeneratedCodexSteering(t *testing.T) {
 // managed block is its sole change, so any real work alongside it sent the
 // block through `git add -A` into the rescue commit.
 func TestRecoverUncommittedWork_NeverCommitsGeneratedSteering_1675(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	gitInitRepo(t, dir)
 	managed := "<!-- BEGIN NIGHTGAUGE MANAGED STEERING -->\ngenerated\n<!-- END NIGHTGAUGE MANAGED STEERING -->\n"
@@ -282,6 +292,8 @@ func TestRecoverUncommittedWork_NeverCommitsGeneratedSteering_1675(t *testing.T)
 // TestRecoverUncommittedWork verifies the recovery commit is created with the
 // canonical message, and that the function errors gracefully on a bad path.
 func TestRecoverUncommittedWork(t *testing.T) {
+	t.Parallel()
+
 	// Bad path — no git repo, empty path.
 	if _, err := RecoverUncommittedWork("", 3542, "feature-dev"); err == nil {
 		t.Error("RecoverUncommittedWork(\"\", ...) = nil, want error")
@@ -322,6 +334,8 @@ func TestRecoverUncommittedWork(t *testing.T) {
 // fields exist with the right types and zero values, so a future refactor
 // that drops them fails CI immediately.
 func TestStageRunResult_ShippedPartiallyFieldsPropagate(t *testing.T) {
+	t.Parallel()
+
 	r := &StageRunResult{}
 	// Zero values
 	if r.BudgetExceeded {
@@ -358,6 +372,8 @@ func TestStageRunResult_ShippedPartiallyFieldsPropagate(t *testing.T) {
 //     repo root (a wrong-location decoy).
 //   - When no run-state exists, the lookup falls back to the workspace root.
 func TestBudgetOverrunPathResolution_UsesWorktree(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	// The run's tree is its own repository here, so its pipeline state
 	// directory is distinct from the root's and a wrong-root read is
@@ -423,6 +439,8 @@ func TestBudgetOverrunPathResolution_UsesWorktree(t *testing.T) {
 // TestLoadWorktreePath verifies the run-state.json preference and the
 // workspace-root fallback.
 func TestLoadWorktreePath(t *testing.T) {
+	t.Parallel()
+
 	// No run-state.json — falls back to workspace root.
 	root := layouttest.Repo(t)
 	if got := loadWorktreePath(root, 3542); got != root {
@@ -462,6 +480,8 @@ func TestLoadWorktreePath(t *testing.T) {
 
 // TestGetPipelineBudgetCeilingUSD covers the tier-merged config resolution
 // (config.Load: machine → project → local) and the maintainer-set default.
+//
+// Serial: sets the environment.
 func TestGetPipelineBudgetCeilingUSD(t *testing.T) {
 	// Hermetic machine tier — never read the developer's real
 	// ~/.nightgauge/config.yaml in tests.
@@ -507,6 +527,8 @@ func TestGetPipelineBudgetCeilingUSD(t *testing.T) {
 // autonomous scheduler: fixed backoff, NO LifetimeIssueFailures increment, and
 // NO per-session circuit-breaker count.
 func TestOnPipelineComplete_RecoverableKinds_NoLifetimeCap(t *testing.T) {
+	t.Parallel()
+
 	for _, kind := range []string{TerminalKindWorktreeUncommitted, TerminalKindBudgetCeiling} {
 		t.Run(kind, func(t *testing.T) {
 			as := &AutonomousScheduler{
@@ -664,6 +686,8 @@ func (r *budgetEscalationRunner) RunStage(_ context.Context, params StageRunPara
 // stall-kills AND the pipeline has burned >50% of its USD budget ceiling, the
 // scheduler escalates the model (sonnet → opus) instead of taking a
 // same-model stall-retry / re-plan rewind.
+//
+// Serial: sets the environment.
 func TestScheduler_BudgetAwareEscalationOnStallKill(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	// Start feature-dev on sonnet so an escalation rung exists above it: the
@@ -723,6 +747,8 @@ func TestScheduler_BudgetAwareEscalationOnStallKill(t *testing.T) {
 // The scheduler must detect the sentinel post-stage and recover the work into a
 // commit on the branch — instead of letting it be silently discarded.
 func TestScheduler3365Recovery(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	gitInitRepo(t, root)
 
@@ -771,6 +797,8 @@ func TestScheduler3365Recovery(t *testing.T) {
 
 // A stall after a quota warning keeps its tier even past the budget threshold:
 // the stronger model spends the bucket that warned (#2711).
+//
+// Serial: sets the environment.
 func TestScheduler_WarningOnlyQuotaStallSkipsBudgetEscalation(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "sonnet")

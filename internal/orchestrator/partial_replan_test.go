@@ -57,6 +57,8 @@ func runReplan(t *testing.T, read func(context.Context, string, int) (hooks.Part
 // starts is scoped, because run start re-reads the newest trusted comment.
 // The extension path gets the same scope from `issue partial-delivery
 // --json`'s prompt_blocks (PartialRerunScopeBlocks, asserted below).
+//
+// Serial: swaps package var reconcileExecGh (via runReplan).
 func TestPartialReplan_RunIsScopedToTheRemainder(t *testing.T) {
 	read := pendingRemainder(3141, partialRerunCriterion)
 	snap, runner := runReplan(t, read)
@@ -93,6 +95,8 @@ func TestPartialReplan_RunIsScopedToTheRemainder(t *testing.T) {
 }
 
 // AC 4: a plain requeue with nothing pending yields no scope and no block.
+//
+// Serial: swaps package var reconcileExecGh (via runReplan).
 func TestPartialReplan_NothingPendingIsUnscoped(t *testing.T) {
 	none := func(context.Context, string, int) (hooks.PartialDeliveryStatus, error) {
 		return hooks.PartialDeliveryStatus{}, nil
@@ -112,6 +116,8 @@ func TestPartialReplan_NothingPendingIsUnscoped(t *testing.T) {
 // AC 3: the card says what the replan run does, not an internal field it
 // never sets.
 func TestPartialReplan_CardDescribesTheRun(t *testing.T) {
+	t.Parallel()
+
 	card := BuildPartialDeliveryCloseRefused("nightgauge/test", 3160, "run-1", 3141,
 		[]string{partialRerunCriterion}, false)
 	for _, opt := range card.Options {

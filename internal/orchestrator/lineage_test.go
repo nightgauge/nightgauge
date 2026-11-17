@@ -22,6 +22,8 @@ var claudeCaps = adaptercompat.CacheCaps{ImplicitPrefixCache: true,
 	CompatibleModelTransitions: adaptercompat.TransitionsNone, ExpirySeconds: 300}
 
 func TestLineage_TransitionTable(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name         string
 		mutate       func(k *LineageKey)
@@ -60,6 +62,8 @@ func TestLineage_TransitionTable(t *testing.T) {
 }
 
 func TestLineage_SameFamilyTransitionKeepsLineage(t *testing.T) {
+	t.Parallel()
+
 	caps := claudeCaps
 	caps.CompatibleModelTransitions = adaptercompat.TransitionsSameFamily
 	prev, next := baseLineageKey(), baseLineageKey()
@@ -74,6 +78,8 @@ func TestLineage_SameFamilyTransitionKeepsLineage(t *testing.T) {
 }
 
 func TestLineage_ReturnToEarlierKeyIsANewLineage(t *testing.T) {
+	t.Parallel()
+
 	a := baseLineageKey()
 	b := a
 	b.Provider = "openai"
@@ -86,6 +92,8 @@ func TestLineage_ReturnToEarlierKeyIsANewLineage(t *testing.T) {
 }
 
 func TestLineage_IdentityHashSaltIsPrivateAndPerWorkspace(t *testing.T) {
+	t.Parallel()
+
 	d1, d2 := t.TempDir(), t.TempDir()
 	desc := identityDescriptor("claude-headless", func(string) string { return "" })
 	h1, err := workspaceIdentityHash(d1, desc)
@@ -110,6 +118,8 @@ func TestLineage_IdentityHashSaltIsPrivateAndPerWorkspace(t *testing.T) {
 }
 
 func TestLineage_DescriptorCarriesNoCredential(t *testing.T) {
+	t.Parallel()
+
 	env := map[string]string{"ANTHROPIC_API_KEY": "sk-ant-secret-bytes", "CLAUDE_CONFIG_DIR": "/home/u/.claude-work"}
 	desc := identityDescriptor("claude-headless", func(k string) string { return env[k] })
 	if strings.Contains(desc, "sk-ant-secret-bytes") {
@@ -125,6 +135,8 @@ func TestLineage_DescriptorCarriesNoCredential(t *testing.T) {
 // no handoff; a switched adapter gives a second lineage and a provider_change
 // handoff. The history record carries neither the account hash nor a session.
 func TestLineage_DispatchRecordsHandoffAndHistoryStaysClean(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	now := time.Now()
 

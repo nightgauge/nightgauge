@@ -49,6 +49,8 @@ func remoteHasBranch(t *testing.T, root, branch string) bool {
 // runner creates and checks out the branch THERE; the primary checkout stays
 // on main.
 func TestRunWorktree_ProvisionsWorktreeAndLeavesPrimaryAlone(t *testing.T) {
+	t.Parallel()
+
 	root := pickupRepo(t)
 	s := &Scheduler{execMgr: execution.NewManager(root, &sleepAdapter{script: "true"})}
 	rt := state.NewRuntimeState("acme/app", 1904, "item-1904", "run-2170")
@@ -91,6 +93,8 @@ func TestRunWorktree_ProvisionsWorktreeAndLeavesPrimaryAlone(t *testing.T) {
 // every stage — a docs-only fast-track route among them — in the primary
 // checkout.
 func TestRunWorktree_ProvisionsWithoutAnAdapter(t *testing.T) {
+	t.Parallel()
+
 	root := pickupRepo(t)
 	s := &Scheduler{execMgr: execution.NewManager(root, nil)}
 	rt := state.NewRuntimeState("acme/app", 1904, "item-1904", "run-2170")
@@ -115,6 +119,8 @@ func TestRunWorktree_ProvisionsWithoutAnAdapter(t *testing.T) {
 // worktree's HEAD. This covers EnsureIssueBranch's other caller,
 // `nightgauge git branch-create`, which opens the same git.Service on its cwd.
 func TestDeterministicIssuePickup_LinkedWorktreeOnly(t *testing.T) {
+	t.Parallel()
+
 	root := pickupRepo(t)
 	wt := filepath.Join(t.TempDir(), "wt")
 	gitIn(t, root, "worktree", "add", "-q", "--detach", wt)
@@ -133,6 +139,8 @@ func TestDeterministicIssuePickup_LinkedWorktreeOnly(t *testing.T) {
 
 // A deterministic stage names no model in its completion line.
 func TestCompletionLogModel(t *testing.T) {
+	t.Parallel()
+
 	if got := completionLogModel("sonnet", "deterministic"); got != "none" {
 		t.Errorf("deterministic = %q, want none", got)
 	}

@@ -11,6 +11,8 @@ import (
 // #3255: a kind that arrives over IPC books host_slept only on the
 // scheduler's structured verdict, never on echoed `[host-slept]` text.
 func TestGateNotifyTerminalKindHostSleptVerdict(t *testing.T) {
+	t.Parallel()
+
 	echoed := "Previous attempt said: [host-slept] the host slept for 2m0s during feature-dev — " +
 		"but this run failed: validation_error: go test failed"
 	genuine := HostSleptStageError("feature-validate", 20*time.Minute, 15*time.Minute)
@@ -47,6 +49,8 @@ func TestGateNotifyTerminalKindHostSleptVerdict(t *testing.T) {
 }
 
 func TestPersistedHostSleptVerdict(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	dispatched := time.Now().Add(-time.Minute)
 	if persistedHostSleptVerdict(dir, 7, dispatched) {
@@ -86,6 +90,8 @@ func TestPersistedHostSleptVerdict(t *testing.T) {
 // Mirrors corpus row host-slept-echoed-no-verdict: without the structured
 // verdict the echoed marker never resolves to host_slept (#3255 AC3).
 func TestResolveTerminalKindEchoedHostSleptNoVerdict(t *testing.T) {
+	t.Parallel()
+
 	in := "Previous attempt said: [host-slept] the host slept for 2m0s during feature-dev " +
 		"(wall clock 30m0s, awake 28m0s) — but this run failed: validation_error: go test failed"
 	if got := ResolveTerminalKind(false, "", false, in); got == TerminalKindHostSlept {

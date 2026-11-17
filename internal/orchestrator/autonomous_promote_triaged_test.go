@@ -43,6 +43,8 @@ func graphWith(nodes ...*depgraph.Node) *depgraph.Graph {
 }
 
 func TestIsTriagedAndUnblocked_HappyPath(t *testing.T) {
+	t.Parallel()
+
 	node := makeNode(3216, "Backlog", "P1", []string{"type:bug", "priority:high"}, "OPEN")
 	g := graphWith(node)
 	if !isTriagedAndUnblocked(node, g, g.Adjacency(), vouchedByMaintainer) {
@@ -51,6 +53,8 @@ func TestIsTriagedAndUnblocked_HappyPath(t *testing.T) {
 }
 
 func TestIsTriagedAndUnblocked_RejectsClosedItems(t *testing.T) {
+	t.Parallel()
+
 	node := makeNode(3216, "Backlog", "P1", []string{"type:bug"}, "CLOSED")
 	g := graphWith(node)
 	if isTriagedAndUnblocked(node, g, g.Adjacency(), vouchedByMaintainer) {
@@ -59,6 +63,8 @@ func TestIsTriagedAndUnblocked_RejectsClosedItems(t *testing.T) {
 }
 
 func TestIsTriagedAndUnblocked_RejectsNonBacklogStatus(t *testing.T) {
+	t.Parallel()
+
 	for _, status := range []string{"Ready", "In progress", "In review", "Done", ""} {
 		node := makeNode(3216, status, "P1", []string{"type:bug"}, "OPEN")
 		g := graphWith(node)
@@ -69,6 +75,8 @@ func TestIsTriagedAndUnblocked_RejectsNonBacklogStatus(t *testing.T) {
 }
 
 func TestIsTriagedAndUnblocked_RejectsMissingPriority(t *testing.T) {
+	t.Parallel()
+
 	node := makeNode(3216, "Backlog", "", []string{"type:bug"}, "OPEN")
 	g := graphWith(node)
 	if isTriagedAndUnblocked(node, g, g.Adjacency(), vouchedByMaintainer) {
@@ -77,6 +85,8 @@ func TestIsTriagedAndUnblocked_RejectsMissingPriority(t *testing.T) {
 }
 
 func TestIsTriagedAndUnblocked_RejectsMissingTypeLabel(t *testing.T) {
+	t.Parallel()
+
 	node := makeNode(3216, "Backlog", "P1", []string{"priority:high", "component:pipeline"}, "OPEN")
 	g := graphWith(node)
 	if isTriagedAndUnblocked(node, g, g.Adjacency(), vouchedByMaintainer) {
@@ -85,6 +95,8 @@ func TestIsTriagedAndUnblocked_RejectsMissingTypeLabel(t *testing.T) {
 }
 
 func TestIsTriagedAndUnblocked_RejectsEpics(t *testing.T) {
+	t.Parallel()
+
 	node := makeNode(3216, "Backlog", "P1", []string{"type:epic"}, "OPEN")
 	g := graphWith(node)
 	if isTriagedAndUnblocked(node, g, g.Adjacency(), vouchedByMaintainer) {
@@ -93,6 +105,8 @@ func TestIsTriagedAndUnblocked_RejectsEpics(t *testing.T) {
 }
 
 func TestIsTriagedAndUnblocked_RejectsItemsWithOpenBlockers(t *testing.T) {
+	t.Parallel()
+
 	blocker := makeNode(100, "In progress", "P1", []string{"type:feature"}, "OPEN")
 	blocked := makeNode(3216, "Backlog", "P1", []string{"type:bug"}, "OPEN")
 	g := graphWith(blocker, blocked)
@@ -106,6 +120,8 @@ func TestIsTriagedAndUnblocked_RejectsItemsWithOpenBlockers(t *testing.T) {
 }
 
 func TestIsTriagedAndUnblocked_AcceptsItemsWithAllClosedBlockers(t *testing.T) {
+	t.Parallel()
+
 	blocker := makeNode(100, "Done", "P1", []string{"type:feature"}, "CLOSED")
 	blocked := makeNode(3216, "Backlog", "P1", []string{"type:bug"}, "OPEN")
 	g := graphWith(blocker, blocked)
@@ -119,6 +135,8 @@ func TestIsTriagedAndUnblocked_AcceptsItemsWithAllClosedBlockers(t *testing.T) {
 }
 
 func TestIsTriagedAndUnblocked_AcceptsAllPriorityLevels(t *testing.T) {
+	t.Parallel()
+
 	for _, p := range []string{"P0", "P1", "P2", "P3"} {
 		node := makeNode(3216, "Backlog", p, []string{"type:bug"}, "OPEN")
 		g := graphWith(node)
@@ -129,6 +147,8 @@ func TestIsTriagedAndUnblocked_AcceptsAllPriorityLevels(t *testing.T) {
 }
 
 func TestIsTriagedAndUnblocked_AcceptsVariousTypeLabels(t *testing.T) {
+	t.Parallel()
+
 	for _, lbl := range []string{"type:bug", "type:feature", "type:chore", "type:docs"} {
 		node := makeNode(3216, "Backlog", "P1", []string{lbl}, "OPEN")
 		g := graphWith(node)
@@ -139,6 +159,8 @@ func TestIsTriagedAndUnblocked_AcceptsVariousTypeLabels(t *testing.T) {
 }
 
 func TestIsTriagedAndUnblocked_HandlesNilNode(t *testing.T) {
+	t.Parallel()
+
 	g := graphWith()
 	if isTriagedAndUnblocked(nil, g, g.Adjacency(), vouchedByMaintainer) {
 		t.Error("nil node must never be promoted")
@@ -150,6 +172,8 @@ func TestIsTriagedAndUnblocked_HandlesNilNode(t *testing.T) {
 // rejection branch, and "" for the eligible case — used only for the
 // LastPromotionRejectionReasons tally, never for gating.
 func TestTriageRejectionReason_MirrorsIsTriagedAndUnblocked(t *testing.T) {
+	t.Parallel()
+
 	t.Run("nil node", func(t *testing.T) {
 		g := graphWith()
 		if got := triageRejectionReason(nil, g, g.Adjacency(), vouchedByMaintainer); got != "not-open" {

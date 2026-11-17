@@ -23,6 +23,8 @@ import (
 // This test builds that exact shape at small scale and pins both halves of the
 // contract: the modifications are recovered, the deletions are withheld.
 func TestRecoverUncommittedWork_RecoversEditsWhileWithholdingGeneratedDeletions(t *testing.T) {
+	t.Parallel()
+
 	const (
 		generatedFiles = 12 // N deletions — the regeneration that never happened
 		sourceFiles    = 4  // M modifications — the actual deliverable

@@ -3,6 +3,8 @@ package orchestrator
 import "testing"
 
 func TestHaltedRepos(t *testing.T) {
+	t.Parallel()
+
 	if got := HaltedRepos(nil); got == nil || len(got) != 0 {
 		t.Errorf("nil state: got %#v, want non-nil empty", got)
 	}
@@ -21,6 +23,8 @@ func TestHaltedRepos(t *testing.T) {
 }
 
 func TestArchitectureApprovalParked(t *testing.T) {
+	t.Parallel()
+
 	if got := ArchitectureApprovalParked(nil); got == nil || len(got) != 0 {
 		t.Errorf("nil state: got %#v, want non-nil empty", got)
 	}

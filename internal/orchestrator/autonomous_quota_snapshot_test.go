@@ -11,6 +11,8 @@ import (
 // expired deadline reads as inactive but is left in place for the scheduler's
 // own clearing path to handle.
 func TestQuotaCooldownSnapshot(t *testing.T) {
+	t.Parallel()
+
 	t.Run("active cooldown reports active with until+reason", func(t *testing.T) {
 		until := time.Now().Add(90 * time.Minute).UTC().Format(time.RFC3339)
 		as := &AutonomousScheduler{

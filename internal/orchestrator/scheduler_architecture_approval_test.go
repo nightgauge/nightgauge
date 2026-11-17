@@ -15,6 +15,8 @@ import (
 // ~$5.32 and 13.5 minutes per attempt, with the second attempt due to trip the
 // whole scheduler to safety_tripped.
 func TestClassifyTerminalKind_ArchitectureApprovalRequired(t *testing.T) {
+	t.Parallel()
+
 	// The real gate text, as emitted by verifyArchitectureApproval and observed
 	// in the a production autonomous run run record.
 	live := "ARCHITECTURE APPROVAL REQUIRED — issue #900 is a high-impact decision " +

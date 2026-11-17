@@ -30,6 +30,8 @@ func cycleGraph(edges ...depgraph.Edge) *depgraph.Graph {
 }
 
 func TestDetectDependencyCycles_ThreeIssueCycleNormalised(t *testing.T) {
+	t.Parallel()
+
 	a := nativeEdge("o/app", 1, "o/app", 2)
 	b := nativeEdge("o/app", 2, "o/app", 3)
 	c := nativeEdge("o/app", 3, "o/app", 1)
@@ -75,6 +77,8 @@ func TestDetectDependencyCycles_ThreeIssueCycleNormalised(t *testing.T) {
 }
 
 func TestDependencyCycle_OneCardNotReraisedClearedOnEdgeRemoval(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	store := attention.New(root)
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{},

@@ -15,6 +15,8 @@ import (
 // uses to build execution.StageOptions from StageRunParams, extracted so this
 // is assertable without spawning a process.
 func TestStageOptionsFromParamsCarriesCostBudget(t *testing.T) {
+	t.Parallel()
+
 	params := StageRunParams{
 		Stage:       state.StagePRCreate,
 		IssueNumber: 1749,
@@ -35,6 +37,8 @@ func TestStageOptionsFromParamsCarriesCostBudget(t *testing.T) {
 // what StageRunParams.CostBudget actually carries — the projection itself
 // must stay a straight pass-through.
 func TestStageOptionsFromParamsZeroCostBudgetStaysZero(t *testing.T) {
+	t.Parallel()
+
 	opts := stageOptionsFromParams(StageRunParams{Stage: state.StagePRCreate})
 
 	if opts.CostBudget != 0 {

@@ -40,6 +40,7 @@ const validFinding1255 = `{"schema_version":"1.0","issue_number":1255,"stage":"f
 	`"signal_type":"OUT_OF_SCOPE_BLOCKER","reason":"needs upstream","rationale":"r",` +
 	`"evidence":["blocked-on: x"],"run_id":"run-1","recorded_at":"2026-11-01T00:00:00Z"}`
 
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestPrioritize_BlockedFinding_SkipsLogsOnceAndReadmitsOnClear(t *testing.T) {
 	root := layouttest.Repo(t)
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}, workspaceRoot: root}
@@ -77,6 +78,8 @@ func TestPrioritize_BlockedFinding_SkipsLogsOnceAndReadmitsOnClear(t *testing.T)
 }
 
 func TestPrioritize_BlockedFinding_InvalidFilesDoNotBlock(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]string{
 		"malformed":      `{not json`,
 		"wrong-schema":   strings.Replace(validFinding1255, `"1.0"`, `"2.0"`, 1),
@@ -101,6 +104,8 @@ func TestPrioritize_BlockedFinding_InvalidFilesDoNotBlock(t *testing.T) {
 // forever; releasing the hold (what blocked.clearFinding now also does in the
 // daemon) re-admits it.
 func TestPrioritize_HeldBlockedIssue_EligibleAfterClear(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	as := &AutonomousScheduler{config: AutonomousConfig{}, workspaceRoot: root,
 		state: &AutonomousState{Failed: []FailedItem{{

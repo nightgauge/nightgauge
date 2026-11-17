@@ -60,6 +60,8 @@ func withRefineRoots(t *testing.T, ws, bundle string) {
 // "refinement skill not found" from an os.Stat guard, never consulting the
 // bundle root. The assertion is therefore not "it succeeded" (it cannot: there
 // is no adapter) but "it got PAST location and reached dispatch".
+//
+// Serial: swaps package var refineSkillRoots (via withRefineRoots).
 func TestRefineViaCLIResolvesTheSkillOutsideTheWorkspace(t *testing.T) {
 	ws := t.TempDir() // no skills/ directory, on purpose
 	bundle := refineSkillFixture(t)
@@ -90,6 +92,8 @@ func TestRefineViaCLIResolvesTheSkillOutsideTheWorkspace(t *testing.T) {
 // stdin and passes AllowedTools to the adapter, so a StageOptions with an empty
 // Prompt spawns a process that reads nothing and does nothing. That failure is
 // strictly harder to detect than "skill not found", because it exits 0.
+//
+// Serial: swaps package var refineSkillRoots (via withRefineRoots).
 func TestRefineStageOptionsCarryAPromptAndToolAllowlist(t *testing.T) {
 	ws := t.TempDir()
 	bundle := refineSkillFixture(t)
@@ -139,6 +143,8 @@ func TestRefineStageOptionsCarryAPromptAndToolAllowlist(t *testing.T) {
 // of the two production StageOptions builders that must carry a non-zero
 // CostBudget so the OpenCode watchdog / --max-budget-usd chain downstream
 // (execution.Manager.buildRunOptions) is ever actually reached.
+//
+// Serial: swaps package var refineSkillRoots (via withRefineRoots).
 func TestRefineStageOptionsSetsCostBudget(t *testing.T) {
 	ws := t.TempDir()
 	bundle := refineSkillFixture(t)
@@ -176,6 +182,8 @@ func containsStr(hay []string, needle string) bool {
 // [opus, opus] envelope and above a haiku max_model. It now resolves through
 // the per-stage chain: no mode pins issue-refine, so maximum's envelope raises
 // the Sonnet base, max_model caps it, and an explicit per-stage model wins.
+//
+// Serial: sets the environment.
 func TestRefineStageOptionsModelFollowsThePerformanceMode(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -220,6 +228,8 @@ func TestRefineStageOptionsModelFollowsThePerformanceMode(t *testing.T) {
 // TestRefineStageOptionsLogsTheResolvedSkillPath pins #2718's line through a real
 // render. The scheduler's own render logs through the same helper; the second
 // half keeps that call from being dropped.
+//
+// Serial: swaps package var refineSkillRoots (via withRefineRoots).
 func TestRefineStageOptionsLogsTheResolvedSkillPath(t *testing.T) {
 	ws := t.TempDir()
 	bundle := refineSkillFixture(t)

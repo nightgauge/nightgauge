@@ -27,6 +27,8 @@ import (
 // CandidateModel-aware ProviderFor call back to the adapter-only
 // ProviderForAdapter) must turn this red.
 func TestOpenCodeCapHopSkipsCandidateConfiguredForTheCappedProvider(t *testing.T) {
+	t.Parallel()
+
 	probed := []string{}
 	d := DecideCapRecovery(CapRecoveryInput{
 		Kind:          ClassifyTerminalKind(capRejectionMarker),
@@ -56,6 +58,8 @@ func TestOpenCodeCapHopSkipsCandidateConfiguredForTheCappedProvider(t *testing.T
 // second half: an opencode candidate configured with lmstudio/* (a local
 // provider, unaffected by an anthropic account cap) is eligible.
 func TestOpenCodeCapHopAcceptsCandidateConfiguredForADifferentProvider(t *testing.T) {
+	t.Parallel()
+
 	d := DecideCapRecovery(CapRecoveryInput{
 		Kind:          ClassifyTerminalKind(capRejectionMarker),
 		DispatchModel: "haiku",
@@ -80,6 +84,8 @@ func TestOpenCodeCapHopAcceptsCandidateConfiguredForADifferentProvider(t *testin
 // TestOpenCodeCapHopAcceptsAnOpenAIConfiguredCandidate covers AC 2's other
 // named example provider (openai/*, alongside lmstudio/*).
 func TestOpenCodeCapHopAcceptsAnOpenAIConfiguredCandidate(t *testing.T) {
+	t.Parallel()
+
 	d := DecideCapRecovery(CapRecoveryInput{
 		Kind:          ClassifyTerminalKind(capRejectionMarker),
 		DispatchModel: "haiku",
@@ -106,6 +112,8 @@ func TestOpenCodeCapHopAcceptsAnOpenAIConfiguredCandidate(t *testing.T) {
 // provider, so the candidate is never wrongly skipped for lack of a
 // resolvable model.
 func TestOpenCodeCapHopWithNoCandidateModelFallsBackToAdapterOnly(t *testing.T) {
+	t.Parallel()
+
 	d := DecideCapRecovery(CapRecoveryInput{
 		Kind:          ClassifyTerminalKind(capRejectionMarker),
 		DispatchModel: "haiku",
@@ -124,6 +132,8 @@ func TestOpenCodeCapHopWithNoCandidateModelFallsBackToAdapterOnly(t *testing.T) 
 // plain []string with no adapter allow-list — and capFallbackChain (the one
 // Go-side reader, #1545) reads it back unfiltered.
 func TestPipelineAdapterFallbackChainAcceptsOpenCode(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	dir := filepath.Join(root, ".nightgauge")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -150,6 +160,8 @@ func TestPipelineAdapterFallbackChainAcceptsOpenCode(t *testing.T) {
 // already pins for the adapter-agnostic case. This test supplies an
 // opencode-flavored failure detail so a future adapter-specific branch that
 // narrowed the path to claude/codex/grok would turn it red.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestOpenCodeAdapterAuthFailedTakesTheRetryableInfraPath(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
@@ -183,6 +195,8 @@ func TestOpenCodeAdapterAuthFailedTakesTheRetryableInfraPath(t *testing.T) {
 // events file carries, read back through the same opencodeplugin path #1624
 // already writes.
 func TestLatestOpenCodeSessionID(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	outputFile := filepath.Join(dir, "output.json")
 	runID := "01a0c032-1221-729e-b2b5-c47938777f61"
@@ -206,6 +220,8 @@ func TestLatestOpenCodeSessionID(t *testing.T) {
 // events file (every non-opencode dispatch, or a run that never installed
 // the plugin) answers "", never an error a caller must guard.
 func TestLatestOpenCodeSessionIDMissingFile(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	outputFile := filepath.Join(dir, "output.json")
 	if got := latestOpenCodeSessionID(outputFile, "01a0c032-1221-729e-b2b5-c47938777f61"); got != "" {

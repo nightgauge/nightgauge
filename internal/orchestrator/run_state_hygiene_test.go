@@ -13,6 +13,8 @@ import (
 
 // A run-state record another issue left behind is not adopted (#3081).
 func TestAdoptableRunStateID_RefusesAnotherIssuesRecord(t *testing.T) {
+	t.Parallel()
+
 	id, err := newRunID()
 	if err != nil {
 		t.Fatalf("newRunID: %v", err)
@@ -28,6 +30,8 @@ func TestAdoptableRunStateID_RefusesAnotherIssuesRecord(t *testing.T) {
 }
 
 func TestAdoptableRunStateID_RefusesNonIdentity(t *testing.T) {
+	t.Parallel()
+
 	rs := &runstate.RunState{RunID: "not-a-uuid", IssueNumber: 3}
 	if got, why := adoptableRunStateID(rs, 3); got != "" || why == "" {
 		t.Fatalf("non-identity run id adopted: got %q why %q", got, why)
@@ -39,6 +43,8 @@ func TestAdoptableRunStateID_RefusesNonIdentity(t *testing.T) {
 
 // A stale dev-N.json is gone, and kept as an archive, once feature-dev starts.
 func TestArchivePriorDevContext_MovesStaleHandoff(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	dev := filepath.Join(dir, "dev-42.json")
 	if err := os.WriteFile(dev, []byte(`{"issue_number":42}`), 0o644); err != nil {
@@ -68,6 +74,8 @@ func TestArchivePriorDevContext_MovesStaleHandoff(t *testing.T) {
 }
 
 func TestStartsPastFeatureDev(t *testing.T) {
+	t.Parallel()
+
 	stages := []state.PipelineStage{state.StageIssuePickup, state.StageFeaturePlanning,
 		state.StageFeatureDev, state.StageFeatureValidate}
 	cases := map[int]bool{0: false, 2: false, 3: true}

@@ -35,11 +35,14 @@ func newBlockedQuotaScheduler(t *testing.T) *AutonomousScheduler {
 // `~usage limit` extension exists for raw adapter stderr and cannot see where
 // text came from. That is why the guard sits at the consumer.
 func TestBlockedQuota_SignalLadderStillReadsQuoteAsQuota(t *testing.T) {
+	t.Parallel()
+
 	if got := terminalkind.SignalKind(issue119Detail); got != TerminalKindRateLimitQuotaExhausted {
 		t.Fatalf("SignalKind(#119 text) = %q, want %q — if this changed, revisit the consumer guard", got, TerminalKindRateLimitQuotaExhausted)
 	}
 }
 
+// Serial: swaps package var reconcileExecGh (via newBlockedQuotaScheduler).
 func TestBlockedQuota_BlockedOutcomeAppliesNoGlobalCooldown(t *testing.T) {
 	as := newBlockedQuotaScheduler(t)
 	addRunning(as, "acme/core", 119, "investigate codex")
@@ -64,6 +67,7 @@ func TestBlockedQuota_BlockedOutcomeAppliesNoGlobalCooldown(t *testing.T) {
 	}
 }
 
+// Serial: swaps package var reconcileExecGh (via newBlockedQuotaScheduler).
 func TestBlockedQuota_NotPipelineActionableQuotingUsageLimit(t *testing.T) {
 	as := newBlockedQuotaScheduler(t)
 	addRunning(as, "acme/core", 120, "legal review")
@@ -79,6 +83,7 @@ func TestBlockedQuota_NotPipelineActionableQuotingUsageLimit(t *testing.T) {
 	}
 }
 
+// Serial: swaps package var reconcileExecGh (via newBlockedQuotaScheduler).
 func TestBlockedQuota_RealQuotaMarkerStillSetsCooldown(t *testing.T) {
 	as := newBlockedQuotaScheduler(t)
 	addRunning(as, "acme/core", 121, "real quota")
@@ -96,6 +101,7 @@ func TestBlockedQuota_RealQuotaMarkerStillSetsCooldown(t *testing.T) {
 	}
 }
 
+// Serial: swaps package var reconcileExecGh (via newBlockedQuotaScheduler).
 func TestBlockedQuota_RawAdapterUsageLimitStillSetsCooldown(t *testing.T) {
 	as := newBlockedQuotaScheduler(t)
 	addRunning(as, "acme/core", 122, "raw adapter")
@@ -109,6 +115,8 @@ func TestBlockedQuota_RawAdapterUsageLimitStillSetsCooldown(t *testing.T) {
 }
 
 // #2711: a warning-only failure is a stall on this issue; dispatch keeps running.
+//
+// Serial: swaps package var reconcileExecGh (via newBlockedQuotaScheduler).
 func TestBlockedQuota_WarningOnlyLeavesDispatchRunning(t *testing.T) {
 	as := newBlockedQuotaScheduler(t)
 	addRunning(as, "acme/core", 123, "gate wait")
@@ -133,6 +141,7 @@ func TestBlockedQuota_WarningOnlyLeavesDispatchRunning(t *testing.T) {
 	}
 }
 
+// Serial: swaps package var reconcileExecGh (via newBlockedQuotaScheduler).
 func TestBlockedQuota_LimitedStatusStillSetsCooldown(t *testing.T) {
 	as := newBlockedQuotaScheduler(t)
 	addRunning(as, "acme/core", 124, "hard limit")
@@ -160,6 +169,8 @@ func failedKind(t *testing.T, as *AutonomousScheduler, repo string, number int) 
 // #3354: the feature-planning gate's empty-plan verdict is booked as
 // not_pipeline_actionable: no lifetime failure, no retry, and neither the
 // scheduler nor the repository pauses.
+//
+// Serial: swaps package var reconcileExecGh (via newBlockedQuotaScheduler).
 func TestEmptyPlanGateVerdictParksWithoutCharging(t *testing.T) {
 	as := newBlockedQuotaScheduler(t)
 	as.attention = attention.New(layouttest.Repo(t))

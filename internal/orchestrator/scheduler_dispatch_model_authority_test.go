@@ -63,6 +63,8 @@ func routedWorkspace(t *testing.T, body string) string {
 // vocabulary arrived via pickup_recommendation.dev_model, which reRouteContext
 // writes as rec.Model — also concrete. A mixed-vocabulary field is not a
 // cosmetic problem: every band-keyed consumer no-ops silently on the ids.
+//
+// Serial: sets the environment (via isolatedWorkspace).
 func TestResolveDispatchModelEmitsRegistryBandsOnly(t *testing.T) {
 	dir := isolatedWorkspace(t)
 
@@ -115,6 +117,8 @@ func TestResolveDispatchModelEmitsRegistryBandsOnly(t *testing.T) {
 // the router's ONE feature-dev decision at pickup. A run whose mode was set
 // after the context file was written — or whose stages are not feature-dev —
 // dispatched a mode-blind band, with no log line.
+//
+// Serial: sets the environment.
 func TestResolveDispatchModelAppliesThePerformanceModePerStage(t *testing.T) {
 	stages := []state.PipelineStage{
 		state.StageIssuePickup,
@@ -167,6 +171,8 @@ func TestResolveDispatchModelAppliesThePerformanceModePerStage(t *testing.T) {
 // starts from a single per-issue predicted tier and only ever RAISES it, so a
 // high-complexity issue routed to opus ran issue-pickup's JSON extraction and
 // pr-create's template fill on Opus.
+//
+// Serial: sets the environment (via isolatedWorkspace).
 func TestResolveDispatchModelKeepsPlumbingStagesOffTheRunTier(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	s := testScheduler(t)
@@ -199,6 +205,8 @@ func TestResolveDispatchModelKeepsPlumbingStagesOffTheRunTier(t *testing.T) {
 // #340 would otherwise have made inert on the autonomous path: pipeline
 // .stage_models, its per-stage env overrides, and model_routing.mode — which,
 // in `manual`, means "use explicit stage models" and had no effect at all.
+//
+// Serial: sets the environment.
 func TestResolveDispatchModelHonorsExplicitStageModels(t *testing.T) {
 	t.Run("manual mode uses the configured stage model", func(t *testing.T) {
 		dir := routedWorkspace(t, "model_routing:\n  mode: manual\npipeline:\n  stage_models:\n    feature-dev: haiku\n")

@@ -27,6 +27,7 @@ func testScheduler(t *testing.T) *Scheduler {
 	return &Scheduler{retryEngine: NewRetryEngine(RetryConfig{})}
 }
 
+// Serial: sets the environment (via isolatedWorkspace).
 func TestResolveDispatchModelUsesPredictedByDefault(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	s := testScheduler(t)
@@ -50,6 +51,8 @@ func TestResolveDispatchModelUsesPredictedByDefault(t *testing.T) {
 // model_not_in_registry, RecordStageModel drops the empty value, and
 // CalculateCost("") is $0. ~1 in 6 real context files on a working machine
 // carry no pickup_recommendation.dev_model, so "" is not a rare shape.
+//
+// Serial: sets the environment (via isolatedWorkspace).
 func TestResolveDispatchModelDefaultsAnUnroutedStage(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	s := testScheduler(t)
@@ -82,6 +85,8 @@ func TestResolveDispatchModelDefaultsAnUnroutedStage(t *testing.T) {
 // concrete id would resolve the floor and the downgrade while silently pinning
 // an escalated stage to its ceiling.
 func TestDefaultDispatchModelIsALadderBand(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 	next, ok := engine.NextModel(defaultDispatchModel)
 	if !ok || next != "opus" {
@@ -95,6 +100,7 @@ func TestDefaultDispatchModelIsALadderBand(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment (via isolatedWorkspace).
 func TestResolveDispatchModelPrefersEscalationOverPrediction(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	s := testScheduler(t)
@@ -114,6 +120,7 @@ func TestResolveDispatchModelPrefersEscalationOverPrediction(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment (via isolatedWorkspace).
 func TestResolveDispatchModelAppliesFloorThenDowngrade(t *testing.T) {
 	// The floor raises haiku→sonnet; the sticky downgrade then reroutes off a
 	// tier the API rejected. Order matters and is the reason the extraction
@@ -138,6 +145,7 @@ func TestResolveDispatchModelAppliesFloorThenDowngrade(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment (via isolatedWorkspace).
 func TestResolveDispatchModelFloorsHaikuOnPRMerge(t *testing.T) {
 	// #197: pr-merge's LLM path only runs on deterministic punts, which are the
 	// judgment-heavy cases. Haiku is never right there regardless of routing.
@@ -156,6 +164,7 @@ func TestResolveDispatchModelFloorsHaikuOnPRMerge(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment (via isolatedWorkspace).
 func TestResolveDispatchModelDisablesHaikuOnUnverifiedFeatureValidate(t *testing.T) {
 	// #3041: haiku shortcuts real build/test commands, so it only runs
 	// feature-validate when dev already proved the build. An empty workdir has
@@ -175,6 +184,8 @@ func TestResolveDispatchModelDisablesHaikuOnUnverifiedFeatureValidate(t *testing
 // the pre-#79 base-only form and every test above would still pass: they cover
 // the model's VALUE, not that it reaches the composer.
 func TestSchedulerRendersWithAModel(t *testing.T) {
+	t.Parallel()
+
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "scheduler.go", nil, 0)
 	if err != nil {
@@ -228,6 +239,8 @@ func TestSchedulerRendersWithAModel(t *testing.T) {
 // of #874 — the bug was that the ONE root could not match in any repository
 // but this one. An assertion that pins a count is not an assertion about
 // behaviour; the bundle arm is covered by TestDefaultRootsAppendsTheBundleTree.
+//
+// Serial: sets the environment.
 func TestDefaultRootsSearchesTheWorkspaceWithNoBundle(t *testing.T) {
 	t.Setenv(skillrender.SkillsRootEnv, "")
 	roots := skillrender.DefaultRoots("/repo")
@@ -278,6 +291,8 @@ func writeTestFile(t *testing.T, path, content string) {
 // search that checkout rather than the repository root, or the hosts apply one
 // order to different trees. Since #2813 the root it searches is a run-scoped
 // copy of that worktree's skills. A worktree that has gone falls back to the root.
+//
+// Serial: sets the environment.
 func TestStageSkillRootsSearchesTheRunsWorktree(t *testing.T) {
 	t.Setenv(skillrender.SkillsRootEnv, "")
 	root := t.TempDir()
@@ -313,6 +328,8 @@ func TestStageSkillRootsSearchesTheRunsWorktree(t *testing.T) {
 // TestStageSkillRootsIgnoresWorktreeEditsBetweenStages is the #2813
 // regression: a stage that rewrites a later stage's SKILL.md or a _shared file
 // in the worktree must not change what that later stage of the same run renders.
+//
+// Serial: sets the environment.
 func TestStageSkillRootsIgnoresWorktreeEditsBetweenStages(t *testing.T) {
 	t.Setenv(skillrender.SkillsRootEnv, "")
 	root := t.TempDir()
@@ -367,6 +384,8 @@ func TestStageSkillRootsIgnoresWorktreeEditsBetweenStages(t *testing.T) {
 // stage defaults sit ABOVE the prediction — so without the floor an operator
 // escalating a stalled pr-create watched the retry re-run it on haiku.
 func TestRaiseStageFloorsCoversThePlumbingStages(t *testing.T) {
+	t.Parallel()
+
 	raised := raiseStageFloors(nil, "opus")
 	for _, stage := range []state.PipelineStage{
 		state.StageIssuePickup, state.StageFeaturePlanning, state.StageFeatureDev,
@@ -402,6 +421,8 @@ func TestRaiseStageFloorsCoversThePlumbingStages(t *testing.T) {
 // TestResolveDispatchModelForcedTierBeatsTheLightweightDefault is the same
 // guarantee at the resolveDispatchModel level: the floor the escalation writes
 // has to survive the per-stage base routing.
+//
+// Serial: sets the environment (via isolatedWorkspace).
 func TestResolveDispatchModelForcedTierBeatsTheLightweightDefault(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	s := testScheduler(t)
@@ -415,6 +436,8 @@ func TestResolveDispatchModelForcedTierBeatsTheLightweightDefault(t *testing.T) 
 // explicit stage config > label; the pin replaces the pipeline-chosen base;
 // the cap binds escalation; the minimum_model floor and the mode ceiling still
 // bind the label.
+//
+// Serial: sets the environment.
 func TestResolveDispatchModel_LabelPin(t *testing.T) {
 	parse := func(labels ...string) routing.ModelLabelOverride {
 		o, _ := routing.ParseModelLabels(labels)
@@ -477,6 +500,8 @@ func TestResolveDispatchModel_LabelPin(t *testing.T) {
 
 // TestResolveDispatchModel_NoLabelIsIdentity: the zero override and an issue
 // with no model:* labels resolve every stage exactly as before (#8).
+//
+// Serial: sets the environment (via isolatedWorkspace).
 func TestResolveDispatchModel_NoLabelIsIdentity(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	unrelated, _ := routing.ParseModelLabels([]string{"type:bug", "size:M"})
@@ -497,6 +522,8 @@ func TestResolveDispatchModel_NoLabelIsIdentity(t *testing.T) {
 // TestResolveDispatchModel_CacheAffinity pins the #55 slot: a warm opus cache
 // keeps spike-materialize on opus over a cheaper sonnet base, but never over
 // an explicit selection, a label pin, an escalation or the mode ceiling.
+//
+// Serial: sets the environment.
 func TestResolveDispatchModel_CacheAffinity(t *testing.T) {
 	warmOpus := func() *affinityPrior {
 		return &affinityPrior{previousModel: "opus", previousProvider: "anthropic",
@@ -556,6 +583,8 @@ func TestResolveDispatchModel_CacheAffinity(t *testing.T) {
 // the checkout's one run-state record names another concurrently running issue,
 // yet this issue's stages still render a frozen copy, keyed by its own run ID.
 // With no run ID the workspace root is omitted rather than read live.
+//
+// Serial: sets the environment.
 func TestStageSkillRootsFreezesWithoutMatchingRunState(t *testing.T) {
 	t.Setenv(skillrender.SkillsRootEnv, "")
 	root := t.TempDir()
@@ -581,6 +610,8 @@ func TestStageSkillRootsFreezesWithoutMatchingRunState(t *testing.T) {
 
 // The snapshot copies the tree the run's stages execute in (runtime.WorktreeDir),
 // not the primary checkout, even with no run-state worktree_path (#2813 review).
+//
+// Serial: sets the environment.
 func TestStageSkillRootsSnapshotsTheRunWorktree(t *testing.T) {
 	t.Setenv(skillrender.SkillsRootEnv, "")
 	root := t.TempDir()

@@ -36,6 +36,8 @@ func buildTestGraph(nodes []*depgraph.Node, edges []depgraph.Edge) *depgraph.Gra
 }
 
 func TestPrioritize_CriticalPathTiebreakerWithinSamePriority(t *testing.T) {
+	t.Parallel()
+
 	// Two unblocked items at the same priority. The one on the critical path
 	// wins as a tiebreaker. (Issue #3396 inverted the prior "crit-path beats
 	// priority" rule; crit-path now only acts as a tiebreaker within the
@@ -74,6 +76,8 @@ func TestPrioritize_CriticalPathTiebreakerWithinSamePriority(t *testing.T) {
 // that IS on the critical path. Pre-#3396 this was reversed and led to GitLab
 // forge sub-issues (a long P1 chain) starving standalone P0 items in production.
 func TestPrioritize_PriorityDominatesCriticalPath(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		// Long P1 chain — every node on the critical path.
 		{Repo: "R", Number: 1, Title: "P1-chain-head", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "M", Weight: 3},
@@ -110,6 +114,8 @@ func TestPrioritize_PriorityDominatesCriticalPath(t *testing.T) {
 }
 
 func TestPrioritize_PriorityOrdering(t *testing.T) {
+	t.Parallel()
+
 	// All four nodes are unblocked (no edges) and same size; they differ only
 	// by priority. After #3396, priority dominates every other heuristic
 	// (critical path, focus, size, unblock count) so the result must be
@@ -144,6 +150,8 @@ func TestPrioritize_PriorityOrdering(t *testing.T) {
 }
 
 func TestPrioritize_SmallerSizeFirst(t *testing.T) {
+	t.Parallel()
+
 	// Same priority, different sizes. Smaller should come first.
 	// The XL node (#1) will be on the critical path (highest weight).
 	// Among the remaining two (same priority, not on crit path), smaller size wins.
@@ -181,6 +189,8 @@ func TestPrioritize_SmallerSizeFirst(t *testing.T) {
 }
 
 func TestPrioritize_HigherUnblockCountFirst(t *testing.T) {
+	t.Parallel()
+
 	// Same priority, same size. Node B unblocks 2 downstream, Node A unblocks 0.
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "A", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "M", Weight: 3},
@@ -216,6 +226,8 @@ func TestPrioritize_HigherUnblockCountFirst(t *testing.T) {
 }
 
 func TestPrioritize_SkipsBlockedItems(t *testing.T) {
+	t.Parallel()
+
 	// A depends on B (B is OPEN). A should not be a candidate.
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "A", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "XS", Weight: 1},
@@ -242,6 +254,8 @@ func TestPrioritize_SkipsBlockedItems(t *testing.T) {
 }
 
 func TestPrioritize_SkipsClosedItems(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "Closed", State: "CLOSED", BoardStatus: "Done", Priority: "P0", Size: "XS", Weight: 1},
 		{Repo: "R", Number: 2, Title: "Open", State: "OPEN", BoardStatus: "Ready", Priority: "P2", Size: "M", Weight: 3},
@@ -264,6 +278,8 @@ func TestPrioritize_SkipsClosedItems(t *testing.T) {
 }
 
 func TestPrioritize_SkipsEpics(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "Epic", State: "OPEN", BoardStatus: "Ready", Labels: []string{"type:epic"}, Priority: "P0", Size: "XL", Weight: 8},
 		{Repo: "R", Number: 2, Title: "Regular", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "M", Weight: 3},
@@ -292,6 +308,8 @@ func TestPrioritize_SkipsEpics(t *testing.T) {
 // The candidate loop must skip it with a distinct reason, mirroring the
 // type:epic exclusion above.
 func TestPrioritize_SkipsOwnerActionLabel(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "Human-only", State: "OPEN", BoardStatus: "Ready", Labels: []string{"owner-action"}, Priority: "P0", Size: "XS", Weight: 1},
 		{Repo: "R", Number: 2, Title: "Regular", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "M", Weight: 3},
@@ -317,6 +335,8 @@ func TestPrioritize_SkipsOwnerActionLabel(t *testing.T) {
 // matches regardless of label casing, mirroring the type:epic check's
 // strings.EqualFold behavior.
 func TestPrioritize_OwnerActionLabelCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "Human-only", State: "OPEN", BoardStatus: "Ready", Labels: []string{"Owner-Action"}, Priority: "P0", Size: "XS", Weight: 1},
 	}
@@ -341,6 +361,8 @@ func TestPrioritize_OwnerActionLabelCaseInsensitive(t *testing.T) {
 // (without the configured label) must NOT be excluded when it's not in the
 // configured list.
 func TestPrioritize_ExcludeLabelsConfigOverride(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "Needs a human", State: "OPEN", BoardStatus: "Ready", Labels: []string{"needs-human"}, Priority: "P0", Size: "XS", Weight: 1},
 		{Repo: "R", Number: 2, Title: "Owner action but not configured", State: "OPEN", BoardStatus: "Ready", Labels: []string{"owner-action"}, Priority: "P1", Size: "XS", Weight: 1},
@@ -363,6 +385,8 @@ func TestPrioritize_ExcludeLabelsConfigOverride(t *testing.T) {
 }
 
 func TestPrioritize_SkipsAlreadyRunning(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "Running", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "XS", Weight: 1},
 		{Repo: "R", Number: 2, Title: "Available", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "M", Weight: 3},
@@ -389,6 +413,8 @@ func TestPrioritize_SkipsAlreadyRunning(t *testing.T) {
 }
 
 func TestPrioritize_SkipsAlreadyCompleted(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "Done", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "XS", Weight: 1},
 		{Repo: "R", Number: 2, Title: "Todo", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "M", Weight: 3},
@@ -415,6 +441,8 @@ func TestPrioritize_SkipsAlreadyCompleted(t *testing.T) {
 }
 
 func TestPrioritize_BoardStatusGating(t *testing.T) {
+	t.Parallel()
+
 	// Only "Ready" items should be dispatched by default.
 	// "Backlog" items should be dispatched only when PickupBacklog is true.
 	// "In progress", "Done", and empty status should never be dispatched.
@@ -465,6 +493,8 @@ func TestPrioritize_BoardStatusGating(t *testing.T) {
 }
 
 func TestUnblockCascade(t *testing.T) {
+	t.Parallel()
+
 	// A depends on B. B completes → A should become a candidate.
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "A", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "M", Weight: 3},
@@ -492,6 +522,8 @@ func TestUnblockCascade(t *testing.T) {
 }
 
 func TestOnPipelineComplete_Success(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -529,6 +561,8 @@ func TestOnPipelineComplete_Success(t *testing.T) {
 }
 
 func TestOnPipelineComplete_Failure(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -561,6 +595,8 @@ func TestOnPipelineComplete_Failure(t *testing.T) {
 // conflictRestart=false. That must surface as a TRUE failure (issue in Failed,
 // no conflict-restart re-queue) — the branch is NOT blindly deleted/restarted.
 func TestOnPipelineComplete_ConflictRecoveryPath_PreservesBranch(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -592,6 +628,8 @@ func TestOnPipelineComplete_ConflictRecoveryPath_PreservesBranch(t *testing.T) {
 // without a circuit-breaker hit; once the bound is reached the issue falls
 // through to a true failure.
 func TestOnPipelineComplete_LegacyConflictRestart_BoundedThenTrueFailure(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -648,6 +686,8 @@ func TestOnPipelineComplete_LegacyConflictRestart_BoundedThenTrueFailure(t *test
 // conditions and burned a second run, then a third tripped the lifetime
 // cap (#3327 incident, $14.95 lost).
 func TestOnPipelineComplete_StreamIdleTimeout_LongBackoff(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -718,6 +758,8 @@ func TestOnPipelineComplete_StreamIdleTimeout_LongBackoff(t *testing.T) {
 // trivially tripped the lifetime cap on the second occurrence and burned
 // $20+ each time.
 func TestOnPipelineComplete_RateLimitQuotaExhausted_LongBackoff(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -778,6 +820,8 @@ func TestOnPipelineComplete_RateLimitQuotaExhausted_LongBackoff(t *testing.T) {
 // Pre-fix, two stall-kills on the same issue exhausted MaxLifetimeFailuresPerIssue
 // (=2) and required manual triage, halting the entire autonomous queue.
 func TestOnPipelineComplete_StallKill_NoLifetimeCap(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -851,6 +895,8 @@ func TestOnPipelineComplete_StallKill_NoLifetimeCap(t *testing.T) {
 // global cooldown, and must set a SHORT (~5m) per-issue backoff so only that
 // issue waits while the rest of the queue keeps flowing.
 func TestOnPipelineComplete_ApiOverloaded_TransientNoPause(t *testing.T) {
+	t.Parallel()
+
 	// SafetyRails MUST be wired. Constructing the scheduler without it leaves
 	// as.safetyRails nil, so every `if as.safetyRails != nil` block is skipped
 	// and this test cannot observe the rails at all — which is exactly how the
@@ -924,6 +970,8 @@ func TestOnPipelineComplete_ApiOverloaded_TransientNoPause(t *testing.T) {
 // TestApiOverloadedBackoffFor_EscalatesAndCaps verifies #194 AC1: backoff
 // doubles per consecutive attempt and is capped at apiOverloadedBackoffCap.
 func TestApiOverloadedBackoffFor_EscalatesAndCaps(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		attempts int
 		want     time.Duration
@@ -948,6 +996,8 @@ func TestApiOverloadedBackoffFor_EscalatesAndCaps(t *testing.T) {
 // increment the lifetime failure cap regardless of how many consecutive
 // attempts have occurred (#194 AC3).
 func TestOnPipelineComplete_ApiOverloaded_EscalatesAcrossConsecutiveFailures(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -997,6 +1047,8 @@ func TestOnPipelineComplete_ApiOverloaded_EscalatesAcrossConsecutiveFailures(t *
 // LifetimeIssueFailures — a sustained provider outage is never the issue's
 // fault, per ADR-001.
 func TestOnPipelineComplete_ApiOverloaded_CeilingStopsRedispatchWithoutLifetimeCap(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -1048,6 +1100,8 @@ func TestOnPipelineComplete_ApiOverloaded_CeilingStopsRedispatchWithoutLifetimeC
 // existing onPipelineComplete(success=true) deletion path rather than adding
 // new production code, per the PRD's assumption that AC4 is already satisfied.
 func TestOnPipelineComplete_ApiOverloaded_SuccessResetsBackoff(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -1086,6 +1140,8 @@ func TestOnPipelineComplete_ApiOverloaded_SuccessResetsBackoff(t *testing.T) {
 //
 // The breaker exists to stop a pipeline that keeps breaking on its own work. A
 // provider outage is weather, not evidence, and must be invisible to it.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestTransientFailuresNeverTripTheCircuitBreaker(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	// Every kind whose handler documents itself as environmental, transient,
@@ -1145,6 +1201,8 @@ func TestTransientFailuresNeverTripTheCircuitBreaker(t *testing.T) {
 // TestRealFailuresStillTripTheCircuitBreaker guards the other direction: the
 // exemption above must not disarm the breaker for genuine defects.
 func TestRealFailuresStillTripTheCircuitBreaker(t *testing.T) {
+	t.Parallel()
+
 	rails := NewSafetyRails(SafetyConfig{CircuitBreakerMax: 3})
 	for i := 0; i < 3; i++ {
 		rails.RecordCompletion(false, 0)
@@ -1161,6 +1219,8 @@ func TestRealFailuresStillTripTheCircuitBreaker(t *testing.T) {
 // not zero the counter, or real failures either side of one 529 would never add
 // up to a trip.
 func TestNonFaultOutcomeDoesNotLaunderAFailureCascade(t *testing.T) {
+	t.Parallel()
+
 	rails := NewSafetyRails(SafetyConfig{CircuitBreakerMax: 3})
 
 	rails.RecordCompletion(false, 0) // real failure 1
@@ -1187,6 +1247,8 @@ func TestNonFaultOutcomeDoesNotLaunderAFailureCascade(t *testing.T) {
 // lifetime cap, allowing autonomous to keep retrying until the underlying
 // condition resolves.
 func TestOnPipelineComplete_StallKill_RepeatedDoesNotBlockIssue(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -1227,6 +1289,8 @@ func TestOnPipelineComplete_StallKill_RepeatedDoesNotBlockIssue(t *testing.T) {
 // engages. Without this defense-in-depth a single bad regex in the TS
 // bridge silently disables the entire cooldown protection.
 func TestNotifyComplete_EmptyKindButQuotaMarkerInDetail_AppliesCooldown(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -1267,6 +1331,8 @@ func TestNotifyComplete_EmptyKindButQuotaMarkerInDetail_AppliesCooldown(t *testi
 // failure with empty kind and no marker text must still go through the
 // GENERIC branch (incrementing lifetime cap as expected).
 func TestNotifyComplete_EmptyKindAndNoMarker_FallsThroughToGeneric(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -1301,6 +1367,8 @@ func TestNotifyComplete_EmptyKindAndNoMarker_FallsThroughToGeneric(t *testing.T)
 // stall-kill) are explicitly excluded — they use their own backoff paths and
 // must not count toward the lifetime cap.
 func TestOnPipelineComplete_OtherFailures_StillIncrementLifetime(t *testing.T) {
+	t.Parallel()
+
 	cases := []string{
 		"",                          // unknown kind — typical path
 		TerminalKindBudgetExceeded,  // cost-cap kill
@@ -1340,6 +1408,8 @@ func TestOnPipelineComplete_OtherFailures_StillIncrementLifetime(t *testing.T) {
 // #3020 — verify the per-issue lifetime failure counter increments on each
 // failure, survives Resume(), and that Resume() does NOT reset it.
 func TestLifetimeIssueFailures_PersistAcrossResume(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -1381,6 +1451,8 @@ func TestLifetimeIssueFailures_PersistAcrossResume(t *testing.T) {
 // #3020 — verify a successful completion clears the lifetime counter so a
 // previously-flaky issue isn't permanently locked out after one bad run.
 func TestLifetimeIssueFailures_ClearedOnSuccess(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -1400,6 +1472,8 @@ func TestLifetimeIssueFailures_ClearedOnSuccess(t *testing.T) {
 
 // #3020 — ClearIssueFailures wipes a single issue or all when key is empty.
 func TestClearIssueFailures(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -1426,6 +1500,8 @@ func TestClearIssueFailures(t *testing.T) {
 }
 
 func TestBudgetExhaustion(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3, BudgetCeiling: 1000},
@@ -1446,6 +1522,8 @@ func TestBudgetExhaustion(t *testing.T) {
 }
 
 func TestAllComplete_Detection(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -1468,6 +1546,8 @@ func TestAllComplete_Detection(t *testing.T) {
 }
 
 func TestStatePersistence(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 
 	as := &AutonomousScheduler{
@@ -1535,6 +1615,8 @@ func TestStatePersistence(t *testing.T) {
 }
 
 func TestStateLoadOnConstruction(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 
 	// Write state file
@@ -1571,6 +1653,8 @@ func TestStateLoadOnConstruction(t *testing.T) {
 }
 
 func TestStateLoadPreservesTerminalStatus(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 	stateDir := layouttest.MkCheckoutSubdir(t, tmpDir, layout.CheckoutAutonomous)
 
@@ -1589,6 +1673,8 @@ func TestStateLoadPreservesTerminalStatus(t *testing.T) {
 }
 
 func TestDryRunMode(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 5, DryRun: true},
@@ -1619,6 +1705,8 @@ func TestDryRunMode(t *testing.T) {
 }
 
 func TestIsRunning(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -1640,6 +1728,8 @@ func TestIsRunning(t *testing.T) {
 }
 
 func TestPauseResume(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -1668,6 +1758,8 @@ func TestPauseResume(t *testing.T) {
 }
 
 func TestPauseIgnoredWhenNotRunning(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -1683,6 +1775,8 @@ func TestPauseIgnoredWhenNotRunning(t *testing.T) {
 }
 
 func TestResumeIgnoredWhenNotPaused(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -1699,6 +1793,8 @@ func TestResumeIgnoredWhenNotPaused(t *testing.T) {
 }
 
 func TestStatusSnapshot(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -1737,6 +1833,8 @@ func TestStatusSnapshot(t *testing.T) {
 }
 
 func TestAddTokensSpent(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -1756,6 +1854,8 @@ func TestAddTokensSpent(t *testing.T) {
 }
 
 func TestCandidatePriorityRank(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		input    string
 		expected int
@@ -1778,6 +1878,8 @@ func TestCandidatePriorityRank(t *testing.T) {
 }
 
 func TestStopSignal(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		running:           true,
@@ -1801,6 +1903,8 @@ func TestStopSignal(t *testing.T) {
 }
 
 func TestStopIgnoredWhenNotRunning(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		running:           false,
@@ -1830,6 +1934,8 @@ func TestStopIgnoredWhenNotRunning(t *testing.T) {
 // `default:` branch and the signal was silently dropped — the scheduler kept
 // looping even though the UI reported it stopped.
 func TestNewAutonomousScheduler_StopChBuffered(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), tmpDir)
 	as.trustGateOverride = allWritersGate()
@@ -1859,6 +1965,8 @@ func TestNewAutonomousScheduler_StopChBuffered(t *testing.T) {
 // built list had been dispatched — leaking autonomous.dispatch events to the
 // TypeScript side after the user clicked "Stop Autonomous".
 func TestStopSetsStopRequested(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		running:           true,
@@ -1895,6 +2003,8 @@ func TestStopSetsStopRequested(t *testing.T) {
 // bail-out logic, avoiding the full runCycle machinery (graph build, gh
 // client, etc.) which would require significant scaffolding.
 func TestRunCycleBailsOutOnStopRequested(t *testing.T) {
+	t.Parallel()
+
 	candidates := []CandidateItem{
 		{Repo: "R/r", Number: 1, Title: "a"},
 		{Repo: "R/r", Number: 2, Title: "b"},
@@ -1951,6 +2061,8 @@ func TestRunCycleBailsOutOnStopRequested(t *testing.T) {
 // already mid-loop dispatched #785 at 13:25:38 because the only status check
 // happened once at the top of the cycle. The per-candidate re-check fixes it.
 func TestRunCycleBailsOutOnStatusChangeMidCycle(t *testing.T) {
+	t.Parallel()
+
 	candidates := []CandidateItem{
 		{Repo: "R/r", Number: 1, Title: "a"},
 		{Repo: "R/r", Number: 2, Title: "b"},
@@ -1998,6 +2110,8 @@ func TestRunCycleBailsOutOnStatusChangeMidCycle(t *testing.T) {
 // call from any goroutine. A burst of calls collapses to at most one
 // pending rescan signal in the buffered channel.
 func TestTriggerRescan_NonBlockingAndIdempotent(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state:             &AutonomousState{Status: "running"},
@@ -2032,6 +2146,8 @@ func TestTriggerRescan_NonBlockingAndIdempotent(t *testing.T) {
 // observed no candidates AND no running pipelines. Any candidate or
 // running pipeline resets it to zero so cadence snaps back to base.
 func TestUpdateIdleCounterAfterCycle(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state:             &AutonomousState{},
@@ -2080,6 +2196,8 @@ func TestUpdateIdleCounterAfterCycle(t *testing.T) {
 // #3023 phase 1 — scanCadence floors a misconfigured ScanInterval to 30s
 // rather than spinning the CPU.
 func TestScanCadence_FloorsMisconfigured(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{config: AutonomousConfig{ScanInterval: 0}}
 	if d := as.scanCadence(); d != 30*time.Second {
 		t.Errorf("0 interval should floor to 30s, got %v", d)
@@ -2095,6 +2213,8 @@ func TestScanCadence_FloorsMisconfigured(t *testing.T) {
 }
 
 func TestRunAlreadyRunning(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		running:           true,
@@ -2113,6 +2233,8 @@ func TestRunAlreadyRunning(t *testing.T) {
 }
 
 func TestCrossRepoPrioritization(t *testing.T) {
+	t.Parallel()
+
 	// Items from different repos — verify cross-repo items are included AND
 	// that priority labels dominate the cross-repo dispatch order. Post-#3396
 	// the strict ordering is P0 → P1 → P2 regardless of which repo "owns" the
@@ -2154,6 +2276,8 @@ func TestCrossRepoPrioritization(t *testing.T) {
 }
 
 func TestFocusAlignmentScore_GeneralNoBoost(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{}
 	generalLens := &focus.Lens{Name: "general"}
 	item := &CandidateItem{
@@ -2167,6 +2291,8 @@ func TestFocusAlignmentScore_GeneralNoBoost(t *testing.T) {
 }
 
 func TestFocusAlignmentScore_NilLensNoBoost(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{}
 	item := &CandidateItem{Labels: []string{"test"}, Title: "Test something"}
 	score := as.focusAlignmentScore(item, nil)
@@ -2176,6 +2302,8 @@ func TestFocusAlignmentScore_NilLensNoBoost(t *testing.T) {
 }
 
 func TestFocusAlignmentScore_KeywordMatches(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{}
 	qualityLens := &focus.Lens{
 		Name:     "quality",
@@ -2232,6 +2360,8 @@ func TestFocusAlignmentScore_KeywordMatches(t *testing.T) {
 }
 
 func TestFocusAlignmentScore_CapAt20(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{}
 	lens := &focus.Lens{
 		Name:     "quality",
@@ -2249,6 +2379,8 @@ func TestFocusAlignmentScore_CapAt20(t *testing.T) {
 }
 
 func TestPrioritize_PriorityDominatesFocusBoost(t *testing.T) {
+	t.Parallel()
+
 	// Item A: P1, focus-aligned (quality lens)
 	// Item B: P0, not focus-aligned
 	//
@@ -2301,6 +2433,8 @@ func TestPrioritize_PriorityDominatesFocusBoost(t *testing.T) {
 }
 
 func TestPrioritize_FocusTiebreaksWithinSamePriority(t *testing.T) {
+	t.Parallel()
+
 	// Two P1 items, same size; one is focus-aligned, one isn't. Within the
 	// same priority level, focus alignment IS a tiebreaker (after critical
 	// path).
@@ -2347,6 +2481,8 @@ func TestPrioritize_FocusTiebreaksWithinSamePriority(t *testing.T) {
 }
 
 func TestPrioritize_FocusGeneralNoEffect(t *testing.T) {
+	t.Parallel()
+
 	// With general focus, ordering should be by priority only (P0 before P1).
 	tmpDir := t.TempDir()
 
@@ -2397,6 +2533,8 @@ func TestPrioritize_FocusGeneralNoEffect(t *testing.T) {
 }
 
 func TestPrioritize_CriticalPathStillBeatsFocus(t *testing.T) {
+	t.Parallel()
+
 	// Critical path should still win over focus-aligned items.
 	tmpDir := t.TempDir()
 
@@ -2441,6 +2579,8 @@ func TestPrioritize_CriticalPathStillBeatsFocus(t *testing.T) {
 }
 
 func TestPrioritize_FocusMissingYaml(t *testing.T) {
+	t.Parallel()
+
 	// When focus.yaml doesn't exist, prioritization should work normally
 	// (no focus boost, backward compatible).
 	tmpDir := t.TempDir()
@@ -2479,6 +2619,8 @@ func TestPrioritize_FocusMissingYaml(t *testing.T) {
 }
 
 func TestEpicAutoCloseScenario(t *testing.T) {
+	t.Parallel()
+
 	// When all sub-issues of an epic are CLOSED, the epic should not appear
 	// as a candidate because it has the type:epic label.
 	nodes := []*depgraph.Node{
@@ -2502,6 +2644,8 @@ func TestEpicAutoCloseScenario(t *testing.T) {
 }
 
 func TestFilterRepos_PrunesPersistedState(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 
 	repos := []depgraph.RepoConfig{
@@ -2569,6 +2713,8 @@ func TestFilterRepos_PrunesPersistedState(t *testing.T) {
 }
 
 func TestFilterRepos_NoMatchKeepsAllState(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 
 	repos := []depgraph.RepoConfig{
@@ -2593,6 +2739,8 @@ func TestFilterRepos_NoMatchKeepsAllState(t *testing.T) {
 }
 
 func TestFilterRepos_CaseInsensitive(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 
 	repos := []depgraph.RepoConfig{
@@ -2630,6 +2778,8 @@ func TestFilterRepos_CaseInsensitive(t *testing.T) {
 // rebuilding the scheduler. After the allRepos refactor a re-filter must
 // restore the pristine entry.
 func TestFilterRepos_Widening(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 
 	repos := []depgraph.RepoConfig{
@@ -2667,6 +2817,8 @@ func TestFilterRepos_Widening(t *testing.T) {
 // --- Refinement tests ---
 
 func TestRefinementConfig_Defaults(t *testing.T) {
+	t.Parallel()
+
 	cfg := DefaultAutonomousConfig()
 	if !cfg.RefinementEnabled {
 		t.Error("expected RefinementEnabled default=true")
@@ -2683,6 +2835,8 @@ func TestRefinementConfig_Defaults(t *testing.T) {
 }
 
 func TestRefinementConfig_SemaphoreClamp(t *testing.T) {
+	t.Parallel()
+
 	// MaxConcurrent > 3 should be clamped to 3
 	cfg := DefaultAutonomousConfig()
 	cfg.RefinementMaxConcurrent = 10
@@ -2695,6 +2849,8 @@ func TestRefinementConfig_SemaphoreClamp(t *testing.T) {
 }
 
 func TestRefinementConfig_SemaphoreMinimum(t *testing.T) {
+	t.Parallel()
+
 	// MaxConcurrent = 0 should default to 1
 	cfg := DefaultAutonomousConfig()
 	cfg.RefinementMaxConcurrent = 0
@@ -2707,6 +2863,8 @@ func TestRefinementConfig_SemaphoreMinimum(t *testing.T) {
 }
 
 func TestRefinementCycleSkipsAlreadyRunning(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
@@ -2738,6 +2896,8 @@ func TestRefinementCycleSkipsAlreadyRunning(t *testing.T) {
 }
 
 func TestRefinementCycleCooldown(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
@@ -2765,6 +2925,8 @@ func TestRefinementCycleCooldown(t *testing.T) {
 }
 
 func TestRefinementCycleDisabled(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
@@ -2782,6 +2944,8 @@ func TestRefinementCycleDisabled(t *testing.T) {
 }
 
 func TestRefinementIsViable_NoDispatcherNoAdapter_False(t *testing.T) {
+	t.Parallel()
+
 	// Reproduces the VSCode IPC mode state that caused issue #2837:
 	// Scheduler constructed with nil adapter AND no IPC refinement dispatcher
 	// registered. refineViaCLI would previously nil-pointer panic in this case;
@@ -2799,6 +2963,8 @@ func TestRefinementIsViable_NoDispatcherNoAdapter_False(t *testing.T) {
 }
 
 func TestRefinementIsViable_DispatcherRegistered_True(t *testing.T) {
+	t.Parallel()
+
 	sched := NewScheduler(nil, SchedulerConfig{
 		WorkspaceRoot: t.TempDir(),
 		Adapter:       nil,
@@ -2813,6 +2979,8 @@ func TestRefinementIsViable_DispatcherRegistered_True(t *testing.T) {
 }
 
 func TestRefinementCycle_SkipsWhenNotViable(t *testing.T) {
+	t.Parallel()
+
 	// End-to-end guard: an unviable cycle must not even reach candidate
 	// discovery. Previously this path panicked inside refineViaCLI and
 	// crashed the backend. Calling runRefinementCycle with a nil ghClient
@@ -2833,6 +3001,8 @@ func TestRefinementCycle_SkipsWhenNotViable(t *testing.T) {
 }
 
 func TestRefinementCycleRateLimit(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		RefinementRateLimitPerHour: 2,
 	})
@@ -2861,6 +3031,8 @@ func TestRefinementCycleRateLimit(t *testing.T) {
 }
 
 func TestRefineIssueSuccess_StateTransitions(t *testing.T) {
+	t.Parallel()
+
 	// Verify state transitions: Running → Completed
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
@@ -2906,6 +3078,8 @@ func TestRefineIssueSuccess_StateTransitions(t *testing.T) {
 }
 
 func TestRefineIssueFailure_StateTransitions(t *testing.T) {
+	t.Parallel()
+
 	// Verify state transitions: Running → Failed
 	// Also verify dispatch circuit breaker is NOT incremented
 	sr := NewSafetyRails(SafetyConfig{
@@ -2966,6 +3140,8 @@ func TestRefineIssueFailure_StateTransitions(t *testing.T) {
 }
 
 func TestRefinementState_Persistence(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 
 	as := &AutonomousScheduler{
@@ -3014,6 +3190,8 @@ func TestRefinementState_Persistence(t *testing.T) {
 }
 
 func TestRefinementState_PrunedByFilterRepos(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		repos: []depgraph.RepoConfig{
@@ -3060,6 +3238,8 @@ func TestRefinementState_PrunedByFilterRepos(t *testing.T) {
 }
 
 func TestRemoveRefinementItem(t *testing.T) {
+	t.Parallel()
+
 	items := []RefinementItem{
 		{Repo: "A", Number: 1},
 		{Repo: "B", Number: 2},
@@ -3091,6 +3271,8 @@ func (as *AutonomousScheduler) isRefinementRunning(repo string, number int) bool
 }
 
 func TestRecoverOrphanedRunning_ClearsState(t *testing.T) {
+	t.Parallel()
+
 	// When the session crashes, state.Running has items from the previous session.
 	// On startup, recoverOrphanedRunning should clear them all from state.Running
 	// and persist the updated state.
@@ -3138,6 +3320,8 @@ func TestRecoverOrphanedRunning_ClearsState(t *testing.T) {
 }
 
 func TestRecoverOrphanedRunning_CompletesDespiteCancelledCaller(t *testing.T) {
+	t.Parallel()
+
 	// #3976: startup recovery runs its board writes on a context detached from
 	// the caller's deadline (context.WithoutCancel + boardRecoveryTimeout) so a
 	// rate-limit dip waits out the reset instead of dying at a short caller
@@ -3186,6 +3370,8 @@ func TestRecoverOrphanedRunning_CompletesDespiteCancelledCaller(t *testing.T) {
 }
 
 func TestRecoverOrphanedRunning_NoOpWhenEmpty(t *testing.T) {
+	t.Parallel()
+
 	// When there are no orphaned items, recovery should be a no-op.
 	tmpDir := t.TempDir()
 
@@ -3213,6 +3399,8 @@ func TestRecoverOrphanedRunning_NoOpWhenEmpty(t *testing.T) {
 }
 
 func TestRecordFailureLocked_DedupsByIssue(t *testing.T) {
+	t.Parallel()
+
 	// Six failures of the same issue should collapse into a single FailedItem
 	// with AttemptCount=6, FirstFailedAt from attempt 1, FailedAt/Reason from
 	// the last attempt. Before this change each failure produced a new row.
@@ -3243,6 +3431,8 @@ func TestRecordFailureLocked_DedupsByIssue(t *testing.T) {
 }
 
 func TestRecordFailureLocked_DistinctIssuesStaySeparate(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{state: &AutonomousState{}}
 	as.recordFailureLocked("r", 1, "A", "2026-04-10T01:00:00Z", "x", "")
 	as.recordFailureLocked("r", 2, "B", "2026-04-10T01:00:01Z", "y", "")
@@ -3260,6 +3450,8 @@ func TestRecordFailureLocked_DistinctIssuesStaySeparate(t *testing.T) {
 }
 
 func TestDedupeFailedItems_MigratesLegacyDuplicates(t *testing.T) {
+	t.Parallel()
+
 	// Simulate a state file written before the dedup logic existed: six
 	// separate rows for the same issue, no AttemptCount field.
 	legacy := []FailedItem{
@@ -3289,6 +3481,8 @@ func TestDedupeFailedItems_MigratesLegacyDuplicates(t *testing.T) {
 }
 
 func TestDedupeFailedItems_Idempotent(t *testing.T) {
+	t.Parallel()
+
 	// Running dedup on already-deduplicated input must not double-count.
 	input := []FailedItem{
 		{Repo: "r", Number: 1, FailedAt: "t2", FirstFailedAt: "t1", AttemptCount: 3},
@@ -3315,6 +3509,8 @@ func TestDedupeFailedItems_Idempotent(t *testing.T) {
 // The field is also `omitempty`, so an emptied map serialises to nothing at
 // all — the loss would leave no trace in state.json to notice later. (#150)
 func TestLifetimeIssueFailures_SurvivesPersistLoadRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	statePath := autonomousStatePathT(t, tmpDir)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
@@ -3370,6 +3566,8 @@ func TestLifetimeIssueFailures_SurvivesPersistLoadRoundTrip(t *testing.T) {
 // circuit breaker (SafetyRails.ConsecutiveFailures) is a separate breaker and
 // must be reported as still-tripped rather than silently cleared. #150.
 func TestClearIssueFailures_ReportsCircuitBreakerTrippedIndependently(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -3402,6 +3600,8 @@ func TestClearIssueFailures_ReportsCircuitBreakerTrippedIndependently(t *testing
 
 // Manual triage is the documented escape hatch, and it must be the only one.
 func TestLifetimeIssueFailures_ClearedOnlyByExplicitTriage(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	const key = "acme/web#315"
 
@@ -3431,6 +3631,8 @@ func TestLifetimeIssueFailures_ClearedOnlyByExplicitTriage(t *testing.T) {
 }
 
 func TestLoadState_PreservesRunningForRecovery(t *testing.T) {
+	t.Parallel()
+
 	// Previously loadState nil'd Running, so when the serve-startup goroutine
 	// called RecoverOrphanedRunning there was nothing left to reset. The
 	// board kept items stuck "In progress" after every crash. loadState now
@@ -3477,6 +3679,8 @@ func TestLoadState_PreservesRunningForRecovery(t *testing.T) {
 // scan cycle left state.json claiming "running" forever. Assert against the
 // on-disk file, not as.state, since the whole bug was an in-memory-only fix.
 func TestLoadState_PersistsRunningToStoppedReconcileToDisk(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	statePath := autonomousStatePathT(t, tmpDir)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
@@ -3512,6 +3716,8 @@ func TestLoadState_PersistsRunningToStoppedReconcileToDisk(t *testing.T) {
 
 // Same reconcile-to-disk regression, but from a "paused" prior status.
 func TestLoadState_PersistsPausedToStoppedReconcileToDisk(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	statePath := autonomousStatePathT(t, tmpDir)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
@@ -3548,6 +3754,8 @@ func TestLoadState_PersistsPausedToStoppedReconcileToDisk(t *testing.T) {
 // A clean stop (already "stopped" on disk) must never be mislabeled as a
 // restart recovery.
 func TestLoadState_CleanStopDoesNotSetRestartedFromRunning(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	statePath := autonomousStatePathT(t, tmpDir)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
@@ -3577,6 +3785,8 @@ func TestLoadState_CleanStopDoesNotSetRestartedFromRunning(t *testing.T) {
 // so a misbehaving dependency (nil GitHub client, etc.) cannot hang the
 // suite — only the synchronous state assignments at the top of Run() are
 // under test here.
+//
+// Serial: fails on a wall-clock deadline of 5s, which parallel load can exceed (#2950).
 func TestRun_SetsPIDAndClearsRestartedFromRunning(t *testing.T) {
 	tmpDir := t.TempDir()
 	as := &AutonomousScheduler{
@@ -3612,6 +3822,8 @@ func TestRun_SetsPIDAndClearsRestartedFromRunning(t *testing.T) {
 }
 
 func TestRecoverOrphanedRunning_ExportedWrapper(t *testing.T) {
+	t.Parallel()
+
 	// Covers the public entry point used by cmd/nightgauge serveCmd to
 	// trigger startup orphan recovery without requiring the user to click
 	// "Start Autonomous". Must delegate to the unexported implementation.
@@ -3652,6 +3864,8 @@ func (as *AutonomousScheduler) isInRefinementCooldown(key string) bool {
 }
 
 func TestReconcileStateAgainstGraph_PrunesClosedFailures(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
@@ -3676,6 +3890,8 @@ func TestReconcileStateAgainstGraph_PrunesClosedFailures(t *testing.T) {
 }
 
 func TestReconcileStateAgainstGraph_PrunesMissingNodeFailures(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
@@ -3696,6 +3912,8 @@ func TestReconcileStateAgainstGraph_PrunesMissingNodeFailures(t *testing.T) {
 }
 
 func TestReconcileStateAgainstGraph_ReadmitsOpenFailures(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
@@ -3726,6 +3944,8 @@ func TestReconcileStateAgainstGraph_ReadmitsOpenFailures(t *testing.T) {
 // permanent — the trip stayed forever and could only be cleared by an operator
 // who knew the exact stale key to pass to ClearIssueFailures.
 func TestReconcileStateAgainstGraph_PrunesStaleLifetimeAndQuarantineKeys(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
@@ -3767,6 +3987,8 @@ func TestReconcileStateAgainstGraph_PrunesStaleLifetimeAndQuarantineKeys(t *test
 // together or an operator who clears the counter still finds the issue
 // silently skipped by the dispatch loop.
 func TestClearIssueFailures_AlsoClearsQuarantine(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
@@ -3798,6 +4020,8 @@ func TestClearIssueFailures_AlsoClearsQuarantine(t *testing.T) {
 }
 
 func TestSequentialModeSkipsSecondDispatch(t *testing.T) {
+	t.Parallel()
+
 	// Per-repo cap defaults to 1 (sequential), so a second issue from the same
 	// repo is blocked while one is running — no explicit config needed.
 	as := &AutonomousScheduler{
@@ -3822,6 +4046,8 @@ func TestSequentialModeSkipsSecondDispatch(t *testing.T) {
 }
 
 func TestPerRepoOverrideMakesRepoNonSequential(t *testing.T) {
+	t.Parallel()
+
 	// An explicit override > 1 makes a repo non-sequential while other repos
 	// keep the sequential default.
 	as := &AutonomousScheduler{
@@ -3846,6 +4072,8 @@ func TestPerRepoOverrideMakesRepoNonSequential(t *testing.T) {
 }
 
 func TestPerRepoOverrideResolvesBothForms(t *testing.T) {
+	t.Parallel()
+
 	// A repository_overrides entry should resolve via short and fully-qualified
 	// names.
 	as := &AutonomousScheduler{
@@ -3870,6 +4098,8 @@ func TestPerRepoOverrideResolvesBothForms(t *testing.T) {
 // machine-tier YAML file and wires it the way buildAutonomousConfig does, so
 // the scheduler's cap is proven from the file, not a Go literal (#2510).
 func TestMaxConcurrentForRepoFromMachineYAML(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	machine := filepath.Join(dir, "machine.yaml")
 	body := "concurrency:\n  workspace_max: 3\n  per_repo_max: 1\n" +
@@ -3911,6 +4141,8 @@ func TestMaxConcurrentForRepoFromMachineYAML(t *testing.T) {
 }
 
 func TestDefaultIsSequential(t *testing.T) {
+	t.Parallel()
+
 	// With no concurrency config, every repo defaults to per-repo cap 1.
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
@@ -3930,6 +4162,8 @@ func TestDefaultIsSequential(t *testing.T) {
 // ── Per-repo concurrency cap tests (#3781) ───────────────────────────────────
 
 func TestMaxConcurrentForRepo_OverrideWins(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
@@ -3946,6 +4180,8 @@ func TestMaxConcurrentForRepo_OverrideWins(t *testing.T) {
 }
 
 func TestMaxConcurrentForRepo_PerRepoMaxDefault(t *testing.T) {
+	t.Parallel()
+
 	// No override → PerRepoMax (explicit), else 1.
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
@@ -3958,6 +4194,8 @@ func TestMaxConcurrentForRepo_PerRepoMaxDefault(t *testing.T) {
 }
 
 func TestMaxConcurrentForRepo_NoConfigDefaultsToOne(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
 	if got := as.maxConcurrentForRepo("R"); got != 1 {
 		t.Errorf("maxConcurrentForRepo('R') = %d, want 1 (default serialize)", got)
@@ -3965,6 +4203,8 @@ func TestMaxConcurrentForRepo_NoConfigDefaultsToOne(t *testing.T) {
 }
 
 func TestMaxConcurrentForRepo_ShortNameFallback(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
@@ -3978,6 +4218,8 @@ func TestMaxConcurrentForRepo_ShortNameFallback(t *testing.T) {
 }
 
 func TestRunningCountFrom(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{},
@@ -4008,6 +4250,8 @@ func TestRunningCountFrom(t *testing.T) {
 }
 
 func TestPerRepoCapBlocksSecondDispatch(t *testing.T) {
+	t.Parallel()
+
 	// Repo A has override cap=2 — first two dispatches OK, third blocked.
 	// Repo B has default cap=1 (per_repo_max) — first OK, second blocked.
 	// Repo C unconfigured — also default cap=1.
@@ -4043,6 +4287,8 @@ func TestPerRepoCapBlocksSecondDispatch(t *testing.T) {
 // stopRefinementCh so the refinement goroutine exits. Before #3029 both loops
 // shared a single stopCh (cap=1); whichever goroutine won the race drained the
 // buffer and the other loop never exited.
+//
+// Serial: fails on a wall-clock deadline of 1s, which parallel load can exceed (#2950).
 func TestStopSignalsRefinementGoroutine(t *testing.T) {
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
@@ -4083,6 +4329,8 @@ func TestStopSignalsRefinementGoroutine(t *testing.T) {
 
 // TestStopSignalsMainLoopAndRefinement verifies that under concurrent load
 // both the dispatch loop and the refinement loop exit when Stop() is called.
+//
+// Serial: fails on a wall-clock deadline of 2s, which parallel load can exceed (#2950).
 func TestStopSignalsMainLoopAndRefinement(t *testing.T) {
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
@@ -4166,6 +4414,8 @@ func TestStopSignalsMainLoopAndRefinement(t *testing.T) {
 // TestWriteCrashExitEvent verifies that a crash exit record is written to
 // autonomous-exits.jsonl with the expected fields.
 func TestWriteCrashExitEvent(t *testing.T) {
+	t.Parallel()
+
 	dir := layouttest.Repo(t)
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
@@ -4205,6 +4455,8 @@ func TestWriteCrashExitEvent(t *testing.T) {
 // TestWriteCrashExitEvent_EmptyWorkspaceRoot verifies that writeCrashExitEvent
 // is a no-op when workspaceRoot is unset (avoids writing to unexpected locations).
 func TestWriteCrashExitEvent_EmptyWorkspaceRoot(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{}
 	// Should not panic or write anywhere.
 	as.writeCrashExitEvent("panic msg", "stack")
@@ -4213,6 +4465,8 @@ func TestWriteCrashExitEvent_EmptyWorkspaceRoot(t *testing.T) {
 // TestWriteCrashExitEvent_StackTruncation verifies that a stack trace larger
 // than 4KB is accepted without error (actual truncation happens in Run()).
 func TestWriteCrashExitEvent_StackTruncation(t *testing.T) {
+	t.Parallel()
+
 	dir := layouttest.Repo(t)
 	as := &AutonomousScheduler{workspaceRoot: dir}
 
@@ -4237,6 +4491,8 @@ func TestWriteCrashExitEvent_StackTruncation(t *testing.T) {
 // TestRunPanicRecovery verifies that writeCrashExitEvent produces a parseable
 // crash record matching what the Run() panic recovery defer would write.
 func TestRunPanicRecovery(t *testing.T) {
+	t.Parallel()
+
 	dir := layouttest.Repo(t)
 	as := &AutonomousScheduler{workspaceRoot: dir}
 
@@ -4263,6 +4519,7 @@ func TestRunPanicRecovery(t *testing.T) {
 // matches Ready/Backlog. Mirrors the cross-session recoverOrphanedRunning
 // behavior for the in-session case.
 
+// Serial: fails on a wall-clock deadline of 2s, which parallel load can exceed (#2950).
 func TestRevertFailedIssueStatus_NoProjectConfigIsNoOp(t *testing.T) {
 	// With no repo configured for the failed item, revert should log + return
 	// without panicking. Defensive — workspaces with mid-incident config
@@ -4289,6 +4546,8 @@ func TestRevertFailedIssueStatus_NoProjectConfigIsNoOp(t *testing.T) {
 }
 
 func TestOnPipelineComplete_Failure_TriggersStatusRevertGoroutine(t *testing.T) {
+	t.Parallel()
+
 	// Ensures onPipelineComplete fires the revertFailedIssueStatus goroutine
 	// on success=false. Verifies via behavior: the goroutine runs even when
 	// no repos are configured (it just logs and returns), so the test is
@@ -4320,6 +4579,8 @@ func TestOnPipelineComplete_Failure_TriggersStatusRevertGoroutine(t *testing.T) 
 }
 
 func TestOnPipelineComplete_Success_DoesNotTriggerRevert(t *testing.T) {
+	t.Parallel()
+
 	// Success path must NOT call revertFailedIssueStatus — the cascade promote
 	// path handles downstream. Asserted by checking that the success branch
 	// doesn't accidentally schedule a revert (verified indirectly: the
@@ -4350,6 +4611,8 @@ func TestOnPipelineComplete_Success_DoesNotTriggerRevert(t *testing.T) {
 // --- #3431: global Anthropic-quota cooldown -------------------------------
 
 func TestParseQuotaResetsAt(t *testing.T) {
+	t.Parallel()
+
 	now := time.Unix(1778420000, 0)
 	cases := []struct {
 		name     string
@@ -4391,6 +4654,8 @@ func TestParseQuotaResetsAt(t *testing.T) {
 }
 
 func TestComputeQuotaCooldownUntil(t *testing.T) {
+	t.Parallel()
+
 	now := time.Unix(1778420000, 0)
 
 	t.Run("with resetsAt hint widens to reset+grace", func(t *testing.T) {
@@ -4430,6 +4695,8 @@ func TestComputeQuotaCooldownUntil(t *testing.T) {
 }
 
 func TestApplyQuotaCooldownLocked_NeverShortens(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{state: &AutonomousState{Status: "running"}}
 	farFuture := time.Now().Add(4 * time.Hour).UTC().Format(time.RFC3339)
 	as.state.QuotaCooldownUntil = farFuture
@@ -4442,6 +4709,8 @@ func TestApplyQuotaCooldownLocked_NeverShortens(t *testing.T) {
 }
 
 func TestQuotaCooldownActiveLocked(t *testing.T) {
+	t.Parallel()
+
 	t.Run("active when in future", func(t *testing.T) {
 		as := &AutonomousScheduler{state: &AutonomousState{
 			Status:             "running",
@@ -4498,6 +4767,8 @@ func TestQuotaCooldownActiveLocked(t *testing.T) {
 }
 
 func TestOnPipelineComplete_QuotaExhausted_SetsGlobalCooldown(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -4540,6 +4811,8 @@ func TestOnPipelineComplete_QuotaExhausted_SetsGlobalCooldown(t *testing.T) {
 }
 
 func TestOnPipelineComplete_QuotaExhausted_NoHintUsesFloor(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -4569,6 +4842,8 @@ func TestOnPipelineComplete_QuotaExhausted_NoHintUsesFloor(t *testing.T) {
 }
 
 func TestRunCycle_SuspendsDispatchDuringQuotaCooldown(t *testing.T) {
+	t.Parallel()
+
 	dispatched := 0
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
@@ -4601,6 +4876,8 @@ func TestRunCycle_SuspendsDispatchDuringQuotaCooldown(t *testing.T) {
 }
 
 func TestRunCycle_ResumesAfterQuotaCooldownExpires(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -4632,6 +4909,8 @@ func TestRunCycle_ResumesAfterQuotaCooldownExpires(t *testing.T) {
 // expected behaviour for the new ClearQuotaCooldown method that the
 // `autonomous.clearQuotaCooldown` IPC handler wraps.
 func TestClearQuotaCooldown_ClearsAndPersists(t *testing.T) {
+	t.Parallel()
+
 	t.Run("clears in-memory + disk when active", func(t *testing.T) {
 		tmp := layouttest.Repo(t)
 		until := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)
@@ -4704,6 +4983,8 @@ func TestClearQuotaCooldown_ClearsAndPersists(t *testing.T) {
 // stderr but the user sees nothing — exactly the invisibility bug #3446
 // is about.
 func TestRunCycle_CooldownEmitsRejectionReason(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -4737,6 +5018,8 @@ func TestRunCycle_CooldownEmitsRejectionReason(t *testing.T) {
 // TestRunCycle_GraphCacheHit verifies that BuildGraph is called exactly once
 // across multiple runCycle calls within the TTL window.
 func TestRunCycle_GraphCacheHit(t *testing.T) {
+	t.Parallel()
+
 	buildCalls := 0
 	fakeGraph := buildTestGraph(nil, nil)
 	as := &AutonomousScheduler{
@@ -4767,6 +5050,8 @@ func TestRunCycle_GraphCacheHit(t *testing.T) {
 // TestRunCycle_GraphCacheMissAfterTTL verifies that BuildGraph is called again
 // once the TTL has expired.
 func TestRunCycle_GraphCacheMissAfterTTL(t *testing.T) {
+	t.Parallel()
+
 	buildCalls := 0
 	fakeGraph := buildTestGraph(nil, nil)
 	as := &AutonomousScheduler{
@@ -4803,6 +5088,8 @@ func TestRunCycle_GraphCacheMissAfterTTL(t *testing.T) {
 // callback as a cycle tick waited forever whenever the build errored, and the
 // cycle's own CyclesRun/LastScanAt increment never reached disk. Issue #1446.
 func TestRunCycle_GraphBuildFailure_FiresOnCycleComplete(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	cycleCompletes := 0
 	as := &AutonomousScheduler{
@@ -4837,6 +5124,8 @@ func TestRunCycle_GraphBuildFailure_FiresOnCycleComplete(t *testing.T) {
 // does NOT count toward the per-session circuit breaker, and does NOT set a
 // retry backoff. Issue #3661.
 func TestOnPipelineComplete_IssueClosed_NoLifetimeIncrement(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -4885,6 +5174,8 @@ func TestOnPipelineComplete_IssueClosed_NoLifetimeIncrement(t *testing.T) {
 // TestOnPipelineComplete_IssueClosed_NoCircuitBreaker verifies that repeated
 // issue-closed events do not trip the cascade circuit breaker. Issue #3661.
 func TestOnPipelineComplete_IssueClosed_NoCircuitBreaker(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -4927,6 +5218,8 @@ func TestOnPipelineComplete_IssueClosed_NoCircuitBreaker(t *testing.T) {
 // circuit breaker, does NOT pause autonomous, and keeps the issue eligible via
 // a modest retry backoff (board → Ready, not Done). Issue #305.
 func TestOnPipelineComplete_BlockedDependency_NonFailure(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -4995,6 +5288,8 @@ func TestOnPipelineComplete_BlockedDependency_NonFailure(t *testing.T) {
 // would either panic or increment the cascade counter — so this test also
 // proves the deferral short-circuits before that path. Issue #305.
 func TestOnPipelineComplete_BlockedDependency_NoCircuitBreaker(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -5030,6 +5325,8 @@ func TestOnPipelineComplete_BlockedDependency_NoCircuitBreaker(t *testing.T) {
 // item closed within 60 seconds is NOT re-admitted even if GitHub returns OPEN
 // state (simulating the read-after-write race). Issue #3661.
 func TestReconcileStateAgainstGraph_RecentClosureGuard(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -5066,6 +5363,8 @@ func TestReconcileStateAgainstGraph_RecentClosureGuard(t *testing.T) {
 // 60-second guard window IS re-admitted when GitHub returns OPEN (because the
 // race window has passed and the OPEN read is now credible). Issue #3661.
 func TestReconcileStateAgainstGraph_RecentClosureGuard_ExpiredAllowsReadmit(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -5110,6 +5409,8 @@ func TestReconcileStateAgainstGraph_RecentClosureGuard_ExpiredAllowsReadmit(t *t
 // TestPrioritize_OffBoardDependencyResolution table-drives the direct-dep and
 // epic-cascade variants of the off-board dependency check.
 func TestPrioritize_OffBoardDependencyResolution(t *testing.T) {
+	t.Parallel()
+
 	const repo = "owner/repo"
 	const missingDepKey = repo + "#209"
 
@@ -5248,6 +5549,8 @@ func TestPrioritize_OffBoardDependencyResolution(t *testing.T) {
 // issue-state resolver is wired at all (resolveDepStatesFn == nil), an
 // off-board dependency still fails closed rather than silently dispatching.
 func TestPrioritize_OffBoardDependency_NoResolverWired(t *testing.T) {
+	t.Parallel()
+
 	const repo = "owner/repo"
 	nodes := []*depgraph.Node{
 		{Repo: repo, Number: 100, Title: "Blocked issue", State: "OPEN", BoardStatus: "Ready", Priority: "P2", Size: "S", Weight: 1},
@@ -5282,6 +5585,8 @@ func TestPrioritize_OffBoardDependency_NoResolverWired(t *testing.T) {
 // map lookup: when every dependency edge resolves to a real node in the
 // graph, resolveDepStatesFn must never be invoked (no GitHub call).
 func TestPrioritize_NoLookupWhenAllDepsPresent(t *testing.T) {
+	t.Parallel()
+
 	const repo = "owner/repo"
 	nodes := []*depgraph.Node{
 		{Repo: repo, Number: 1, Title: "Blocker", State: "CLOSED", BoardStatus: "Done", Priority: "P2", Size: "S", Weight: 1},
@@ -5320,6 +5625,8 @@ func TestPrioritize_NoLookupWhenAllDepsPresent(t *testing.T) {
 // helper mirrors refreshBlockerStates' discipline (scheduler.go): N keys
 // spread across R repos cost exactly R batch reads.
 func TestResolveIssueStatesByKey_BatchedPerRepo(t *testing.T) {
+	t.Parallel()
+
 	mock := newMockIssueSvc()
 	mock.addIssue("owner", "repo-a", 10, &types.Issue{Number: 10, State: "CLOSED"})
 	mock.addIssue("owner", "repo-a", 11, &types.Issue{Number: 11, State: "OPEN"})
@@ -5346,6 +5653,8 @@ func TestResolveIssueStatesByKey_BatchedPerRepo(t *testing.T) {
 // issue absent from the batch response (deleted/inaccessible) is simply left
 // out of the result — never defaulted to a guessed state.
 func TestResolveIssueStatesByKey_MissingIssueAbsentFromResult(t *testing.T) {
+	t.Parallel()
+
 	mock := newMockIssueSvc() // no issues registered
 	resolved := ResolveIssueStatesByKey(context.Background(), mock, []string{"owner/repo#999"})
 	if state, ok := resolved["owner/repo#999"]; ok {
@@ -5356,6 +5665,8 @@ func TestResolveIssueStatesByKey_MissingIssueAbsentFromResult(t *testing.T) {
 // A failed read gives no verdict: the keys stay absent, so the hold reason stays
 // "not confirmed via GitHub" and never claims the number does not exist (#2854).
 func TestResolveIssueStatesByKey_FailedReadLeavesKeysAbsent(t *testing.T) {
+	t.Parallel()
+
 	mock := newMockIssueSvc()
 	mock.depStatesErr = errors.New("boom")
 	resolved := ResolveIssueStatesByKey(context.Background(), mock, []string{"owner/repo#7"})
@@ -5371,6 +5682,8 @@ func TestResolveIssueStatesByKey_FailedReadLeavesKeysAbsent(t *testing.T) {
 // TestResolveIssueStatesByKey_NilIssueService verifies the nil-issueSvc guard
 // (no GitHub call attempted when the issue service is unavailable).
 func TestResolveIssueStatesByKey_NilIssueService(t *testing.T) {
+	t.Parallel()
+
 	resolved := ResolveIssueStatesByKey(context.Background(), nil, []string{"owner/repo#1"})
 	if resolved != nil {
 		t.Errorf("expected nil map when issueSvc is nil, got %+v", resolved)
@@ -5382,6 +5695,8 @@ func TestResolveIssueStatesByKey_NilIssueService(t *testing.T) {
 // deadline used to live only in an unexported map and a log line, so the UI
 // rendered a recovering fleet as a stalled one.
 func TestPendingRetriesAreVisibleInExportedState(t *testing.T) {
+	t.Parallel()
+
 	dir := layouttest.Repo(t)
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
@@ -5454,6 +5769,8 @@ func TestPendingRetriesAreVisibleInExportedState(t *testing.T) {
 // an elapsed deadline means eligible-now (not waiting), and output order is
 // stable despite randomized map iteration.
 func TestPendingRetriesExcludeExpiredAndSortByDeadline(t *testing.T) {
+	t.Parallel()
+
 	now := time.Now()
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
@@ -5490,6 +5807,8 @@ func TestPendingRetriesExcludeExpiredAndSortByDeadline(t *testing.T) {
 
 // TestPendingRetryClearsOnSuccess proves the entry does not outlive the wait.
 func TestPendingRetryClearsOnSuccess(t *testing.T) {
+	t.Parallel()
+
 	dir := layouttest.Repo(t)
 	as := &AutonomousScheduler{
 		trustGateOverride:    allWritersGate(),
@@ -5538,6 +5857,8 @@ func retryDeadline(as *AutonomousScheduler, key string) (time.Time, bool) {
 // and a drifted mirror means the runtime default differs from the documented
 // one for every caller that constructs AutonomousConfig directly.
 func TestDefaultExcludeLabels_MirrorsConfig(t *testing.T) {
+	t.Parallel()
+
 	want := config.DefaultExcludeLabels
 	if len(defaultExcludeLabels) != len(want) {
 		t.Fatalf("defaultExcludeLabels = %v, config.DefaultExcludeLabels = %v", defaultExcludeLabels, want)
@@ -5557,6 +5878,8 @@ func TestDefaultExcludeLabels_MirrorsConfig(t *testing.T) {
 // scheduler behaviour is worse than no label when nothing implements it,
 // because it is believed.
 func TestPrioritize_SkipsBlockedLabel(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "Waiting on a decision", State: "OPEN", BoardStatus: "Ready", Labels: []string{"blocked"}, Priority: "P0", Size: "XS", Weight: 1},
 		{Repo: "R", Number: 2, Title: "Mixed case", State: "OPEN", BoardStatus: "Ready", Labels: []string{"Blocked"}, Priority: "P0", Size: "XS", Weight: 1},
@@ -5585,6 +5908,8 @@ func TestPrioritize_SkipsBlockedLabel(t *testing.T) {
 // "blocked … by open dep" path then holds the issue. Before the parser change
 // there was no edge, so this dispatched.
 func TestPrioritize_HoldsOnBodyDeclaredSameRepoDependency(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1187, Title: "Prerequisite", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "M", Weight: 1},
 		{Repo: "R", Number: 1188, Title: "Dependent", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "S", Weight: 1},
@@ -5620,6 +5945,8 @@ func TestPrioritize_HoldsOnBodyDeclaredSameRepoDependency(t *testing.T) {
 // operator who sees a hold must be told which sentence caused it, or the only
 // way to find out is to read internal/depgraph/parser.go (#126).
 func TestDescribeEdgeSource_NamesTheBodyLine(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1187, State: "OPEN", BoardStatus: "Ready"},
 		{Repo: "R", Number: 1188, State: "OPEN", BoardStatus: "Ready"},
@@ -5644,6 +5971,8 @@ func TestDescribeEdgeSource_NamesTheBodyLine(t *testing.T) {
 // With the kind the IPC layer derives from startRefusal it is a non-failure;
 // the same text without that kind is booked as a failure.
 func TestNotifyComplete_ClosedIssueRefusal_BookingDependsOnStructuredKind(t *testing.T) {
+	t.Parallel()
+
 	const detail = "Issue #3114 is already CLOSED. Pipeline halted — zero AI tokens consumed.\n\n" +
 		"Use forceRerun: true to override this guard for legitimate re-runs."
 	newScheduler := func() *AutonomousScheduler {

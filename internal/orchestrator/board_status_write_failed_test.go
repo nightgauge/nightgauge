@@ -11,6 +11,8 @@ import (
 // board write. It is informational: nothing the run does depends on the board,
 // so the card must not block anything or bind a verb.
 func TestBoardStatusWriteFailedIsAnInformationalEvent(t *testing.T) {
+	t.Parallel()
+
 	r := BuildBoardStatusWriteFailed("octocat/acme", 42, "run-1", "feature-dev")
 
 	if r.Producer != ProducerBoardStatusWriteFailed {
@@ -42,6 +44,8 @@ func TestBoardStatusWriteFailedIsAnInformationalEvent(t *testing.T) {
 }
 
 func TestBoardStatusWriteFailedNamesAnUnknownStage(t *testing.T) {
+	t.Parallel()
+
 	r := BuildBoardStatusWriteFailed("octocat/acme", 42, "", "")
 	if r.Context.Stage != "unknown" {
 		t.Errorf("stage = %q, want unknown", r.Context.Stage)

@@ -7,6 +7,8 @@ import (
 )
 
 func TestBudgetCeiling_AllowWhenUnder(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		BudgetCeiling: 100_000,
 	})
@@ -17,6 +19,8 @@ func TestBudgetCeiling_AllowWhenUnder(t *testing.T) {
 }
 
 func TestBudgetCeiling_DenyWhenOver(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		BudgetCeiling: 100_000,
 	})
@@ -33,6 +37,8 @@ func TestBudgetCeiling_DenyWhenOver(t *testing.T) {
 }
 
 func TestBudgetCeiling_UnlimitedWhenZero(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		BudgetCeiling: 0, // unlimited
 	})
@@ -45,6 +51,8 @@ func TestBudgetCeiling_UnlimitedWhenZero(t *testing.T) {
 }
 
 func TestBudgetCeiling_ExactlyAtLimit(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		BudgetCeiling: 100_000,
 	})
@@ -64,6 +72,8 @@ func TestBudgetCeiling_ExactlyAtLimit(t *testing.T) {
 }
 
 func TestCircuitBreaker_TripsAfterMaxFailures(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		CircuitBreakerMax: 3,
 	})
@@ -90,6 +100,8 @@ func TestCircuitBreaker_TripsAfterMaxFailures(t *testing.T) {
 }
 
 func TestCircuitBreaker_SuccessResetsCounter(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		CircuitBreakerMax: 3,
 	})
@@ -110,6 +122,8 @@ func TestCircuitBreaker_SuccessResetsCounter(t *testing.T) {
 }
 
 func TestCircuitBreaker_DisabledWhenZero(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		CircuitBreakerMax: 0, // disabled
 	})
@@ -125,6 +139,8 @@ func TestCircuitBreaker_DisabledWhenZero(t *testing.T) {
 }
 
 func TestRateLimit_AllowUpToLimit(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		RateLimitPerHour: 5,
 	})
@@ -148,6 +164,8 @@ func TestRateLimit_AllowUpToLimit(t *testing.T) {
 }
 
 func TestRateLimit_WindowReset(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		RateLimitPerHour: 2,
 	})
@@ -173,6 +191,8 @@ func TestRateLimit_WindowReset(t *testing.T) {
 }
 
 func TestRateLimit_DisabledWhenZero(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		RateLimitPerHour: 0, // disabled
 	})
@@ -188,6 +208,8 @@ func TestRateLimit_DisabledWhenZero(t *testing.T) {
 }
 
 func TestEpicCheckpoint_PausesAfterEpicComplete(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		EpicCheckpoint: true,
 	})
@@ -219,6 +241,8 @@ func TestEpicCheckpoint_PausesAfterEpicComplete(t *testing.T) {
 }
 
 func TestEpicCheckpoint_DisabledWhenFalse(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		EpicCheckpoint: false,
 	})
@@ -237,6 +261,8 @@ func TestEpicCheckpoint_DisabledWhenFalse(t *testing.T) {
 }
 
 func TestEpicCheckpoint_ResumeClears(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		EpicCheckpoint: true,
 	})
@@ -257,6 +283,8 @@ func TestEpicCheckpoint_ResumeClears(t *testing.T) {
 }
 
 func TestHealthGate_DenyWhenBelowThreshold(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		HealthGateMin: 30,
 	})
@@ -273,6 +301,8 @@ func TestHealthGate_DenyWhenBelowThreshold(t *testing.T) {
 }
 
 func TestHealthGate_AllowWhenAboveThreshold(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		HealthGateMin: 30,
 	})
@@ -286,6 +316,8 @@ func TestHealthGate_AllowWhenAboveThreshold(t *testing.T) {
 }
 
 func TestHealthGate_AllowWhenScoreNotSet(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		HealthGateMin: 30,
 	})
@@ -298,6 +330,8 @@ func TestHealthGate_AllowWhenScoreNotSet(t *testing.T) {
 }
 
 func TestHealthGate_DisabledWhenZero(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		HealthGateMin: 0, // disabled
 	})
@@ -311,6 +345,8 @@ func TestHealthGate_DisabledWhenZero(t *testing.T) {
 }
 
 func TestMultipleRails_PriorityOrder(t *testing.T) {
+	t.Parallel()
+
 	// Budget trips before circuit breaker
 	sr := NewSafetyRails(SafetyConfig{
 		BudgetCeiling:     1000,
@@ -342,6 +378,8 @@ func TestMultipleRails_PriorityOrder(t *testing.T) {
 }
 
 func TestMultipleRails_CircuitBeforRate(t *testing.T) {
+	t.Parallel()
+
 	// When budget is fine, circuit breaker should trip before rate limit
 	sr := NewSafetyRails(SafetyConfig{
 		BudgetCeiling:     100_000,
@@ -361,6 +399,8 @@ func TestMultipleRails_CircuitBeforRate(t *testing.T) {
 }
 
 func TestMultipleRails_RateBeforeHealth(t *testing.T) {
+	t.Parallel()
+
 	// When budget and circuit breaker are fine, rate limit before health
 	sr := NewSafetyRails(SafetyConfig{
 		RateLimitPerHour: 1,
@@ -378,6 +418,8 @@ func TestMultipleRails_RateBeforeHealth(t *testing.T) {
 }
 
 func TestReset_ClearsCounters(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		BudgetCeiling:     100_000,
 		CircuitBreakerMax: 3,
@@ -423,6 +465,8 @@ func TestReset_ClearsCounters(t *testing.T) {
 }
 
 func TestIsTripped_Budget(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		BudgetCeiling: 1000,
 	})
@@ -434,6 +478,8 @@ func TestIsTripped_Budget(t *testing.T) {
 }
 
 func TestIsTripped_CircuitBreaker(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		CircuitBreakerMax: 2,
 	})
@@ -446,6 +492,8 @@ func TestIsTripped_CircuitBreaker(t *testing.T) {
 }
 
 func TestIsTripped_RateLimit(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		RateLimitPerHour: 2,
 	})
@@ -458,6 +506,8 @@ func TestIsTripped_RateLimit(t *testing.T) {
 }
 
 func TestIsTripped_HealthGate(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		HealthGateMin: 50,
 	})
@@ -469,6 +519,8 @@ func TestIsTripped_HealthGate(t *testing.T) {
 }
 
 func TestIsTripped_Checkpoint(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		EpicCheckpoint: true,
 	})
@@ -480,6 +532,8 @@ func TestIsTripped_Checkpoint(t *testing.T) {
 }
 
 func TestIsTripped_NothingTripped(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(DefaultSafetyConfig())
 
 	if sr.IsTripped() {
@@ -488,6 +542,8 @@ func TestIsTripped_NothingTripped(t *testing.T) {
 }
 
 func TestStateSnapshot(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		BudgetCeiling:     100_000,
 		CircuitBreakerMax: 3,
@@ -505,6 +561,8 @@ func TestStateSnapshot(t *testing.T) {
 }
 
 func TestConfigSnapshot(t *testing.T) {
+	t.Parallel()
+
 	cfg := SafetyConfig{
 		BudgetCeiling:     42,
 		CircuitBreakerMax: 7,
@@ -521,6 +579,8 @@ func TestConfigSnapshot(t *testing.T) {
 }
 
 func TestRecordPipelineStart_IncrementsCounter(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		RateLimitPerHour: 10,
 	})
@@ -536,6 +596,8 @@ func TestRecordPipelineStart_IncrementsCounter(t *testing.T) {
 }
 
 func TestConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
 	sr := NewSafetyRails(SafetyConfig{
 		BudgetCeiling:     1_000_000,
 		CircuitBreakerMax: 100,

@@ -20,6 +20,8 @@ import (
 )
 
 func TestCancelAllForNetworkOutage_NoActiveStages(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	got := s.CancelAllForNetworkOutage()
 	if got != nil {
@@ -28,6 +30,8 @@ func TestCancelAllForNetworkOutage_NoActiveStages(t *testing.T) {
 }
 
 func TestCancelAllForNetworkOutage_CancelsAndReturnsSorted(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 
 	// Register three active stages (issues out of order to verify sorting).
@@ -61,6 +65,7 @@ func TestCancelAllForNetworkOutage_CancelsAndReturnsSorted(t *testing.T) {
 	}
 }
 
+// Serial: fails on a wall-clock deadline of 1s, which parallel load can exceed (#2950).
 func TestCancelAllForNetworkOutage_CauseIsErrNetworkUnavailable(t *testing.T) {
 	s := &Scheduler{}
 
@@ -87,6 +92,8 @@ func TestCancelAllForNetworkOutage_CauseIsErrNetworkUnavailable(t *testing.T) {
 }
 
 func TestRegisterUnregisterActiveStage_BalancedLifecycle(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	_, cancel := context.WithCancelCause(context.Background())
 
@@ -105,6 +112,8 @@ func TestRegisterUnregisterActiveStage_BalancedLifecycle(t *testing.T) {
 }
 
 func TestRegisterActiveStage_GuardsAgainstZeroAndNil(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	_, cancel := context.WithCancelCause(context.Background())
 
@@ -120,6 +129,8 @@ func TestRegisterActiveStage_GuardsAgainstZeroAndNil(t *testing.T) {
 }
 
 func TestRegisterActiveStage_ConcurrentAccessDoesNotRace(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 
 	var wg sync.WaitGroup
@@ -148,6 +159,8 @@ func testStageRunID(issue int) string { return fmt.Sprintf("run-%d", issue) }
 // function, so the outage cancel left one LLM subprocess running, and either
 // stage's end deleted the other's entry.
 func TestCancelAllForNetworkOutage_SameNumberInTwoRepos(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	appCtx, appCancel := context.WithCancelCause(context.Background())
 	platformCtx, platformCancel := context.WithCancelCause(context.Background())
@@ -180,6 +193,8 @@ func TestCancelAllForNetworkOutage_SameNumberInTwoRepos(t *testing.T) {
 }
 
 func TestClassifyTerminalKind_NetworkUnavailable(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		in   string
@@ -232,6 +247,8 @@ func (errNetUnavailableRunner) RunStage(ctx context.Context, _ StageRunParams) (
 }
 
 func TestStageContext_CancelCausePreservedAfterRun(t *testing.T) {
+	t.Parallel()
+
 	// Verifies the wiring pattern used in runPipeline: WithCancelCause +
 	// register + run + Cause() check. We reproduce the inner block here so
 	// the test doesn't have to spin up a full pipeline.
@@ -275,6 +292,8 @@ func TestStageContext_CancelCausePreservedAfterRun(t *testing.T) {
 
 // Smoke check: the expected board-item shape works with the path.
 func TestNetworkAbort_BoardItemSmoke(t *testing.T) {
+	t.Parallel()
+
 	item := types.BoardItem{Number: 3216, Repo: "nightgauge/nightgauge"}
 	if item.Number != 3216 {
 		t.Fatal("BoardItem shape changed unexpectedly")

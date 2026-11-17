@@ -62,6 +62,8 @@ func runQueueOnce(t *testing.T, serverURL string) QueueRunSummary {
 }
 
 func TestRunQueue_MissingBoardItemIsReportedAsNotFound(t *testing.T) {
+	t.Parallel()
+
 	srv := emptyBoardServer(t)
 	defer srv.Close()
 
@@ -76,6 +78,8 @@ func TestRunQueue_MissingBoardItemIsReportedAsNotFound(t *testing.T) {
 }
 
 func TestRunQueue_BoardFetchFailureIsNotReportedAsNotFound(t *testing.T) {
+	t.Parallel()
+
 	srv := brokenBoardServer(t)
 	defer srv.Close()
 
@@ -99,6 +103,8 @@ func TestRunQueue_BoardFetchFailureIsNotReportedAsNotFound(t *testing.T) {
 // `queue list` shows, instead of vanishing. It is not run again, does not
 // count as queued, and `queue add` re-queues it.
 func TestRunQueue_NotDispatchedItemIsKeptAsDropped(t *testing.T) {
+	t.Parallel()
+
 	srv := emptyBoardServer(t)
 	defer srv.Close()
 	client := gh.NewClientWithURL("test-token", srv.URL)
@@ -142,6 +148,8 @@ func TestRunQueue_NotDispatchedItemIsKeptAsDropped(t *testing.T) {
 
 // A dropped item is never dequeued for dispatch.
 func TestDequeueIndependent_SkipsDropped(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:   allWritersGate(),
 		repoRunning: map[string]int{},

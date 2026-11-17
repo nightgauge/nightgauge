@@ -7,6 +7,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/config"
 )
 
+// Serial: swaps package var openCodeReadinessLoadSettings.
 func TestOpenCodeConfiguredModel(t *testing.T) {
 	prev := openCodeReadinessLoadSettings
 	t.Cleanup(func() { openCodeReadinessLoadSettings = prev })

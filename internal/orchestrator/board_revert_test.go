@@ -14,6 +14,8 @@ import "testing"
 // once mergedCommitSha is non-empty, the revert must be skipped regardless of
 // terminalFailureKind or workRecovered.
 func TestShouldSkipBoardRevert_MergedCommitShaSkipsRevert(t *testing.T) {
+	t.Parallel()
+
 	got := shouldSkipBoardRevert(false, "validation_error", "8b82c582abcdef")
 	if !got {
 		t.Fatalf("shouldSkipBoardRevert(false, %q, <non-empty sha>) = false, want true — "+
@@ -28,6 +30,8 @@ func TestShouldSkipBoardRevert_MergedCommitShaSkipsRevert(t *testing.T) {
 // #1969 — the fifth condition widens skipBoardRevert, it must not swallow
 // every failure.
 func TestShouldSkipBoardRevert_NoMergeStillReverts(t *testing.T) {
+	t.Parallel()
+
 	got := shouldSkipBoardRevert(false, "validation_error", "")
 	if got {
 		t.Fatalf("shouldSkipBoardRevert(false, %q, \"\") = true, want false — an ordinary failure "+
@@ -39,6 +43,8 @@ func TestShouldSkipBoardRevert_NoMergeStillReverts(t *testing.T) {
 // conditions #1969 must not disturb: each was already sufficient on its own
 // to skip the revert, with no merge breadcrumb involved.
 func TestShouldSkipBoardRevert_PreexistingConditionsUnchanged(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name                string
 		workRecovered       bool
@@ -64,6 +70,8 @@ func TestShouldSkipBoardRevert_PreexistingConditionsUnchanged(t *testing.T) {
 // the five conditions cover: a plain stage failure with no recovery, no
 // special terminal kind, and no merge. It must still revert.
 func TestShouldSkipBoardRevert_OrdinaryFailureReverts(t *testing.T) {
+	t.Parallel()
+
 	if shouldSkipBoardRevert(false, "subagent_crash", "") {
 		t.Fatalf("shouldSkipBoardRevert(false, %q, \"\") = true, want false", "subagent_crash")
 	}

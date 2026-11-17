@@ -97,6 +97,8 @@ func pausedBaselineItem(issue int, workflow string) QueueItem {
 
 // TestBaselineSweep_ResumesWhenBaselineGoesGreen is the acceptance criterion
 // stated directly: a deferred item resumes once the baseline is green.
+//
+// Serial: swaps package var reconcileExecGh (via newBaselineSweepScheduler).
 func TestBaselineSweep_ResumesWhenBaselineGoesGreen(t *testing.T) {
 	eval := &fakeBaselineEvaluator{green: map[string]bool{"ci.yml": false}}
 	as := newBaselineSweepScheduler(t, eval, pausedBaselineItem(42, "ci.yml"))
@@ -126,6 +128,8 @@ func TestBaselineSweep_ResumesWhenBaselineGoesGreen(t *testing.T) {
 // delete `as.sweepBaselineDeferrals(ctx)` from runCycle and this goes red. It
 // drives the real runCycle rather than the receiver, so it covers the wiring
 // and not merely the function body.
+//
+// Serial: swaps package var reconcileExecGh (via newBaselineSweepScheduler).
 func TestBaselineSweep_RunsOnTheAutonomousCycle(t *testing.T) {
 	eval := &fakeBaselineEvaluator{green: map[string]bool{"ci.yml": false}}
 	as := newBaselineSweepScheduler(t, eval, pausedBaselineItem(42, "ci.yml"))
@@ -142,6 +146,8 @@ func TestBaselineSweep_RunsOnTheAutonomousCycle(t *testing.T) {
 // when a deferred item waits longest, and the sweep dispatches nothing, so it
 // must sit above that gate. Moving the call below it compiles and passes the
 // wiring test above while silently reinstating half the defect.
+//
+// Serial: swaps package var reconcileExecGh (via newBaselineSweepScheduler).
 func TestBaselineSweep_RunsEvenWithNoFreeSlots(t *testing.T) {
 	eval := &fakeBaselineEvaluator{green: map[string]bool{"ci.yml": true}}
 	as := newBaselineSweepScheduler(t, eval, pausedBaselineItem(42, "ci.yml"))
@@ -163,6 +169,8 @@ func TestBaselineSweep_RunsEvenWithNoFreeSlots(t *testing.T) {
 // asks GitHub for workflow run history per deferred item. Running it per cycle
 // would issue the same query sixty times per baseline repair to observe a fact
 // that changed once.
+//
+// Serial: swaps package var reconcileExecGh (via newBaselineSweepScheduler).
 func TestBaselineSweep_PacedNotPerCycle(t *testing.T) {
 	eval := &fakeBaselineEvaluator{green: map[string]bool{"ci.yml": false}}
 	as := newBaselineSweepScheduler(t, eval, pausedBaselineItem(42, "ci.yml"))
@@ -186,6 +194,8 @@ func TestBaselineSweep_PacedNotPerCycle(t *testing.T) {
 
 // TestBaselineSweep_NoDeferralsCostsNothing. The common case is an empty
 // deferral list, and it must not pay for a forge round-trip to discover that.
+//
+// Serial: swaps package var reconcileExecGh (via newBaselineSweepScheduler).
 func TestBaselineSweep_NoDeferralsCostsNothing(t *testing.T) {
 	eval := &fakeBaselineEvaluator{green: map[string]bool{}}
 	as := newBaselineSweepScheduler(t, eval) // no paused items
@@ -200,6 +210,8 @@ func TestBaselineSweep_NoDeferralsCostsNothing(t *testing.T) {
 // TestBaselineSweep_ErrorLeavesTheItemPaused. One unreachable workflow must
 // not strand the others, and must never release an item on an unanswered
 // question — "we could not check" is not "the baseline is green".
+//
+// Serial: swaps package var reconcileExecGh (via newBaselineSweepScheduler).
 func TestBaselineSweep_ErrorLeavesTheItemPaused(t *testing.T) {
 	eval := &fakeBaselineEvaluator{err: errors.New("forge unreachable")}
 	as := newBaselineSweepScheduler(t, eval,
@@ -219,6 +231,8 @@ func TestBaselineSweep_ErrorLeavesTheItemPaused(t *testing.T) {
 // TestBaselineSweep_SkipsItemWithNoWorkflow. A pause record naming no workflow
 // has no question to ask; it must stay paused rather than be promoted by
 // default.
+//
+// Serial: swaps package var reconcileExecGh (via newBaselineSweepScheduler).
 func TestBaselineSweep_SkipsItemWithNoWorkflow(t *testing.T) {
 	eval := &fakeBaselineEvaluator{green: map[string]bool{}}
 	item := pausedBaselineItem(42, "")

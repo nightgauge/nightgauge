@@ -23,6 +23,8 @@ import (
 // completes before the grace expires must COMPLETE, not be aborted. This is the
 // whole reason shutdown has a grace period rather than cancelling outright —
 // an aborted MoveStatus leaves an issue stuck "In progress".
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestShutdown_WaitsForWorkThatFinishesInsideTheGrace(t *testing.T) {
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
 
@@ -86,6 +88,8 @@ func TestShutdown_WaitsForWorkThatFinishesInsideTheGrace(t *testing.T) {
 // The op here only ever exits on cancellation, so Shutdown returning at all is
 // the assertion: under a mutant that waits without cancelling, the 15s bound
 // below fires.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestShutdown_CancelsWorkThatOutlastsTheGrace(t *testing.T) {
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
 
@@ -126,6 +130,8 @@ func TestShutdown_CancelsWorkThatOutlastsTheGrace(t *testing.T) {
 // TestShutdown_OnAQuietSchedulerSaysSo pins the third outcome. A shutdown with
 // nothing detached must still leave a line, or "no drain line in the log" is
 // ambiguous between a quiet exit and a teardown that never reached the drain.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestShutdown_OnAQuietSchedulerSaysSo(t *testing.T) {
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
 	out := withCapturedLog(t)
@@ -148,6 +154,8 @@ func TestShutdown_OnAQuietSchedulerSaysSo(t *testing.T) {
 //
 // Measured before the fix: Shutdown(50ms) had not returned after 5s (100x the
 // grace); the "abandoned" line below did not exist.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestShutdown_ReturnsEvenWhenACancelledOpNeverStops(t *testing.T) {
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
 
@@ -188,6 +196,8 @@ func TestShutdown_ReturnsEvenWhenACancelledOpNeverStops(t *testing.T) {
 // it into the state it persists — a count in state.json is stale the instant
 // the file is closed, and loadState would resurrect it on the next start.
 func TestStatus_ReportsTheBoardTailWithoutPersistingIt(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
 
 	entered := make(chan struct{})
@@ -220,6 +230,8 @@ func TestStatus_ReportsTheBoardTailWithoutPersistingIt(t *testing.T) {
 // the operator's board count, while still being visible to the shutdown that
 // has to join it.
 func TestStatus_BoardTailExcludesNonBoardTrackedWork(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
 
 	entered := make(chan struct{})
@@ -253,6 +265,8 @@ func TestStatus_BoardTailExcludesNonBoardTrackedWork(t *testing.T) {
 //
 // Measured before the split: the status snapshot reported 1 here.
 func TestStatus_BoardTailIsZeroWhileTheRefinementLoopRuns(t *testing.T) {
+	t.Parallel()
+
 	cfg := DefaultAutonomousConfig()
 	if !cfg.RefinementEnabled {
 		t.Fatal("RefinementEnabled is no longer the default — this test measures the default config")

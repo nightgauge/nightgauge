@@ -45,6 +45,8 @@ func forgeScheduler(forge *githubtest.Forge) *Scheduler {
 // later page cannot be read. Enqueuing #202 with only the blockers on the
 // first page would let DequeueIndependent dispatch it beside one that is still
 // open.
+//
+// Serial: sets the environment (via githubtest.New).
 func TestEnqueueEpic_TruncatedBlockerListIsAnError(t *testing.T) {
 	fake := githubtest.New(t, map[int]githubtest.Issue{
 		100: {SubIssues: []int{201, 202}},
@@ -73,6 +75,8 @@ func TestEnqueueEpic_TruncatedBlockerListIsAnError(t *testing.T) {
 // When it read every list, one failed page of a blocking list enqueued
 // nothing and reported a blocker problem on a sub-issue whose blockers were
 // complete.
+//
+// Serial: sets the environment (via githubtest.New).
 func TestEnqueueEpic_LongListsItDoesNotUseCannotAbortIt(t *testing.T) {
 	forge := githubtest.New(t, map[int]githubtest.Issue{
 		100: {SubIssues: []int{201, 202}, Blocking: githubtest.Numbers(900, 7)},
@@ -103,6 +107,8 @@ func TestEnqueueEpic_LongListsItDoesNotUseCannotAbortIt(t *testing.T) {
 // blocker list read only in part would plan it into an earlier wave than its
 // unseen blockers allow, and leaving the sub-issue out of the plan would drop
 // its siblings' edges to it as well.
+//
+// Serial: sets the environment (via githubtest.New).
 func TestFetchSubIssueDetails_TruncatedBlockerListIsAnError(t *testing.T) {
 	fake := githubtest.New(t, map[int]githubtest.Issue{
 		100: {SubIssues: []int{101, 102}},
@@ -126,6 +132,8 @@ func TestFetchSubIssueDetails_TruncatedBlockerListIsAnError(t *testing.T) {
 // block 7 issues and every later page fails. The wave plan uses each
 // sub-issue's body, labels and blocker list, so the blocking lists must not be
 // read and cannot fail the plan.
+//
+// Serial: sets the environment (via githubtest.New).
 func TestFetchSubIssueDetails_LongListsItDoesNotUseCannotFailIt(t *testing.T) {
 	forge := githubtest.New(t, map[int]githubtest.Issue{
 		100: {SubIssues: []int{101, 102}},
@@ -158,6 +166,8 @@ func TestFetchSubIssueDetails_LongListsItDoesNotUseCannotFailIt(t *testing.T) {
 // each sub-issue's blocker list decides readiness, so #101's blocking list
 // must not be read: when it was, its failed later page skipped #101 and the
 // epic reported no ready sub-issue.
+//
+// Serial: sets the environment (via githubtest.New).
 func TestFindReadySubIssues_LongListsItDoesNotUseCannotHideAReadySubIssue(t *testing.T) {
 	forge := githubtest.New(t, map[int]githubtest.Issue{
 		100: {SubIssues: []int{101, 102}},
@@ -182,6 +192,8 @@ func TestFindReadySubIssues_LongListsItDoesNotUseCannotHideAReadySubIssue(t *tes
 // the title is used, so an epic whose sub-issue list cannot be read whole must
 // still get its branch. Reading that list failed the create at "fetch epic
 // title" and sent the sub-issue's run on without its epic base branch.
+//
+// Serial: sets the environment.
 func TestEnsureEpicBranchForItem_EpicTitleReadSkipsRelationships(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH", "true")
 	root := gitWorkspace(t)
@@ -217,6 +229,8 @@ func TestEnsureEpicBranchForItem_EpicTitleReadSkipsRelationships(t *testing.T) {
 // completes relationships, so the compiler keeps them off it; this pins that
 // both still resolve every state through the one it offers.
 func TestBlockerStateReadsSkipRelationships(t *testing.T) {
+	t.Parallel()
+
 	newMock := func() *mockIssueSvc {
 		mock := newMockIssueSvc()
 		mock.addIssue("test", "repo-a", 50, &types.Issue{Number: 50, State: "CLOSED"})

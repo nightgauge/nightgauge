@@ -19,6 +19,8 @@ func (f verbExecutorFunc) ExecuteVerb(ctx context.Context, _ *attention.Decision
 // TestScanEntryPointsFailOpenBehindABusyStore pins AC3 at the scheduler's
 // seam (#2750): with Resolve holding the store in a verb that does not finish,
 // each background entry point logs and returns, so the scan carries on.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestScanEntryPointsFailOpenBehindABusyStore(t *testing.T) {
 	buf := withCapturedLog(t)
 	store := attention.New(layouttest.Repo(t))

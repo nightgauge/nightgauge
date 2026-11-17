@@ -90,6 +90,8 @@ func endpointReq(issue int) endpointRequest {
 
 // TestOpenCodeEndpointSpread: two endpoints with one slot each and two
 // parallel stages give one stage per endpoint, both asking for gpu-a.
+//
+// Serial: swaps package var openCodeReadinessLoadSettings (via withOpenCodeReadinessConfig).
 func TestOpenCodeEndpointSpread(t *testing.T) {
 	withOpenCodeReadinessConfig(t, endpointTestConfig([]string{"gpu-a", "gpu-b"}, nil))
 	withFakeEndpointProbe(t)
@@ -126,6 +128,8 @@ func TestOpenCodeEndpointSpread(t *testing.T) {
 
 // TestOpenCodeEndpointSlotWait: two slots and three stages. The third waits,
 // listed in the scheduler status, and is dispatched once a slot is released.
+//
+// Serial: swaps package var openCodeEndpointSlotsPath.
 func TestOpenCodeEndpointSlotWait(t *testing.T) {
 	withOpenCodeReadinessConfig(t, endpointTestConfig([]string{"gpu-a", "gpu-b"}, nil))
 	withFakeEndpointProbe(t)
@@ -188,6 +192,8 @@ func TestOpenCodeEndpointSlotWait(t *testing.T) {
 // TestOpenCodeEndpointReadinessMovesToAnotherEndpoint: an endpoint that fails
 // readiness at dispatch is skipped for another serving the same model; with
 // none healthy the refusal is environmental and names every endpoint tried.
+//
+// Serial: swaps package var openCodeReadinessLoadSettings (via withOpenCodeReadinessConfig).
 func TestOpenCodeEndpointReadinessMovesToAnotherEndpoint(t *testing.T) {
 	withOpenCodeReadinessConfig(t, endpointTestConfig([]string{"gpu-a", "gpu-b"}, nil))
 	withFakeEndpointProbe(t, "gpu-a")
@@ -270,6 +276,8 @@ func runFailoverPipeline(t *testing.T, cfg config.OpenCodeConfig, down ...string
 // serving the same model id, and history records endpoint_failover. With
 // the second endpoint serving a different model there is no retry: the stage
 // fails as an environment failure.
+//
+// Serial: swaps package var openCodeEndpointFailoverBackoff (via runFailoverPipeline).
 func TestOpenCodeEndpointFailoverSameModelOnly(t *testing.T) {
 	t.Run("same model", func(t *testing.T) {
 		runner, rec, _ := runFailoverPipeline(t, endpointTestConfig([]string{"gpu-a", "gpu-b"}, nil))
@@ -299,6 +307,8 @@ func TestOpenCodeEndpointFailoverSameModelOnly(t *testing.T) {
 // TestOpenCodeLocalNeverFailsOverToCloud: a local-only config whose every
 // local endpoint is down never dispatches, and never even probes, an
 // endpoint that forwards to a hosted service, even one declaring the model.
+//
+// Serial: swaps package var openCodeEndpointFailoverBackoff (via runFailoverPipeline).
 func TestOpenCodeLocalNeverFailsOverToCloud(t *testing.T) {
 	cfg := endpointTestConfig([]string{"gpu-a", "gpu-b", "gateway"}, nil, "gateway")
 	runner, rec, probe := runFailoverPipeline(t, cfg, "gpu-a", "gpu-b")
@@ -324,6 +334,8 @@ func TestOpenCodeLocalNeverFailsOverToCloud(t *testing.T) {
 // TestOpenCodeEndpointFailoverBounded: failover needs another endpoint, an
 // endpoint-loss kind and no finished step, and stops at len(endpoints).
 func TestOpenCodeEndpointFailoverBounded(t *testing.T) {
+	t.Parallel()
+
 	lease := endpointLease{Endpoint: "gpu-a", Candidates: 3}
 	cases := []struct {
 		name      string

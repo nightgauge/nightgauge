@@ -11,6 +11,8 @@ import (
 // deleted, or was already gone, is never reported as "NOT removed locally" or
 // as "the only copy".
 func TestDescribeShippedBranchCleanup(t *testing.T) {
+	t.Parallel()
+
 	const b = "feat/1-x"
 	cases := []struct {
 		name    string

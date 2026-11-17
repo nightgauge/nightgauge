@@ -42,6 +42,8 @@ var (
 // site is added with only half of the pair, which is the failure that actually
 // happened.
 func TestEveryRecordEscalationHasADurableTwin(t *testing.T) {
+	t.Parallel()
+
 	totalRecord := 0
 
 	// PER FILE, not summed. A repo-wide total lets one file's surplus mask

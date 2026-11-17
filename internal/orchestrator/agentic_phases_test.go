@@ -44,6 +44,8 @@ func successEvidence(t *testing.T, stage state.PipelineStage) *AgenticEvidence {
 }
 
 func TestAgenticSpecsCoverEveryRegistryPhase(t *testing.T) {
+	t.Parallel()
+
 	for stage := range state.PhaseRegistry {
 		spec, ok := agenticPhaseSpecs[stage]
 		if !ok {
@@ -74,6 +76,8 @@ func TestAgenticSpecsCoverEveryRegistryPhase(t *testing.T) {
 // TestAgenticReconcileObservedRatio is the AC2 assertion: a successful run of
 // each agentic stage observes substantially all of its applicable phases.
 func TestAgenticReconcileObservedRatio(t *testing.T) {
+	t.Parallel()
+
 	const minRatio = 0.8
 	for stage := range agenticFixture {
 		ts := ReconcileAgenticPhases(successEvidence(t, stage))
@@ -103,6 +107,8 @@ func TestAgenticReconcileObservedRatio(t *testing.T) {
 }
 
 func TestAgenticReconcileClaimsNothingWithoutEvidence(t *testing.T) {
+	t.Parallel()
+
 	for stage := range agenticFixture {
 		cases := map[string]func(*AgenticEvidence){
 			"no handoff":   func(ev *AgenticEvidence) { ev.Handoff = nil },
@@ -123,6 +129,8 @@ func TestAgenticReconcileClaimsNothingWithoutEvidence(t *testing.T) {
 }
 
 func TestAgenticReconcileHonoursDeclaredSkips(t *testing.T) {
+	t.Parallel()
+
 	ev := successEvidence(t, state.StageFeatureValidate)
 	ev.Handoff["skipped_phases"] = []any{map[string]any{"phase": "run-tests", "reason": "docs only"}}
 	for _, tr := range ReconcileAgenticPhases(ev) {
@@ -133,6 +141,8 @@ func TestAgenticReconcileHonoursDeclaredSkips(t *testing.T) {
 }
 
 func TestCollectAgenticEvidenceIgnoresStaleHandoff(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	dir := layouttest.MkPipelineDir(t, root)
 	data, _ := os.ReadFile(filepath.Join("testdata", "agentic_phases", "planning-success.json"))
@@ -168,6 +178,8 @@ func TestCollectAgenticEvidenceIgnoresStaleHandoff(t *testing.T) {
 }
 
 func TestReconcileAgenticPhasesUpgradesOnlySilence(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	dir := layouttest.MkPipelineDir(t, root)
 	data, _ := os.ReadFile(filepath.Join("testdata", "agentic_phases", "planning-success.json"))

@@ -38,6 +38,8 @@ func readRunStateFile(t *testing.T, root string) map[string]any {
 }
 
 func TestRunLifecycle_FreshRunTracksStagesAndCompletes(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	lc, from := beginRunLifecycle(root, 42, "")
 	if from != "" {
@@ -75,6 +77,8 @@ func TestRunLifecycle_FreshRunTracksStagesAndCompletes(t *testing.T) {
 }
 
 func TestRunLifecycle_CancelPausesAndReinvocationResumes(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	lc, _ := beginRunLifecycle(root, 7, "fix/7")
 	if lc.resumed {
@@ -118,6 +122,8 @@ func TestRunLifecycle_CancelPausesAndReinvocationResumes(t *testing.T) {
 }
 
 func TestRunLifecycle_HardKilledRecordIsResumed(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	dir, _ := layout.CheckoutDir(root)
 	if _, err := runstate.MarkRunning(dir, runstate.MarkRunningOptions{IssueNumber: 9, Branch: "fix/9"}); err != nil {
@@ -141,6 +147,8 @@ func TestRunLifecycle_HardKilledRecordIsResumed(t *testing.T) {
 }
 
 func TestRunLifecycle_LiveRunOfAnotherIssueIsNotClobbered(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	lc1, _ := beginRunLifecycle(root, 1, "")
 	lc2, _ := beginRunLifecycle(root, 2, "")
@@ -217,6 +225,8 @@ func newLifecycleTestScheduler(root string, runner StageRunner) *Scheduler {
 // acceptance test: a scheduler run writes run-state.json while it executes,
 // a cancellation mid-feature-dev leaves it paused at feature-dev, and the next
 // invocation re-enters at feature-dev instead of issue-pickup.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestScheduler_RunState_PausedOnCancelAndResumedOnReinvocation(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	root := gitWorkspace(t)

@@ -55,6 +55,8 @@ func (r *openCodeRootRunner) RunStage(ctx context.Context, params StageRunParams
 // failed. The terminal defer deletes it beside the worktree, whatever adapter
 // the run's stages used, and deleting it unlinks config/git without touching
 // the operator's git config it points at.
+//
+// Serial: sets the environment.
 func TestRunPipeline_DeletesTheOpenCodeRunRootAtEveryTerminalOutcome(t *testing.T) {
 	for _, tc := range []struct {
 		name string

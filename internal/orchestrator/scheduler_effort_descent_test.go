@@ -79,6 +79,8 @@ func downgradeCell(d DowngradeDecision) string {
 // silently reverting #606; without the claude half it passes on today's
 // tier-only key.
 func TestStickyEffort_XaiDescentDoesNotBleedOntoAnotherAdapter(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 
 	xai := DowngradeProviderForAdapter("grok")
@@ -139,6 +141,8 @@ func TestStickyEffort_XaiDescentDoesNotBleedOntoAnotherAdapter(t *testing.T) {
 // execMgr's adapter, and the IPC one keyed on the concrete id the adapter's own
 // process reported.
 func TestDowngradeDescent_XaiGoldenCellHoldsForABandDispatch(t *testing.T) {
+	t.Parallel()
+
 	want := descentGoldenCell(t, "grok-4.6")
 
 	// The Go-direct path already reached this cell via the concrete id.
@@ -173,6 +177,8 @@ func TestDowngradeDescent_XaiGoldenCellHoldsForABandDispatch(t *testing.T) {
 // for byte — that is what makes "single-adapter behaviour unchanged" an
 // assertion rather than a claim in a PR body.
 func TestDowngradeDescent_NonXaiAdaptersKeepEveryGoldenCell(t *testing.T) {
+	t.Parallel()
+
 	data, err := os.ReadFile(selectionCompatGoldenPath)
 	if err != nil {
 		t.Fatalf("read golden: %v", err)
@@ -210,6 +216,8 @@ func TestDowngradeDescent_NonXaiAdaptersKeepEveryGoldenCell(t *testing.T) {
 // a run that never mixes adapters must still descend and still apply the rung,
 // including down the chained ladder #606 shipped.
 func TestStickyEffort_SingleAdapterXaiRunIsUnchanged(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 	xai := DowngradeProviderForAdapter("grok-headless")
 
@@ -420,6 +428,8 @@ func newDescentTestScheduler(t *testing.T, root string, runner StageRunner, engi
 //     gets the descended rung, and the claude stages — resolving to the very
 //     same tier — must not. Pinning only the first direction would pass on a
 //     hardcoded "xai"; pinning only the second would pass on a hardcoded "".
+//
+// Serial: sets the environment.
 func TestRunPipeline_GoDirectXaiRungRidesTheRetryAndNoOtherAdapter(t *testing.T) {
 	isolateRoutingEnv(t)
 	t.Setenv("NIGHTGAUGE_ADAPTER", "")
@@ -494,6 +504,8 @@ func TestRunPipeline_GoDirectXaiRungRidesTheRetryAndNoOtherAdapter(t *testing.T)
 //
 // The control arm is the same fixture reporting an anthropic served id: the
 // rung must not be applied, or the implementation is keying everything to xai.
+//
+// Serial: sets the environment.
 func TestRunPipeline_IpcDescentKeysOffTheAdapterTheExtensionActuallyRan(t *testing.T) {
 	run := func(t *testing.T, served string) []StageRunParams {
 		t.Helper()

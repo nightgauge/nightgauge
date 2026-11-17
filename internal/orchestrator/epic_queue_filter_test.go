@@ -43,6 +43,8 @@ func newEpicFilterFixture(t *testing.T) *Scheduler {
 // TestEnqueueEpic_NilEligibleSubIssues_QueuesAllOpen verifies the autonomous
 // path behaviour: nil whitelist keeps every open sub-issue.
 func TestEnqueueEpic_NilEligibleSubIssues_QueuesAllOpen(t *testing.T) {
+	t.Parallel()
+
 	s := newEpicFilterFixture(t)
 
 	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, nil, ""); err != nil {
@@ -65,6 +67,8 @@ func TestEnqueueEpic_NilEligibleSubIssues_QueuesAllOpen(t *testing.T) {
 // rather than relying on the scheduler's startup client. A resolver error
 // falls back to the default issueSvc so resolution never blocks enqueue (#3700).
 func TestEnqueueEpic_UsesClientResolverPerRepo(t *testing.T) {
+	t.Parallel()
+
 	s := newEpicFilterFixture(t)
 
 	var calls int
@@ -97,6 +101,8 @@ func TestEnqueueEpic_UsesClientResolverPerRepo(t *testing.T) {
 // empty slice (not nil) is also treated as "no filter" so callers can pass
 // the result of a filter call without guarding against the zero case.
 func TestEnqueueEpic_EmptyEligibleSubIssues_QueuesAllOpen(t *testing.T) {
+	t.Parallel()
+
 	s := newEpicFilterFixture(t)
 
 	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, []IssueRef{}, ""); err != nil {
@@ -112,6 +118,8 @@ func TestEnqueueEpic_EmptyEligibleSubIssues_QueuesAllOpen(t *testing.T) {
 // only sub-issues in the whitelist are enqueued, and epicOrder is sequential
 // across the filtered subset.
 func TestEnqueueEpic_EligibleSubset_OnlyWhitelisted(t *testing.T) {
+	t.Parallel()
+
 	s := newEpicFilterFixture(t)
 
 	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, []IssueRef{{Repo: "Org/repo", Number: 201}, {Number: 203}}, ""); err != nil {
@@ -138,6 +146,8 @@ func TestEnqueueEpic_EligibleSubset_OnlyWhitelisted(t *testing.T) {
 // though it is open and would otherwise pass every other filter. The other
 // two sub-issues still enqueue normally.
 func TestEnqueueEpic_SkipsOwnerActionSubIssue(t *testing.T) {
+	t.Parallel()
+
 	mock := newMockIssueSvc()
 	mock.addIssue("Org", "repo", 100, &types.Issue{
 		NodeID: "I_epic100",
@@ -182,6 +192,8 @@ func TestEnqueueEpic_SkipsOwnerActionSubIssue(t *testing.T) {
 // "owner-action" is NOT in the configured list, so it enqueues normally, while
 // one labeled "needs-human" (the configured entry) is skipped.
 func TestEnqueueEpic_ExcludeLabelsConfigOverride(t *testing.T) {
+	t.Parallel()
+
 	mock := newMockIssueSvc()
 	mock.addIssue("Org", "repo", 100, &types.Issue{
 		NodeID: "I_epic100",
@@ -222,6 +234,8 @@ func TestEnqueueEpic_ExcludeLabelsConfigOverride(t *testing.T) {
 // are simply ignored — the epic enqueue succeeds with an empty
 // queue rather than erroring. This is the "missing from cache" fallback path.
 func TestEnqueueEpic_EligibleUnknown_NoOp(t *testing.T) {
+	t.Parallel()
+
 	s := newEpicFilterFixture(t)
 
 	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, []IssueRef{{Number: 999}, {Repo: "Org/other", Number: 201}}, ""); err != nil {

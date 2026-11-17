@@ -33,6 +33,8 @@ func (r *identityStageRunner) RunStage(ctx context.Context, params StageRunParam
 // result carries the model provider, the upstream model and the endpoint,
 // so the stage record can be written from them.
 func TestCLIRunResultCarriesTheModelIdentity(t *testing.T) {
+	t.Parallel()
+
 	got := cliRunResultToStageResult(&adapters.RunResult{
 		ServedModel:   "claude-sonnet-5",
 		ModelProvider: "anthropic",
@@ -49,6 +51,8 @@ func TestCLIRunResultCarriesTheModelIdentity(t *testing.T) {
 // stage's cache reads as 0 — 97k-182k per OpenCode feature-dev session on the
 // live run — so the stage and phase token totals undercounted.
 func TestCLIRunResultCarriesTheCachePools(t *testing.T) {
+	t.Parallel()
+
 	got := cliRunResultToStageResult(&adapters.RunResult{
 		InputTokens:         1200,
 		OutputTokens:        2900,
@@ -65,6 +69,8 @@ func TestCLIRunResultCarriesTheCachePools(t *testing.T) {
 // dispatched -m survives as the upstream model when another model served the
 // stage. A stage whose result carries none records none.
 func TestRunPipeline_RecordsTheStageModelIdentity(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	runner := &identityStageRunner{}
 	s := newRunIdentityTestScheduler(t, root, runner)
@@ -96,6 +102,8 @@ func TestRunPipeline_RecordsTheStageModelIdentity(t *testing.T) {
 // 97000 cache-read tokens booked input = 1200 - 97000 = -95800 whenever the
 // run record synthesised the stage from it.
 func TestRecordTerminatingStageTokens_BooksNonCachedInput(t *testing.T) {
+	t.Parallel()
+
 	rs := state.NewRuntimeState("nightgauge/test", 1651, "item-1651", "run-1651")
 	rs.BeginStage(state.StageFeatureDev)
 	rs.SetStageError(state.StageFeatureDev, "feature-dev failed (fixture)")

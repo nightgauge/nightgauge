@@ -162,6 +162,8 @@ func newBreadcrumbScheduler(t *testing.T, launchRoot, targetRoot string) *Schedu
 // post-run scan of either root would find nothing and every assertion here
 // would be vacuous.
 func TestVerifyPRMergeForStage_BreadcrumbLandsInTheRunsTargetRepo(t *testing.T) {
+	t.Parallel()
+
 	launchRoot := layouttest.Repo(t)
 	targetRoot := layouttest.Repo(t)
 
@@ -234,6 +236,8 @@ func TestVerifyPRMergeForStage_BreadcrumbLandsInTheRunsTargetRepo(t *testing.T) 
 // So the two writes SPLIT here by design, and this test is what makes that
 // design a fact about the code rather than a claim in a comment.
 func TestVerifyPRMergeForStage_SurvivalRecordStaysAtTheLaunchRoot(t *testing.T) {
+	t.Parallel()
+
 	launchRoot := layouttest.Repo(t)
 	targetRoot := layouttest.Repo(t)
 
@@ -278,6 +282,8 @@ func TestVerifyPRMergeForStage_SurvivalRecordStaysAtTheLaunchRoot(t *testing.T) 
 // record has already ended, so the post-merge evaluation runs once and no
 // snapshot is written anywhere.
 func TestRunPostMerge_NilRuntimeEvaluatesOnceAndWritesNoBreadcrumb(t *testing.T) {
+	t.Parallel()
+
 	launchRoot := layouttest.Repo(t)
 	targetRoot := layouttest.Repo(t)
 	s := newBreadcrumbScheduler(t, launchRoot, targetRoot)
@@ -316,6 +322,8 @@ func TestRunPostMerge_NilRuntimeEvaluatesOnceAndWritesNoBreadcrumb(t *testing.T)
 // the hook to withhold Ready, and a withheld Ready is not re-written at
 // completion. A nil runtime is a real merge seen late, so it never asks.
 func TestRunPostMerge_NoOpRunWithholdsReady(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	s := newBreadcrumbScheduler(t, root, root)
 	var got []bool
@@ -349,6 +357,8 @@ func TestRunPostMerge_NoOpRunWithholdsReady(t *testing.T) {
 // TestRunPostMerge_WiresTheRemainderComment (#2878): the scheduler's path posts
 // the partial-delivery comment too, not only the CLI and extension path.
 func TestRunPostMerge_WiresTheRemainderComment(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	s := newBreadcrumbScheduler(t, root, root)
 	s.trustGate = allWritersGate()

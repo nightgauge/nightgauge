@@ -107,6 +107,8 @@ func dispatchedStages(calls []StageRunParams) map[state.PipelineStage]bool {
 
 // Every stage of a pinned run dispatches on the requested adapter and model,
 // marked as requested, and the run's record carries the requested pair.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestRemotePinDispatchesEveryStageOnTheRequestedPair(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	root := gitWorkspace(t)
@@ -137,6 +139,8 @@ func TestRemotePinDispatchesEveryStageOnTheRequestedPair(t *testing.T) {
 
 // Without a pin nothing changes: no dispatch names an adapter, none is
 // marked requested, and the record names no request.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestNoRemotePinDispatchesAsBefore(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	root := t.TempDir()
@@ -162,6 +166,8 @@ func TestNoRemotePinDispatchesAsBefore(t *testing.T) {
 // A usage cap mid-run hops to the next provider in the chain. The hop is
 // recorded as a hop, with its reason, and the requested pair stays the
 // original: the record shows what was asked for next to what served.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestRemotePinCapHopIsRecordedAndTheRequestStands(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	root := gitWorkspace(t)
@@ -233,6 +239,8 @@ func TestRemotePinCapHopIsRecordedAndTheRequestStands(t *testing.T) {
 // another model: the reroute that dispatches an unpinned run
 // (TestContextBudgetRefusal_SuccessfulReRouteDispatches) does not run, and the
 // refusal names the pin (#1656).
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestRemotePinContextBudgetRefusesInsteadOfReRouting(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	root := gitWorkspace(t)
@@ -266,6 +274,8 @@ func TestRemotePinContextBudgetRefusesInsteadOfReRouting(t *testing.T) {
 // A capacity overflow on a pinned run is refused under reject_action:
 // soft-route, never moved to a capacity fallback model, and the windows of the
 // stages ahead are the pinned model's (#1656).
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestRemotePinCapacityRefusesInsteadOfSoftRouting(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	capacityTestEndpoints(t)

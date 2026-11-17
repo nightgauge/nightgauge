@@ -41,6 +41,8 @@ func accumulateFixture(t *testing.T, name string) *execution.TokenAccumulator {
 // used to price the result alone — "(0 cached)", 4–9x under the record. It now
 // reads the booking, so it cannot disagree with the run summary.
 func TestStageCostFromBookingCarriesCachePoolsTheResultLacked(t *testing.T) {
+	t.Parallel()
+
 	acc := accumulateFixture(t, "claude_stream_subagent_multi_result.jsonl")
 
 	rt := state.NewRuntimeState("nightgauge/nightgauge", 1934, "item-1934", "run-1934")
@@ -84,6 +86,8 @@ func TestStageCostFromBookingCarriesCachePoolsTheResultLacked(t *testing.T) {
 }
 
 func TestStageCostFromBookingReadsLatestAttempt(t *testing.T) {
+	t.Parallel()
+
 	rt := state.NewRuntimeState("nightgauge/nightgauge", 1934, "item-1934", "run-1934")
 	if _, ok := stageCostFromBooking(rt, state.StageFeatureDev); ok {
 		t.Fatal("found a booking for a stage that never ran")
@@ -104,6 +108,8 @@ func TestStageCostFromBookingReadsLatestAttempt(t *testing.T) {
 }
 
 func TestNativeCostDivergence(t *testing.T) {
+	t.Parallel()
+
 	counts := StageCost{Input: 206, Output: 47798, CacheRead: 14466305, CacheCreation: 201473}
 	derived, _ := tokens.CalculateCostFor("claude", stageCostTestModel, tokens.TokenCounts{
 		Input: counts.Input, Output: counts.Output, CacheRead: counts.CacheRead,
@@ -137,6 +143,8 @@ func TestNativeCostDivergence(t *testing.T) {
 }
 
 func TestRecordCostDivergencePersistsAnomaly(t *testing.T) {
+	t.Parallel()
+
 	rt := state.NewRuntimeState("nightgauge/nightgauge", 1934, "item-1934", "run-1934")
 	c := StageCost{Input: 206, Output: 47798, CacheRead: 14466305, CacheCreation: 201473,
 		CostUSD: 0.7176, Source: state.CostSourceNative}
@@ -173,6 +181,8 @@ func (r *cachePoolsOffResultRunner) RunStage(ctx context.Context, params StageRu
 // Drives a real runPipeline: every stage-complete callback must report the
 // same cost and cache reads the run then books, never the cache-less
 // re-derivation that printed "(0 cached)" beside a 9x larger summary.
+//
+// Serial: sets the environment (via isolateRoutingEnv).
 func TestRunPipeline_StageCompleteReportsTheBookedCost(t *testing.T) {
 	isolateRoutingEnv(t)
 	root := gitWorkspace(t)
@@ -218,6 +228,8 @@ func TestRunPipeline_StageCompleteReportsTheBookedCost(t *testing.T) {
 // stage priced from tokens: the stage_completed telemetry event (every such
 // stage reached analytics as $0), the trace stage-exit cost, and the failing
 // stage's terminating record. Each must report the booked figure.
+//
+// Serial: sets the environment (via isolateRoutingEnv).
 func TestRunPipeline_TelemetryStageCompletedReportsTheBookedCost(t *testing.T) {
 	isolateRoutingEnv(t)
 	root := gitWorkspace(t)
@@ -279,6 +291,7 @@ func (r *failingCachePoolsRunner) RunStage(_ context.Context, params StageRunPar
 	return &StageRunResult{ExitCode: 1, InputTokens: 217, OutputTokens: 12_485, CacheReadTokens: r.cacheRead}, nil
 }
 
+// Serial: sets the environment (via isolateRoutingEnv).
 func TestRunPipeline_TerminatingStageRecordCarriesTheBookedCost(t *testing.T) {
 	isolateRoutingEnv(t)
 	root := gitWorkspace(t)
@@ -311,6 +324,8 @@ func TestRunPipeline_TerminatingStageRecordCarriesTheBookedCost(t *testing.T) {
 }
 
 func TestStageAttemptRowsLabelsRepeatedStages(t *testing.T) {
+	t.Parallel()
+
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	// AllStageAttempts lists superseded attempts before completed ones, so the
 	// opus retry of pr-merge can precede the stage that ran before it.

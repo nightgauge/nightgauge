@@ -17,6 +17,8 @@ import (
 // Startup recovery must not hand a closed issue back to the dispatcher (#2750).
 // The fake refuses every board write, so the log names which move was tried and
 // writes proves whether any was.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRecoverOrphanedRunningItems_ClosedIssue(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -97,6 +99,8 @@ func TestRecoverOrphanedRunningItems_ClosedIssue(t *testing.T) {
 // A recheck ends in a revert that can write Ready, so it reads the issue first:
 // the entry recovery queues for an unread issue must not put it in Ready once
 // the forge answers that the issue is closed (#2750).
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRecheckPR_ClosedIssueNeverRevertsToReady(t *testing.T) {
 	cases := []struct {
 		name      string

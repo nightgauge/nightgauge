@@ -32,6 +32,8 @@ func (m *mockDispatcher) Dispatch(_ context.Context, item CandidateItem) (string
 // ---- LocalDispatcher tests ----
 
 func TestLocalDispatcher_Dispatch_IPC(t *testing.T) {
+	t.Parallel()
+
 	var got struct {
 		owner  string
 		repo   string
@@ -62,6 +64,8 @@ func TestLocalDispatcher_Dispatch_IPC(t *testing.T) {
 }
 
 func TestLocalDispatcher_Dispatch_Fallback(t *testing.T) {
+	t.Parallel()
+
 	var fallbackCalled bool
 	disp := NewLocalDispatcher(
 		nil,
@@ -81,6 +85,8 @@ func TestLocalDispatcher_Dispatch_Fallback(t *testing.T) {
 }
 
 func TestLocalSlotID_Deterministic(t *testing.T) {
+	t.Parallel()
+
 	item := CandidateItem{Repo: "nightgauge/nightgauge", Number: 99}
 	a := localSlotID(item)
 	b := localSlotID(item)
@@ -93,6 +99,8 @@ func TestLocalSlotID_Deterministic(t *testing.T) {
 }
 
 func TestLocalSlotID_Unique(t *testing.T) {
+	t.Parallel()
+
 	a := localSlotID(CandidateItem{Repo: "owner/repo", Number: 1})
 	b := localSlotID(CandidateItem{Repo: "owner/repo", Number: 2})
 	if a == b {
@@ -111,6 +119,8 @@ func newTestCloudServer(t *testing.T, handler http.HandlerFunc) (*httptest.Serve
 }
 
 func TestCloudDispatcher_Dispatch_Success(t *testing.T) {
+	t.Parallel()
+
 	_, disp := newTestCloudServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("expected POST, got %s", r.Method)
@@ -140,6 +150,8 @@ func TestCloudDispatcher_Dispatch_Success(t *testing.T) {
 }
 
 func TestCloudDispatcher_Dispatch_Retry5xx(t *testing.T) {
+	t.Parallel()
+
 	attempts := 0
 	_, disp := newTestCloudServer(t, func(w http.ResponseWriter, r *http.Request) {
 		attempts++
@@ -165,6 +177,8 @@ func TestCloudDispatcher_Dispatch_Retry5xx(t *testing.T) {
 }
 
 func TestCloudDispatcher_Dispatch_PermanentError(t *testing.T) {
+	t.Parallel()
+
 	_, disp := newTestCloudServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
@@ -177,6 +191,8 @@ func TestCloudDispatcher_Dispatch_PermanentError(t *testing.T) {
 }
 
 func TestCloudDispatcher_Dispatch_4xx(t *testing.T) {
+	t.Parallel()
+
 	_, disp := newTestCloudServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(`{"error":"bad request"}`)) //nolint:errcheck
@@ -190,6 +206,8 @@ func TestCloudDispatcher_Dispatch_4xx(t *testing.T) {
 }
 
 func TestCloudDispatcher_Dispatch_EmptySlotID(t *testing.T) {
+	t.Parallel()
+
 	_, disp := newTestCloudServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(dispatchResponse{SlotID: ""}) //nolint:errcheck
@@ -203,6 +221,8 @@ func TestCloudDispatcher_Dispatch_EmptySlotID(t *testing.T) {
 }
 
 func TestCloudDispatcher_Dispatch_ContextCancelled(t *testing.T) {
+	t.Parallel()
+
 	_, disp := newTestCloudServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
@@ -224,6 +244,8 @@ func TestCloudDispatcher_Dispatch_ContextCancelled(t *testing.T) {
 // ---- mockDispatcher integration with AutonomousScheduler ----
 
 func TestAutonomousScheduler_SetDispatcher_RoutesThrough(t *testing.T) {
+	t.Parallel()
+
 	mock := &mockDispatcher{slotID: "mock-slot-1"}
 
 	// Build a minimal scheduler — we only need enqueueItem to exercise the path.
@@ -254,6 +276,8 @@ func TestAutonomousScheduler_SetDispatcher_RoutesThrough(t *testing.T) {
 }
 
 func TestAutonomousScheduler_SetDispatcher_NoDispatcherUsesLegacy(t *testing.T) {
+	t.Parallel()
+
 	var legacyCalled bool
 
 	as := &AutonomousScheduler{

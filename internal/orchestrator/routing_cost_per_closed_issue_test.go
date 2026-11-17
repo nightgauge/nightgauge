@@ -26,6 +26,8 @@ func decisionFor(labels ...string) routing.Decision {
 // A sized M+ issue dispatches feature-dev on Opus even on a first run, where
 // the run-wide prediction is empty. Every other stage keeps the prediction.
 func TestRoutedStageModel_ImplementationBand(t *testing.T) {
+	t.Parallel()
+
 	sizedM := decisionFor("type:feature", "size:M")
 	unsized := decisionFor("type:feature")
 	sizedS := decisionFor("type:feature", "size:S")
@@ -58,6 +60,8 @@ func TestRoutedStageModel_ImplementationBand(t *testing.T) {
 // End to end through resolveDispatchModel: the band reaches dispatch, an
 // unsized issue keeps today's default, the efficiency envelope still caps it,
 // and an explicit per-stage model still wins over it.
+//
+// Serial: sets the environment (via isolatedWorkspace).
 func TestResolveDispatchModel_ImplementationBandInsideEnvelope(t *testing.T) {
 	sizedM := decisionFor("type:feature", "size:M")
 	unsized := decisionFor("type:feature")
@@ -90,6 +94,8 @@ func TestResolveDispatchModel_ImplementationBandInsideEnvelope(t *testing.T) {
 // A high-risk issue floors feature-dev and feature-validate at Opus, even an
 // XS one whose size alone would never reach it; the efficiency ceiling still
 // caps the floor; plumbing stages are untouched.
+//
+// Serial: sets the environment (via isolatedWorkspace).
 func TestRiskFloors_DispatchAndEnvelope(t *testing.T) {
 	risky := decisionFor("type:bug", "size:XS", "security")
 	plain := decisionFor("type:bug", "size:XS")
@@ -143,6 +149,8 @@ func writePlannerAssessment(t *testing.T, root string, issue int, body string) {
 // #1909 reproduced on the #1643 shape: no size label, type:feature,
 // component:go-binary. Pickup routes from the assumed M; once the planner
 // assesses L the run re-derives, and the route it records is the L one.
+//
+// Serial: sets the environment (via isolatedWorkspace).
 func TestPlannerRoutingDecision_RederivesAnAssumedSize(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	item := types.BoardItem{Number: 1643, Repo: "acme/widget", Title: "t",
@@ -178,6 +186,8 @@ func TestPlannerRoutingDecision_RederivesAnAssumedSize(t *testing.T) {
 
 // Re-derivation never newly skips a stage mid-run: a planner's XS would skip
 // feature-validate on its own, but the run keeps the skip set it started with.
+//
+// Serial: sets the environment (via isolatedWorkspace).
 func TestPlannerRoutingDecision_KeepsTheStartingSkipSet(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	item := types.BoardItem{Number: 7, Repo: "acme/widget", Title: "t", Labels: []string{"type:feature"}}
@@ -259,6 +269,8 @@ func writeRunFixture(root, name, body string) {
 // re-derived Decision must reach feature-dev's DISPATCH model — and only
 // feature-dev's — and must be written into the issue context the later stages
 // read, and into the run record.
+//
+// Serial: sets the environment (via isolateRoutingEnv).
 func TestRunPipeline_PlannerSizeReachesFeatureDevDispatch(t *testing.T) {
 	isolateRoutingEnv(t)
 	root := gitWorkspace(t)
@@ -330,6 +342,8 @@ func TestRunPipeline_PlannerSizeReachesFeatureDevDispatch(t *testing.T) {
 // and stageBaseModel applies dev_model to EVERY reasoning stage — so an L issue
 // (complexity_score 5) re-routed in the default elevated mode gets Opus for
 // feature-dev only, while planning and validation stay on Sonnet.
+//
+// Serial: sets the environment (via isolatedWorkspace).
 func TestReRouteContext_SizeRuleStaysOnFeatureDev(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	makeIssueContext(t, dir, 1909, "", 5)

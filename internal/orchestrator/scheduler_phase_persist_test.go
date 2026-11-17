@@ -42,6 +42,8 @@ func readPersistedPhases(t *testing.T, root string, issue int) []state.PhaseReco
 // this, only stage boundaries persisted, so a CLI-started run read 0/18 in the
 // extension until feature-dev ended.
 func TestRecordPhaseProgress_PersistsMidStage(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	id, err := runstate.NewRunID()
 	if err != nil {

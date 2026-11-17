@@ -17,6 +17,8 @@ import (
 // (~5m) per-issue backoff, NO lifetime/per-session cap increment, NO pause,
 // NO global cooldown.
 func TestOnPipelineComplete_ApiConnectionLost_TransientNoPause(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -77,6 +79,8 @@ func TestOnPipelineComplete_ApiConnectionLost_TransientNoPause(t *testing.T) {
 // classifier and the completion path: no lifetime increment, no pause, and
 // the short per-issue backoff.
 func TestOnPipelineComplete_ClaudeAPIErrorLine_TransientNoPause_3238(t *testing.T) {
+	t.Parallel()
+
 	for _, line := range []string{apiErrENOTFOUND, apiErrECONNREFUSED} {
 		reason, _ := cliFailureText("", line+"\n")
 		text := terminalFailureReason(1, nil, reason)
@@ -118,6 +122,8 @@ func TestOnPipelineComplete_ClaudeAPIErrorLine_TransientNoPause_3238(t *testing.
 // also arms the #3444 pause-decline guard against a racing
 // haltQueueOnSlotFailure.
 func TestOnPipelineComplete_GitHubNetworkOutage_ShortGlobalCooldownNoPause(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -178,6 +184,8 @@ func TestOnPipelineComplete_GitHubNetworkOutage_ShortGlobalCooldownNoPause(t *te
 // CLI message, the Go-side ClassifyTerminalKind fallback must re-classify and
 // route to the transient branch (no lifetime increment, no pause).
 func TestNotifyComplete_EmptyKindSocketCloseDetail_RoutesTransient(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},

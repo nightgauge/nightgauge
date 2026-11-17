@@ -43,6 +43,8 @@ func captureLog(t *testing.T, fn func()) string {
 }
 
 func TestOutcomeModelDiagnosticsNameTheCause(t *testing.T) {
+	t.Parallel()
+
 	t.Run("predicted: nothing was predicted", func(t *testing.T) {
 		got := OutcomePredictedModelDiagnostic(340, "")
 		if !strings.Contains(got, "carried no routing.pickup_recommendation.dispatch_dev_model") {
@@ -89,6 +91,8 @@ func TestOutcomeModelDiagnosticsNameTheCause(t *testing.T) {
 // is the shape every codex `gpt-5.5`, gemini, lm-studio and ollama workspace
 // produces, so the wrong text is what an operator debugging an empty
 // ModelAccuracy actually reads.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestRecordOutcomeDiagnosesAnUnregisteredServedModel(t *testing.T) {
 	root := t.TempDir()
 	s := &Scheduler{recordOutcomes: true}
@@ -112,6 +116,8 @@ func TestRecordOutcomeDiagnosesAnUnregisteredServedModel(t *testing.T) {
 
 // The mirror case: a prediction that IS present but unregistered must not be
 // reported as an issue-{N}.json that carried no recommendation.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestRecordOutcomeDiagnosesAnUnregisteredPrediction(t *testing.T) {
 	root := layouttest.Repo(t)
 	s := &Scheduler{recordOutcomes: true}
@@ -137,6 +143,8 @@ func TestRecordOutcomeDiagnosesAnUnregisteredPrediction(t *testing.T) {
 
 // The genuinely-absent cases keep their original, correct text — the fix
 // distinguishes causes, it does not blur them together.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestRecordOutcomeStillReportsGenuineAbsence(t *testing.T) {
 	root := t.TempDir()
 	s := &Scheduler{recordOutcomes: true}
@@ -162,6 +170,8 @@ func TestRecordOutcomeStillReportsGenuineAbsence(t *testing.T) {
 // COMMON case on a non-Claude workspace and were previously described as if the
 // band were translated for every adapter.
 func TestOutcomeActualBandWorkedTable(t *testing.T) {
+	t.Parallel()
+
 	rows := []struct {
 		served, predicted, want, why string
 	}{

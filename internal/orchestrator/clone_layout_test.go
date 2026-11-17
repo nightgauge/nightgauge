@@ -25,6 +25,8 @@ func autonomousStatePathT(t testing.TB, root string) string {
 // state (ADR-024 § 7), so two orchestrators — one per checkout — never
 // overwrite each other's run control.
 func TestRunControlSingletonsArePerCheckout(t *testing.T) {
+	t.Parallel()
+
 	mainRoot := layouttest.Repo(t)
 	gittest.Run(t, mainRoot, "commit", "-q", "--allow-empty", "-m", "init")
 	linked := filepath.Join(t.TempDir(), "wt")
@@ -74,6 +76,8 @@ func TestRunControlSingletonsArePerCheckout(t *testing.T) {
 // Outside a git checkout there is no CHECKOUT: reads are absent and writes
 // fail, never landing in the working tree.
 func TestRunControlOutsideGitIsRefused(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	if p := checkoutStatePath(root, layout.CheckoutCurrentRun); p != "" {
 		t.Errorf("checkoutStatePath outside git = %q, want \"\"", p)

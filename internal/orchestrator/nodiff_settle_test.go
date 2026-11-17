@@ -35,6 +35,8 @@ func noDiffResult(statuses ...string) pmstages.PRCreateResult {
 }
 
 func TestSettleNoDiffAllMetClosesIssue(t *testing.T) {
+	t.Parallel()
+
 	f := &fakeNoDiffIssue{}
 	detail, closed := SettleNoDiff(context.Background(), f, f, "I_1", 3012, noDiffResult(pmstages.ACMet, pmstages.ACMet))
 	if !closed || f.closes != 1 || len(f.comments) != 1 {
@@ -46,6 +48,8 @@ func TestSettleNoDiffAllMetClosesIssue(t *testing.T) {
 }
 
 func TestSettleNoDiffUnmetParksIssue(t *testing.T) {
+	t.Parallel()
+
 	f := &fakeNoDiffIssue{}
 	detail, closed := SettleNoDiff(context.Background(), f, f, "I_1", 3012, noDiffResult(pmstages.ACMet, pmstages.ACUnmet))
 	if closed || f.closes != 0 || len(f.comments) != 1 {
@@ -57,6 +61,8 @@ func TestSettleNoDiffUnmetParksIssue(t *testing.T) {
 }
 
 func TestSettleNoDiffCommentFailurePreventsClose(t *testing.T) {
+	t.Parallel()
+
 	f := &fakeNoDiffIssue{commentErr: errors.New("boom")}
 	detail, closed := SettleNoDiff(context.Background(), f, f, "I_1", 3012, noDiffResult(pmstages.ACMet))
 	if closed || f.closes != 0 {
@@ -68,6 +74,8 @@ func TestSettleNoDiffCommentFailurePreventsClose(t *testing.T) {
 }
 
 func TestSettleNoDiffCloseFailureParks(t *testing.T) {
+	t.Parallel()
+
 	f := &fakeNoDiffIssue{closeErr: errors.New("boom")}
 	detail, closed := SettleNoDiff(context.Background(), f, f, "I_1", 3012, noDiffResult(pmstages.ACMet))
 	if closed || !strings.Contains(detail, "[not-pipeline-actionable]") {
@@ -76,6 +84,8 @@ func TestSettleNoDiffCloseFailureParks(t *testing.T) {
 }
 
 func TestSettleNoDiffNoNodeIDRecordsNothing(t *testing.T) {
+	t.Parallel()
+
 	f := &fakeNoDiffIssue{}
 	_, closed := SettleNoDiff(context.Background(), f, f, "", 3012, noDiffResult(pmstages.ACMet))
 	if closed || len(f.comments) != 0 || f.closes != 0 {

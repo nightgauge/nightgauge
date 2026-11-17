@@ -30,6 +30,8 @@ import (
 // runtime-{issue}-{runId}.json at all, and the whole CLI-observability feature
 // dies silently behind a bare `catch { return null }` (F25).
 func TestRunPipeline_SidecarCarriesTheRunIdentity(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	runner := &runIDCapturingRunner{}
 	s := newRunIdentityTestScheduler(t, root, runner)
@@ -76,6 +78,8 @@ func TestRunPipeline_SidecarCarriesTheRunIdentity(t *testing.T) {
 // D11: readers treat a MISSING key as "written by a binary older than
 // ADR-017", so this binary must never omit it.
 func TestCurrentRunSidecar_RunIdKeyIsAlwaysPresent(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	if err := writeCurrentRunSidecar(root, CurrentRunSidecar{IssueNumber: 1, Repo: "o/r"}); err != nil {
 		t.Fatalf("writeCurrentRunSidecar: %v", err)
@@ -113,6 +117,8 @@ func TestCurrentRunSidecar_RunIdKeyIsAlwaysPresent(t *testing.T) {
 // on how many sites there are — only that whichever one wrote first used the
 // composer.
 func TestRunPipeline_SnapshotLandsUnderTheIdentityKeyedName(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	runner := &runIDCapturingRunner{}
 	s := newRunIdentityTestScheduler(t, root, runner)

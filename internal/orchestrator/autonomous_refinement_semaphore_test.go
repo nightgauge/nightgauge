@@ -88,6 +88,8 @@ func threeTrustedUnrefinedIssuesServer(t *testing.T) *httptest.Server {
 //
 // This test captures the process-global standard logger, so it must NEVER call
 // t.Parallel().
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRunRefinementCycle_RefusedSemaphoreGatesDispatch(t *testing.T) {
 	logs := withCapturedLog(t)
 
@@ -189,6 +191,8 @@ func TestRunRefinementCycle_RefusedSemaphoreGatesDispatch(t *testing.T) {
 // the short-circuit leaves TestRunRefinementCycle_RefusedSemaphoreGatesDispatch
 // green and only moves this counter off zero.
 func TestRunRefinementCycle_SaturatedCycleSpendsNoAPIQuota(t *testing.T) {
+	t.Parallel()
+
 	var hits int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt64(&hits, 1)

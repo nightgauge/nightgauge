@@ -125,6 +125,8 @@ func renderStage(t *testing.T, root, stage, model, adapter, profile string) *ski
 // (i) At a 32768-token local window feature-dev's full render does not fit
 // and its compact one does, so every sub-session is dispatched on the
 // compact render: the sub-session policy and the compact profile compose.
+//
+// Serial: swaps package var reconcileExecGh (via runLocalFeatureDev).
 func TestScheduler_SmallLocalWindowDispatchesTheCompactProfile(t *testing.T) {
 	root, runner := runLocalFeatureDev(t, 32768)
 
@@ -148,6 +150,8 @@ func TestScheduler_SmallLocalWindowDispatchesTheCompactProfile(t *testing.T) {
 
 // (ii) A window neither render fits is refused before dispatch as
 // context_window_exceeded, and names the compact attempt.
+//
+// Serial: swaps package var reconcileExecGh (via runLocalFeatureDev).
 func TestScheduler_WindowTheCompactProfileMissesIsRefused(t *testing.T) {
 	const window = 12288
 	root, runner := runLocalFeatureDev(t, window)
@@ -166,6 +170,8 @@ func TestScheduler_WindowTheCompactProfileMissesIsRefused(t *testing.T) {
 }
 
 // (iii) A hosted model with a large window keeps the full render.
+//
+// Serial: sets the environment.
 func TestScheduler_LargeHostedWindowKeepsTheFullProfile(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "sonnet")

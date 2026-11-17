@@ -12,6 +12,8 @@ import (
 // TestStageBudgetsAreSnapshottedOncePerRun is #2257: stage budgets are read
 // once at run start. An edit to the tracked config during the run, or to the
 // returned map, must not change what later stages of that run dispatch under.
+//
+// Serial: sets the environment.
 func TestStageBudgetsAreSnapshottedOncePerRun(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("NIGHTGAUGE_CONFIG_HOME", t.TempDir())

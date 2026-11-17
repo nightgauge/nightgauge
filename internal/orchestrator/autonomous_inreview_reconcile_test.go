@@ -24,6 +24,7 @@ func prListJSON(t *testing.T) func(ctx context.Context, args ...string) ([]byte,
 	}
 }
 
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestOpenPRMergeStateForIssue_MatchesBranch(t *testing.T) {
 	stubReconcileGh(t, prListJSON(t))
 	as := &AutonomousScheduler{}
@@ -33,6 +34,7 @@ func TestOpenPRMergeStateForIssue_MatchesBranch(t *testing.T) {
 	}
 }
 
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestOpenPRMergeStateForIssue_NoMatch(t *testing.T) {
 	stubReconcileGh(t, prListJSON(t))
 	as := &AutonomousScheduler{}
@@ -41,6 +43,7 @@ func TestOpenPRMergeStateForIssue_NoMatch(t *testing.T) {
 	}
 }
 
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestOpenPRMergeStateForIssue_GhError(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
 		return nil, context.DeadlineExceeded
@@ -52,6 +55,8 @@ func TestOpenPRMergeStateForIssue_GhError(t *testing.T) {
 }
 
 func TestNodeHasEpicLabel(t *testing.T) {
+	t.Parallel()
+
 	if !nodeHasEpicLabel(&depgraph.Node{Labels: []string{"component:platform", "type:epic"}}) {
 		t.Error("expected true for type:epic")
 	}
@@ -62,6 +67,8 @@ func TestNodeHasEpicLabel(t *testing.T) {
 
 // TestReconcileStuckInReview_SkipsCleanPR: an In-review issue whose PR is CLEAN
 // (legitimately awaiting the merge stage) must NOT be moved/retried.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileStuckInReview_SkipsCleanPR(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
 		return []byte(`[{"number":64,"headRefName":"feat/43-x","mergeStateStatus":"CLEAN"}]`), nil
@@ -82,6 +89,8 @@ func TestReconcileStuckInReview_SkipsCleanPR(t *testing.T) {
 // TestOpenPRMergeStatesForRepo_BatchesOneCall: the batched lookup returns a
 // number→state map from a SINGLE gh pr list, and openPRMergeStateForIssue
 // delegates to it. This is the quota-saving contract (#3896).
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestOpenPRMergeStatesForRepo_BatchesOneCall(t *testing.T) {
 	calls := 0
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -105,6 +114,8 @@ func TestOpenPRMergeStatesForRepo_BatchesOneCall(t *testing.T) {
 // TestReconcileStuckInReview_OneCallPerRepo: with multiple in-review nodes in
 // the same repo, the sweep must issue exactly ONE gh pr list for that repo
 // (was one-per-node before #3896).
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileStuckInReview_OneCallPerRepo(t *testing.T) {
 	calls := 0
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -129,6 +140,8 @@ func TestReconcileStuckInReview_OneCallPerRepo(t *testing.T) {
 
 // TestReconcileStuckInReview_SkipsNonInReviewAndEpics: only In-review,
 // non-epic nodes are considered.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileStuckInReview_SkipsNonInReviewAndEpics(t *testing.T) {
 	called := false
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -151,6 +164,8 @@ func TestReconcileStuckInReview_SkipsNonInReviewAndEpics(t *testing.T) {
 // records "In review" nodes with a confirmed OPEN PR into inReviewPRBacked,
 // and leaves out "In review" nodes with no confirmed PR — sharing one
 // gh-pr-list call per repo with the existing blockedReadyPRIssues sweep.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestRefreshBlockedReadyPRs_PopulatesInReviewPRBacked(t *testing.T) {
 	calls := 0
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
@@ -183,6 +198,8 @@ func TestRefreshBlockedReadyPRs_PopulatesInReviewPRBacked(t *testing.T) {
 // TestRefreshBlockedReadyPRs_QueryFailure_LeavesInReviewPRBackedEmpty: a
 // failed gh query must fail closed — the repo's "In review" nodes contribute
 // nothing to inReviewPRBacked, never a silent "satisfied".
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestRefreshBlockedReadyPRs_QueryFailure_LeavesInReviewPRBackedEmpty(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
 		return nil, context.DeadlineExceeded
@@ -204,6 +221,8 @@ func TestRefreshBlockedReadyPRs_QueryFailure_LeavesInReviewPRBackedEmpty(t *test
 // status is "In review" but has no confirmed OPEN PR must NOT satisfy the
 // blockedBy edge — the status string alone is not evidence.
 func TestEvaluateDeps_InReviewWithoutPRBacking_Blocks(t *testing.T) {
+	t.Parallel()
+
 	g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
 		"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: "In review"},
 	}}
@@ -217,6 +236,8 @@ func TestEvaluateDeps_InReviewWithoutPRBacking_Blocks(t *testing.T) {
 // holds its dependents in every column. A `Refs` merge can leave one Done, and
 // an open PR does not prove the dependents' contract exists.
 func TestEvaluateDeps_OpenBlockerBlocksWhateverItsStatus(t *testing.T) {
+	t.Parallel()
+
 	for _, status := range []string{"Done", "In review", "Ready"} {
 		g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
 			"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: status},
@@ -230,6 +251,8 @@ func TestEvaluateDeps_OpenBlockerBlocksWhateverItsStatus(t *testing.T) {
 // TestIsBlocked_OpenBlockerKeysOnState (#2706): the Go scheduler's gate reads
 // the blocker's issue state; a board status is not part of its input.
 func TestIsBlocked_OpenBlockerKeysOnState(t *testing.T) {
+	t.Parallel()
+
 	item := types.BoardItem{Number: 2, BlockedBy: []types.BlockingRef{{Number: 1, State: "OPEN"}}}
 	blocked, err := (&Scheduler{}).isBlocked(context.Background(), item)
 	if err != nil || !blocked {
@@ -242,6 +265,8 @@ func TestIsBlocked_OpenBlockerKeysOnState(t *testing.T) {
 // Backlog. Neither Backlog promotion path may move the dependent. The independent
 // node is promoted, which is what really happened to #2702: it had no edge to
 // #2684, and promoteUnblockedToReady sweeps every Backlog node (#288).
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestPromotion_OpenDoneBlockerHoldsItsDependent(t *testing.T) {
 	const repo = "nightgauge/nightgauge"
 	paths := map[string]func(as *AutonomousScheduler){
@@ -279,6 +304,8 @@ func TestPromotion_OpenDoneBlockerHoldsItsDependent(t *testing.T) {
 }
 
 func TestIsTriagedAndUnblocked_OpenBlockerBlocksWhateverItsStatus(t *testing.T) {
+	t.Parallel()
+
 	dependent := &depgraph.Node{
 		Repo: "O/app", Number: 2, State: "OPEN", BoardStatus: "Backlog",
 		Priority: "P1", Labels: []string{"type:bug"},
@@ -296,6 +323,8 @@ func TestIsTriagedAndUnblocked_OpenBlockerBlocksWhateverItsStatus(t *testing.T) 
 // TestPromotionCause: the promotion log names a cause only for a real dependent
 // of the completed issue.
 func TestPromotionCause(t *testing.T) {
+	t.Parallel()
+
 	dependents := []string{"O/app#2"}
 	if got, want := promotionCause(dependents, "O/app#2", "O/app#1"), "unblocked by O/app#1"; got != want {
 		t.Errorf("dependent: got %q, want %q", got, want)
@@ -310,6 +339,8 @@ func TestPromotionCause(t *testing.T) {
 // next fresh scan's dispatch guard must not then hold that issue for a human.
 // The two sweeps used to contradict each other and strand the issue in Ready. A
 // BEHIND PR that also fails a required check stays blocked (#159).
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileThenRefresh_BehindPRIsDispatchedNextFreshCycle(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -358,6 +389,8 @@ func TestReconcileThenRefresh_BehindPRIsDispatchedNextFreshCycle(t *testing.T) {
 // TestIsEnqueueFailedCleanPR: the reconcile recovers a CLEAN, green PR only
 // when its last run ended with an exhausted enqueue (#2729).
 func TestIsEnqueueFailedCleanPR(t *testing.T) {
+	t.Parallel()
+
 	const repo = "nightgauge/acmeapp-platform"
 	cases := []struct {
 		name       string
@@ -390,6 +423,8 @@ func TestIsEnqueueFailedCleanPR(t *testing.T) {
 
 // TestReconcileStuckInReview_EnqueueFailedCleanPR_RespectsCap: a recovered
 // enqueue-failed PR is still bounded by maxInReviewRecoveryAttempts.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileStuckInReview_EnqueueFailedCleanPR_RespectsCap(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
 		return []byte(`[{"number":64,"headRefName":"feat/43-x","mergeStateStatus":"CLEAN"}]`), nil
@@ -411,6 +446,8 @@ func TestReconcileStuckInReview_EnqueueFailedCleanPR_RespectsCap(t *testing.T) {
 // TestRefreshBlockedReadyPRs_InheritedFailureResumesOnMovedBase pins #3179:
 // a PR parked by an inherited CI failure is dispatched once the base branch
 // has moved past the base_sha pr-merge recorded, and stays parked otherwise.
+//
+// Serial: swaps package var reconcileReadPrBlocker.
 func TestRefreshBlockedReadyPRs_InheritedFailureResumesOnMovedBase(t *testing.T) {
 	cases := []struct {
 		name       string

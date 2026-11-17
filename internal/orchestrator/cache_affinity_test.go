@@ -32,6 +32,8 @@ type affinityFixture struct {
 
 // TestApplyCacheAffinity_SharedFixture runs the fixture the TS mirror runs.
 func TestApplyCacheAffinity_SharedFixture(t *testing.T) {
+	t.Parallel()
+
 	data, err := os.ReadFile("testdata/cache_affinity_cases.json")
 	if err != nil {
 		t.Fatal(err)

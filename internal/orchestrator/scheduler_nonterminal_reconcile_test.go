@@ -82,6 +82,8 @@ func acmeappItem(number int) types.BoardItem {
 // TestReconcileIssueResolved_IssueClosed: a non-terminal stage failed but the
 // issue is CLOSED on the forge → reconciled (AC #1). This is the Case 1 shape
 // where the work landed and the issue was closed in a prior run.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_IssueClosed(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
@@ -99,6 +101,8 @@ func TestReconcileIssueResolved_IssueClosed(t *testing.T) {
 // still OPEN but the branch's PR is MERGED → reconciled (AC #1). The merged PR
 // is this run's OWN (its recorded number): MERGED is unconditional proof the
 // work landed, so ownership never gates it.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_PrMerged(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
@@ -128,6 +132,8 @@ func TestReconcileIssueResolved_PrMerged(t *testing.T) {
 // resets the branch to the pushed tip, so a re-run's checkout sits AT the prior
 // PR's head and SHA equality answered "ours". Identity has no such failure mode
 // — the run never recorded a PR, so no PR is its own.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_ForeignPrOpen(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
@@ -143,6 +149,8 @@ func TestReconcileIssueResolved_ForeignPrOpen(t *testing.T) {
 
 // TestReconcileIssueResolved_GenuinelyOpen: issue OPEN, no PR for the branch →
 // NOT reconciled. Guards against masking a real failure (negative control).
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_GenuinelyOpen(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
@@ -158,6 +166,8 @@ func TestReconcileIssueResolved_GenuinelyOpen(t *testing.T) {
 
 // TestReconcileIssueResolved_PrClosedNotMerged: a CLOSED-but-not-merged PR
 // (abandoned branch) does NOT reconcile — the work never landed.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_PrClosedNotMerged(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
@@ -174,6 +184,8 @@ func TestReconcileIssueResolved_PrClosedNotMerged(t *testing.T) {
 // TestReconcileIssueResolved_ForgeError_FailsClosed: any gh error returns
 // reconcileNone (fail-closed) so an uncertain check never masks a genuine
 // failure.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_ForgeError_FailsClosed(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
 		return nil, errors.New("gh: API rate limit exceeded")
@@ -186,6 +198,8 @@ func TestReconcileIssueResolved_ForgeError_FailsClosed(t *testing.T) {
 
 // TestReconcileIssueResolved_UnparseableJSON_FailsClosed: a malformed gh
 // response is treated as not-reconciled (fail-closed).
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_UnparseableJSON_FailsClosed(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
 		return []byte(`not json`), nil
@@ -198,6 +212,8 @@ func TestReconcileIssueResolved_UnparseableJSON_FailsClosed(t *testing.T) {
 
 // TestReconcileIssueResolved_MalformedRepo_FailsClosed: a repo slug that fails
 // the well-formed guard never shells out and returns reconcileNone.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_MalformedRepo_FailsClosed(t *testing.T) {
 	called := false
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -216,6 +232,8 @@ func TestReconcileIssueResolved_MalformedRepo_FailsClosed(t *testing.T) {
 
 // TestReconcileIssueResolved_EmptyBranch_OnlyIssueCheck: with no branch, only
 // the issue-closed check runs; the PR probe is skipped.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_EmptyBranch_OnlyIssueCheck(t *testing.T) {
 	prListCalled := false
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
@@ -254,6 +272,8 @@ func reconcileNonTerminalForTest(stage state.PipelineStage, item types.BoardItem
 
 // TestScheduler_NonTerminalFailure_IssueClosed_Reconciled: feature-validate
 // exits 1 while the issue is CLOSED → reconciled to success:true (no page). AC #1.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestScheduler_NonTerminalFailure_IssueClosed_Reconciled(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
@@ -273,6 +293,8 @@ func TestScheduler_NonTerminalFailure_IssueClosed_Reconciled(t *testing.T) {
 
 // TestScheduler_NonTerminalFailure_PrMerged_Reconciled: feature-dev exits 1
 // (pre-flight-death shape) while the branch PR is MERGED → reconciled. AC #1.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestScheduler_NonTerminalFailure_PrMerged_Reconciled(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
@@ -293,6 +315,8 @@ func TestScheduler_NonTerminalFailure_PrMerged_Reconciled(t *testing.T) {
 // TestScheduler_NonTerminalFailure_GenuinelyOpen_NotReconciled: feature-dev
 // exits 1, issue OPEN, no PR → NOT reconciled, success:false preserved. Guards
 // against masking real failures (negative control).
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestScheduler_NonTerminalFailure_GenuinelyOpen_NotReconciled(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
@@ -314,6 +338,8 @@ func TestScheduler_NonTerminalFailure_GenuinelyOpen_NotReconciled(t *testing.T) 
 // guarded on !isTerminalStage, so a terminal stage never enters it (the #3835
 // terminal block owns those). Even with a CLOSED issue, this helper leaves a
 // terminal failure untouched.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestScheduler_NonTerminalFailure_TerminalStageUnaffected(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
 		return []byte(`{"state":"CLOSED"}`), nil

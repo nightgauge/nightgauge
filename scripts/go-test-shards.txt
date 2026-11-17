@@ -5,8 +5,15 @@
 # (internal/orchestrator: 453s plain and 445s race of a 13m26s gate, #3209).
 # scripts/ci-local.sh runs each package below as N separate
 # `go test -run '^(A|B|...)$' <pkg>` processes, for the plain and the race
-# pass, and every other package in one `go test` over the rest. No test code
-# changes.
+# pass, and every other package in one `go test` over the rest.
+#
+# internal/orchestrator's tests also run in parallel inside each process
+# (#3144), except the ones that touch shared state, which run first, one after
+# another. That composes with the shards rather than replacing them: Go
+# serialises fork within a process, and these tests spend their time spawning
+# git, so separate processes still scale where t.Parallel() stops. Measured
+# 2026-11-16 on 30 cores, its 8 shard steps took 142s before and 133s after,
+# so the count stays 4.
 #
 # A test goes in bucket crc32(name) % N, so a new test lands in a bucket by
 # itself and only a rename moves one. scripts/go-test-shard.py checks that

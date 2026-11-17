@@ -43,6 +43,7 @@ func pendingRecheck(as *AutonomousScheduler, repo string, issue int) (PRRecheckI
 	return PRRecheckItem{}, false
 }
 
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestReconcilePRRechecks_UnreadablePRKeepsTheEntry(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, writes, _ := revertFixture(t)
@@ -66,6 +67,8 @@ func TestReconcilePRRechecks_UnreadablePRKeepsTheEntry(t *testing.T) {
 }
 
 func TestReconcilePRRechecks_MergedRunsPostMergeOnceAndRecordsCompletion(t *testing.T) {
+	t.Parallel()
+
 	as, _, _ := revertFixture(t)
 	postMerges, _ := recheckSeams(as, func() (string, error) { return "MERGED", nil })
 	as.state.Failed = []FailedItem{{Repo: "O/a", Number: 1, Title: "the issue", Kind: TerminalKindApiConnectionLost}}
@@ -102,6 +105,8 @@ func TestReconcilePRRechecks_MergedRunsPostMergeOnceAndRecordsCompletion(t *test
 
 // An open PR on a transient kind goes to Ready (#2554), so the re-dispatch
 // resumes at pr-merge on the same PR rather than opening a second one.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestReconcilePRRechecks_OpenPRRevertsToReady(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, writes, _ := revertFixture(t, map[int]string{42: "feat/1-x"})
@@ -128,6 +133,7 @@ func TestReconcilePRRechecks_OpenPRRevertsToReady(t *testing.T) {
 	}
 }
 
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestReconcilePRRechecks_ClosedUnmergedPRReverts(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, _, _ := revertFixture(t, map[int]string{})
@@ -150,6 +156,8 @@ func TestReconcilePRRechecks_ClosedUnmergedPRReverts(t *testing.T) {
 // With no PR on record the open-PR list decides, and an unread list keeps the
 // entry for the next scan.
 func TestReconcilePRRechecks_NoPRAndUnreadListKeepsTheEntry(t *testing.T) {
+	t.Parallel()
+
 	as, writes, _ := revertFixture(t)
 	_, stateReads := recheckSeams(as, func() (string, error) { return "MERGED", nil })
 	as.enqueuePRRecheck("O/a", 1, 0, "")
@@ -169,6 +177,8 @@ func TestReconcilePRRechecks_NoPRAndUnreadListKeepsTheEntry(t *testing.T) {
 
 // A running issue follows its own PR; the sweep must not move its board row.
 func TestReconcilePRRechecks_SkipsARunningIssue(t *testing.T) {
+	t.Parallel()
+
 	as, writes, _ := revertFixture(t, map[int]string{})
 	postMerges, stateReads := recheckSeams(as, func() (string, error) { return "MERGED", nil })
 	as.enqueuePRRecheck("O/a", 1, 42, TerminalKindApiConnectionLost)
@@ -186,6 +196,8 @@ func TestReconcilePRRechecks_SkipsARunningIssue(t *testing.T) {
 }
 
 func TestEnqueuePRRecheck_OneEntryPerIssueKeepingTheKnownPR(t *testing.T) {
+	t.Parallel()
+
 	as, _, _ := revertFixture(t)
 	as.enqueuePRRecheck("O/a", 1, 42, TerminalKindApiConnectionLost)
 	as.enqueuePRRecheck("O/a", 1, 0, "")
@@ -201,6 +213,8 @@ func TestEnqueuePRRecheck_OneEntryPerIssueKeepingTheKnownPR(t *testing.T) {
 
 // A run that succeeds saw its own PR, so its pending recheck is dropped.
 func TestOnPipelineComplete_SuccessDropsThePendingRecheck(t *testing.T) {
+	t.Parallel()
+
 	as, _, _ := revertFixture(t)
 	as.enqueuePRRecheck("O/a", 1, 42, TerminalKindApiConnectionLost)
 	as.state.Running = []RunningItem{{Repo: "O/a", Number: 1}}
@@ -216,6 +230,8 @@ func TestOnPipelineComplete_SuccessDropsThePendingRecheck(t *testing.T) {
 // The scan cycle dispatches the sweep detached, one at a time: a second scan
 // while a sweep is still waiting on the forge starts nothing.
 func TestStartPRRecheckSweep_OneSweepInFlight(t *testing.T) {
+	t.Parallel()
+
 	as, _, _ := revertFixture(t)
 	release := make(chan struct{})
 	_, stateReads := recheckSeams(as, func() (string, error) {
@@ -242,6 +258,8 @@ func TestStartPRRecheckSweep_OneSweepInFlight(t *testing.T) {
 // A run PR in another repository is not this issue's PR: re-checking it could
 // close the issue on a merge that never touched it.
 func TestRecordTransientRunPR_RejectsAPRInAnotherRepository(t *testing.T) {
+	t.Parallel()
+
 	as, _, _ := revertFixture(t)
 	foreign := state.NewRuntimeState("O/a", 1, "item-1", "run-1")
 	foreign.SetPrUrl("https://github.com/O/other/pull/7")

@@ -7,6 +7,8 @@ import "testing"
 // predicted concrete ID and a config floor alias compare correctly. Unknown /
 // local models rank -1 (never floored).
 func TestTierRank(t *testing.T) {
+	t.Parallel()
+
 	// Ordering by alias.
 	if !(tierRank("haiku") < tierRank("sonnet") &&
 		tierRank("sonnet") < tierRank("opus") &&
@@ -42,6 +44,8 @@ func TestTierRank(t *testing.T) {
 // cases: an unrecognized floor is ignored, and a local/unknown selected model
 // is never floored.
 func TestEnforceMinimumModel(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		selected string
@@ -71,6 +75,8 @@ func TestEnforceMinimumModel(t *testing.T) {
 // (parity with TS modelResolver.getMinimumModel precedence), that the stage
 // name is upper-cased with dashes → underscores for the env key, and that an
 // absent floor returns "".
+//
+// Serial: sets the environment.
 func TestStageModelFloor(t *testing.T) {
 	floors := map[string]string{"feature-dev": "sonnet"}
 

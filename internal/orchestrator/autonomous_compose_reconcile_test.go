@@ -27,6 +27,8 @@ import (
 // Driven through runCycle with a fresh graph — the pacing gate the neighbouring
 // sweeps use — so the assertion covers the wiring, not just the receiver.
 func TestSweepOrphanedCompose_RunsOnTheAutonomousCycle(t *testing.T) {
+	t.Parallel()
+
 	root := worktreeRepo(t, 921)
 
 	var torn []string
@@ -60,6 +62,8 @@ func TestSweepOrphanedCompose_RunsOnTheAutonomousCycle(t *testing.T) {
 // runs `down -v` — which removes named volumes nothing recovers — against a live
 // run.
 func TestSweepOrphanedCompose_UnionProtectsBothPopulations(t *testing.T) {
+	t.Parallel()
+
 	// #931 has a registered worktree but is NOT in state.Running: it is a run
 	// this process did not dispatch (previous incarnation, or another host's
 	// cross-repo run). Only the worktree scan sees it.
@@ -103,10 +107,13 @@ func TestSweepOrphanedCompose_UnionProtectsBothPopulations(t *testing.T) {
 // merged-worktree sweep's two guards on the same two dereferences. A nil state is
 // not an empty one — it is half the protection, unread.
 func TestSweepOrphanedCompose_NoSchedulerIsNoOp(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{state: &AutonomousState{}}
 	as.sweepOrphanedComposeProjects(context.Background()) // must not panic
 }
 
+// Serial: redirects the standard logger (via captureLog).
 func TestSweepOrphanedCompose_NilStateSkipsLoudly(t *testing.T) {
 	root := worktreeRepo(t, 941)
 
@@ -138,6 +145,8 @@ func TestSweepOrphanedCompose_NilStateSkipsLoudly(t *testing.T) {
 // path that now runs in production. One unreadable root means the active-worktree
 // half of the union was never obtained, and every listed project would be torn
 // down on the strength of a set nobody read.
+//
+// Serial: sets the environment (via unreadableRoot).
 func TestSweepOrphanedCompose_UndeterminedTearsDownNothing(t *testing.T) {
 	var torn []string
 	as := &AutonomousScheduler{
@@ -167,6 +176,8 @@ func TestSweepOrphanedCompose_UndeterminedTearsDownNothing(t *testing.T) {
 // feature both satisfy. This one asserts the production DEFAULT seams — no
 // injected lister, no injected teardown — still reach the docker CLI from the
 // autonomous receiver, so "nothing called docker" can never be the whole story.
+//
+// Serial: sets the environment (via installRecordingDocker).
 func TestSweepOrphanedCompose_ProductionDefaultsReachDocker(t *testing.T) {
 	root := worktreeRepo(t, 961)
 	// ConfigFiles under root: the candidate bound (#442) skips a project whose
@@ -224,6 +235,8 @@ func TestSweepOrphanedCompose_ProductionDefaultsReachDocker(t *testing.T) {
 // origin/main (the post-merge tail the sweep exists to reclaim), Running empty,
 // and a compose stack for the same issue.
 func TestAutonomousCycle_ComposeReconcileRunsBeforeTheWorktreeSweep(t *testing.T) {
+	t.Parallel()
+
 	root, wt := mergedWorktreeRepo(t, 802)
 
 	var torn []string
@@ -265,6 +278,8 @@ func TestAutonomousCycle_ComposeReconcileRunsBeforeTheWorktreeSweep(t *testing.T
 // invisible to both original halves of the union. The machine-wide snapshot scan
 // — the same source #410 made authoritative for the CLI sweep — is what sees it.
 func TestSweepOrphanedCompose_SnapshotArmProtectsARunWithNoWorktree(t *testing.T) {
+	t.Parallel()
+
 	root := worktreeRepo(t, 971) // #971 has a worktree; #972 deliberately does not
 
 	// The snapshot is written through the state package's own writer, at the
@@ -310,6 +325,8 @@ func TestSweepOrphanedCompose_SnapshotArmProtectsARunWithNoWorktree(t *testing.T
 // (so `git worktree list` succeeds and the active-worktree half is DETERMINED)
 // whose pipeline state path is not a directory. Before the snapshot half was
 // unioned in, this state tore the stack down on a set nobody could read.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestSweepOrphanedCompose_UnreadableSnapshotSourceVetoesTheTeardown(t *testing.T) {
 	root := worktreeRepo(t, 991)
 	// A FILE where the state directory belongs: ReadDir fails with ENOTDIR, which

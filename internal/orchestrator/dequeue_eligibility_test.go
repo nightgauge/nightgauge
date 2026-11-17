@@ -14,6 +14,8 @@ import (
 // slot is claimed. An issue no writer vouched for is held there, whatever
 // route queued it (#2130).
 func TestDequeueIndependent_HoldsAnIssueNoWriterVouchedFor(t *testing.T) {
+	t.Parallel()
+
 	s := newDequeueExcludeFixture(t, nil)
 	gate, _ := levelsGate(map[string]trust.Level{"stranger": trust.LevelRead, "maintainer": trust.LevelWrite})
 	s.trustGate = gate
@@ -40,6 +42,8 @@ func TestDequeueIndependent_HoldsAnIssueNoWriterVouchedFor(t *testing.T) {
 
 // A bare repository name in the queue is read in the scheduler's owner.
 func TestDequeueIndependent_QualifiesABareRepoWithTheSchedulerOwner(t *testing.T) {
+	t.Parallel()
+
 	s := newDequeueExcludeFixture(t, nil)
 	s.owner = "Org"
 	forge := &fakeTrustForge{levels: map[string]trust.Level{"maintainer": trust.LevelWrite},
@@ -54,6 +58,8 @@ func TestDequeueIndependent_QualifiesABareRepoWithTheSchedulerOwner(t *testing.T
 // The autonomous loop refuses to dispatch what the gate refuses, before any
 // dispatcher or the extension's onDispatch callback sees it.
 func TestEnqueueItem_RefusesAnIssueNoWriterVouchedFor(t *testing.T) {
+	t.Parallel()
+
 	gate, _ := levelsGate(map[string]trust.Level{"stranger": trust.LevelRead})
 	as := &AutonomousScheduler{trustGateOverride: gate, state: &AutonomousState{Status: "running"}}
 	dispatched := false
@@ -71,6 +77,8 @@ func TestEnqueueItem_RefusesAnIssueNoWriterVouchedFor(t *testing.T) {
 // on the next dequeue once a writer vouches for it, and dispatched on the one
 // after.
 func TestDequeueIndependent_ReleasesAHeldItemOnceVouchedFor(t *testing.T) {
+	t.Parallel()
+
 	s := newDequeueExcludeFixture(t, nil)
 	forge := &fakeTrustForge{levels: map[string]trust.Level{"stranger": trust.LevelRead, "maintainer": trust.LevelWrite},
 		signals: map[string]trust.Signals{"org/repo#504": {Author: "stranger"}}}

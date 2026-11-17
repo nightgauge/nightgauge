@@ -21,6 +21,8 @@ import (
 // LLM skill, which can merge the very head the runner refused; the refusal
 // must fail the stage instead and name the classified reason.
 func TestScheduler_PRMerge_RefusedNeverFallsThroughToLLM_1675(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	reason := pmstages.ReasonGeneratedSteering + ": PR head abc carries generated Nightgauge steering in AGENTS.md"
 	s.WithPRMergeRunner(&fakePRMergeRunner{result: pmstages.PRMergeResult{
@@ -46,6 +48,8 @@ func TestScheduler_PRMerge_RefusedNeverFallsThroughToLLM_1675(t *testing.T) {
 // pipeline: the pr-merge LLM skill must never run after a refusal, and the
 // run fails carrying the reason.
 func TestScheduler_PRMerge_RefusalFailsRunWithoutLLM_1675(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	for _, dir := range []string{
 		"nightgauge-issue-pickup", "nightgauge-feature-planning", "nightgauge-feature-dev",

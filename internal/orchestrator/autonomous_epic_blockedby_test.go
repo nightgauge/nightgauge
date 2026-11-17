@@ -27,6 +27,8 @@ func makeEpicTestNode(repo string, number int, state, status string, labels []st
 // TestEpicBlockedByCascade_SubIssueBlocked verifies that a sub-issue is NOT
 // a candidate when its parent epic has an open, incomplete blockedBy dep.
 func TestEpicBlockedByCascade_SubIssueBlocked(t *testing.T) {
+	t.Parallel()
+
 	const repo = "owner/repo"
 
 	// E0 is the blocker epic (open, no board status — simulating an unfinished
@@ -66,6 +68,8 @@ func TestEpicBlockedByCascade_SubIssueBlocked(t *testing.T) {
 // TestEpicBlockedByCascade_SubIssueUnblocked_EpicBlockerClosed verifies that
 // a sub-issue IS a candidate when its parent epic's blocker is closed.
 func TestEpicBlockedByCascade_SubIssueUnblocked_EpicBlockerClosed(t *testing.T) {
+	t.Parallel()
+
 	const repo = "owner/repo"
 
 	nodes := []*depgraph.Node{
@@ -101,6 +105,8 @@ func TestEpicBlockedByCascade_SubIssueUnblocked_EpicBlockerClosed(t *testing.T) 
 // TestEpicBlockedByCascade_Disabled verifies that with cascade disabled,
 // sub-issue #21 is a candidate even though its parent epic is blocked.
 func TestEpicBlockedByCascade_Disabled(t *testing.T) {
+	t.Parallel()
+
 	const repo = "owner/repo"
 
 	nodes := []*depgraph.Node{
@@ -139,6 +145,8 @@ func TestEpicBlockedByCascade_Disabled(t *testing.T) {
 // TestReposCandidateRestriction verifies that only nodes from repos in as.repos
 // are returned as candidates, even though the full graph has nodes from other repos.
 func TestReposCandidateRestriction(t *testing.T) {
+	t.Parallel()
+
 	const repoA = "owner/repo-a"
 	const repoB = "owner/repo-b"
 
@@ -177,6 +185,8 @@ func TestReposCandidateRestriction(t *testing.T) {
 // epic has an open blocker but its sub-issue is individually schedulable,
 // the log output contains the dangling-gate warning.
 func TestDanglingEpicGateWarning(t *testing.T) {
+	t.Parallel()
+
 	const repo = "owner/repo"
 
 	nodes := []*depgraph.Node{

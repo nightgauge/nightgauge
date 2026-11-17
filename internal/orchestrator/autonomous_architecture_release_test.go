@@ -137,6 +137,8 @@ func reconcileOnce(as *AutonomousScheduler, node *depgraph.Node) {
 
 // A released hold moves the issue to Ready from either parked status, and the
 // Failed entry is dropped only once the move landed.
+//
+// Serial: swaps package var reconcileExecGh (via newReleaseFixture).
 func TestArchitectureRelease_MovesToReadyFromParkedStatuses(t *testing.T) {
 	for _, status := range []string{"In progress", "In review"} {
 		t.Run(status, func(t *testing.T) {
@@ -161,6 +163,8 @@ func TestArchitectureRelease_MovesToReadyFromParkedStatuses(t *testing.T) {
 }
 
 // The approval file releases the hold exactly as the label does.
+//
+// Serial: swaps package var reconcileExecGh (via newReleaseFixture).
 func TestArchitectureRelease_ApprovalFileMovesToReady(t *testing.T) {
 	f := newReleaseFixture(t, releaseRepos)
 	holdIssue(t, f.as, 11)
@@ -186,6 +190,8 @@ func TestArchitectureRelease_ApprovalFileMovesToReady(t *testing.T) {
 }
 
 // An issue with its own open or merged PR is not moved, and its hold drops.
+//
+// Serial: swaps package var reconcileExecGh (via newReleaseFixture).
 func TestArchitectureRelease_OwnPRIsNotMoved(t *testing.T) {
 	cases := map[string]func(f *releaseFixture){
 		"open":   func(f *releaseFixture) { f.openPRs = map[int]string{42: "feat/12-x"} },
@@ -216,6 +222,8 @@ func TestArchitectureRelease_OwnPRIsNotMoved(t *testing.T) {
 }
 
 // An issue with an active run is not moved.
+//
+// Serial: swaps package var reconcileExecGh (via newReleaseFixture).
 func TestArchitectureRelease_RunningIssueIsNotMoved(t *testing.T) {
 	f := newReleaseFixture(t, releaseRepos)
 	holdIssue(t, f.as, 13)
@@ -230,6 +238,8 @@ func TestArchitectureRelease_RunningIssueIsNotMoved(t *testing.T) {
 
 // A failed board write is logged, never reported as a release, and retried on
 // the next reconcile; the second attempt lands and only then releases.
+//
+// Serial: swaps package var reconcileExecGh (via newReleaseFixture).
 func TestArchitectureRelease_FailedWriteRetriedNextReconcile(t *testing.T) {
 	buf := withCapturedLog(t)
 	f := newReleaseFixture(t, releaseRepos)
@@ -270,6 +280,8 @@ func TestArchitectureRelease_FailedWriteRetriedNextReconcile(t *testing.T) {
 }
 
 // An unreadable PR list is not "no PR": nothing moves and the entry stays.
+//
+// Serial: swaps package var reconcileExecGh (via newReleaseFixture).
 func TestArchitectureRelease_UnreadablePRListKeepsHold(t *testing.T) {
 	f := newReleaseFixture(t, releaseRepos)
 	holdIssue(t, f.as, 15)
@@ -288,6 +300,8 @@ func TestArchitectureRelease_UnreadablePRListKeepsHold(t *testing.T) {
 }
 
 // Every board that carries the repository is moved, not only the first.
+//
+// Serial: swaps package var reconcileExecGh (via newReleaseFixture).
 func TestArchitectureRelease_MovesEveryBoard(t *testing.T) {
 	f := newReleaseFixture(t, []depgraph.RepoConfig{
 		{Owner: "acme", Name: "app", Project: 7},
@@ -310,6 +324,8 @@ func TestArchitectureRelease_MovesEveryBoard(t *testing.T) {
 
 // The card's entry point marks the hold released and moves the board without
 // waiting for the label to reach a graph read.
+//
+// Serial: swaps package var reconcileExecGh (via newReleaseFixture).
 func TestReleaseArchitectureHold_CardStartsSharedRelease(t *testing.T) {
 	f := newReleaseFixture(t, releaseRepos)
 	holdIssue(t, f.as, 17)
@@ -331,6 +347,8 @@ func TestReleaseArchitectureHold_CardStartsSharedRelease(t *testing.T) {
 }
 
 // A fresh architecture halt after an approval waits for a fresh approval.
+//
+// Serial: swaps package var reconcileExecGh (via newReleaseFixture).
 func TestArchitectureRelease_NewHaltClearsReleasePending(t *testing.T) {
 	f := newReleaseFixture(t, releaseRepos)
 	f.failMoves = 1

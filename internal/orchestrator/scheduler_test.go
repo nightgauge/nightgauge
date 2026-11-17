@@ -171,6 +171,8 @@ func (m *mockIssueSvc) RemoveBlockedBy(_ context.Context, blocked, blocker forge
 // successful fetch returns the (clipped) body; a fetch error, a nil issue, or an
 // unparseable repo degrade to an empty string without failing the run.
 func TestCaptureIssueBody(t *testing.T) {
+	t.Parallel()
+
 	mock := newMockIssueSvc()
 	mock.addIssue("nightgauge", "nightgauge", 183, &types.Issue{
 		Number: 183,
@@ -214,6 +216,8 @@ func TestCaptureIssueBody(t *testing.T) {
 }
 
 func TestQueueOperations(t *testing.T) {
+	t.Parallel()
+
 	// Test queue add/list/clear without needing a real GitHub client
 	entries := []QueueEntry{
 		{Repo: "nightgauge/nightgauge", IssueNumber: 1311, Priority: 0},
@@ -231,6 +235,8 @@ func TestQueueOperations(t *testing.T) {
 }
 
 func TestOutcomeRecording(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 
 	s := &Scheduler{recordOutcomes: true}
@@ -355,6 +361,8 @@ func writeDispatchPrediction(t *testing.T, repoRoot string, issue int, model str
 }
 
 func TestLoadIssueContext(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	pipelineDir := layouttest.PipelineDir(t, tmpDir)
 	if err := os.MkdirAll(pipelineDir, 0755); err != nil {
@@ -407,6 +415,8 @@ func TestLoadIssueContext(t *testing.T) {
 }
 
 func TestPredictedSizeLabel(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		score int
 		want  string
@@ -427,6 +437,8 @@ func TestPredictedSizeLabel(t *testing.T) {
 }
 
 func TestEmitStateChangedCallback(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	var called bool
 	var receivedIssue int
@@ -447,6 +459,8 @@ func TestEmitStateChangedCallback(t *testing.T) {
 }
 
 func TestEmitStateChangedNilCallback(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	rs := state.NewRuntimeState("nightgauge/nightgauge", 1899, "item-1", testRunID())
 	// Should not panic when callback is nil
@@ -454,6 +468,8 @@ func TestEmitStateChangedNilCallback(t *testing.T) {
 }
 
 func TestOnPhaseDetectedCallback(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	var phaseName string
 	s.OnPhaseDetected(func(repo string, issue int, stage, name string, index, total int) {
@@ -469,6 +485,8 @@ func TestOnPhaseDetectedCallback(t *testing.T) {
 }
 
 func TestRecordPhaseStart_PopulatesRuntime(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	rt := state.NewRuntimeState("nightgauge/nightgauge", 3486, "item-1", testRunID())
 	s.registerRuntime(rt)
@@ -492,6 +510,8 @@ func TestRecordPhaseStart_PopulatesRuntime(t *testing.T) {
 }
 
 func TestRecordPhaseComplete_MarksRunningPhaseDone(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	rt := state.NewRuntimeState("nightgauge/nightgauge", 3486, "item-1", testRunID())
 	s.registerRuntime(rt)
@@ -509,6 +529,8 @@ func TestRecordPhaseComplete_MarksRunningPhaseDone(t *testing.T) {
 }
 
 func TestRecordPhaseStart_NoRuntimeIsNoOp(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	// No runtime registered for issue 9999 — call must not panic.
 	s.RecordPhaseStartForRun(testRunID(), 9999, "feature-dev", "implementation", 0, 17)
@@ -516,6 +538,8 @@ func TestRecordPhaseStart_NoRuntimeIsNoOp(t *testing.T) {
 }
 
 func TestRegisterRuntime_RejectsInvalidInputs(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	// Nil runtime — should not register.
 	s.registerRuntime(nil)
@@ -540,6 +564,8 @@ func TestRegisterRuntime_RejectsInvalidInputs(t *testing.T) {
 // either vanished or — without the compensating guard — landed on the wrong
 // run's PhaseHistory.
 func TestActiveRuntimes_SeparatesTwoRunsOfOneIssue(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	const issue = 4242
 	first := state.NewRuntimeState("nightgauge/nightgauge", issue, "item-1", testRunID())
@@ -584,6 +610,8 @@ func TestActiveRuntimes_SeparatesTwoRunsOfOneIssue(t *testing.T) {
 // repositories each resolve to their own id, and once one has unregistered a
 // late event for it does not borrow the other repository's run.
 func TestRunIDForIssue_SameNumberInTwoRepos(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	const issue = 21
 	app := state.NewRuntimeState("example-org/app", issue, "item-a", testRunID())
@@ -624,6 +652,8 @@ func TestRunIDForIssue_SameNumberInTwoRepos(t *testing.T) {
 }
 
 func TestActiveRuntimes_IsolatedPerIssue(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	rtA := state.NewRuntimeState("nightgauge/nightgauge", 100, "a", testRunID())
 	rtB := state.NewRuntimeState("nightgauge/nightgauge", 200, "b", testRunID())
@@ -644,6 +674,8 @@ func TestActiveRuntimes_IsolatedPerIssue(t *testing.T) {
 }
 
 func TestSchedulerConfig(t *testing.T) {
+	t.Parallel()
+
 	cfg := SchedulerConfig{
 		Owner:         "nightgauge",
 		ProjectNumber: 5,
@@ -662,6 +694,8 @@ func TestSchedulerConfig(t *testing.T) {
 // TestWarnProjectMappingMismatch verifies the scheduler startup check logs a
 // loud but non-fatal warning when the workspace manifest and the runtime-
 // resolved project number disagree for a repo (#271).
+//
+// Serial: redirects the standard logger.
 func TestWarnProjectMappingMismatch(t *testing.T) {
 	dir := layouttest.Repo(t)
 	vscodeDir := filepath.Join(dir, ".vscode")
@@ -713,6 +747,8 @@ repositories:
 
 // TestWarnProjectMappingMismatch_NilConfigNoop verifies the check is a no-op
 // (does not panic, logs nothing) when no runtime config was loaded.
+//
+// Serial: redirects the standard logger.
 func TestWarnProjectMappingMismatch_NilConfigNoop(t *testing.T) {
 	var buf strings.Builder
 	prevOutput := log.Writer()
@@ -727,6 +763,8 @@ func TestWarnProjectMappingMismatch_NilConfigNoop(t *testing.T) {
 }
 
 func TestQueuePersistence(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 
 	// Create scheduler with workspace root — queue persists to disk
@@ -811,6 +849,8 @@ func TestQueuePersistence(t *testing.T) {
 // continue to call it unchanged.
 
 func TestDequeueIndependent(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name          string
 		queue         []QueueItem
@@ -1018,6 +1058,8 @@ func (f *fakeTelemetry) SyncQueue(ctx context.Context, items []platform.QueueSyn
 // present in QueueList()/persisted queue-state.json, and completion clears it
 // back to idle. (AC1, AC2, AC3)
 func TestDequeueIndependent_ProducesProcessingStatus(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{
 		trustGate:     allWritersGate(),
@@ -1075,6 +1117,8 @@ func TestDequeueIndependent_ProducesProcessingStatus(t *testing.T) {
 // TestQueueStatusLocked_Precedence pins the processing > paused > waiting >
 // idle precedence order explicitly (Issue #232 AC2).
 func TestQueueStatusLocked_Precedence(t *testing.T) {
+	t.Parallel()
+
 	pausedReason := QueuePausedReason{Kind: "upstream_failure"}
 
 	tests := []struct {
@@ -1126,6 +1170,8 @@ func TestQueueStatusLocked_Precedence(t *testing.T) {
 // pending-item positions stay 1..N over items actually waiting, skipping
 // in-flight "processing" items. (Issue #232)
 func TestRecalculatePositions_SkipsProcessingItems(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{repoRunning: make(map[string]int), mergeLocks: make(map[string]*sync.Mutex)}
 	s.queue = []QueueItem{
 		{IssueNumber: 1, Status: "processing", Position: 1},
@@ -1145,6 +1191,8 @@ func TestRecalculatePositions_SkipsProcessingItems(t *testing.T) {
 // TestCompleteQueueItem_NoopWhenNotProcessing pins the "no matching item"
 // no-op branch (autonomous board-scan runs never touch s.queue). (Issue #232)
 func TestCompleteQueueItem_NoopWhenNotProcessing(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{repoRunning: make(map[string]int), mergeLocks: make(map[string]*sync.Mutex)}
 	s.queue = []QueueItem{{IssueNumber: 1, Repo: "o/A", Status: "pending"}}
 	s.CompleteQueueItem("o/A", 1)
@@ -1167,6 +1215,8 @@ func TestCompleteQueueItem_NoopWhenNotProcessing(t *testing.T) {
 // the same issue that an operator added while the run was in flight — silently
 // dropping work the operator explicitly asked for.
 func TestCompleteQueueItem_SparesRequeueAndOtherRepo(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{repoRunning: make(map[string]int), mergeLocks: make(map[string]*sync.Mutex)}
 	s.queue = []QueueItem{
 		{IssueNumber: 7, Repo: "o/A", Status: "processing"},
@@ -1193,6 +1243,8 @@ func TestCompleteQueueItem_SparesRequeueAndOtherRepo(t *testing.T) {
 // payload distinguishes a running item ("processing") from an idle/pending
 // one once DequeueIndependent has marked it in flight.
 func TestSyncQueueToCloudLocked_IncludesProcessingItem(t *testing.T) {
+	t.Parallel()
+
 	fake := &fakeTelemetry{}
 	s := &Scheduler{
 		trustGate:        allWritersGate(),
@@ -1230,6 +1282,8 @@ func TestSyncQueueToCloudLocked_IncludesProcessingItem(t *testing.T) {
 // exactly 3 dequeued, 1 per repo; a second dequeue with those running returns
 // nothing (every repo at its per-repo cap), and overflow stays queued.
 func TestDequeueIndependent_PerRepoCap(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:   allWritersGate(),
 		repoRunning: make(map[string]int),
@@ -1279,6 +1333,8 @@ func TestDequeueIndependent_PerRepoCap(t *testing.T) {
 // regression the issue's AC mandates and that the IPC dispatch path historically
 // lacked before #3781/#3786.
 func TestDequeueIndependent_3874_SameRepoBatchAndCrossPass(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:   allWritersGate(),
 		repoRunning: make(map[string]int),
@@ -1331,6 +1387,8 @@ func TestDequeueIndependent_3874_SameRepoBatchAndCrossPass(t *testing.T) {
 }
 
 func TestDequeueIndependent_PerRepoOverride(t *testing.T) {
+	t.Parallel()
+
 	// Override raises repo A to 2; B stays at default 1.
 	s := &Scheduler{
 		trustGate:                allWritersGate(),
@@ -1359,6 +1417,8 @@ func TestDequeueIndependent_PerRepoOverride(t *testing.T) {
 }
 
 func TestQueueItemPositions(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:   allWritersGate(),
 		repoRunning: make(map[string]int),
@@ -1393,6 +1453,8 @@ func TestQueueItemPositions(t *testing.T) {
 }
 
 func TestQueueAddItem_DeduplicatesByRepositoryAndIssueNumber(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:   allWritersGate(),
 		repoRunning: make(map[string]int),
@@ -1438,6 +1500,7 @@ func TestQueueAddItem_DeduplicatesByRepositoryAndIssueNumber(t *testing.T) {
 	}
 }
 
+// Serial: fails on a wall-clock deadline of 5s, which parallel load can exceed (#2950).
 func TestQueueChangedCallback(t *testing.T) {
 	ch := make(chan QueueState, 1)
 
@@ -1463,6 +1526,8 @@ func TestQueueChangedCallback(t *testing.T) {
 }
 
 func TestEnqueueEpic_PopulatesSubIssueBlockedBy(t *testing.T) {
+	t.Parallel()
+
 	mock := newMockIssueSvc()
 
 	// Epic #100 has two sub-issues: #200 and #300
@@ -1561,6 +1626,8 @@ func TestEnqueueEpic_PopulatesSubIssueBlockedBy(t *testing.T) {
 }
 
 func TestEnqueueEpic_CombinesEpicAndSubIssueBlockers(t *testing.T) {
+	t.Parallel()
+
 	mock := newMockIssueSvc()
 
 	// Epic #100 is itself blocked by #50 (epic-level blocker)
@@ -1625,6 +1692,8 @@ func TestEnqueueEpic_CombinesEpicAndSubIssueBlockers(t *testing.T) {
 }
 
 func TestIsBlocked_CircularEpicDependency(t *testing.T) {
+	t.Parallel()
+
 	// Sub-issue #163 blocked by its own parent epic #152 — should auto-remove
 	// and return unblocked. BlockedBy comes from the board item, not GetIssue.
 	issueSvc := newMockIssueSvc()
@@ -1649,6 +1718,8 @@ func TestIsBlocked_CircularEpicDependency(t *testing.T) {
 }
 
 func TestIsBlocked_LegitimateBlocker(t *testing.T) {
+	t.Parallel()
+
 	// Sub-issue #131 blocked by sibling #130 (legitimate) — should remain blocked.
 	issueSvc := newMockIssueSvc()
 	s := &Scheduler{issueSvc: issueSvc}
@@ -1672,6 +1743,8 @@ func TestIsBlocked_LegitimateBlocker(t *testing.T) {
 }
 
 func TestIsBlocked_ClosedBlockerSkipped(t *testing.T) {
+	t.Parallel()
+
 	// A blocker that is already CLOSED should not block — verifies state filter.
 	s := &Scheduler{issueSvc: newMockIssueSvc()}
 	item := types.BoardItem{
@@ -1694,6 +1767,8 @@ func TestIsBlocked_ClosedBlockerSkipped(t *testing.T) {
 }
 
 func TestIsBlocked_NoBlockers(t *testing.T) {
+	t.Parallel()
+
 	// Item with no BlockedBy entries should report unblocked without any
 	// IssueService call. Passing a nil issueSvc proves the hot path is fetch-free.
 	s := &Scheduler{issueSvc: nil}
@@ -1713,6 +1788,8 @@ func TestIsBlocked_NoBlockers(t *testing.T) {
 }
 
 func TestRefreshBlockerStates_BatchedPerRepo(t *testing.T) {
+	t.Parallel()
+
 	// Queue with 4 items split across 2 repos, each item has 2 OPEN blockers.
 	// Without batching: 8 GetIssue calls. With batching: 2 calls (one per repo).
 	mock := newMockIssueSvc()
@@ -1759,6 +1836,8 @@ func TestRefreshBlockerStates_BatchedPerRepo(t *testing.T) {
 }
 
 func TestRefreshBlockerStates_NoOpenBlockers(t *testing.T) {
+	t.Parallel()
+
 	mock := newMockIssueSvc()
 	s := &Scheduler{issueSvc: mock}
 	s.queue = []QueueItem{
@@ -1803,6 +1882,8 @@ func (m *escalatingMockRunner) RunStage(ctx context.Context, params StageRunPara
 // 3. On retry, the scheduler passes the escalated model (opus) to the runner
 // 4. Stage succeeds on second attempt
 func TestScheduler_IpcStageEscalation(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 
 	runner := &escalatingMockRunner{engine: engine}
@@ -1862,6 +1943,8 @@ func TestScheduler_IpcStageEscalation(t *testing.T) {
 }
 
 func TestIsHaikuModel(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		model string
 		want  bool
@@ -1880,6 +1963,7 @@ func TestIsHaikuModel(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestGetLargeDiffThreshold(t *testing.T) {
 	t.Run("returns default when no config", func(t *testing.T) {
 		dir := layouttest.Repo(t)
@@ -1922,6 +2006,8 @@ func TestGetLargeDiffThreshold(t *testing.T) {
 }
 
 func TestOnFailureStatusDefault(t *testing.T) {
+	t.Parallel()
+
 	// When OnFailureStatus is empty, NewScheduler should default to "ready"
 	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{
@@ -1952,6 +2038,8 @@ func TestOnFailureStatusDefault(t *testing.T) {
 }
 
 func TestOnFailureStatusConfigValues(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name            string
 		onFailureStatus string
@@ -1984,6 +2072,8 @@ func TestOnFailureStatusConfigValues(t *testing.T) {
 }
 
 func TestFailureRevertSkippedOnSuccess(t *testing.T) {
+	t.Parallel()
+
 	// Verify that when pipelineSuccess is true, the failure revert code path
 	// is NOT entered. We test this by checking the condition logic directly.
 	pipelineSuccess := true
@@ -1997,6 +2087,8 @@ func TestFailureRevertSkippedOnSuccess(t *testing.T) {
 }
 
 func TestFailureRevertSkippedOnUnchanged(t *testing.T) {
+	t.Parallel()
+
 	// When configured as "unchanged", no revert should happen even on failure
 	pipelineSuccess := false
 	onFailureStatus := "unchanged"
@@ -2008,6 +2100,8 @@ func TestFailureRevertSkippedOnUnchanged(t *testing.T) {
 }
 
 func TestFailureRevertTriggeredOnFailure(t *testing.T) {
+	t.Parallel()
+
 	// When pipeline fails and status is "ready", revert should happen
 	tests := []struct {
 		name            string
@@ -2041,6 +2135,7 @@ func TestFailureRevertTriggeredOnFailure(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestGetAutoCreateEpicBranch_Default(t *testing.T) {
 	// No env var set, no config file — default is true
 	dir := layouttest.Repo(t)
@@ -2050,6 +2145,7 @@ func TestGetAutoCreateEpicBranch_Default(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestGetAutoCreateEpicBranch_EnvDisable(t *testing.T) {
 	dir := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH", "false")
@@ -2058,6 +2154,7 @@ func TestGetAutoCreateEpicBranch_EnvDisable(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestGetAutoCreateEpicBranch_EnvEnable(t *testing.T) {
 	dir := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH", "true")
@@ -2066,6 +2163,7 @@ func TestGetAutoCreateEpicBranch_EnvEnable(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestGetAutoCreateEpicBranch_ConfigDisable(t *testing.T) {
 	dir := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH", "")
@@ -2082,6 +2180,7 @@ func TestGetAutoCreateEpicBranch_ConfigDisable(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestGetAutoCreateEpicBranch_ConfigEnable(t *testing.T) {
 	dir := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH", "")
@@ -2099,6 +2198,8 @@ func TestGetAutoCreateEpicBranch_ConfigEnable(t *testing.T) {
 }
 
 func TestEnsureEpicBranchForItem_NoParent(t *testing.T) {
+	t.Parallel()
+
 	// When item.ParentNumber == 0, ensureEpicBranchForItem is never called.
 	// The StageIssuePickup handler guards with: if item.ParentNumber != 0.
 	// This test verifies the guard condition itself.
@@ -2114,6 +2215,7 @@ func TestEnsureEpicBranchForItem_NoParent(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestEnsureEpicBranchForItem_Disabled(t *testing.T) {
 	// When the env var disables auto-creation, ensureEpicBranchForItem returns immediately.
 	// We verify by passing a non-existent workspaceRoot — if the function tried to open
@@ -2143,6 +2245,8 @@ func TestEnsureEpicBranchForItem_Disabled(t *testing.T) {
 // ── parsePRURL / verifyPRMerged tests (#2843) ─────────────────────────────────
 
 func TestParsePRURL(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name      string
 		url       string
@@ -2222,6 +2326,8 @@ func prBlockerServer(t *testing.T, state, mergeable, mergeStateStatus, reviewDec
 }
 
 func TestVerifyPRMerged_EmptyURL_TrustsSkill(t *testing.T) {
+	t.Parallel()
+
 	// Empty PrUrl is unusual but not fatal — pr-create may have skipped
 	// persisting the URL in test/mock contexts. Rather than fail every
 	// pipeline in that shape, we defer to the pr-merge skill's exit code.
@@ -2235,6 +2341,8 @@ func TestVerifyPRMerged_EmptyURL_TrustsSkill(t *testing.T) {
 }
 
 func TestVerifyPRMerged_BadURL(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	merged, reason := s.verifyPRMerged(context.Background(), "not a url", 0)
 	if merged {
@@ -2246,6 +2354,8 @@ func TestVerifyPRMerged_BadURL(t *testing.T) {
 }
 
 func TestVerifyPRMerged_NilClient(t *testing.T) {
+	t.Parallel()
+
 	// When no GitHub client is wired (test scheduler without client), we can't
 	// verify — fall back to trusting the skill's exit code rather than failing
 	// every pipeline in that configuration.
@@ -2258,6 +2368,8 @@ func TestVerifyPRMerged_NilClient(t *testing.T) {
 }
 
 func TestVerifyPRMerged_StateMerged(t *testing.T) {
+	t.Parallel()
+
 	srv := prStateServer(t, "MERGED")
 	defer srv.Close()
 	s := &Scheduler{client: gh.NewClientWithURL("test-token", srv.URL)}
@@ -2270,6 +2382,8 @@ func TestVerifyPRMerged_StateMerged(t *testing.T) {
 }
 
 func TestVerifyPRMerged_StateOpen(t *testing.T) {
+	t.Parallel()
+
 	// Reproduces #2843: pr-merge skill returned exit 0 but PR is still OPEN
 	// on GitHub (CI failure, review rejection, branch protection, etc).
 	srv := prStateServer(t, "OPEN")
@@ -2287,6 +2401,8 @@ func TestVerifyPRMerged_StateOpen(t *testing.T) {
 }
 
 func TestVerifyPRMerged_StateClosed(t *testing.T) {
+	t.Parallel()
+
 	// CLOSED without merge (e.g., user or bot closed the PR manually).
 	srv := prStateServer(t, "CLOSED")
 	defer srv.Close()
@@ -2307,6 +2423,8 @@ func TestVerifyPRMerged_StateClosed(t *testing.T) {
 const testPRURL = "https://github.com/acme/platform/pull/682"
 
 func TestVerifyPRMerged_Conflicting_NamesBlocker(t *testing.T) {
+	t.Parallel()
+
 	// State OPEN + Mergeable CONFLICTING → the named blocker must surface the
 	// conflict (not-mergeable bucket) so #4073's stuck-epic detector reads it.
 	srv := prBlockerServer(t, "OPEN", "CONFLICTING", "DIRTY", "")
@@ -2323,6 +2441,8 @@ func TestVerifyPRMerged_Conflicting_NamesBlocker(t *testing.T) {
 }
 
 func TestVerifyPRMerged_DirtyBehindState_NamesBlocker(t *testing.T) {
+	t.Parallel()
+
 	// State OPEN + MERGEABLE but mergeStateStatus BEHIND (base moved ahead) →
 	// dirty-merge-state bucket naming BEHIND.
 	srv := prBlockerServer(t, "OPEN", "MERGEABLE", "BEHIND", "")
@@ -2339,6 +2459,8 @@ func TestVerifyPRMerged_DirtyBehindState_NamesBlocker(t *testing.T) {
 }
 
 func TestVerifyPRMerged_ReviewRequired_NamesBlocker(t *testing.T) {
+	t.Parallel()
+
 	// State OPEN + MERGEABLE + CLEAN but reviewDecision REVIEW_REQUIRED →
 	// review-not-approved bucket naming REVIEW_REQUIRED.
 	srv := prBlockerServer(t, "OPEN", "MERGEABLE", "CLEAN", "REVIEW_REQUIRED")
@@ -2355,6 +2477,8 @@ func TestVerifyPRMerged_ReviewRequired_NamesBlocker(t *testing.T) {
 }
 
 func TestVerifyPRMerged_MergedButIssueStillOpen_TrustsMerged(t *testing.T) {
+	t.Parallel()
+
 	// #4070 review fix (assert-before-close race): when the PR is MERGED, that is
 	// the authoritative success signal. A still-OPEN linked issue here is NOT a
 	// merge failure — the post-merge close (checkEpicCompletion) runs AFTER this
@@ -2378,6 +2502,8 @@ func TestVerifyPRMerged_MergedButIssueStillOpen_TrustsMerged(t *testing.T) {
 }
 
 func TestVerifyPRMerged_MergedAndIssueClosed_Succeeds(t *testing.T) {
+	t.Parallel()
+
 	// Happy path: PR MERGED and the linked issue CLOSED → success.
 	srv := prBlockerServer(t, "MERGED", "MERGEABLE", "CLEAN", "APPROVED")
 	defer srv.Close()
@@ -2397,6 +2523,8 @@ func TestVerifyPRMerged_MergedAndIssueClosed_Succeeds(t *testing.T) {
 }
 
 func TestVerifyPRMerged_MergedIssueFetchError_Inconclusive(t *testing.T) {
+	t.Parallel()
+
 	// Inconclusive-on-transient-error: PR MERGED but GetIssue errors (eventual
 	// consistency on the close). Must trust MERGED rather than flap the
 	// pipeline. The mock returns an error for an unregistered issue.
@@ -2415,6 +2543,8 @@ func TestVerifyPRMerged_MergedIssueFetchError_Inconclusive(t *testing.T) {
 }
 
 func TestVerifyPRMergeForStage_NotMergedFailsClosed(t *testing.T) {
+	t.Parallel()
+
 	// Both the normal success tail AND the budget-shipped fast-advance route
 	// through verifyPRMergeForStage. A non-MERGED PR must return failed=true so
 	// the caller aborts the pipeline — closing the phantom-success hole where a
@@ -2435,6 +2565,8 @@ func TestVerifyPRMergeForStage_NotMergedFailsClosed(t *testing.T) {
 // introduced for #2870. A stage that exits 0 without writing its expected
 // output context file must be treated as a stage failure.
 func TestValidateStageOutput(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 
 	// Pre-create the pipeline state directory so the "present" cases
@@ -2514,6 +2646,8 @@ func TestValidateStageOutput(t *testing.T) {
 }
 
 func TestDevContextBuildPassed(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	pipelineDir := layouttest.PipelineDir(t, tmpDir)
 	if err := os.MkdirAll(pipelineDir, 0755); err != nil {
@@ -2592,6 +2726,8 @@ func makePerfModeFile(t *testing.T, dir, mode string) string {
 }
 
 func TestScheduler_ShouldReRoute_PerfModeNewer(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{}
 
@@ -2613,6 +2749,8 @@ func TestScheduler_ShouldReRoute_PerfModeNewer(t *testing.T) {
 }
 
 func TestScheduler_ShouldReRoute_ContextNewer(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{}
 
@@ -2633,6 +2771,8 @@ func TestScheduler_ShouldReRoute_ContextNewer(t *testing.T) {
 }
 
 func TestScheduler_ShouldReRoute_MissingPerfMode(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{}
 	makeIssueContext(t, tmpDir, 3140, "claude-sonnet-4-6", 5)
@@ -2644,6 +2784,8 @@ func TestScheduler_ShouldReRoute_MissingPerfMode(t *testing.T) {
 }
 
 func TestScheduler_ReRouteContext_EfficiencyOverride(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{}
 	ctx := context.Background()
@@ -2682,6 +2824,8 @@ func TestScheduler_ReRouteContext_EfficiencyOverride(t *testing.T) {
 }
 
 func TestScheduler_ReRouteContext_MaximumMode(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{}
 	ctx := context.Background()
@@ -2706,6 +2850,7 @@ func TestScheduler_ReRouteContext_MaximumMode(t *testing.T) {
 	}
 }
 
+// Serial: redirects the standard logger.
 func TestScheduler_ReRouteContext_LogsChange(t *testing.T) {
 	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{}
@@ -2734,6 +2879,8 @@ func TestScheduler_ReRouteContext_LogsChange(t *testing.T) {
 }
 
 func TestScheduler_ReRouteContext_AtomicWrite(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{}
 	ctx := context.Background()
@@ -2771,6 +2918,8 @@ func TestScheduler_ReRouteContext_AtomicWrite(t *testing.T) {
 // pipeline state, and pushed its epic branch inside a real repository that was
 // not the target.
 func TestRunRootResolvesTargetRepo(t *testing.T) {
+	t.Parallel()
+
 	launchRoot := t.TempDir()
 
 	s := &Scheduler{execMgr: execution.NewManager(launchRoot, nil), launchRepo: "owner/launch"}
@@ -2846,6 +2995,8 @@ func TestRunRootResolvesTargetRepo(t *testing.T) {
 // goroutine, so the only cross-run hazard is a write arriving from OUTSIDE over
 // IPC, which is exactly what this rejects (the second arm of F10).
 func TestRunIdentity_SchedulerPhaseArmsAreIdentityGated(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	rt := state.NewRuntimeState("nightgauge/nightgauge", 370, "item-1", testRunID())
 	s.registerRuntime(rt)
@@ -2901,6 +3052,8 @@ func TestRunIdentity_SchedulerPhaseArmsAreIdentityGated(t *testing.T) {
 // asserts only the unblocked return value, which the old `continue` produced
 // whether or not the removal happened.
 func TestCircularBlockedByAutoFixActuallyFires(t *testing.T) {
+	t.Parallel()
+
 	issueSvc := newMockIssueSvc()
 	s := &Scheduler{issueSvc: issueSvc, owner: "nightgauge"}
 	item := types.BoardItem{
@@ -2940,6 +3093,8 @@ func TestCircularBlockedByAutoFixActuallyFires(t *testing.T) {
 // item (#2344): not another repository's item with the same issue number, not
 // a local item of the same issue, and not the item once a dispatch took it.
 func TestQueueRemoveRemoteRun_RemovesOnlyTheRunsUntakenItem(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:   allWritersGate(),
 		repoRunning: make(map[string]int),
@@ -2987,6 +3142,8 @@ func TestQueueRemoveRemoteRun_RemovesOnlyTheRunsUntakenItem(t *testing.T) {
 // serves the run. An item a dispatch took, or one serving another remote run,
 // keeps what it has, and nothing is queued twice.
 func TestQueueAddItem_AttachesATriggersRunIdToAWaitingItem(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:   allWritersGate(),
 		repoRunning: make(map[string]int),
@@ -3032,6 +3189,8 @@ func TestQueueAddItem_AttachesATriggersRunIdToAWaitingItem(t *testing.T) {
 // item queued again as attached keeps that. A run's own item is removed only
 // while no dispatch has taken it.
 func TestQueueRemoveRemoteRun_DetachesARunFromTheOperatorsItem(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:   allWritersGate(),
 		repoRunning: make(map[string]int),

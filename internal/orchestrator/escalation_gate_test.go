@@ -10,6 +10,8 @@ import "testing"
 // it should not have); blocking escalation on it defeats the whole point of
 // escalating to a stronger model.
 func TestEscalationBlockedByCategory_FilesystemEACCESNotBlocked(t *testing.T) {
+	t.Parallel()
+
 	line := "open /var/lib/nightgauge/scratch/abc123.txt: permission denied"
 	blocked, reason := EscalationBlockedByCategory(line)
 	if blocked {
@@ -21,6 +23,8 @@ func TestEscalationBlockedByCategory_FilesystemEACCESNotBlocked(t *testing.T) {
 // original #878 behavior: a genuine forge/git-transport permission denial
 // (the canonical single-method OpenSSH form) must still block escalation.
 func TestEscalationBlockedByCategory_ForgeAuthDenialStillBlocked(t *testing.T) {
+	t.Parallel()
+
 	text := "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."
 	blocked, reason := EscalationBlockedByCategory(text)
 	if !blocked {
@@ -41,6 +45,8 @@ func TestEscalationBlockedByCategory_ForgeAuthDenialStillBlocked(t *testing.T) {
 // denied" phrase plus the filesystem negative-guard must still catch them
 // all.
 func TestEscalationBlockedByCategory_MultiMethodSSHDenialsStillBlocked(t *testing.T) {
+	t.Parallel()
+
 	cases := []string{
 		"git@gitlab.example.com: Permission denied (publickey,gssapi-keyex,gssapi-with-mic).\nfatal: Could not read from remote repository.",
 		"Permission denied (publickey,password).\nfatal: Could not read from remote repository.",
@@ -66,6 +72,8 @@ func TestEscalationBlockedByCategory_MultiMethodSSHDenialsStillBlocked(t *testin
 // board/issue mutation refused for lack of scope must still block
 // escalation, same as a git-transport denial.
 func TestEscalationBlockedByCategory_ForgeSentinelStillBlocked(t *testing.T) {
+	t.Parallel()
+
 	cases := []string{
 		"read alerts: forge: permission denied",
 		"gh: Permission denied",
@@ -89,6 +97,8 @@ func TestEscalationBlockedByCategory_ForgeSentinelStillBlocked(t *testing.T) {
 // IAM grant for re-dispatches the whole prompt to fail identically, exactly
 // #878's observed waste.
 func TestEscalationBlockedByCategory_ModelProviderDenialsStillBlocked(t *testing.T) {
+	t.Parallel()
+
 	cases := []string{
 		"Permission denied to access model",
 		"google: Permission denied on resource project foo.",
@@ -109,6 +119,8 @@ func TestEscalationBlockedByCategory_ModelProviderDenialsStillBlocked(t *testing
 // firstCauseFromOutputTail must not pick a plain filesystem EACCES line as a
 // run's recorded cause.
 func TestFirstCauseFromOutputTail_FilesystemEACCESNotPickedAsCause(t *testing.T) {
+	t.Parallel()
+
 	tail := "writing output\nopen /var/lib/nightgauge/scratch/abc123.txt: permission denied\nstage exited 1"
 	if got := firstCauseFromOutputTail(tail); got != "" {
 		t.Fatalf("firstCauseFromOutputTail(%q) = %q; want \"\" — a filesystem EACCES is not a forge-auth cause", tail, got)
@@ -118,6 +130,8 @@ func TestFirstCauseFromOutputTail_FilesystemEACCESNotPickedAsCause(t *testing.T)
 // TestFirstCauseFromOutputTail_ForgeAuthDenialStillPickedAsCause preserves the
 // original #878 behavior for the cause-naming helper.
 func TestFirstCauseFromOutputTail_ForgeAuthDenialStillPickedAsCause(t *testing.T) {
+	t.Parallel()
+
 	tail := "attempting push\ngit@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."
 	want := "git@github.com: Permission denied (publickey)."
 	if got := firstCauseFromOutputTail(tail); got != want {

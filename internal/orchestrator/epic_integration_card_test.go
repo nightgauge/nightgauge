@@ -14,6 +14,8 @@ import (
 // Action Center card naming the conflicts; the close that follows a later
 // successful integration retracts it. A pending integration raises nothing.
 func TestCheckEpicCompletion_BlockedIntegrationRaisesCardAndCloseResolvesIt(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	result := hooks.PostMergeResult{IssueClosed: true, EpicNumber: 2085, EpicRepo: "o/r", Reason: "error",
 		EpicReason: "integration_conflict",

@@ -41,6 +41,8 @@ const routedTier = "opus"
 
 // TestDispatchModelModeKnobMatrix walks {maximum, efficiency, frontier, unset}
 // × {automatic, manual stage_models, env override}.
+//
+// Serial: sets the environment.
 func TestDispatchModelModeKnobMatrix(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -161,6 +163,8 @@ func TestDispatchModelModeKnobMatrix(t *testing.T) {
 // recommendation escalated to Fable would otherwise dispatch Fable on
 // feature-validate — the stage the TS selector deliberately excludes from the
 // escalation, because Fable's extended reasoning empirically failed validation.
+//
+// Serial: sets the environment.
 func TestDispatchModelFrontierNeverCarriesFableOffTheReasoningStages(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "frontier")
@@ -197,6 +201,8 @@ func TestDispatchModelFrontierNeverCarriesFableOffTheReasoningStages(t *testing.
 // profile, all three of which set `model_routing.mode: manual`. Asserting the
 // rule only where the base is router-chosen is asserting it only where it
 // already held.
+//
+// Serial: sets the environment.
 func TestDispatchModelCeilingBindsTheRaisingMechanisms(t *testing.T) {
 	// manualHaikuDev is the shape of every recommended CONFIGURATION.md
 	// profile: explicit routing mode, explicit per-stage model.
@@ -312,6 +318,8 @@ func TestDispatchModelCeilingBindsTheRaisingMechanisms(t *testing.T) {
 // validation in dogfooding" on Fable — so a run-wide `minimum_model` or a
 // forced tier putting it on Fable is the behavior #19 deleted, arriving through
 // a different door.
+//
+// Serial: sets the environment.
 func TestDispatchModelFrontierCeilingIsPerStageForFloorsToo(t *testing.T) {
 	capped := []state.PipelineStage{
 		state.StageFeatureValidate, state.StagePRMerge, state.StageIssuePickup, state.StagePRCreate,
@@ -361,6 +369,8 @@ func TestDispatchModelFrontierCeilingIsPerStageForFloorsToo(t *testing.T) {
 // never fired and Step 3 always won — so a Go router that stopped at its own
 // hardcoded sonnet would have dropped the knob silently for exactly the runs it
 // used to govern.
+//
+// Serial: sets the environment.
 func TestDispatchModelResolvesTheWorkspaceDefault(t *testing.T) {
 	t.Run("ui.core.default_model answers an unrouted stage", func(t *testing.T) {
 		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: opus\n")
@@ -485,6 +495,8 @@ func gitWorkspaceWithLargeDiff(t *testing.T, body string, lines int) string {
 // and the same 900-line diff ran pr-create on sonnet autonomously and haiku
 // from the extension. That is the default cell for those operators, not an
 // exotic one.
+//
+// Serial: sets the environment.
 func TestDispatchModelPRCreateLargeDiffSparesAnExplicitBase(t *testing.T) {
 	const bigDiff = 900
 
@@ -537,6 +549,8 @@ func TestDispatchModelPRCreateLargeDiffSparesAnExplicitBase(t *testing.T) {
 // matrix above cannot see: getStageModel accepts only the four registry bands,
 // so an unrecognized env value falls through to the rest of the chain. Without
 // the same guard here, a value one resolver drops is dispatched by the other.
+//
+// Serial: sets the environment.
 func TestStageEnvModelValidatesLikeItsTypeScriptPair(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "gpt-5.6-sol")
@@ -550,6 +564,8 @@ func TestStageEnvModelValidatesLikeItsTypeScriptPair(t *testing.T) {
 // has exactly one home (routing.modeProfiles); this asserts the dispatch path
 // and the router agree about what a mode does, rather than each holding a copy.
 func TestModeTableIsSharedWithTheRouter(t *testing.T) {
+	t.Parallel()
+
 	for _, mode := range []routing.PerformanceMode{
 		routing.ModeEfficiency, routing.ModeElevated, routing.ModeMaximum, routing.ModeFrontier,
 	} {
@@ -565,6 +581,8 @@ func TestModeTableIsSharedWithTheRouter(t *testing.T) {
 // (#2512) on the Go dispatch path in every routing mode, with no routed tier
 // and no config. TS twin: modelRoutingConfig.test.ts "per-stage defaults
 // (#2512)" — both dispatch paths assert the same table.
+//
+// Serial: sets the environment.
 func TestStageDefaultModelsEveryMode(t *testing.T) {
 	want := map[state.PipelineStage]string{
 		state.StageIssuePickup:     "haiku",
@@ -645,6 +663,8 @@ func writeExclusionsConfig(t *testing.T, dir, body string) {
 // TestDispatchModelHonoursExcludedModels pins #2063's headline case: frontier
 // routes feature-dev at L/XL to Fable, and excluding claude-fable-5-1 lands it
 // on the strongest remaining rung (opus → claude-opus-5-5) instead.
+//
+// Serial: sets the environment.
 func TestDispatchModelHonoursExcludedModels(t *testing.T) {
 	plain := isolatedWorkspace(t)
 	dir := t.TempDir()
@@ -674,6 +694,7 @@ func TestDispatchModelHonoursExcludedModels(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment (via isolatedWorkspace).
 func TestDispatchModelNoEligibleRungNamesStageProviderAndLists(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	writeExclusionsConfig(t, dir,

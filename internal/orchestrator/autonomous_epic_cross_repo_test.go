@@ -52,6 +52,8 @@ func crossRepoCascadeScheduler() *AutonomousScheduler {
 // held even though the same-numbered issue in the sub-issue's own repository is
 // open and unblocked.
 func TestEpicCascade_CrossRepoParentWithAnOpenBlockerHoldsItsSub(t *testing.T) {
+	t.Parallel()
+
 	g := buildTestGraph([]*depgraph.Node{
 		makeEpicTestNode(crossRepoPlatform, 10, "OPEN", "In progress", nil, 0),
 		makeEpicTestNode(crossRepoPlatform, 20, "OPEN", "In progress", []string{"type:epic"}, 0),
@@ -73,6 +75,8 @@ func TestEpicCascade_CrossRepoParentWithAnOpenBlockerHoldsItsSub(t *testing.T) {
 // The unrelated same-numbered issue in the sub-issue's repository has an open
 // blocker and the real epic has none: nothing holds the sub-issue.
 func TestEpicCascade_SameNumberedIssueInTheSubsRepoDoesNotHoldIt(t *testing.T) {
+	t.Parallel()
+
 	g := buildTestGraph([]*depgraph.Node{
 		makeEpicTestNode(crossRepoPlatform, 20, "OPEN", "In progress", []string{"type:epic"}, 0),
 		makeEpicTestNode(crossRepoApp, 11, "OPEN", "In progress", nil, 0),
@@ -100,6 +104,8 @@ func crossRepoStuckOpts() stuckEpicScanOpts {
 // explains the hold by naming that epic, and its blocker, in their own
 // repository: in a reason about o/app#21 a bare "#10" would read as o/app#10.
 func TestStuckEpics_CrossRepoParentWithAnOpenBlockerIsStuck(t *testing.T) {
+	t.Parallel()
+
 	g := buildTestGraph([]*depgraph.Node{
 		makeEpicTestNode(crossRepoPlatform, 10, "OPEN", "In progress", nil, 0),
 		makeEpicTestNode(crossRepoPlatform, 20, "OPEN", "In progress", []string{"type:epic"}, 0),
@@ -123,6 +129,8 @@ func TestStuckEpics_CrossRepoParentWithAnOpenBlockerIsStuck(t *testing.T) {
 // An unrelated same-numbered epic in the sub-issue's repository, blocked, must
 // neither hold the sub-issue nor be reported stuck on its account.
 func TestStuckEpics_SameNumberedEpicInTheSubsRepoDoesNotHoldIt(t *testing.T) {
+	t.Parallel()
+
 	g := buildTestGraph([]*depgraph.Node{
 		makeEpicTestNode(crossRepoPlatform, 20, "OPEN", "In progress", []string{"type:epic"}, 0),
 		makeEpicTestNode(crossRepoApp, 11, "OPEN", "In progress", nil, 0),
@@ -142,6 +150,8 @@ func TestStuckEpics_SameNumberedEpicInTheSubsRepoDoesNotHoldIt(t *testing.T) {
 // An epic's edge to its own sub-issue in another repository states
 // containment, as one in its own repository does (#1937), and so does not gate.
 func TestEpicCascadeDeps_RecognisesACrossRepoSubIssue(t *testing.T) {
+	t.Parallel()
+
 	g := buildTestGraph([]*depgraph.Node{
 		makeEpicTestNode(crossRepoPlatform, 20, "OPEN", "In progress", []string{"type:epic"}, 0),
 		makeEpicTestNode(crossRepoApp, 20, "OPEN", "In progress", nil, 0),
@@ -163,6 +173,8 @@ func TestEpicCascadeDeps_RecognisesACrossRepoSubIssue(t *testing.T) {
 // openBlockerRefs names a blocker in the reason's own repository as "#N" and
 // any other as "owner/repo#N", the local ones first.
 func TestOpenBlockerRefs_QualifiesBlockersInOtherRepositories(t *testing.T) {
+	t.Parallel()
+
 	g := buildTestGraph([]*depgraph.Node{
 		makeEpicTestNode(crossRepoApp, 7, "OPEN", "In progress", nil, 0),
 		makeEpicTestNode(crossRepoApp, 3, "OPEN", "Ready", nil, 0),

@@ -54,6 +54,8 @@ func clearRoutingEnv(t *testing.T) {
 // consulted, because the shipped default is true (ADR-021). The test this
 // replaces passed no job class, so it held whatever the default was, and the
 // extension's resolver had kept a default of false unnoticed (#2387).
+//
+// Serial: sets the environment (via isolateRoutingEnv).
 func TestStageBaseModelAppliesAdviceByDefault(t *testing.T) {
 	isolateRoutingEnv(t)
 	clearRoutingEnv(t)
@@ -70,6 +72,8 @@ func TestStageBaseModelAppliesAdviceByDefault(t *testing.T) {
 // use_eval_recommendations: false leaves the advice file unread even for an
 // attributed job class with advisable evidence. Routed tier sonnet stays
 // sonnet.
+//
+// Serial: sets the environment (via routedWorkspace).
 func TestStageBaseModelIgnoresAdviceWhenTheKeyIsOff(t *testing.T) {
 	root := routedWorkspace(t, "model_routing:\n  use_eval_recommendations: false\n")
 	clearRoutingEnv(t)
@@ -81,6 +85,7 @@ func TestStageBaseModelIgnoresAdviceWhenTheKeyIsOff(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestStageBaseModelAppliesAdviceWhenEnabled(t *testing.T) {
 	clearRoutingEnv(t)
 	t.Setenv("NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS", "true")
@@ -96,6 +101,7 @@ func TestStageBaseModelAppliesAdviceWhenEnabled(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestStageBaseModelAdviceStaysInsideTheEnvelope(t *testing.T) {
 	clearRoutingEnv(t)
 	t.Setenv("NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS", "true")
@@ -110,6 +116,7 @@ func TestStageBaseModelAdviceStaysInsideTheEnvelope(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestStageBaseModelAdviceEnabledWithoutFileIsToday(t *testing.T) {
 	clearRoutingEnv(t)
 	t.Setenv("NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS", "true")
@@ -121,6 +128,7 @@ func TestStageBaseModelAdviceEnabledWithoutFileIsToday(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestStageBaseModelAdviceRequiresAJobClass(t *testing.T) {
 	clearRoutingEnv(t)
 	t.Setenv("NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS", "true")

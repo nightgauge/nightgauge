@@ -13,6 +13,8 @@ import (
 
 // A default branch that refuses an epic MERGE gets no epic branch: the whole
 // epic would otherwise land as one squash commit through the queue (#3358).
+//
+// Serial: sets the environment.
 func TestEnsureEpicBranchForItem_EpicMergePolicyGate(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -60,6 +62,8 @@ func TestEnsureEpicBranchForItem_EpicMergePolicyGate(t *testing.T) {
 
 // A probe error fails open (the branch is created as before) and is not
 // cached, so the next item re-probes (#3358).
+//
+// Serial: sets the environment.
 func TestEnsureEpicBranchForItem_EpicMergeProbeErrorFailsOpen(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH", "true")
 	root := gitWorkspace(t)

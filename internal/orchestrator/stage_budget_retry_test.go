@@ -26,6 +26,8 @@ import (
 // the retry engine records no escalation and the stage is dispatched once. A
 // stronger model re-dispatched under the same budget would only spend it again.
 func TestStageBudgetStopIsBudgetExceededAndNeverRetried(t *testing.T) {
+	t.Parallel()
+
 	for _, dimension := range []string{execution.StageBudgetTurns, execution.StageBudgetWallClock, execution.StageBudgetTokens} {
 		t.Run(dimension, func(t *testing.T) {
 			root := gitWorkspace(t)
@@ -82,6 +84,8 @@ func TestStageBudgetStopIsBudgetExceededAndNeverRetried(t *testing.T) {
 // TestStageBudgetsReachTheExecutor pins the scheduler wiring: the workspace's
 // pipeline.stage_budgets is read through the tier merge and carried onto the
 // execution.StageOptions the manager enforces.
+//
+// Serial: sets the environment.
 func TestStageBudgetsReachTheExecutor(t *testing.T) {
 	// Keep the machine tier out of the merge.
 	t.Setenv("HOME", t.TempDir())
@@ -118,6 +122,8 @@ pipeline:
 // re-runs pr-merge, which spends another round of re-enqueues on the same
 // outage. pr-merge is dispatched once and the run ends merge_queue_infra_failed.
 func TestMergeQueueInfraExhaustedIsTerminalAndNeverEscalated(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	errText := pmstages.MergeQueueInfraExhaustedReason(pmstages.MergeGroupVerdict{
 		Class: pmstages.MergeGroupInfra, Job: "Playwright webview tests", Step: "Install Playwright OS dependencies",

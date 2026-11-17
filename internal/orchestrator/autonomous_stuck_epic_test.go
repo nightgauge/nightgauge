@@ -50,6 +50,8 @@ func noRecovery(string, int) bool { return false }
 func noReason(string, int) string { return "" }
 
 func TestStuckEpics_AllBlocked_IsStuck(t *testing.T) {
+	t.Parallel()
+
 	// #143 is in progress with no run; #144 is blocked by the open #143.
 	g := buildEpicGraph("In progress",
 		[]*depgraph.Node{
@@ -83,6 +85,8 @@ func TestStuckEpics_AllBlocked_IsStuck(t *testing.T) {
 }
 
 func TestStuckEpics_RecoveringSub_NotStuck(t *testing.T) {
+	t.Parallel()
+
 	g := buildEpicGraph("In progress",
 		[]*depgraph.Node{
 			{Number: 143, Title: "Sub A", State: "OPEN", BoardStatus: "In progress"},
@@ -100,6 +104,8 @@ func TestStuckEpics_RecoveringSub_NotStuck(t *testing.T) {
 }
 
 func TestStuckEpics_EligibleSub_NotStuck(t *testing.T) {
+	t.Parallel()
+
 	// #143 is Ready and unblocked → dispatchable → epic is progressing.
 	g := buildEpicGraph("In progress",
 		[]*depgraph.Node{
@@ -116,6 +122,8 @@ func TestStuckEpics_EligibleSub_NotStuck(t *testing.T) {
 }
 
 func TestStuckEpics_RunningSub_NotStuck(t *testing.T) {
+	t.Parallel()
+
 	g := buildEpicGraph("In progress",
 		[]*depgraph.Node{
 			{Number: 143, Title: "Sub A", State: "OPEN", BoardStatus: "In progress"},
@@ -132,6 +140,8 @@ func TestStuckEpics_RunningSub_NotStuck(t *testing.T) {
 }
 
 func TestStuckEpics_AllSubsClosed_NotStuck(t *testing.T) {
+	t.Parallel()
+
 	g := buildEpicGraph("In progress",
 		[]*depgraph.Node{
 			{Number: 143, Title: "Sub A", State: "CLOSED", BoardStatus: "Done"},
@@ -147,6 +157,8 @@ func TestStuckEpics_AllSubsClosed_NotStuck(t *testing.T) {
 }
 
 func TestStuckEpics_FailureReasonFromHistory(t *testing.T) {
+	t.Parallel()
+
 	g := buildEpicGraph("In progress",
 		[]*depgraph.Node{
 			{Number: 143, Title: "Sub A", State: "OPEN", BoardStatus: "In progress"},
@@ -171,6 +183,8 @@ func TestStuckEpics_FailureReasonFromHistory(t *testing.T) {
 }
 
 func TestRunRecordIsRecovering(t *testing.T) {
+	t.Parallel()
+
 	now := time.Now().UTC()
 	recent := now.Add(-5 * time.Minute).Format(time.RFC3339)
 	old := now.Add(-2 * time.Hour).Format(time.RFC3339)
@@ -199,6 +213,8 @@ func TestRunRecordIsRecovering(t *testing.T) {
 }
 
 func TestLatestRunRecordFromDir(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	// Two records for #143; the later CompletedAt must win.
 	older := `{"issue_number":143,"repo":"o/r","completed_at":"2026-06-01T10:00:00Z","outcome":"failed","terminal_failure_kind":"stall_kill"}`
@@ -225,6 +241,8 @@ func TestLatestRunRecordFromDir(t *testing.T) {
 // treats an issue with a pending retry (in-memory backoff) as actively
 // recovering — so the epic is NOT flagged as stuck (#4073).
 func TestDetectStuckEpics_RetryBackoffExcludes(t *testing.T) {
+	t.Parallel()
+
 	g := buildEpicGraph("In progress",
 		[]*depgraph.Node{
 			{Number: 143, Title: "Sub A", State: "OPEN", BoardStatus: "In progress"},
@@ -254,6 +272,8 @@ func TestDetectStuckEpics_RetryBackoffExcludes(t *testing.T) {
 // TestDetectStuckEpics_HistoryRecoveryExcludes verifies a recent
 // conflict-recovery run (from history) keeps the epic NOT stuck.
 func TestDetectStuckEpics_HistoryRecoveryExcludes(t *testing.T) {
+	t.Parallel()
+
 	g := buildEpicGraph("In progress",
 		[]*depgraph.Node{{Number: 143, Title: "Sub A", State: "OPEN", BoardStatus: "In progress"}}, nil)
 
@@ -280,6 +300,8 @@ func TestDetectStuckEpics_HistoryRecoveryExcludes(t *testing.T) {
 }
 
 func TestAlertStuckEpics_DeDup(t *testing.T) {
+	t.Parallel()
+
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -310,6 +332,8 @@ func TestAlertStuckEpics_DeDup(t *testing.T) {
 // distinct stalled epics with correctly-attributed blockers — never merged or
 // shadowed by the bare-number index.
 func TestStuckEpics_CrossRepoNumberCollision(t *testing.T) {
+	t.Parallel()
+
 	g := depgraph.NewGraph()
 	for _, repo := range []string{"o/A", "o/B"} {
 		g.AddNode(&depgraph.Node{Repo: repo, Number: 142, Title: "Epic " + repo, State: "OPEN", BoardStatus: "In progress", Labels: []string{"type:epic"}})
@@ -336,6 +360,8 @@ func TestStuckEpics_CrossRepoNumberCollision(t *testing.T) {
 // TestStuckEpics_CrossRepoEligibleDoesNotSuppress: a Ready+unblocked sub in repo
 // B must NOT suppress a genuinely-stuck same-numbered epic in repo A.
 func TestStuckEpics_CrossRepoEligibleDoesNotSuppress(t *testing.T) {
+	t.Parallel()
+
 	g := depgraph.NewGraph()
 	g.AddNode(&depgraph.Node{Repo: "o/A", Number: 142, Title: "Epic A", State: "OPEN", BoardStatus: "In progress", Labels: []string{"type:epic"}})
 	g.AddNode(&depgraph.Node{Repo: "o/A", Number: 143, Title: "Sub A", State: "OPEN", BoardStatus: "In progress", EpicNumber: 142})
@@ -355,6 +381,8 @@ func TestStuckEpics_CrossRepoEligibleDoesNotSuppress(t *testing.T) {
 // dispatchable per the author-trust gate fix (#270) — only "Ready" is. The
 // epic must now be flagged stuck since its sole sub has no eligible work.
 func TestStuckEpics_TodoStatusNotDispatchable(t *testing.T) {
+	t.Parallel()
+
 	for _, status := range []string{"Todo", "To Do"} {
 		g := buildEpicGraph("In progress",
 			[]*depgraph.Node{{Number: 143, Title: "Sub A", State: "OPEN", BoardStatus: status}}, nil)
@@ -371,6 +399,8 @@ func TestStuckEpics_TodoStatusNotDispatchable(t *testing.T) {
 // TestStuckEpics_InReviewDepBlocksDependent: a sub blocked only by an open "In
 // review" dep waits for it to close (#2706), so nothing in the epic can dispatch.
 func TestStuckEpics_InReviewDepBlocksDependent(t *testing.T) {
+	t.Parallel()
+
 	g := buildEpicGraph("In progress",
 		[]*depgraph.Node{
 			{Number: 143, Title: "Sub A", State: "OPEN", BoardStatus: "In review"},
@@ -391,6 +421,8 @@ func TestStuckEpics_InReviewDepBlocksDependent(t *testing.T) {
 // itself blocked by an open upstream epic is NOT dispatchable (cascade), so the
 // epic IS stuck — matching the real dispatcher.
 func TestStuckEpics_EpicCascadeBlocksSub(t *testing.T) {
+	t.Parallel()
+
 	g := depgraph.NewGraph()
 	g.AddNode(&depgraph.Node{Repo: "o/r", Number: 100, Title: "Upstream epic", State: "OPEN", BoardStatus: "In progress", Labels: []string{"type:epic"}})
 	g.AddNode(&depgraph.Node{Repo: "o/r", Number: 142, Title: "Epic", State: "OPEN", BoardStatus: "In progress", Labels: []string{"type:epic"}})
@@ -428,6 +460,8 @@ func TestStuckEpics_EpicCascadeBlocksSub(t *testing.T) {
 // TestParseRecordTime locks the deterministic tie-break: completed_at preferred,
 // recorded_at fallback, ok=false when neither parses.
 func TestParseRecordTime(t *testing.T) {
+	t.Parallel()
+
 	if tm, ok := parseRecordTime("2026-06-02T10:00:00Z", "2026-06-01T10:00:00Z"); !ok || tm.Day() != 2 {
 		t.Errorf("completed_at must win, got %v ok=%v", tm, ok)
 	}
@@ -444,6 +478,8 @@ func TestParseRecordTime(t *testing.T) {
 
 // TestAlertStuckEpics_NoCooldownOnFailure locks the #4073 review fix: a failed
 // Discord POST must NOT arm the re-alert cooldown, so the next cycle retries.
+//
+// Serial: swaps package var notify.RetryDelay.
 func TestAlertStuckEpics_NoCooldownOnFailure(t *testing.T) {
 	var fail int32 = 1
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -481,6 +517,8 @@ func TestAlertStuckEpics_NoCooldownOnFailure(t *testing.T) {
 // back only by its parent epic's blocker is described as "(via epic #N)", not
 // mislabeled "ready but undispatched".
 func TestStuckEpics_EpicCascadeReason(t *testing.T) {
+	t.Parallel()
+
 	g := depgraph.NewGraph()
 	g.AddNode(&depgraph.Node{Repo: "o/r", Number: 100, Title: "Upstream", State: "OPEN", BoardStatus: "In progress", Labels: []string{"type:epic"}})
 	g.AddNode(&depgraph.Node{Repo: "o/r", Number: 142, Title: "Epic", State: "OPEN", BoardStatus: "In progress", Labels: []string{"type:epic"}})
@@ -509,6 +547,8 @@ func TestStuckEpics_EpicCascadeReason(t *testing.T) {
 // TestAlertStuckEpics_PartialBatchArmsDelivered: when batch 1 lands but batch 2
 // fails, the cooldown must be armed ONLY for the delivered epics (the failed
 // batch re-alerts next cycle) (#4073 round-2 review).
+//
+// Serial: swaps package var notify.RetryDelay.
 func TestAlertStuckEpics_PartialBatchArmsDelivered(t *testing.T) {
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -572,6 +612,8 @@ func reasonForInReviewSub(t *testing.T, o stuckEpicScanOpts) string {
 // A confirmed OPEN PR is the ONLY input that licenses the "PR open, awaiting
 // merge" claim — the state the card is allowed to assert.
 func TestInReviewReason_ConfirmedOpenPR_ClaimsPR(t *testing.T) {
+	t.Parallel()
+
 	reason := reasonForInReviewSub(t, stuckEpicScanOpts{
 		prEvidence: prEvidenceFrom(map[string]bool{"o/r#143": true}, map[string]bool{"o/r": true}),
 	})
@@ -584,6 +626,8 @@ func TestInReviewReason_ConfirmedOpenPR_ClaimsPR(t *testing.T) {
 // is the exact production shape — the architecture-approval gate parked the
 // issue at "In review" with zero implementation behind it.
 func TestInReviewReason_QueriedAndNoPR_DoesNotClaimPR(t *testing.T) {
+	t.Parallel()
+
 	reason := reasonForInReviewSub(t, stuckEpicScanOpts{
 		prEvidence: prEvidenceFrom(map[string]bool{}, map[string]bool{"o/r": true}),
 	})
@@ -599,6 +643,8 @@ func TestInReviewReason_QueriedAndNoPR_DoesNotClaimPR(t *testing.T) {
 // card must say so rather than pick either confident answer — collapsing this
 // into "no PR" is the same defect class as #265 itself, just reversed.
 func TestInReviewReason_PRQueryFailed_ReportsUnverified(t *testing.T) {
+	t.Parallel()
+
 	reason := reasonForInReviewSub(t, stuckEpicScanOpts{
 		// prBacked empty AND the repo missing from queryOK — a failed lookup.
 		prEvidence: prEvidenceFrom(map[string]bool{}, map[string]bool{}),
@@ -617,6 +663,8 @@ func TestInReviewReason_PRQueryFailed_ReportsUnverified(t *testing.T) {
 // A wholly unwired detector (no evidence source at all) must also degrade to
 // "unverified" rather than inheriting the old unconditional PR claim.
 func TestInReviewReason_NoEvidenceSource_ReportsUnverified(t *testing.T) {
+	t.Parallel()
+
 	reason := reasonForInReviewSub(t, stuckEpicScanOpts{})
 	if strings.Contains(reason, "PR open") {
 		t.Fatalf("no evidence source wired — must not claim a PR; got %q", reason)
@@ -629,6 +677,8 @@ func TestInReviewReason_NoEvidenceSource_ReportsUnverified(t *testing.T) {
 // The acceptance case from #265: sub-issues parked on the architecture-approval
 // gate must name the approval — the action that unblocks them — and never a PR.
 func TestInReviewReason_AwaitingArchApproval_NamesApprovalNotPR(t *testing.T) {
+	t.Parallel()
+
 	reason := reasonForInReviewSub(t, stuckEpicScanOpts{
 		awaitingArchApproval: func(string, int) bool { return true },
 		prEvidence:           prEvidenceFrom(map[string]bool{}, map[string]bool{"o/r": true}),
@@ -650,6 +700,8 @@ func TestInReviewReason_AwaitingArchApproval_NamesApprovalNotPR(t *testing.T) {
 // prEvidenceFrom is the seam that keeps "no PR" and "never looked" apart; test
 // it directly so a future refactor cannot quietly collapse the two.
 func TestPREvidenceFrom_ThreeStates(t *testing.T) {
+	t.Parallel()
+
 	ev := prEvidenceFrom(
 		map[string]bool{"o/r#1": true},
 		map[string]bool{"o/r": true},
@@ -670,6 +722,8 @@ func TestPREvidenceFrom_ThreeStates(t *testing.T) {
 // reach Slack at all. Delivery and the cooldown are covered by SlackSink's own
 // tests and the Discord path's cooldown tests respectively; this asserts the
 // caller resolves credentials from the shared config block (#1089).
+//
+// Serial: sets the environment.
 func TestAlertStuckEpics_BuildsSlackSinkFromSharedConfig(t *testing.T) {
 	t.Setenv("TEST_SLACK_TOKEN", "xoxb-test")
 	enabled := true
@@ -710,6 +764,8 @@ func issue477Graph(extraEpicBlocker bool) *depgraph.Graph {
 }
 
 func TestStuckEpics_EpicEdgesToItsOwnSubsDoNotCascade(t *testing.T) {
+	t.Parallel()
+
 	got := stuckEpicsFromGraph(issue477Graph(false), stuckEpicScanOpts{
 		now: time.Unix(1_700_000_000, 0), runningSet: map[string]bool{},
 		isRecovering: noRecovery, failureReason: noReason,
@@ -722,6 +778,8 @@ func TestStuckEpics_EpicEdgesToItsOwnSubsDoNotCascade(t *testing.T) {
 }
 
 func TestStuckEpics_CascadeNamesOnlyTheEpicsRealBlocker(t *testing.T) {
+	t.Parallel()
+
 	got := stuckEpicsFromGraph(issue477Graph(true), stuckEpicScanOpts{
 		now: time.Unix(1_700_000_000, 0), runningSet: map[string]bool{},
 		isRecovering: noRecovery, failureReason: noReason,
@@ -745,6 +803,8 @@ func TestStuckEpics_CascadeNamesOnlyTheEpicsRealBlocker(t *testing.T) {
 }
 
 func TestPrioritize_EpicEdgesToItsOwnSubsDoNotCascade(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 5},

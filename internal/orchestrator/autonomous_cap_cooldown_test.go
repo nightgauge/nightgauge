@@ -22,6 +22,8 @@ import (
 // run continues on a weaker tier and the terminal kind the scheduler reports is
 // model_unavailable — which takes the per-issue backoff branch and writes NO
 // global cooldown.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestAnAttributedCapDoesNotSuspendEveryRepo(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.QuotaCooldownUntil = ""
@@ -53,6 +55,8 @@ func TestAnAttributedCapDoesNotSuspendEveryRepo(t *testing.T) {
 // the autonomous scheduler still carrying rate_limit_quota_exhausted, and the
 // global cooldown fires exactly as it always did — now as a last resort rather
 // than a first move.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestASurvivingAccountWideRejectionStillSuspendsTheFleet(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.QuotaCooldownUntil = ""

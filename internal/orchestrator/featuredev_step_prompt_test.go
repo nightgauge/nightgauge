@@ -10,6 +10,8 @@ import (
 // to stop after implementation and testing. Step 1 and the last step keep
 // the phases they own.
 func TestComposeFeatureDevStepPromptSkipsRepeatedPhases(t *testing.T) {
+	t.Parallel()
+
 	const skipSetup = "Do not repeat them: start at implementation"
 	const stopEarly = "Stop after this step's implementation and testing"
 	cases := []struct {
@@ -41,6 +43,8 @@ func TestComposeFeatureDevStepPromptSkipsRepeatedPhases(t *testing.T) {
 // `nightgauge layout path` and write it back through `nightgauge layout write`,
 // never to edit it by path.
 func TestComposeFeatureDevStepPromptChecksTheBoxThroughLayout(t *testing.T) {
+	t.Parallel()
+
 	got := composeFeatureDevStepPrompt("BASE", "3-plan.md", 3, 1, 2, false, "do the step", "")
 	for _, want := range []string{
 		"`$(nightgauge layout path plans 3-plan.md)`",

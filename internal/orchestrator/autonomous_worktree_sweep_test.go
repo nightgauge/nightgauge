@@ -68,6 +68,8 @@ func mergedWorktreeRepo(t *testing.T, issue int) (string, string) {
 }
 
 func TestSweepMergedWorktrees_ReclaimsAcrossEveryRegisteredRepo(t *testing.T) {
+	t.Parallel()
+
 	rootA, wtA := mergedWorktreeRepo(t, 201)
 	rootB, wtB := mergedWorktreeRepo(t, 202)
 
@@ -90,6 +92,8 @@ func TestSweepMergedWorktrees_ReclaimsAcrossEveryRegisteredRepo(t *testing.T) {
 }
 
 func TestSweepMergedWorktrees_ProtectsRunningIssues(t *testing.T) {
+	t.Parallel()
+
 	root, wt := mergedWorktreeRepo(t, 203)
 
 	as := &AutonomousScheduler{
@@ -106,6 +110,8 @@ func TestSweepMergedWorktrees_ProtectsRunningIssues(t *testing.T) {
 }
 
 func TestSweepMergedWorktrees_NoSchedulerIsNoOp(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{state: &AutonomousState{}}
 	as.sweepMergedWorktrees() // must not panic
 }
@@ -116,6 +122,8 @@ func TestSweepMergedWorktrees_NoSchedulerIsNoOp(t *testing.T) {
 // landed, so treating "could not read it" as "nothing is running" removes those
 // worktrees while their stages are still executing. Fail open, and say so —
 // silence here is the #302 class of defect.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestSweepMergedWorktrees_NilStateSkipsLoudly(t *testing.T) {
 	root, wt := mergedWorktreeRepo(t, 204)
 
@@ -140,6 +148,8 @@ func TestSweepMergedWorktrees_NilStateSkipsLoudly(t *testing.T) {
 // failed. This IS the leak-detection pass (#110) — returning bare leaves
 // worktree accumulation invisible for as long as the misconfiguration lasts,
 // and the sweep looks like it ran clean every cycle.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestSweepMergedWorktrees_ZeroRootsIsLoud(t *testing.T) {
 	// No workspace root and no roots resolver → repoScanRoots() is empty.
 	as := &AutonomousScheduler{
@@ -183,6 +193,8 @@ func unreadableRoot(t *testing.T) string {
 // its own candidate enumeration either (one unreadable sibling root hides
 // whatever that root held). Skip loudly — never reclaim on an answer that was
 // never obtained (#296).
+//
+// Serial: sets the environment (via unreadableRoot).
 func TestSweepMergedWorktrees_UndeterminedSkipsAutonomousSweep(t *testing.T) {
 	root, wt := mergedWorktreeRepo(t, 403) // reclaimable: content already on main
 	notARepo := unreadableRoot(t)
@@ -216,6 +228,8 @@ func TestSweepMergedWorktrees_UndeterminedSkipsAutonomousSweep(t *testing.T) {
 // the whole answer), so the sweep still runs — and then fails on that root.
 // That failure has to be visible and has to be local: the readable root's
 // leaked worktree is still reclaimed.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestSweepMergedWorktrees_PerRootFailureIsLoggedAndDoesNotStopTheSweep(t *testing.T) {
 	root, wt := mergedWorktreeRepo(t, 205)
 	missing := filepath.Join(t.TempDir(), "deleted-sibling")

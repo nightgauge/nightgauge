@@ -20,6 +20,8 @@ import (
 // and #202, #202 is blocked by #201, and #202 cannot be read. EnqueueEpic
 // enqueued #202 with no blockers, so DequeueIndependent could dispatch it
 // beside #201.
+//
+// Serial: sets the environment (via githubtest.New).
 func TestEnqueueEpic_UnreadableSubIssueIsAnError(t *testing.T) {
 	fake := githubtest.New(t, map[int]githubtest.Issue{
 		100: {SubIssues: []int{201, 202}},
@@ -42,6 +44,8 @@ func TestEnqueueEpic_UnreadableSubIssueIsAnError(t *testing.T) {
 // enqueue leaves out (outside the drag path's whitelist, or human-only) is
 // not read, so failing to read it cannot fail the enqueue of the others.
 func TestEnqueueEpic_SubIssuesItWillNotEnqueueAreNotRead(t *testing.T) {
+	t.Parallel()
+
 	readFailure := errors.New("status 502")
 
 	t.Run("outside the whitelist", func(t *testing.T) {
@@ -82,6 +86,8 @@ func TestEnqueueEpic_SubIssuesItWillNotEnqueueAreNotRead(t *testing.T) {
 // TestFetchSubIssueDetails_UnreadableSubIssueIsAnError: #102 is blocked by
 // #101 and cannot be read. The wave plan left #102 out with a warning, so the
 // epic ran without it and reported every wave a success.
+//
+// Serial: sets the environment (via githubtest.New).
 func TestFetchSubIssueDetails_UnreadableSubIssueIsAnError(t *testing.T) {
 	fake := githubtest.New(t, map[int]githubtest.Issue{
 		100: {SubIssues: []int{101, 102}},

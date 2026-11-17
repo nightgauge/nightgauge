@@ -28,12 +28,16 @@ func writeEpicCtx(t *testing.T, epicNumber int, ec epicContext) string {
 }
 
 func TestRenderEpicContext_AbsentFile(t *testing.T) {
+	t.Parallel()
+
 	if got := renderEpicContextForPrompt(t.TempDir(), 42); got != "" {
 		t.Errorf("absent file should render \"\", got %q", got)
 	}
 }
 
 func TestRenderEpicContext_EmptyData(t *testing.T) {
+	t.Parallel()
+
 	root := writeEpicCtx(t, 42, epicContext{EpicNumber: 42}) // no files/notes
 	if got := renderEpicContextForPrompt(root, 42); got != "" {
 		t.Errorf("empty context should render \"\", got %q", got)
@@ -41,6 +45,8 @@ func TestRenderEpicContext_EmptyData(t *testing.T) {
 }
 
 func TestRenderEpicContext_RendersDelimitedSemiTrustedBlock(t *testing.T) {
+	t.Parallel()
+
 	root := writeEpicCtx(t, 7, epicContext{
 		EpicNumber: 7,
 		SharedResearch: sharedResearch{
@@ -69,6 +75,8 @@ func TestRenderEpicContext_RendersDelimitedSemiTrustedBlock(t *testing.T) {
 }
 
 func TestRenderEpicContext_DeterministicSiblingOrder(t *testing.T) {
+	t.Parallel()
+
 	root := writeEpicCtx(t, 7, epicContext{
 		EpicNumber: 7,
 		SubIssueFindings: map[string]*subIssueFindings{
@@ -89,6 +97,8 @@ func TestRenderEpicContext_DeterministicSiblingOrder(t *testing.T) {
 }
 
 func TestRenderEpicContext_BoundsFilesAndChars(t *testing.T) {
+	t.Parallel()
+
 	manyFiles := make([]string, 100)
 	for i := range manyFiles {
 		manyFiles[i] = "file-" + strconv.Itoa(i) + ".go"
@@ -108,6 +118,8 @@ func TestRenderEpicContext_BoundsFilesAndChars(t *testing.T) {
 }
 
 func TestDedupeCap(t *testing.T) {
+	t.Parallel()
+
 	got := dedupeCap([]string{"a", "", "a", "b", "  ", "c"}, 2)
 	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
 		t.Errorf("dedupeCap = %v, want [a b]", got)

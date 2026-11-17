@@ -19,6 +19,8 @@ import (
 // already made are refunded.
 
 // The exact incident shape: one terminal kind, three failures, two repos.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestCascadeProductFault_SharedKindAcrossTwoReposChargesNoIssue(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 
@@ -66,6 +68,8 @@ func TestCascadeProductFault_SharedKindAcrossTwoReposChargesNoIssue(t *testing.T
 
 // The control: three failures of three different kinds are three independent
 // problems, and the counters increment exactly as they did before #1487.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestCascadeProductFault_MixedKindsStillChargeTheIssues(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 
@@ -102,6 +106,8 @@ func TestCascadeProductFault_MixedKindsStillChargeTheIssues(t *testing.T) {
 // A refund only ever un-charges what was charged: an issue that failed twice
 // inside the window is refunded twice, and a counter never goes negative.
 func TestRefundLifetimeFailuresLocked(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{state: &AutonomousState{
 		LifetimeIssueFailures: map[string]int{"o/r#1": 2, "o/r#2": 1},
 		QuarantinedIssues:     map[string]bool{"o/r#1": true},
@@ -125,6 +131,8 @@ func TestRefundLifetimeFailuresLocked(t *testing.T) {
 // is not evidence of a shared cause, and treating it as one would switch the
 // lifetime cap off for every un-kinded cluster.
 func TestSharedProductFaultKind(t *testing.T) {
+	t.Parallel()
+
 	now := time.Now()
 	tests := []struct {
 		name       string
@@ -185,6 +193,8 @@ func TestSharedProductFaultKind(t *testing.T) {
 // no classified terminal kind, each took its issue to 1/2 on the lifetime cap,
 // and together with one unrelated failure they tripped the cascading-failures
 // breaker — halting the fleet the operator had only asked to pause.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestOperatorStop_DoesNotChargeTheIssueOrFeedTheCascade(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.stopRequested = true
@@ -223,6 +233,8 @@ func TestOperatorStop_DoesNotChargeTheIssueOrFeedTheCascade(t *testing.T) {
 // The classified half of the same rule: the stage carried
 // TerminalKindOperatorStop (runPipeline set it off execution.Manager's own
 // Cancelled flag) even though the scheduler is not in a stop.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestOperatorStop_ClassifiedKindIsExemptWithoutStopRequested(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 
@@ -244,6 +256,8 @@ func TestOperatorStop_ClassifiedKindIsExemptWithoutStopRequested(t *testing.T) {
 // carries the same `pipeline_failure` placeholder, so reading it as one defect
 // would refund every cascade of unclassified failures — the lifetime cap
 // switching itself off rather than a verdict about a defect.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestCascadeProductFault_UnclassifiedFailuresStillCharge(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 

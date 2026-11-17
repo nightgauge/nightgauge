@@ -104,6 +104,8 @@ func readStageExitPayloads(t *testing.T, root, runID string) []trace.StageExitPa
 // The IPC twin below is not decoration: it pins the two shapes as EQUIVALENT,
 // so a future change cannot "fix" one path by moving the derivation onto the
 // other.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestTraceStageExit_CLIFailureCarriesTerminalKind(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	shapes := []struct {

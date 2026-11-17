@@ -13,6 +13,8 @@ import (
 // blocker that merely shares the epic's number was removed from GitHub and the
 // sub-issue dispatched over it.
 func TestIsBlocked_SameNumberAsACrossRepoParentStaysABlocker(t *testing.T) {
+	t.Parallel()
+
 	issueSvc := newMockIssueSvc()
 	s := &Scheduler{issueSvc: issueSvc, owner: "o"}
 	item := types.BoardItem{
@@ -40,6 +42,8 @@ func TestIsBlocked_SameNumberAsACrossRepoParentStaysABlocker(t *testing.T) {
 // The auto-fix still fires for the real parent when it lives in another
 // repository, and removes the relationship to the parent's own repository.
 func TestIsBlocked_CrossRepoParentAsBlockerIsStillCircular(t *testing.T) {
+	t.Parallel()
+
 	issueSvc := newMockIssueSvc()
 	s := &Scheduler{issueSvc: issueSvc, owner: "o"}
 	item := types.BoardItem{
@@ -69,6 +73,8 @@ func TestIsBlocked_CrossRepoParentAsBlockerIsStillCircular(t *testing.T) {
 }
 
 func TestBlockerIsOwnParent(t *testing.T) {
+	t.Parallel()
+
 	item := types.BoardItem{Number: 21, Repo: "o/app", ParentNumber: 20}
 	for _, tc := range []struct {
 		name       string

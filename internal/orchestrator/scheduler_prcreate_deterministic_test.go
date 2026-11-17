@@ -29,6 +29,8 @@ func (f *fakePRCreateRunner) Run(_ context.Context, _ int, _, workdir string) (p
 // deterministic runner reports `created`, the LLM stage runner must not be
 // invoked for pr-create.
 func TestScheduler_PRCreate_DeterministicSkipsLLM(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{
 		Path:     pmstages.CreatePathCreated,
@@ -72,6 +74,8 @@ func TestScheduler_PRCreate_DeterministicSkipsLLM(t *testing.T) {
 // path returns false so the caller invokes the LLM stage runner; runtime
 // records execution_path = "llm".
 func TestScheduler_PRCreate_PuntInvokesLLM(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{
 		Path:   pmstages.CreatePathPunt,
@@ -102,6 +106,8 @@ func TestScheduler_PRCreate_PuntInvokesLLM(t *testing.T) {
 // GitHub rate-limit signal must defer (second return value true) and NOT run the
 // LLM path or record an execution_path. Issue #3976.
 func TestScheduler_PRCreate_RateLimitedDefersNoLLM(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{
 		Path: pmstages.CreatePathPunt,
@@ -135,6 +141,8 @@ func TestScheduler_PRCreate_RateLimitedDefersNoLLM(t *testing.T) {
 // is NOT rate-limit related must keep the existing behaviour: defer flag false,
 // execution_path = "llm". Guards against the rate-limit matcher being too broad.
 func TestScheduler_PRCreate_NonRateLimitPuntStillInvokesLLM(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{
 		Path:   pmstages.CreatePathPunt,
@@ -161,6 +169,8 @@ func TestScheduler_PRCreate_NonRateLimitPuntStillInvokesLLM(t *testing.T) {
 // TerminalKindGitHubQuotaLow so it routes to the #3896 environmental recovery
 // path (global cooldown, board→Ready, no lifetime-cap penalty).
 func TestReasonIndicatesRateLimit_RoutesToGitHubQuotaLow(t *testing.T) {
+	t.Parallel()
+
 	rateLimitReasons := []string{
 		pmstages.ReasonRateLimited,
 		"create-call-failed: API rate limit exceeded",
@@ -198,6 +208,8 @@ func TestReasonIndicatesRateLimit_RoutesToGitHubQuotaLow(t *testing.T) {
 // TestScheduler_PRCreate_DeterministicErrorFallsThroughToLLM — an unexpected
 // error from the runner is treated as a punt; LLM path runs.
 func TestScheduler_PRCreate_DeterministicErrorFallsThroughToLLM(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRCreateRunner{err: errors.New("unexpected gh failure")}
 	s.WithPRCreateRunner(det)
@@ -217,6 +229,8 @@ func TestScheduler_PRCreate_DeterministicErrorFallsThroughToLLM(t *testing.T) {
 
 // TestScheduler_PRCreate_RecordsExecutionPath_Deterministic (AC #5).
 func TestScheduler_PRCreate_RecordsExecutionPath_Deterministic(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{Path: pmstages.CreatePathCreated, PRNumber: 1, PRURL: "u"}}
 	s.WithPRCreateRunner(det)
@@ -233,6 +247,8 @@ func TestScheduler_PRCreate_RecordsExecutionPath_Deterministic(t *testing.T) {
 
 // TestScheduler_PRCreate_RecordsExecutionPath_LLM (AC #5).
 func TestScheduler_PRCreate_RecordsExecutionPath_LLM(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{Path: pmstages.CreatePathPunt, Reason: pmstages.ReasonNoChanges}}
 	s.WithPRCreateRunner(det)
@@ -251,6 +267,8 @@ func TestScheduler_PRCreate_RecordsExecutionPath_LLM(t *testing.T) {
 // Mirrors TestScheduler_PRMerge_DeterministicPath_CostZero — the deterministic
 // hook itself touches no token state.
 func TestScheduler_PRCreate_DeterministicPath_CostZero(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{Path: pmstages.CreatePathCreated, PRNumber: 1, PRURL: "u"}}
 	s.WithPRCreateRunner(det)
@@ -284,6 +302,8 @@ func TestScheduler_PRCreate_DeterministicPath_CostZero(t *testing.T) {
 // TestScheduler_PRCreate_NonPRCreateStage_NoOp — the hook is a no-op for any
 // stage other than pr-create, even with a runner registered.
 func TestScheduler_PRCreate_NonPRCreateStage_NoOp(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{Path: pmstages.CreatePathCreated}}
 	s.WithPRCreateRunner(det)
@@ -306,6 +326,8 @@ func TestScheduler_PRCreate_NonPRCreateStage_NoOp(t *testing.T) {
 // TestScheduler_PRCreate_NilRunner_NoOp — no runner → no-op (no panic, no
 // execution_path recorded).
 func TestScheduler_PRCreate_NilRunner_NoOp(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	// no WithPRCreateRunner — prCreateRunner is nil
 
@@ -330,6 +352,8 @@ func TestScheduler_PRCreate_NilRunner_NoOp(t *testing.T) {
 // the bare workspaceRoot — otherwise every worktree-mode run punts
 // missing-dev-context and burns the expensive LLM fallback (the dogfood workspace 0-for-N).
 func TestScheduler_PRCreate_ReadsContextFromWorktree(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{
 		Path: pmstages.CreatePathCreated, PRNumber: 7, PRURL: "u",
@@ -356,6 +380,8 @@ func TestScheduler_PRCreate_ReadsContextFromWorktree(t *testing.T) {
 // worktree, e.g. VSCode/headless) must keep passing workspaceRoot unchanged, so
 // the #275 fix is byte-identical for the non-worktree majority.
 func TestScheduler_PRCreate_NoWorktreeUsesWorkspaceRoot(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{Path: pmstages.CreatePathPunt, Reason: pmstages.ReasonNoChanges}}
 	s.WithPRCreateRunner(det)
@@ -374,6 +400,8 @@ func TestScheduler_PRCreate_NoWorktreeUsesWorkspaceRoot(t *testing.T) {
 // pr-create writes pr-{N}.json into the worktree, so the runner must be handed
 // the worktree path or it punts missing-pr-context on every worktree-mode run.
 func TestScheduler_PRMerge_ReadsContextFromWorktree(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRMergeRunner{result: pmstages.PRMergeResult{Path: pmstages.PathMerged, PRNumber: 7, PRState: "MERGED"}}
 	s.WithPRMergeRunner(det)
@@ -393,6 +421,8 @@ func TestScheduler_PRMerge_ReadsContextFromWorktree(t *testing.T) {
 // TestScheduler_PRCreate_OrthogonalToPRMerge — both deterministic hooks must
 // be guarded on stage so they don't fire for the wrong stage.
 func TestScheduler_PRCreate_OrthogonalToPRMerge(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	prCreate := &fakePRCreateRunner{result: pmstages.PRCreateResult{Path: pmstages.CreatePathCreated}}
 	prMerge := &fakePRMergeRunner{result: pmstages.PRMergeResult{Path: pmstages.PathMerged}}
@@ -424,6 +454,8 @@ func TestScheduler_PRCreate_OrthogonalToPRMerge(t *testing.T) {
 // path, which would open the empty PR (#2942). With a criterion unmet the
 // refusal parks the issue; with GitHub unavailable nothing is closed.
 func TestScheduler_PRCreate_NoDiffRefusesWithoutLLM(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	s.WithPRCreateRunner(&fakePRCreateRunner{result: pmstages.PRCreateResult{
 		Path: pmstages.CreatePathPunt, Reason: pmstages.ReasonNoDiffAgainstBase,

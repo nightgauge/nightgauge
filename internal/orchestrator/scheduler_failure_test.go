@@ -140,6 +140,8 @@ func splitJSONLines(data []byte) [][]byte {
 // terminal kind so future error-string changes in the failure paths get caught
 // by tests rather than silently dropping records into the "unknown" bucket.
 func TestClassifyTerminalKind(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		err  string
@@ -494,6 +496,8 @@ func TestClassifyTerminalKind(t *testing.T) {
 // Issue #9: a gate-sourced structured kind wins when present; otherwise fall
 // back to prose classification, whether or not a gate ran at all.
 func TestResolveTerminalKind(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name             string
 		gateRan          bool
@@ -545,6 +549,8 @@ func TestResolveTerminalKind(t *testing.T) {
 // only touches pending/ready items and copies the reason struct so each item
 // owns its own pointer (mutating one doesn't poison others).
 func TestPauseQueuedItemsUnlocked(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
@@ -604,6 +610,8 @@ func TestPauseQueuedItemsUnlocked(t *testing.T) {
 // status is *derived* — true paused iff any item is paused. Prevents the
 // dual-source-of-truth class of bugs.
 func TestQueueStatusDerivedFromPausedItems(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{repoRunning: make(map[string]int), mergeLocks: make(map[string]*sync.Mutex)}
 	s.queue = []QueueItem{{IssueNumber: 1, Status: "pending"}, {IssueNumber: 2, Status: "ready"}}
 
@@ -627,6 +635,8 @@ func TestQueueStatusDerivedFromPausedItems(t *testing.T) {
 // touches items that match the FailedRunID (so resuming run A doesn't
 // accidentally release items paused by an unrelated run B).
 func TestResumePausedItems(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
@@ -659,6 +669,8 @@ func TestResumePausedItems(t *testing.T) {
 // TestDequeueIndependentSkipsPaused proves the paused guard added to the
 // dispatcher: paused items are never picked even when first in the queue.
 func TestDequeueIndependentSkipsPaused(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
@@ -698,6 +710,8 @@ func TestDequeueIndependentSkipsPaused(t *testing.T) {
 // packages/nightgauge/tests/fixtures/undetermined-branch/crash-record.jsonl:
 // a static fixture cannot fail when the Go writer regresses, it only goes stale.
 func TestSynthesizeOrchestratorCrashRecord_NeverFabricatesABranch(t *testing.T) {
+	t.Parallel()
+
 	now := time.Now().UTC()
 	sc := CurrentRunSidecar{
 		RunID:       testRunID(),
@@ -732,6 +746,8 @@ func TestSynthesizeOrchestratorCrashRecord_NeverFabricatesABranch(t *testing.T) 
 //     PausedReason linking back to the synthesized run id
 //  4. the sidecar is removed (so a subsequent restart doesn't re-synthesize)
 func TestSidecarRoundTripAndOrchestratorCrashRecovery(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 
 	// Pre-seed a stale sidecar — simulates the previous orchestrator crashing
@@ -866,6 +882,8 @@ func TestSidecarRoundTripAndOrchestratorCrashRecovery(t *testing.T) {
 // (clock skew, workspace move). The synthesizer must refuse and remove a
 // sidecar with a future StartedAt rather than write a phantom record.
 func TestSidecarRecoverySkipsFutureStartedAt(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	if err := writeCurrentRunSidecar(tmpDir, CurrentRunSidecar{
 		RunID:       testRunID(),
@@ -903,6 +921,8 @@ func TestSidecarRecoverySkipsFutureStartedAt(t *testing.T) {
 // TestGetPipelineFailureModeDefaults verifies the conservative default and the
 // env-var override path. The config-file path is exercised via integration
 // against the test workspace.
+//
+// Serial: sets the environment.
 func TestGetPipelineFailureModeDefaults(t *testing.T) {
 	// Empty workspace → halt
 	if got := GetPipelineFailureMode(""); got != FailureModeHalt {
@@ -923,6 +943,8 @@ func TestGetPipelineFailureModeDefaults(t *testing.T) {
 // TestGetPipelineFailureModeFromConfigYAML covers the YAML reader so a typo
 // in the config-file scanner doesn't silently drop the operator's choice.
 func TestGetPipelineFailureModeFromConfigYAML(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 	cfgDir := filepath.Join(tmpDir, ".nightgauge")
 	if err := os.MkdirAll(cfgDir, 0755); err != nil {
@@ -998,6 +1020,8 @@ func (r *ipcStallStageRunner) RunStage(_ context.Context, params StageRunParams)
 // must write a V3 RunRecord with terminal_failure_kind=stall_kill and a
 // populated last_output_lines snippet on the failed stage.
 func TestStallKillJSONLRecord_IPCMode(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 
 	stallErrText := "[stall-killed] pr-create terminated: exceeded stall idle threshold (1200s without output)"
@@ -1103,6 +1127,8 @@ func TestStallKillJSONLRecord_IPCMode(t *testing.T) {
 // The canonical [cost-cap-exceeded] marker MUST take precedence over any
 // stall-shaped substring in the error text.
 func TestCostCapKillJSONLRecord_IPCMode(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 
 	costCapErrText := "[cost-cap-exceeded] pr-create terminated ($5.21 ≥ $5.00 cap)"
@@ -1199,6 +1225,8 @@ const grokNotSignedInStderr = `Error: Not signed in. To authenticate without a b
 // This test MUST fail at 8dbbeb95: ErrorText and LastOutputLines were never
 // assigned in the ExecutionManagerRunner.RunStage literal, so both are "" and
 // ClassifyTerminalKind falls back to subagent_crash.
+//
+// Serial: sets the environment.
 func TestCLIStageErrorTextReachesClassification_GrokUnknownModel(t *testing.T) {
 	root := layouttest.Repo(t)
 	stubCLI := writeFailingStubCLI(t, root, "", grokUnknownModelStderr, 1)
@@ -1323,6 +1351,8 @@ func (r *cliFailureStageRunner) RunStage(_ context.Context, params StageRunParam
 // This test MUST fail at 8dbbeb95 — with err==nil, failText stayed "" and
 // terminalReason was literally "exit 1: <nil>".
 func TestCLIModelUnavailableRoutesToDowngrade_NotSubagentCrash(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 
 	tail := "some earlier stdout chatter\n" + strings.TrimSpace(grokUnknownModelStderr)
@@ -1424,6 +1454,8 @@ func TestCLIModelUnavailableRoutesToDowngrade_NotSubagentCrash(t *testing.T) {
 // cannot authenticate a CLI whose credentials are absent, so escalating is
 // pure wasted spend on a failure only the operator fixing credentials clears.
 func TestCLIAdapterAuthFailedExcludedFromEscalation_NotSubagentCrash(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 
 	runner := &cliFailureStageRunner{
@@ -1506,6 +1538,8 @@ func TestCLIAdapterAuthFailedExcludedFromEscalation_NotSubagentCrash(t *testing.
 // stallErrMsg was always "", so isStallKill was false and the whole stall block
 // was unreachable. Making it reachable is what re-introduced "exit 1: <nil>" on
 // this path, so the branch is asserted here rather than left to inspection.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestCLIStallKill_RewindsAndPersistsTheRealReason(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	root := gitWorkspace(t)
@@ -1582,6 +1616,8 @@ func TestCLIStallKill_RewindsAndPersistsTheRealReason(t *testing.T) {
 // real: RecordStageOutputTail is keyed by stage, the failed attempt writes it,
 // and nothing removed it when the retry succeeded — so the V3 record showed a
 // `complete` feature-dev carrying a crash transcript.
+//
+// Serial: sets the environment.
 func TestSupersededStageTailIsCleared(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	// Start feature-dev on sonnet so an escalation rung exists above it: the
@@ -1651,6 +1687,8 @@ func TestSupersededStageTailIsCleared(t *testing.T) {
 // ErrorText is the string ClassifyTerminalKind reads, so its size and shape are
 // part of the classifier's input contract, not a cosmetic detail.
 func TestStderrFailureReason_Bounds(t *testing.T) {
+	t.Parallel()
+
 	t.Run("empty and whitespace yield no reason", func(t *testing.T) {
 		for _, in := range []string{"", "\n", "\n\n\n", "   \n\t\n"} {
 			if got := stderrFailureReason(in); got != "" {
@@ -1714,6 +1752,8 @@ func TestStderrFailureReason_Bounds(t *testing.T) {
 // function. #533 briefly shipped a second implementation with its own copy of
 // the constants, and the two already disagreed.
 func TestCLIFailureTail_UsesTheStateCaps(t *testing.T) {
+	t.Parallel()
+
 	t.Run("line cap keeps the LAST lines", func(t *testing.T) {
 		var sb strings.Builder
 		for i := 0; i < state.StageOutputBufferLineLimit*3; i++ {
@@ -1765,6 +1805,8 @@ func TestCLIFailureTail_UsesTheStateCaps(t *testing.T) {
 // reach the runtime snapshot (via terminalReason) and the daily history JSONL
 // (via StageDetail.last_output_lines), and CLI mode's source for them is the
 // stage's ENTIRE captured output. A ~10MB run must not write a ~10MB record.
+//
+// Serial: sets the environment.
 func TestCLIStageOutputCarry_BoundedForHugeStdout(t *testing.T) {
 	root := layouttest.Repo(t)
 
@@ -1839,6 +1881,8 @@ func TestCLIStageOutputCarry_BoundedForHugeStdout(t *testing.T) {
 // every `tool_result` in it included, and the classifier is an ordered
 // substring ladder.
 func TestCLIFailureText_ErrorTextIsStderrOnly(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name           string
 		stdout, stderr string
@@ -1909,6 +1953,8 @@ func TestCLIFailureText_ErrorTextIsStderrOnly(t *testing.T) {
 // scheduler consumer reads this one function, so inverting the two branches
 // would silently re-route every IPC failure through a CLI-shaped result.
 func TestStageFailureText_Precedence(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name   string
 		err    error
@@ -1995,6 +2041,8 @@ func cliTranscriptLine(body string) string {
 // answer is whether the text arrived on the adapter's own stderr or inside the
 // stdout transcript.
 func TestTerminalReasonClassification_CLIShapeParity(t *testing.T) {
+	t.Parallel()
+
 	// What the classifier answered for EVERY CLI failure before #533: the
 	// nil-error placeholder.
 	const preFixReason = "exit 1: <nil>"
@@ -2197,6 +2245,8 @@ func TestTerminalReasonClassification_CLIShapeParity(t *testing.T) {
 // stub binaries. The carry lives in the shared runner, not in anything
 // grok-specific, and this is what proves it — plus the other half of the
 // non-regression: a stage that exits 0 must carry no failure evidence at all.
+//
+// Serial: sets the environment.
 func TestCLIRunnerCarriesFailureTextForEveryAdapter(t *testing.T) {
 	tests := []struct {
 		binary  string
@@ -2290,6 +2340,8 @@ func TestCLIRunnerCarriesFailureTextForEveryAdapter(t *testing.T) {
 // internal/terminalkind's TestCorpus_CoversEveryKind cannot see, since it
 // reads only failure_handler.go.
 func TestGateTerminalKindConstantsMirrorOrchestrator(t *testing.T) {
+	t.Parallel()
+
 	pairs := map[string][2]string{
 		"ValidationError":             {gates.TerminalKindValidationError, TerminalKindValidationError},
 		"ValidationFailed":            {gates.TerminalKindValidationFailed, TerminalKindValidationFailed},
@@ -2327,6 +2379,8 @@ func TestGateTerminalKindConstantsMirrorOrchestrator(t *testing.T) {
 // (internal/execution/manager.go:269, ExecutionManagerRunner.RunStage in this
 // package).
 func TestCLIGracefulStop_ExitZeroStillCarriesFailureText(t *testing.T) {
+	t.Parallel()
+
 	t.Run("Cancelled exit-0 still carries the CLI's own stderr as ErrorText", func(t *testing.T) {
 		result := &adapters.RunResult{
 			ExitCode:  0,
@@ -2398,6 +2452,8 @@ func TestCLIGracefulStop_ExitZeroStillCarriesFailureText(t *testing.T) {
 // TestFailurePausesQueue_HeldKindsStopOneIssue: under failure_mode=halt an
 // ordinary failure pauses the queue and a held kind does not (#2865).
 func TestFailurePausesQueue_HeldKindsStopOneIssue(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		kind, mode string
 		want       bool
@@ -2419,6 +2475,8 @@ func TestFailurePausesQueue_HeldKindsStopOneIssue(t *testing.T) {
 // An empty-plan gate verdict's run error carries the planner's approach (#3354)
 // and keeps the marker ClassifyTerminalKind keys on; other gates keep the bare reason.
 func TestGateFailureError_NPACarriesApproach(t *testing.T) {
+	t.Parallel()
+
 	res := gates.GateResult{
 		Reason:       "[not-pipeline-actionable] plan lists no files to create or modify",
 		Evidence:     []string{"approach: record via empty commit", "plan_file=/p.md"},
