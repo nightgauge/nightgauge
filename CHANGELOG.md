@@ -14,6 +14,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-11-17
+
 ### Added
 
 - `nightgauge preflight skill-overlays` gates the base-skill/overlay split (ADR 016, #80). It fails an overlay keyed to a band name, a deprecated id or a typo; a fragment over 4608 bytes; a fragment that restates a registry behavior fact; and a configured stage effort that breaks the thinking interlock. Model-conditional prose in a stage `SKILL.md` is reported as a warning until #82 triages it, and `<!-- overlay-exempt: reason -->` now exempts a line. The gate runs in `scripts/ci-local.sh` and, through a working-tree test, in CI. The dead `grok-build-0.1` shared fragment is removed.
@@ -9390,7 +9392,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.4...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.6...HEAD
+[0.8.6]: https://github.com/nightgauge/nightgauge/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.5
 [0.8.4]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.4
 [0.8.3]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.3
