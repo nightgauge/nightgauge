@@ -14,6 +14,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- The Claude Code plugin ships a square 512 px icon at `.claude-plugin/icon.png`, the location the validator auto-detects, clearing the validator's `ICON_MISSING` warning (#2863).
+
 ### Changed
 
 - The pull-request review comment's footer no longer says it does not block merging. It now states that hold findings (every blocker, and a correctness major on `README*`, `docs/**` or `packages/*/package.json`) stop `pr-merge` from merging, matching the enqueue review gate (#2730), and that other findings do not (#2836).
