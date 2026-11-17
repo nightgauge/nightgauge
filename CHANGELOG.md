@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- The codex token path is verified against a live codex-cli 0.167.0 capture: the usage envelope has not drifted, and a test drives the capture through the budget enforcer and run history, priced and attributed to `codex` (#119).
 - The Claude Code plugin ships a square 512 px icon at `.claude-plugin/icon.png`, the location the validator auto-detects, clearing the validator's `ICON_MISSING` warning (#2863).
 
 ### Changed

@@ -855,9 +855,9 @@ func TestParseGrokStreamRealCapture(t *testing.T) {
 // "codex_stream_real_capture.jsonl" section for the full table). The capture
 // has exactly one turn, so per-turn and total are the same numbers.
 const (
-	codexCaptureTurn1Input  = 67553
-	codexCaptureTurn1Cached = 56704
-	codexCaptureTurn1Output = 124
+	codexCaptureTurn1Input  = 36276
+	codexCaptureTurn1Cached = 28800
+	codexCaptureTurn1Output = 78
 
 	codexCaptureTotalInput     = codexCaptureTurn1Input - codexCaptureTurn1Cached
 	codexCaptureTotalOutput    = codexCaptureTurn1Output
