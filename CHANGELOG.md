@@ -14,6 +14,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- `nightgauge preflight skill-overlays` gates the base-skill/overlay split (ADR 016, #80). It fails an overlay keyed to a band name, a deprecated id or a typo; a fragment over 4608 bytes; a fragment that restates a registry behavior fact; and a configured stage effort that breaks the thinking interlock. Model-conditional prose in a stage `SKILL.md` is reported as a warning until #82 triages it, and `<!-- overlay-exempt: reason -->` now exempts a line. The gate runs in `scripts/ci-local.sh` and, through a working-tree test, in CI. The dead `grok-build-0.1` shared fragment is removed.
+
 ### Security
 
 - Tree-view hover tooltips no longer trust Markdown built from issue titles, branches, blocker titles or error text (#3369). Seven items set `isTrusted = true` and inserted those values raw, so anyone who could open an issue on a watched repository could plant a live `command:` link in a tooltip. Trust is removed, and every forge- or agent-derived value a views tooltip shows is escaped (or shown as a code span) through a new `markdownEscape` helper that mirrors the Go `attention.EscapeMarkdown`/`CodeSpan`. Action Center tooltips link a card URL only when it is `https:`. A guard test fails if any file under `src/views/` marks a tooltip trusted.

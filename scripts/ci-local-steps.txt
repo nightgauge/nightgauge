@@ -112,6 +112,7 @@ skill bundle (dist/skills)
 VSIX skill file list (vsce ls)
 skill bundle links stay inside dist/skills
 skill bundle portability (dist/skills)
+overlay gate (ADR 016)
 Phase markers ↔ PHASE_REGISTRY
 npm run test (all workspaces)
 Generated VSCode contributions in sync

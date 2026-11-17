@@ -16,9 +16,9 @@ the composer is
 > **Status.** The composer (`nightgauge skill render`), the registry `behavior`
 > block, the extension's migration onto the composer, and the shared provider
 > and Anthropic overlays (#81), and the `nightgauge-model-watch` intake (#83)
-> have shipped. The `preflight skill-overlays` gate, base-skill prose
-> extraction, and the overlay-delta evals are still
-> open — see [Not yet enforced](#not-yet-enforced) before relying on any of them.
+> have shipped, and `nightgauge preflight skill-overlays` gates them (#80).
+> Base-skill prose extraction (#82) and the overlay-delta evals (#84) are still
+> open — see [What the gate enforces](#8-what-the-gate-enforces).
 
 ## 1. The mental model
 
@@ -72,14 +72,13 @@ skill-specific fragments; no whole-file override exists. All land at the
 | `claude-opus-5-5`   | Countermands `anthropic`: no extra verify pass or subagents, tight bodies, latitude to skip a step already satisfied.                     |
 | `claude-sonnet-5-5` | As `claude-opus-5-5`, without the delegation line.                                                                                        |
 | `grok-4.6`          | Drop redundant verify-your-work scaffolding and extra review subagents; one thorough pass.                                                |
-| `grok-build-0.1`    | The cheaper Grok coding model: stay inside the stage contract, no extra research loops.                                                   |
 | `claude-fable-5-1`  | The Fable 5.1 behavioral shifts (#1276), one named block each — see below. Composes after `anthropic`.                                    |
 
 `anthropic` is the conservative default Haiku renders with; the frontier ids
 countermand it by name. It says nothing about verification, so it never fights
 Fable's "keep the verification" block. There are no band files (they cannot
-resolve) and no fragments for deprecated ids. New fragments hold to 1024 bytes
-until #80 fixes the budget.
+resolve) and no fragments for deprecated ids; the gate in §8 fails both. Each
+fragment holds to 4608 bytes.
 
 Both skill-specific fragments are keyed `claude-fable-5-1`, and each carries the
 batching-nudge block and nothing else:
@@ -272,20 +271,26 @@ argument itself, so it resolves even when the model fails to — an `opencode`
 dispatch of a local model with no registry entry still gets `hosts/opencode.md`
 if it exists. There is no adapter for which that is not knowable.
 
-## 8. Not yet enforced
+## 8. What the gate enforces
 
-Two things in this guide are specified but not yet mechanically gated:
+`nightgauge preflight skill-overlays --skills-root skills` runs in
+`scripts/ci-local.sh`, and `TestSkillOverlays_WorkingTreeIsClean` runs it over
+`skills/` in CI. Every finding names the file, the rule, the problem and the fix.
 
-- **`nightgauge preflight skill-overlays`** — key validity, base-skill purity,
-  the size budget, and the thinking/effort interlock. Until it lands, an overlay
-  filename that resolves to no registry key silently applies to nothing, and the
-  size budget is a review convention (#80).
-- **`<!-- overlay-exempt: reason -->`** is the marker that gate will honour. It
-  is inert today.
+| Rule                    | Fails when                                                                                                 | Severity |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------- | -------- |
+| `overlay-key`           | a fragment's key is not a registry provider or live id (under `hosts/`: a known adapter)                   | fail     |
+| `overlay-budget`        | a fragment exceeds 4608 bytes                                                                              | fail     |
+| `overlay-registry-fact` | a fragment restates its model's `behavior` fact (thinking default, effort default, disable ceiling) (#544) | fail     |
+| `thinking-effort`       | a configured stage (model, effort) pair breaks the thinking interlock with thinking disabled               | fail     |
+| `base-skill-purity`     | a stage `SKILL.md` line outside fenced code names a model or carries size-conditional prose                | warn     |
+| `overlay-override`      | a whole-file `<key>.SKILL.md` override exists (listed as a drift liability)                                | warn     |
 
-The base-skill prose extraction (#82) and the overlay-delta harness (#84) are open
-for the same reason. Write overlays as if the gate existed; it is coming, and
-the review burden until then is human.
+Band names, deprecated ids and typos each get their own message. Exempt a
+base-skill line with `<!-- overlay-exempt: reason -->` on it or the line above;
+an empty reason is itself a finding, and exempt lines are listed in the output.
+Purity stays warn-only until #82 triages the existing hits. Exit `0` means no
+blocking finding, `1` a blocking finding, `2` the check could not run.
 
 ## 9. The coverage gap
 

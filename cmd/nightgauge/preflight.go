@@ -36,7 +36,7 @@ import (
 func preflightCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "preflight",
-		Short: "Pre-submission gates (links, syntax, secrets, skill-includes, skill-no-direct-gh, skill-anti-patterns, skill-shell-state, skill-portability, dependency-guard, mitigation-rule, managed-steering)",
+		Short: "Pre-submission gates (links, syntax, secrets, skill-includes, skill-no-direct-gh, skill-anti-patterns, skill-shell-state, skill-overlays, skill-portability, dependency-guard, mitigation-rule, managed-steering)",
 		Long: `Deterministic pre-submission validation gates. Each subcommand inspects the
 working tree for a specific class of defect and exits non-zero when findings
 exist, so they can be chained in CI or git pre-push hooks. Replaces the
@@ -52,6 +52,7 @@ fragile bash + python3 + sed chains in skills/pr-preflight/SKILL.md
 	cmd.AddCommand(preflightPlatformRawHTTPCmd())
 	cmd.AddCommand(preflightSkillAntiPatternsCmd())
 	cmd.AddCommand(preflightSkillShellStateCmd())
+	cmd.AddCommand(preflightSkillOverlaysCmd())
 	cmd.AddCommand(preflightSkillPortabilityCmd())
 	cmd.AddCommand(preflightDependencyGuardCmd())
 	cmd.AddCommand(preflightACReconcileCmd())
@@ -1415,4 +1416,112 @@ func environmentConfigRoot(dir string) string {
 		return dir
 	}
 	return filepath.Dir(common)
+}
+
+// preflightSkillOverlaysCmd enforces the ADR 016 base-skill/overlay split (#80).
+func preflightSkillOverlaysCmd() *cobra.Command {
+	var (
+		jsonOutput bool
+		skillsRoot string
+	)
+	cmd := &cobra.Command{
+		Use:   "skill-overlays",
+		Short: "Fail on dead, oversized or fact-restating overlays and invalid thinking/effort pairs",
+		Long: `Check every _overlays/ fragment and pipeline-stage SKILL.md (ADR 016):
+
+  overlay-key            fragment key is a registry provider, a live id, or (hosts/) an adapter
+  overlay-budget         fragment is at most the byte budget
+  overlay-registry-fact  fragment does not restate a registry behavior fact
+  thinking-effort        configured stage (model, effort) pairs pass the thinking interlock
+  base-skill-purity      stage SKILL.md has no model-conditional prose (warn until #82)
+  overlay-override       whole-file <key>.SKILL.md overrides are listed (warn)
+
+Exempt a base-skill line with <!-- overlay-exempt: <reason> --> on it or the line above.
+
+Exit codes:
+  0  no blocking findings (warnings allowed)
+  1  one or more blocking findings
+  2  the check could not run`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cwd, err := os.Getwd()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "HARNESS ERROR: preflight skill-overlays: %v\n", err)
+				os.Exit(2)
+			}
+			cfg, err := config.Load(cwd)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "HARNESS ERROR: preflight skill-overlays: load config: %v\n", err)
+				os.Exit(2)
+			}
+			efforts := skillOverlayEfforts(cfg)
+			result, err := preflight.RunSkillOverlaysCheck(cmd.Context(), preflight.SkillOverlaysOptions{
+				SkillsRoot: skillsRoot,
+				Efforts:    efforts,
+			})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "HARNESS ERROR: preflight skill-overlays: %v\n", err)
+				os.Exit(2)
+			}
+			if jsonOutput {
+				if err := printJSON(result); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to encode JSON output: %v\n", err)
+				}
+			} else {
+				printPreflightSkillOverlaysHuman(result)
+			}
+			if result.Blocking() {
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON")
+	cmd.Flags().StringVar(&skillsRoot, "skills-root", "skills", "Skill tree to scan")
+	return cmd
+}
+
+// skillOverlayEfforts pairs each configured stage effort with the stage's
+// pinned model, falling back to the default effort for pinned stages.
+func skillOverlayEfforts(cfg *config.Config) map[string]preflight.ModelEffort {
+	out := map[string]preflight.ModelEffort{}
+	if cfg == nil || cfg.Pipeline == nil || cfg.ModelRouting == nil {
+		return out
+	}
+	for stage, model := range cfg.Pipeline.StageModels {
+		effort := cfg.ModelRouting.StageEfforts[stage]
+		source := "model_routing.stage_efforts." + stage
+		if effort == "" {
+			effort, source = cfg.ModelRouting.DefaultEffort, "model_routing.default_effort ("+stage+")"
+		}
+		if effort != "" && model != "" {
+			out[source] = preflight.ModelEffort{Model: model, Effort: effort}
+		}
+	}
+	return out
+}
+
+func printPreflightSkillOverlaysHuman(r *preflight.SkillOverlaysResult) {
+	fmt.Printf("nightgauge preflight skill-overlays — schema v%d\n", r.V)
+	fmt.Printf("skills root: %s  files checked: %d  budget: %d B  findings: %d\n",
+		r.SkillsRoot, r.FilesChecked, r.BudgetBytes, len(r.Findings))
+	for _, f := range r.Findings {
+		mark := "✗"
+		if f.Severity != preflight.OverlaySeverityFail {
+			mark = "!"
+		}
+		fmt.Printf("  %s %s:%d  [%s]  %s\n      fix: %s\n", mark, f.File, f.Line, f.Rule, f.Message, f.Fix)
+	}
+	for _, e := range r.Exempt {
+		fmt.Printf("  exempt %s:%d  %s\n", e.File, e.Line, e.Reason)
+	}
+	for _, o := range r.Overrides {
+		fmt.Printf("  override %s\n", o)
+	}
+	for _, w := range r.Warnings {
+		fmt.Printf("  ! %s\n", w)
+	}
+	if !r.Blocking() {
+		fmt.Println("no blocking overlay findings ✓")
+	}
 }

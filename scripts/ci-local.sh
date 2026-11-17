@@ -2535,6 +2535,11 @@ run_step "skill bundle portability (dist/skills)" \
   go run ./cmd/nightgauge preflight skill-portability \
   --skills-root packages/nightgauge/dist/skills
 
+# 7a3. ADR 016 overlay gate (#80): live keys, size budget, no restated
+# registry facts, thinking/effort pairs; base-skill purity warns until #82.
+run_step "overlay gate (ADR 016)" \
+  go run ./cmd/nightgauge preflight skill-overlays --skills-root skills
+
 # 7b. Phase markers ↔ PHASE_REGISTRY drift check
 # Runs after the SDK build so the script can import PHASE_REGISTRY from
 # the workspace package. Catches the class of registry↔skill marker drift
