@@ -122,7 +122,7 @@ others.
 ## 3. Bare `nightgauge` Calls Inside Skill Bodies
 
 **Files**: ~30+ skill bodies contain bare `nightgauge ...` invocations
-(e.g. `nightgauge format run`, `nightgauge ci parity-check`). When
+(e.g. `nightgauge format run`, `nightgauge ci discover-commands`). When
 the binary is resolved via a fallback location (canonical-repo bin, VSCode
 extension bundle, `~/go/bin`) but is **not** on the user's `PATH`, these bare
 calls fail with "command not found" — surfacing as another

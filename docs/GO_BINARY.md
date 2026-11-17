@@ -4460,8 +4460,8 @@ nightgauge integration probe-platform \
 
 ### CI Operations
 
-CI check operations including PR status polling, log retrieval, CI parity
-checking, workflow command discovery, and diff classification for CI fast-track.
+CI check operations including PR status polling, log retrieval,
+workflow command discovery, and diff classification for CI fast-track.
 
 ```bash
 # Poll CI check status for a PR
@@ -4555,41 +4555,10 @@ With no `--workflow`, every workflow under `.github/workflows/` that runs on
 `git fetch`/`git push`) is dropped whole, as is a step whose own `env:` binds a
 `${{ }}` expression or whose `run:` reads a workflow- or job-level variable bound
 to one (locally that input is empty);
-a multi-line block is one command, run through `sh -c` by `ci parity-check`.
+a multi-line block is returned whole as one command.
 
 Falls back to standard commands (`format:check`, `lint`, `typecheck`, `build`,
 `test` from `package.json` scripts) when no workflow is found.
-
-```bash
-# Run CI parity checks locally (discover + execute)
-nightgauge ci parity-check
-nightgauge ci parity-check --json
-nightgauge ci parity-check --workdir /path/to/project --json
-```
-
-**`ci parity-check` JSON output schema**:
-
-```json
-{
-  "passed": true,
-  "commands_run": ["npm run format:check", "npm run lint"],
-  "failures": [],
-  "timestamp": "2026-04-29T12:00:00Z"
-}
-```
-
-Each failure entry:
-
-```json
-{
-  "command": "npm run lint",
-  "failure_type": "lint",
-  "output": "...",
-  "exit_code": 1
-}
-```
-
-`failure_type` values: `"format"` | `"lint"` | `"typecheck"` | `"build"` | `"test"` | `"unknown"`
 
 `ci discover-commands` is used by `skills/nightgauge-feature-validate/SKILL.md`
 Phase 2.5.1.

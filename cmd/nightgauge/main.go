@@ -8216,9 +8216,13 @@ func checkRunFailing(checks []gh.CheckDetail, name string) bool {
 func ciCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ci",
-		Short: "CI check operations (wait, logs, history, parity, discover-commands, gate-status, gate-run, gate-record)",
+		Short: "CI check operations (wait, logs, history, discover-commands, gate-status, gate-run, gate-record)",
+		// A group with no Run prints help and exits 0 for any unknown verb, so a
+		// removed verb such as parity-check would look like it succeeded (#2816).
+		Args: cobra.NoArgs,
+		RunE: func(c *cobra.Command, _ []string) error { return c.Help() },
 	}
-	cmd.AddCommand(ciWaitCmd(), ciLogsCmd(), ciHistoryCmd(), ciParityCheckCmd(), ciDiscoverCommandsCmd(), ciClassifyCmd(), ciClassifyUISurfaceCmd(), ciChecksCompleteCmd(), ciGateStatusCmd(), ciGateRunCmd(), ciGateRecordCmd(), ciGateCountCmd())
+	cmd.AddCommand(ciWaitCmd(), ciLogsCmd(), ciHistoryCmd(), ciDiscoverCommandsCmd(), ciClassifyCmd(), ciClassifyUISurfaceCmd(), ciChecksCompleteCmd(), ciGateStatusCmd(), ciGateRunCmd(), ciGateRecordCmd(), ciGateCountCmd())
 	return cmd
 }
 
@@ -8690,61 +8694,6 @@ func ciClassifyCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&base, "base", "", "Base ref/SHA (required)")
 	cmd.Flags().StringVar(&head, "head", "HEAD", "Head ref/SHA")
-	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
-	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory (default: cwd)")
-	return cmd
-}
-
-// ciParityCheckCmd implements `nightgauge ci-parity check [--json] [--workdir <dir>]`.
-func ciParityCheckCmd() *cobra.Command {
-	var (
-		outputJSON bool
-		workdir    string
-	)
-
-	cmd := &cobra.Command{
-		Use:          "parity-check",
-		Short:        "Run CI parity checks matching the project workflow",
-		SilenceUsage: true,
-		Example: `  nightgauge ci parity-check
-  nightgauge ci parity-check --json
-  nightgauge ci parity-check --workdir /path/to/project --json`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if workdir == "" {
-				wd, err := os.Getwd()
-				if err != nil {
-					return fmt.Errorf("get working directory: %w", err)
-				}
-				workdir = wd
-			}
-
-			discoverResult, err := cipkg.DiscoverCommands(cmd.Context(), workdir, "")
-			if err != nil {
-				return fmt.Errorf("discover CI commands: %w", err)
-			}
-
-			result, err := cipkg.CheckParity(cmd.Context(), workdir, discoverResult.Commands)
-			if err != nil {
-				return fmt.Errorf("ci parity check: %w", err)
-			}
-
-			if outputJSON {
-				return printJSON(result)
-			}
-
-			if result.Passed {
-				fmt.Printf("CI parity: passed (%d commands)\n", len(result.CommandsRun))
-			} else {
-				fmt.Printf("CI parity: FAILED (%d failures)\n", len(result.Failures))
-				for _, f := range result.Failures {
-					fmt.Printf("  FAIL [%s]: %s (exit %d)\n", f.FailureType, f.Command, f.ExitCode)
-				}
-				return fmt.Errorf("CI parity check failed")
-			}
-			return nil
-		},
-	}
-
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory (default: cwd)")
 	return cmd
