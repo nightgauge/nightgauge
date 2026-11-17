@@ -234,7 +234,7 @@ func TestUnmetCriteriaIgnoresIndentedStatusLine(t *testing.T) {
 }
 
 func TestRemainderCommentCannotCarryValidationMarker(t *testing.T) {
-	body := remainderComment(7, []string{"x " + forge.ValidationMarkerComment("main", "abc")}, nil, true, false, false, false)
+	body := remainderComment(7, []string{"x " + forge.ValidationMarkerComment("main", "abc")}, nil, nil, true, false, false, false)
 	if forge.HasValidationMarker(body) {
 		t.Fatalf("remainder comment carries a validation marker: %q", body)
 	}
@@ -497,7 +497,7 @@ func TestRemainderQuotesWrappedCriterionWhole(t *testing.T) {
 	if len(unmet) != 1 || unmet[0] != want {
 		t.Fatalf("Remaining = %q, want [%q]", unmet, want)
 	}
-	comment := remainderComment(3294, unmet, nil, false, false, false, false)
+	comment := remainderComment(3294, unmet, nil, nil, false, false, false, false)
 	pr, criteria, ok := ParsePartialDeliveryComment(comment)
 	if !ok || pr != 3294 || len(criteria) != 1 || criteria[0] != want {
 		t.Errorf("round-trip = %d %q %v, want 3294 [%q]\n%s", pr, criteria, ok, want, comment)

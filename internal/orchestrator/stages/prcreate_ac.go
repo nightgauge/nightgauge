@@ -44,6 +44,10 @@ type ACVerdict struct {
 	Status   string `json:"status"`
 	Source   string `json:"source"`
 	Evidence string `json:"evidence,omitempty"`
+	// MetByPR is the earlier merged PR whose partial-delivery record met this
+	// criterion (#3362); MetByCommit the commit on base that delivered it.
+	MetByPR     int    `json:"met_by_pr,omitempty"`
+	MetByCommit string `json:"met_by_commit,omitempty"`
 	// Step names the runtime or operator step a not_verifiable criterion
 	// needs (#2665), so the PR says what would verify it.
 	Step string `json:"step,omitempty"`

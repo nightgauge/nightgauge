@@ -851,12 +851,16 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 	}
 
 	if input.Remainder != nil {
+		var notVerifiable []string
+		if plan.Found {
+			notVerifiable = plan.NotVerifiable
+		}
 		if commentsRead && remainderCommentIn(comments, input.PRNumber) {
 			fmt.Fprintf(os.Stderr, "Post-merge: #%d already names the remainder of PR #%d\n", input.IssueNumber, input.PRNumber)
 			out.RemainderComment = "present"
 			return out
 		}
-		if err := input.Remainder.AddComment(ctx, issue.NodeID, remainderComment(input.PRNumber, out.UnmetCriteria, plan.Met, !out.ReadyWithheld, out.EmptyDelivery, out.OwnerOnlyRemainder, out.AllCriteriaTicked)); err != nil {
+		if err := input.Remainder.AddComment(ctx, issue.NodeID, remainderComment(input.PRNumber, out.UnmetCriteria, notVerifiable, plan.Met, !out.ReadyWithheld, out.EmptyDelivery, out.OwnerOnlyRemainder, out.AllCriteriaTicked)); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: post-merge remainder comment failed for #%d: %v\n", input.IssueNumber, err)
 			out.RemainderComment = "failed"
 			out.Failed = true
@@ -903,7 +907,10 @@ func remainderCommentIn(comments []trust.Comment, prNumber int) bool {
 	return false
 }
 
-func remainderComment(prNumber int, unmet, met []string, backInReady, empty, ownerOnly, allTicked bool) string {
+// remainderComment writes the marker comment. remaining is the whole
+// remainder; the entries also in notVerifiable go under their own heading
+// (#3362), the rest under RemainingCriteriaHeading.
+func remainderComment(prNumber int, remaining, notVerifiable, met []string, backInReady, empty, ownerOnly, allTicked bool) string {
 	var b strings.Builder
 	b.WriteString(remainderMarker(prNumber) + "\n")
 	if empty {
@@ -931,16 +938,35 @@ func remainderComment(prNumber int, unmet, met []string, backInReady, empty, own
 		b.WriteString("Every acceptance criterion in the issue body is ticked, so nothing is left to re-dispatch: the issue stays In review for the supervisor to verify and close.\n")
 		return b.String()
 	}
-	if len(unmet) == 0 {
+	if len(remaining) == 0 {
 		b.WriteString("The PR did not list the remaining acceptance criteria; check them against the issue body.\n")
 		return b.String()
 	}
-	b.WriteString(RemainingCriteriaHeading + "\n\n")
-	for _, c := range unmet {
-		// Escape HTML-comment openers: this comment is posted by the trusted
-		// identity, and a criterion carrying the validation marker would
-		// release program dependents (forge.HasValidationMarker).
-		b.WriteString("- " + strings.ReplaceAll(c, "<!--", "&lt;!--") + "\n")
+	var unmet, nv []string
+	for _, c := range remaining {
+		if containsNormalised(notVerifiable, c) {
+			nv = append(nv, c)
+		} else {
+			unmet = append(unmet, c)
+		}
 	}
+	writeList := func(heading string, list []string) {
+		if len(list) == 0 {
+			return
+		}
+		b.WriteString(heading + "\n\n")
+		for _, c := range list {
+			// Escape HTML-comment openers: this comment is posted by the
+			// trusted identity, and a criterion carrying the validation
+			// marker would release program dependents
+			// (forge.HasValidationMarker).
+			b.WriteString("- " + strings.ReplaceAll(c, "<!--", "&lt;!--") + "\n")
+		}
+	}
+	writeList(RemainingCriteriaHeading, unmet)
+	if len(unmet) > 0 && len(nv) > 0 {
+		b.WriteString("\n")
+	}
+	writeList(NotVerifiableCriteriaHeading, nv)
 	return b.String()
 }

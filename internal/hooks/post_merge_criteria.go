@@ -197,6 +197,9 @@ type remainderPlan struct {
 	TickIndices []int
 	// Remaining is the criteria left, in issue order, then PR-only ones.
 	Remaining []string
+	// NotVerifiable is the subset of Remaining the PR marked not verifiable
+	// (#3362), in the same order; the hook records it under its own heading.
+	NotVerifiable []string
 	// NotVerifiableOnly: every remaining criterion is not verifiable by the
 	// pipeline or reserved to the supervisor/owner.
 	NotVerifiableOnly bool
@@ -214,7 +217,8 @@ type remainderPlan struct {
 // an unticked box or a numbered/plain item. PR verdicts the issue never wrote
 // are appended. A criterion an earlier partial-delivery marker recorded as met
 // (priorMet, the issue's own wording) is dropped unless this PR restates it as
-// unmet or not verifiable: the latest evidence wins.
+// unmet: the latest evidence wins, and "not verifiable" is no evidence
+// against an earlier met record (#3362).
 func computeRemainder(issueBody, prBody string, priorMet []string) remainderPlan {
 	criteria := issueCriteria(issueBody)
 	metBefore := func(text string) bool { return containsNormalised(priorMet, text) }
@@ -232,6 +236,9 @@ func computeRemainder(issueBody, prBody string, priorMet []string) remainderPlan
 		}
 		kept = append(kept, n)
 		plan.Remaining = append(plan.Remaining, text)
+		if notVerifiable {
+			plan.NotVerifiable = append(plan.NotVerifiable, text)
+		}
 		if !notVerifiable && !isOwnerOnlyRemainder([]string{text}) {
 			allNotVerifiable = false
 		}
@@ -282,6 +289,9 @@ func computeRemainder(issueBody, prBody string, priorMet []string) remainderPlan
 			}
 			continue
 		}
+		if v.Status == verdictNotVerifiable && metBefore(c.Text) {
+			continue
+		}
 		keep(v.Text, v.Status == verdictNotVerifiable)
 	}
 	for i, v := range verdicts {
@@ -302,4 +312,27 @@ func containsNormalised(list []string, text string) bool {
 		}
 	}
 	return false
+}
+
+// IssueCriterionTexts returns the issue body's criteria in the wording
+// post-merge records them under in a partial-delivery comment (#3362).
+func IssueCriterionTexts(body string) []string {
+	var out []string
+	for _, c := range issueCriteria(body) {
+		out = append(out, c.Text)
+	}
+	return out
+}
+
+// NormaliseCriterion is the normalisation the partial-delivery writer
+// compares criteria under (#3362).
+func NormaliseCriterion(s string) string { return normaliseCriterion(s) }
+
+// RecordedCriterionMatches reports whether a criterion, in the issue's
+// wording, is the one a partial-delivery record entry names: equal after
+// normalising, or the entry followed by an evidence suffix (#3362). It is
+// the rule the writer ticks under, so a shorter entry never matches a
+// stronger criterion.
+func RecordedCriterionMatches(criterion, recorded string) bool {
+	return tickMatches(criterion, recorded)
 }

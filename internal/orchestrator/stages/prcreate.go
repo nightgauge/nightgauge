@@ -26,6 +26,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/gateledger"
+	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 )
@@ -464,8 +465,15 @@ func RenderBody(snap PRCreateSnapshot) string {
 		b.WriteString("## Acceptance criteria\n\n")
 		for _, v := range met {
 			b.WriteString(fmt.Sprintf("- %s: %s", acStatusLabel(v.Status), acText(v.Text)))
-			if v.Evidence != "" {
-				b.WriteString(fmt.Sprintf(" (%s: %s)", v.Source, acText(v.Evidence)))
+			switch {
+			case v.MetByPR > 0:
+				b.WriteString(fmt.Sprintf(" (met by #%d, merged earlier)", v.MetByPR))
+			case v.MetByCommit != "":
+				b.WriteString(fmt.Sprintf(" (delivered by %s on %s)", v.MetByCommit, snap.BaseBranch))
+			case v.Evidence != "":
+				b.WriteString(fmt.Sprintf(" (this PR — %s: %s)", v.Source, acText(v.Evidence)))
+			default:
+				b.WriteString(" (this PR)")
 			}
 			b.WriteString("\n")
 		}
@@ -1264,10 +1272,12 @@ func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber i
 		}
 		var unjudged map[string]bool
 		forceRefs := false
+		var issueCriteria []string
 		if body, bodyErr := prCreateIssueBody(workdir)(ctx, issueNumber); bodyErr != nil {
 			forceRefs = true
 			log.Printf("pr-create: WARNING cannot read #%d's body to check ac-reconcile's scope (%v); the PR will say Refs #%d, not Closes", issueNumber, bodyErr, issueNumber)
-		} else if current := preflight.ACFingerprint(body); current != fingerprint {
+		} else if issueCriteria = hooks.IssueCriterionTexts(body); preflight.ACFingerprint(body) != fingerprint {
+			current := preflight.ACFingerprint(body)
 			judged := map[string]bool{}
 			for _, c := range criteria {
 				judged[preflight.NormalizeACText(c)] = true
@@ -1299,6 +1309,18 @@ func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber i
 				snap.ACVerdicts[i] = ACVerdict{Index: v.Index, Text: v.Text, Status: ACNotJudged, Source: ACSourceStale,
 					Evidence: "added to the issue after this run's acceptance criteria were reconciled"}
 			}
+		}
+		// Criteria an earlier merged PR on this issue delivered (#3362). A
+		// record that cannot be read credits nothing, so a criterion only an
+		// earlier PR met stays not_verifiable and the PR says Refs. Skipped
+		// when no criterion is not_verifiable, the single-PR common case.
+		if hasNotVerifiable(snap.ACVerdicts) {
+			priors, priorErr := prCreatePriorDeliveries(workdir)(ctx, issueNumber)
+			if priorErr != nil {
+				priors = nil
+				log.Printf("pr-create: WARNING cannot read #%d's earlier partial deliveries (%v); no criterion is credited to an earlier PR", issueNumber, priorErr)
+			}
+			snap.ACVerdicts = ApplyPriorDeliveries(snap.ACVerdicts, priors, prCreateCommitOnBase(workdir, snap.BaseBranch), snap.BaseBranch, issueCriteria)
 		}
 		snap.ACFingerprint = fingerprint
 		snap.ACScopeUnverified = forceRefs

@@ -22,6 +22,11 @@ const (
 	// words them (#3318). A numbered or plain criterion has no box to tick,
 	// so this list is where its met state persists for later remainders.
 	MetCriteriaHeading = "Met by this PR:"
+	// NotVerifiableCriteriaHeading introduces the remaining criteria the PR
+	// marked not verifiable by the pipeline (#3362). They are still part of
+	// the remainder, but unlike an unmet entry they do not cancel an earlier
+	// record's met credit.
+	NotVerifiableCriteriaHeading = "Not verifiable by the pipeline:"
 )
 
 var partialDeliveryMarkerRE = regexp.MustCompile(`<!-- nightgauge:partial-delivery pr=(\d+) -->`)
@@ -54,7 +59,8 @@ type PartialDeliveryStatus struct {
 }
 
 // ParsePartialDeliveryComment extracts the PR a remainder comment names and the
-// criteria it listed. ok is false when body carries no marker.
+// criteria it left: the unmet list, then the not-verifiable list (#3362).
+// ok is false when body carries no marker.
 func ParsePartialDeliveryComment(body string) (pr int, criteria []string, ok bool) {
 	m := partialDeliveryMarkerRE.FindStringSubmatch(body)
 	if m == nil {
@@ -64,11 +70,29 @@ func ParsePartialDeliveryComment(body string) (pr int, criteria []string, ok boo
 	if err != nil {
 		return 0, nil, false
 	}
-	idx := strings.Index(body, RemainingCriteriaHeading)
-	if idx < 0 {
-		return pr, nil, true
+	criteria = append(sectionBullets(body, RemainingCriteriaHeading), sectionBullets(body, NotVerifiableCriteriaHeading)...)
+	return pr, criteria, true
+}
+
+// ParsePartialDeliveryNotVerifiable returns the remaining criteria a marker
+// comment records as not verifiable by the pipeline (#3362). It is nil when
+// body carries no marker or no such list.
+func ParsePartialDeliveryNotVerifiable(body string) []string {
+	if !partialDeliveryMarkerRE.MatchString(body) {
+		return nil
 	}
-	return pr, bulletsUntil(body[idx+len(RemainingCriteriaHeading):], MetCriteriaHeading), true
+	return sectionBullets(body, NotVerifiableCriteriaHeading)
+}
+
+// sectionBullets returns the bullets under heading, up to the next section
+// heading; nil when body has no such heading.
+func sectionBullets(body, heading string) []string {
+	idx := strings.Index(body, heading)
+	if idx < 0 {
+		return nil
+	}
+	return bulletsUntil(body[idx+len(heading):],
+		RemainingCriteriaHeading, MetCriteriaHeading, NotVerifiableCriteriaHeading)
 }
 
 // ParsePartialDeliveryMet returns the criteria a marker comment records as met
@@ -77,20 +101,20 @@ func ParsePartialDeliveryMet(body string) []string {
 	if !partialDeliveryMarkerRE.MatchString(body) {
 		return nil
 	}
-	idx := strings.Index(body, MetCriteriaHeading)
-	if idx < 0 {
-		return nil
-	}
-	return bulletsUntil(body[idx+len(MetCriteriaHeading):], RemainingCriteriaHeading)
+	return sectionBullets(body, MetCriteriaHeading)
 }
 
-// bulletsUntil collects the "- " bullets in s up to the line holding stop.
-func bulletsUntil(s, stop string) []string {
+// bulletsUntil collects the "- " bullets in s up to the first line holding
+// any of stops.
+func bulletsUntil(s string, stops ...string) []string {
 	var out []string
+lines:
 	for _, line := range strings.Split(s, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.Contains(line, stop) {
-			break
+		for _, stop := range stops {
+			if strings.Contains(line, stop) {
+				break lines
+			}
 		}
 		if strings.HasPrefix(line, "- ") {
 			if c := strings.TrimSpace(strings.TrimPrefix(line, "- ")); c != "" {
