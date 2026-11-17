@@ -8,9 +8,12 @@
  * (stage, model). This module takes the p75 of WHOLE completed runs of the
  * same size instead, narrowed to the same routing when enough such runs exist.
  *
- * Zero imports on purpose: `scripts/backtest-cost-estimate.ts` loads it under
- * `tsx` without the extension's dependency graph.
+ * Its only import is the band authority (`TIER_BANDS`), so
+ * `scripts/backtest-cost-estimate.ts` can load it under `tsx` against the
+ * built SDK without the rest of the extension's dependency graph.
  */
+
+import { TIER_BANDS } from "@nightgauge/sdk";
 
 /** One completed pipeline run, priced as a whole. */
 export interface CompletedRunCost {
@@ -48,7 +51,7 @@ export const WHOLE_RUN_WINDOW = 30;
  */
 export function modelBand(model: string): string {
   const m = model.toLowerCase();
-  for (const band of ["opus", "sonnet", "haiku", "fable"]) {
+  for (const band of TIER_BANDS) {
     if (m.includes(band)) return band;
   }
   return m;
