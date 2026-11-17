@@ -1487,8 +1487,9 @@ nightgauge issue close <number> [--owner ORG] [--repo REPO]
 # nothing is pending or the read fails), the record both paths splice into the
 # planning context as `partial_delivery`; --json carries it too (#3163).
 # The comment also lists the criteria its PR met under `Met by this PR:`;
-# post-merge drops those from later remainders (#3318). This verb reports
-# only the remaining list.
+# post-merge drops those from later remainders (#3318). The remainder is split
+# into `Remaining acceptance criteria:` and `Not verifiable by the pipeline:`
+# (#3362); this verb reports both together as the remaining list.
 nightgauge issue partial-delivery <number> [--owner ORG] [--repo REPO] [--json] [--write-context]
 
 # Print the feature-dev prompt block for an operator-revised plan (#3163),

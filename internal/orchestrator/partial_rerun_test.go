@@ -539,7 +539,7 @@ func TestReconcilePartialRemainder_TolerantMatch(t *testing.T) {
 // bullets without their status label.
 func TestPartialPRCriteria_ReadsMetAndUnmet(t *testing.T) {
 	got := partialPRCriteria(partialPRBody([]string{"Met one"}, []string{"Unmet one"}))
-	if len(got) != 2 || got[0] != "Unmet one" || !strings.HasPrefix(got[1], "Met one (diff: ") {
+	if len(got) != 2 || got[0] != "Unmet one" || !strings.HasPrefix(got[1], "Met one (this PR — diff: ") {
 		t.Fatalf("criteria = %q", got)
 	}
 }

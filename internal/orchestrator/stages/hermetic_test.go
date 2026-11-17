@@ -32,5 +32,9 @@ func TestMain(m *testing.M) {
 			return acCheckboxBody(texts), nil
 		}
 	}
+	// No earlier merged PR delivered anything (#3362) unless a test says so.
+	prCreatePriorDeliveries = func(string) PriorDeliveryReader {
+		return func(context.Context, int) ([]PriorDelivery, error) { return nil, nil }
+	}
 	os.Exit(m.Run())
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,7 +30,7 @@ func (f fakePartialReader) LatestClosingMerge(context.Context, string, string, i
 }
 
 func TestParsePartialDeliveryCommentRoundTripsWriter(t *testing.T) {
-	body := remainderComment(3085, []string{"criterion one", "two <!-- x"}, nil, false, false, false, false)
+	body := remainderComment(3085, []string{"criterion one", "two <!-- x"}, nil, nil, false, false, false, false)
 	pr, criteria, ok := ParsePartialDeliveryComment(body)
 	if !ok || pr != 3085 {
 		t.Fatalf("got pr=%d ok=%v", pr, ok)
@@ -41,7 +42,7 @@ func TestParsePartialDeliveryCommentRoundTripsWriter(t *testing.T) {
 	if _, _, ok := ParsePartialDeliveryComment("plain comment"); ok {
 		t.Fatal("comment without marker parsed")
 	}
-	if pr, c, ok := ParsePartialDeliveryComment(remainderComment(9, nil, nil, false, true, false, false)); !ok || pr != 9 || len(c) != 0 {
+	if pr, c, ok := ParsePartialDeliveryComment(remainderComment(9, nil, nil, nil, false, true, false, false)); !ok || pr != 9 || len(c) != 0 {
 		t.Fatalf("unlisted: pr=%d c=%v ok=%v", pr, c, ok)
 	}
 }
@@ -49,7 +50,7 @@ func TestParsePartialDeliveryCommentRoundTripsWriter(t *testing.T) {
 func TestPendingPartialDelivery(t *testing.T) {
 	t0 := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	marker := func(pr int, at time.Time, criteria ...string) trust.Comment {
-		return trust.Comment{Body: remainderComment(pr, criteria, nil, false, false, false, false), CreatedAt: at}
+		return trust.Comment{Body: remainderComment(pr, criteria, nil, nil, false, false, false, false), CreatedAt: at}
 	}
 	cases := []struct {
 		name      string
@@ -99,7 +100,7 @@ func TestPendingPartialDelivery(t *testing.T) {
 }
 
 func TestPartialDeliveryMetListRoundTrips(t *testing.T) {
-	body := remainderComment(5, []string{"left"}, []string{"met one", "met <!-- two"}, false, false, false, false)
+	body := remainderComment(5, []string{"left"}, nil, []string{"met one", "met <!-- two"}, false, false, false, false)
 	if got := ParsePartialDeliveryMet(body); !reflect.DeepEqual(got, []string{"met one", "met &lt;!-- two"}) {
 		t.Errorf("met = %q\n%s", got, body)
 	}
@@ -110,7 +111,7 @@ func TestPartialDeliveryMetListRoundTrips(t *testing.T) {
 		t.Errorf("unmarked body met = %q, want nil", got)
 	}
 	// Met list recorded even on the all-ticked early return.
-	if got := ParsePartialDeliveryMet(remainderComment(6, nil, []string{"x"}, false, false, false, true)); len(got) != 1 {
+	if got := ParsePartialDeliveryMet(remainderComment(6, nil, nil, []string{"x"}, false, false, false, true)); len(got) != 1 {
 		t.Errorf("all-ticked met = %q", got)
 	}
 }
@@ -136,7 +137,7 @@ func TestPendingPartialDeliveryIgnoresCrossRepoMerge(t *testing.T) {
 	t0 := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	r := issueServiceMerges{
 		fakePartialReader: fakePartialReader{comments: []trust.Comment{
-			{Body: remainderComment(5, []string{"c"}, nil, false, false, false, false), CreatedAt: t0}}},
+			{Body: remainderComment(5, []string{"c"}, nil, nil, false, false, false, false), CreatedAt: t0}}},
 		issues: gh.NewIssueService(gh.NewClientWithURL("t", srv.URL)),
 	}
 	got, err := PendingPartialDelivery(context.Background(), r, "o", "r", 1)
@@ -145,5 +146,46 @@ func TestPendingPartialDeliveryIgnoresCrossRepoMerge(t *testing.T) {
 	}
 	if got.ClosedBy != 0 || !got.Pending {
 		t.Fatalf("got %+v, want pending with no closing PR", got)
+	}
+}
+
+// #3362: unmet and not-verifiable remainders round-trip under separate
+// headings; ParsePartialDeliveryComment still returns the whole remainder.
+func TestRemainderComment_NotVerifiableRoundTrip(t *testing.T) {
+	body := remainderComment(8, []string{"unmet one", "nv <!-- two"}, []string{"nv <!-- two"}, []string{"met one"}, false, false, false, false)
+	if !strings.Contains(body, RemainingCriteriaHeading) || !strings.Contains(body, NotVerifiableCriteriaHeading) {
+		t.Fatalf("missing a heading:\n%s", body)
+	}
+	if _, c, _ := ParsePartialDeliveryComment(body); !reflect.DeepEqual(c, []string{"unmet one", "nv &lt;!-- two"}) {
+		t.Errorf("remainder = %q", c)
+	}
+	if got := ParsePartialDeliveryNotVerifiable(body); !reflect.DeepEqual(got, []string{"nv &lt;!-- two"}) {
+		t.Errorf("not verifiable = %q", got)
+	}
+	if got := ParsePartialDeliveryMet(body); !reflect.DeepEqual(got, []string{"met one"}) {
+		t.Errorf("met = %q", got)
+	}
+	only := remainderComment(9, []string{"nv"}, []string{"nv"}, nil, false, false, true, false)
+	if strings.Contains(only, RemainingCriteriaHeading) {
+		t.Errorf("unmet heading written with no unmet entry:\n%s", only)
+	}
+	if _, c, _ := ParsePartialDeliveryComment(only); !reflect.DeepEqual(c, []string{"nv"}) {
+		t.Errorf("not-verifiable-only remainder lost: %q", c)
+	}
+}
+
+// #3362: a prior-met criterion this PR marks only not verifiable leaves the
+// remainder; one it marks unmet stays.
+func TestComputeRemainder_PriorMetNotVerifiable(t *testing.T) {
+	issue := "## Acceptance Criteria\n\n- [ ] Alpha crit\n- [ ] Beta crit\n"
+	prNV := prAcceptanceHeading + "\n\n- " + metLinePrefix + "Beta crit\n\n" + unmetCriteriaHeading +
+		"\n\n- Alpha crit\n  _" + notVerifiableLabel + "_\n"
+	nv := computeRemainder(issue, prNV, []string{"Alpha crit"})
+	if len(nv.Remaining) != 0 {
+		t.Errorf("not-verifiable restatement kept prior-met Alpha: %+v", nv)
+	}
+	plain := computeRemainder(issue, prNV, nil)
+	if !reflect.DeepEqual(plain.NotVerifiable, []string{"Alpha crit"}) || !plain.NotVerifiableOnly {
+		t.Errorf("not-verifiable remainder not recorded: %+v", plain)
 	}
 }

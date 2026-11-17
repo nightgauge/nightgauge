@@ -266,7 +266,9 @@ var forgeIssueBodyEditedAt = func(s *Scheduler, ctx context.Context, item types.
 }
 
 // partialPRMetHeading heads the met criteria in a pr-create body
-// (stages.RenderBody); each bullet reads `- <label>: <text> (<source>: …)`.
+// (stages.RenderBody); each bullet reads `- <label>: <text>` then one suffix:
+// `(this PR — <source>: …)`, `(this PR)`, `(met by #N, merged earlier)` or
+// `(delivered by <sha> on <base>)` (#3362).
 const partialPRMetHeading = "## Acceptance criteria"
 
 // partialPRCriteria returns the criteria a partial PR's body names under its

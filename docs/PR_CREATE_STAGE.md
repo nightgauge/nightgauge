@@ -236,6 +236,24 @@ Any `unmet` wins, so a diff heuristic never closes an issue another source
 judged unmet. Otherwise any `met` wins, cited from the first of deterministic,
 diff and validate. Otherwise the criterion is `not_verifiable`.
 
+A `not_verifiable` criterion is then credited to earlier delivery on the same
+issue (#3362). It is `met` with source `prior-pr` and `met_by_pr` when a MERGED
+PR's trusted partial-delivery comment lists it under `Met by this PR:`, matched
+in the issue body's wording under the writer's tick rule, so a strengthened
+or reworded criterion is not credited. The newest merged record that names a
+criterion decides: listed under `Met by this PR:` credits that PR, left under
+`Remaining acceptance criteria:` (unmet) credits nothing, and listed under
+`Not verifiable by the pipeline:` is skipped in favour of older records. It is `met` with source `prior-commit` and
+`met_by_commit` when its evidence says a commit delivered it ("delivered by
+<sha>", "implemented in commit <sha>", not negated or hedged) and that commit is an ancestor of
+`origin/<base>`; a SHA cited for any other reason, or a criterion with a
+runtime step, is not credited. A closed-unmerged or open PR, or a commit only on the feature
+branch, credits nothing, and neither `unmet` nor `not_judged` is lifted. A
+record that cannot be read credits nothing, so a criterion only an earlier PR
+met keeps the PR at `Refs`. Each met bullet names what met it: `(this PR —
+<source>: <evidence>)`, `(this PR)`, `(met by #N, merged earlier)` or
+`(delivered by <sha> on <base>)`.
+
 The diff verifier first rejects criteria that need a runtime or operator step:
 a physical device, production, a deploy, a release, a manual or operator step,
 a credential, a live API call, a post-merge observation or a live run. They
@@ -278,7 +296,11 @@ unless every remaining criterion is not verifiable or reserved to the
 supervisor or owner, which keeps it In review. A re-run over an
 already-merged PR does not tick. The comment lists the criteria the PR met
 under `Met by this PR:`, numbered items included, and later remainders on the
-issue leave those out unless a later PR reports them unmet again. An
+issue leave those out unless a later PR reports them unmet again (a later
+`not verifiable` is no evidence against them). The remainder is written as
+unmet criteria under `Remaining acceptance criteria:` and not-verifiable ones
+under `Not verifiable by the pipeline:`; pr-create reads
+the same list back to credit a later PR (see above). An
 unreadable body keeps the close.
 
 ### Unit-test label

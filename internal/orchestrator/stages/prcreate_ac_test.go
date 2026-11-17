@@ -182,7 +182,7 @@ func TestRenderBody_PartialDeliveryRefsNotCloses(t *testing.T) {
 	if strings.Contains(unmet, "- Add the widget") {
 		t.Error("the met criterion is listed as unmet")
 	}
-	if !strings.Contains(body, "- ✅ met: Add the widget (feature-validate: widget.go:12)\n") {
+	if !strings.Contains(body, "- ✅ met: Add the widget (this PR — feature-validate: widget.go:12)\n") {
 		t.Errorf("AC section missing the met line with evidence:\n%s", body)
 	}
 }
@@ -280,7 +280,7 @@ func TestRenderBody_MixedRefsEachOnce(t *testing.T) {
 	s := richSnap()
 	s.ACVerdicts = ResolveACVerdicts([]string{"alpha crit", "beta crit"}, []ACVerdict{{Index: 0, Text: "alpha crit", Status: "met"}}, nil, nil)
 	body := RenderBody(s)
-	if !strings.Contains(body, "Refs #42\n") || !strings.Contains(body, "- ✅ met: alpha crit\n") {
+	if !strings.Contains(body, "Refs #42\n") || !strings.Contains(body, "- ✅ met: alpha crit (this PR)\n") {
 		t.Errorf("mixed body wrong:\n%s", body)
 	}
 	for _, c := range []string{"alpha crit", "beta crit"} {
@@ -757,7 +757,7 @@ func TestRenderBody_UntrustedACTextRendersOnOneLine(t *testing.T) {
 	if !strings.Contains(body, "_❌ unmet — feature-validate: x - injected ## Heading_\n") {
 		t.Errorf("evidence not collapsed onto its status line:\n%s", body)
 	}
-	if !strings.Contains(body, "(feature-validate: Refs #9 and Refs #10)") || BodyClosesIssue(body, "o/r", 9) || BodyClosesIssue(body, "o/r", 10) {
+	if !strings.Contains(body, "(this PR — feature-validate: Refs #9 and Refs #10)") || BodyClosesIssue(body, "o/r", 9) || BodyClosesIssue(body, "o/r", 10) {
 		t.Errorf("a closing keyword split by a newline survived:\n%s", body)
 	}
 }
