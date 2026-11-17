@@ -359,5 +359,5 @@ always includes root and nested `AGENTS.md`. Neither needs a generated file.
 Create `.cursor/rules/*.mdc` or `.kiro/steering/*.md` only for a rule that is
 genuinely specific to that tool (for example a glob-scoped Cursor rule), and
 never restate `AGENTS.md` in it. Likewise, do not create `.cursorrules`,
-`.windsurfrules` or `GEMINI.md` copies of `AGENTS.md`; Gemini CLI can load
+`.windsurfrules` or `GEMINI.md` copies of `AGENTS.md`; Gemini CLI can load <!-- overlay-exempt: Gemini CLI and GEMINI.md are tool and file names -->
 `AGENTS.md` directly through its `context.fileName` setting.

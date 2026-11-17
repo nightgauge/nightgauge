@@ -5,3 +5,7 @@ prescribed step explicitly and in order, including the implied ones:
 read the predecessor context file before working, and write this
 stage's context file before ending the turn. Later model fragments
 may relax this step-by-step guidance by name.
+
+When a skill fans out subagents, run read-only analysis (per-package
+assessment, changelog or doc reading, drift comparison, pattern mining)
+on Haiku, and generation (tests, fixes, implementation) on Sonnet.

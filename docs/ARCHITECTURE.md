@@ -375,7 +375,7 @@ _within_ a pipeline stage.
 ┌─────────────────────────────────────────────────────────────────┐
 │  LEVEL 2: Within-Stage Subagent Model Routing                   │
 │  Controls: The model parameter on Task tool invocations         │
-│  Mechanism: Explicit instructions in SKILL.md files             │
+│  Mechanism: Provider overlay (_shared/_overlays/anthropic.md)   │
 │  Scope: Individual subagent spawns within a stage               │
 │  Benefit: Cost optimization for parallel/heavyweight tasks      │
 └─────────────────────────────────────────────────────────────────┘
@@ -390,32 +390,18 @@ those subagents inherit the parent's expensive model by default. Within-stage
 routing allows these subagents to use cheaper models when the task complexity
 doesn't warrant the parent model.
 
-**Subagent Classification:**
-
-| Skill              | Task Usage                         | Classification | Subagent Model |
-| ------------------ | ---------------------------------- | -------------- | -------------- |
-| `feature-dev`      | Phase 3.3 parallel file creation   | Heavyweight    | `sonnet`       |
-| `test-gen`         | Phase 4.2 parallel test generation | Heavyweight    | `sonnet`       |
-| `update-docs`      | Phase 1 doc exploration            | Lightweight    | `haiku`        |
-| `feature-validate` | Phase 1.5.3 Ralph Loop auto-fix    | Heavyweight    | `sonnet`       |
-| `pr-merge`         | Phase 2.5 CI auto-fix retry        | Heavyweight    | `sonnet`       |
-
-**Model Selection Rationale:**
-
-- **Sonnet** for heavyweight subagent tasks (code generation, test generation,
-  error fixing) — balances quality and cost, already proven for M-complexity
-  dev-stage work
-- **Haiku** for lightweight exploration tasks (file reading, searching,
-  documentation analysis) — matches Claude Code's built-in Explore subagent
-  model choice
-
 **Implementation Approach:**
 
-Within-stage model routing is **instruction-level**, not config-driven. Each
-SKILL.md file contains explicit guidance telling the AI agent which model to
-specify on Task tool invocations. This keeps the routing transparent and
-auditable in the skill definitions themselves, without requiring SDK or
-extension code changes.
+Within-stage model routing is **instruction-level**, not config-driven, and it
+lives in the provider overlay, not in the base skills (ADR 016, #82). A base
+skill says _that_ it fans out subagents; `skills/_shared/_overlays/anthropic.md`
+says which Claude tier runs them: read-only analysis (per-package assessment,
+doc reading, drift comparison, pattern mining) on Haiku, generation (tests,
+fixes, implementation) on Sonnet. Non-Claude adapters never see the pin. The
+`preflight skill-overlays` base-skill-purity rule fails a quoted
+`model: "<tier>"` pin in base skill prose. See
+[MODEL_ADAPTATION.md](MODEL_ADAPTATION.md) and
+[ADR 016](decisions/016-model-aware-skill-overlays.md).
 
 **Relationship to Stage-Level Routing:**
 

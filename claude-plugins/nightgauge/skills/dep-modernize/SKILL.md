@@ -76,8 +76,7 @@ This skill follows the **deterministic vs probabilistic** principle:
   test execution, and rollback decisions are all deterministic and reproducible
 - **Probabilistic**: Breaking change analysis from changelogs/release notes,
   risk assessment of major updates, and replacement suggestions for deprecated
-  or unmaintained packages use AI interpretation via `Task` with
-  `model: "haiku"`
+  or unmaintained packages use AI interpretation via `Task` subagents
 
 ## Invocation
 
@@ -184,7 +183,7 @@ Three-layer check:
    `preflight.environment` (#101); opt-in, silent when none are declared
 
 The binary discovery cascade below is **provider-neutral** (issue 4029): it works
-identically under every adapter (Claude, Codex, Gemini, …) and references no
+identically under every adapter (Claude, Codex, Gemini, …) and references no <!-- overlay-exempt: names adapters, not models -->
 VSCode-extension-specific path. The host that spawns the skill (the VSCode
 extension's `skillRunner`, or the Go `nightgauge` binary in auto/CLI mode)
 resolves the binary authoritatively and exports `NIGHTGAUGE_BIN`, which
@@ -850,7 +849,7 @@ else
   echo "=== Phase 3: Breaking Change Analysis ==="
   echo "Spawning parallel subagents for changelog analysis..."
 
-  # For each major-update dependency, use Task tool with model: "haiku"
+  # For each major-update dependency, use a Task subagent
   # to analyze the changelog/release notes between the installed version
   # and the latest version.
   #
@@ -946,7 +945,7 @@ only.
 echo "=== Phase 5: Replacement Suggestions ==="
 
 # For each deprecated or unmaintained package, use the Task tool with
-# model: "haiku" to research modern alternatives.
+# a subagent to research modern alternatives.
 #
 # Each subagent receives:
 #   - Package name and current version

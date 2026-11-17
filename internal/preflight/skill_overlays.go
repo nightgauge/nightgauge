@@ -11,8 +11,10 @@
 //     fact (#544); the registry is the single source.
 //   - thinking-effort: the resolved stage (model, effort) pairs pass the
 //     thinking/effort interlock (delegates to RunThinkingEffortCheck).
-//   - base-skill-purity: stage SKILL.md files carry no model-conditional
-//     prose. Warn-only until #82 triages the existing hits (purityBlocking).
+//   - base-skill-purity: base skill prose (every skills/*/SKILL.md, every
+//     skills/*/_includes/*.md and every top-level skills/_shared/*.md, never
+//     an _overlays/ fragment) carries no model-conditional prose. Blocking
+//     since #82 extracted the existing hits (purityBlocking).
 //   - overlay-override: each whole-file <key>.SKILL.md override is listed as a
 //     drift liability (warn).
 //
@@ -31,8 +33,8 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/doctor"
+	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/models"
-	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // SkillOverlaysSchemaVersion is the JSON envelope version.
@@ -42,9 +44,9 @@ const SkillOverlaysSchemaVersion = 1
 // largest vetted fragment (claude-fable-5-1, 4183 B) plus ~10% headroom.
 const OverlayBudgetBytes = 4608
 
-// purityBlocking makes base-skill-purity findings fail the gate. False until
-// #82 triages and extracts the existing model-conditional prose.
-const purityBlocking = false
+// purityBlocking makes base-skill-purity findings fail the gate. #82 extracted
+// the existing model-conditional prose and flipped it on.
+const purityBlocking = true
 
 // Severities.
 const (
@@ -183,11 +185,7 @@ func RunSkillOverlaysCheck(_ context.Context, opts SkillOverlaysOptions) (*Skill
 		}
 	}
 
-	for _, stage := range state.AllPipelineStages {
-		path := filepath.Join(root, "nightgauge-"+string(stage), "SKILL.md")
-		if _, err := os.Stat(path); err != nil {
-			continue
-		}
+	for _, path := range r.purityFiles(root, entries) {
 		r.checkPurity(path)
 	}
 
@@ -376,6 +374,9 @@ var purityPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\b(?:Opus|Sonnet|Haiku|Fable|GPT|Gemini|Grok)\b`),
 	regexp.MustCompile(`(?i)\bif you are a (?:large|small|smaller|frontier) model\b`),
 	regexp.MustCompile(`(?i)\bsmaller models\b`),
+	// A quoted subagent pin in prose: model: "haiku". Unquoted frontmatter
+	// routing keys are skipped with the frontmatter.
+	regexp.MustCompile(`(?i)\bmodel:\s*\\?"(?:` + strings.Join(routing.TierBandsStrongestFirst, "|") + `)\\?"`),
 }
 
 var purityIDRe = purityIDPattern()
@@ -387,6 +388,53 @@ func purityIDPattern() *regexp.Regexp {
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(ids)))
 	return regexp.MustCompile(`\b(?:` + strings.Join(ids, "|") + `)\b`)
+}
+
+// purityFiles lists the base skill prose the purity rule scans: each skill's
+// SKILL.md and _includes/*.md, and the top-level _shared/*.md blocks. Overlay
+// fragments are excluded: they are where model-conditional prose belongs.
+func (r *SkillOverlaysResult) purityFiles(root string, entries []os.DirEntry) []string {
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		if p := filepath.Join(dir, "SKILL.md"); purityFileExists(p) {
+			out = append(out, p)
+		}
+		out = append(out, r.purityProseFiles(filepath.Join(dir, "_includes"))...)
+		if e.Name() == "_shared" {
+			out = append(out, r.purityProseFiles(dir)...)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func purityFileExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
+}
+
+// purityProseFiles lists dir's *.md files other than SKILL.md (scanned on its
+// own), non-recursively. A missing dir is normal; any other read error is a
+// finding, so an unreadable directory cannot pass the blocking scan silently.
+func (r *SkillOverlaysResult) purityProseFiles(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			r.unreadable(dir, err)
+		}
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") && e.Name() != "SKILL.md" {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	return out
 }
 
 func (r *SkillOverlaysResult) checkPurity(path string) {
@@ -404,7 +452,16 @@ func (r *SkillOverlaysResult) checkPurity(path string) {
 	patterns := append([]*regexp.Regexp{purityIDRe}, purityPatterns...)
 	lines := strings.Split(string(body), "\n")
 	inFence := false
+	// A SKILL.md's leading YAML frontmatter is routing config (model: haiku),
+	// not prose. Unterminated frontmatter is scanned as prose.
+	start := 0
+	if filepath.Base(path) == "SKILL.md" {
+		start = frontmatterEnd(lines)
+	}
 	for i, line := range lines {
+		if i < start {
+			continue
+		}
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
 			inFence = !inFence
@@ -447,6 +504,20 @@ func (r *SkillOverlaysResult) checkPurity(path string) {
 			Fix:     "move the sentence into _overlays/<provider-or-id>.md, or mark it <!-- overlay-exempt: <reason> -->",
 		})
 	}
+}
+
+// frontmatterEnd returns the index of the first line after a closed leading
+// YAML frontmatter block, or 0 when there is none or it never closes.
+func frontmatterEnd(lines []string) int {
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return 0
+	}
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 func exemptReason(line string) string {

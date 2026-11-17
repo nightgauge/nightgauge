@@ -1049,7 +1049,7 @@ For each package in `PACKAGES`:
 1. Run Phases 1-6 scoped to the package directory
 2. Compute per-package scores
 
-Use the `Task` tool with `model: "haiku"` to spawn parallel subagents for
+Use the `Task` tool to spawn parallel subagents for
 independent package assessments. Each subagent receives: package path, ecosystem
 detected, and dimensions to assess.
 

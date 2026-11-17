@@ -18,7 +18,7 @@ Launch a `Task` subagent to run the pattern mining skill. The subagent
 uses only Glob, Grep, and Read tools — no model invocation.
 
 ```
-Task (model: "haiku"):
+Task:
   "You are a codebase pattern mining subagent. Follow the instructions in
   skills/nightgauge-pattern-mining/SKILL.md exactly.
 
@@ -150,7 +150,7 @@ faster than subagent coordination overhead.
 Launch ALL of the following `Task` subagents in a **single message**:
 
 ```
-Task (model: "haiku"):
+Task:
   "Read and summarize the architecture and context documentation for this
   project. Read these files and extract key patterns, component boundaries,
   and data flow relevant to the feature being planned:
@@ -161,7 +161,7 @@ Task (model: "haiku"):
   \"patterns\": [...], \"components\": [...], \"data_flow\": [...],
   \"relevant_to_feature\": string }. Output ONLY the JSON."
 
-Task (model: "haiku"):
+Task:
   "Read and summarize the coding standards and testing documentation for
   this project. Read these files and extract conventions, naming rules,
   test patterns, and quality requirements:
@@ -172,7 +172,7 @@ Task (model: "haiku"):
   \"naming_conventions\": [...], \"test_patterns\": [...],
   \"quality_requirements\": [...] }. Output ONLY the JSON."
 
-Task (model: "haiku"):
+Task:
   "Analyze the source code files most relevant to this feature. The issue
   requires: {REQUIREMENT_SUMMARY}. Find and read the source files most
   likely to be modified or extended. Look for existing patterns, imports,

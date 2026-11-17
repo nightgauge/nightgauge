@@ -1427,13 +1427,13 @@ func preflightSkillOverlaysCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "skill-overlays",
 		Short: "Fail on dead, oversized or fact-restating overlays and invalid thinking/effort pairs",
-		Long: `Check every _overlays/ fragment and pipeline-stage SKILL.md (ADR 016):
+		Long: `Check every _overlays/ fragment and the base skill prose (ADR 016):
 
   overlay-key            fragment key is a registry provider, a live id, or (hosts/) an adapter
   overlay-budget         fragment is at most the byte budget
   overlay-registry-fact  fragment does not restate a registry behavior fact
   thinking-effort        configured stage (model, effort) pairs pass the thinking interlock
-  base-skill-purity      stage SKILL.md has no model-conditional prose (warn until #82)
+  base-skill-purity      SKILL.md, _includes/*.md and _shared/*.md carry no model-conditional prose
   overlay-override       whole-file <key>.SKILL.md overrides are listed (warn)
 
 Exempt a base-skill line with <!-- overlay-exempt: <reason> --> on it or the line above.

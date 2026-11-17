@@ -483,10 +483,11 @@ dispatches.
 The `preflight skill-overlays` gate (#80) enforces key validity, the size
 budget (4608 bytes), registry-fact restatement, and the thinking/effort
 interlock, and honours the `<!-- overlay-exempt -->` marker. Base-skill purity
-is reported warn-only until #82 triages it.
+is blocking since #82, which moved the subagent model pins into
+`_shared/_overlays/anthropic.md` and widened the scan to every base skill,
+include and shared block.
 
-**Outstanding** — base-skill prose extraction and blocking purity (#82) and
-the overlay-delta evals (#84, #383).
+**Outstanding** — the overlay-delta evals (#84, #383).
 
 The status line above stays `Decided` rather than `Implemented` for that reason.
 Operational guidance for what _is_ live lives in

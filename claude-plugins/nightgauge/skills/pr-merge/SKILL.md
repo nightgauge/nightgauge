@@ -356,7 +356,7 @@ Three-layer check:
    `preflight.environment` (#101); opt-in, silent when none are declared
 
 The binary discovery cascade below is **provider-neutral** (issue 4029): it works
-identically under every adapter (Claude, Codex, Gemini, …) and references no
+identically under every adapter (Claude, Codex, Gemini, …) and references no <!-- overlay-exempt: names adapters, not models -->
 VSCode-extension-specific path. The host that spawns the skill (the VSCode
 extension's `skillRunner`, or the Go `nightgauge` binary in auto/CLI mode)
 resolves the binary authoritatively and exports `NIGHTGAUGE_BIN`, which
@@ -1163,9 +1163,6 @@ on a stack of 22 pre-existing failures it could not have known were not its).
 
 **This is the ONLY probabilistic step in the auto-fix loop.** Based on failure
 type and logs, generate an appropriate fix.
-
-**Subagent Model**: When spawning a Task subagent for fix generation, specify
-`model: "sonnet"` to use a cost-optimized model.
 
 | Failure Type | Fix Approach                                           |
 | ------------ | ------------------------------------------------------ |

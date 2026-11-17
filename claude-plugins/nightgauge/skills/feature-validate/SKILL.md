@@ -189,7 +189,7 @@ Three-layer check:
    `preflight.environment` (#101); opt-in, silent when none are declared
 
 The binary discovery cascade below is **provider-neutral** (issue 4029): it works
-identically under every adapter (Claude, Codex, Gemini, …) and references no
+identically under every adapter (Claude, Codex, Gemini, …) and references no <!-- overlay-exempt: names adapters, not models -->
 VSCode-extension-specific path. The host that spawns the skill (the VSCode
 extension's `skillRunner`, or the Go `nightgauge` binary in auto/CLI mode)
 resolves the binary authoritatively and exports `NIGHTGAUGE_BIN`, which
@@ -940,7 +940,7 @@ fi
 
 <!--
   LEAN REWRITE — adopted 2026-07-13 on a measured composite-score win
-  (+1.8 Sonnet 5 / +1.6 Opus 4.8, no deterministic-check regressions),
+  (composite gain on both measured models, no deterministic-check regressions),
   replacing a 581-line predecessor at 55% of its size.
   Measurement and decision rule: evals/skill-variants/feature-validate/README.md
   Inventory preserved across the rewrite: 23/23 phase markers, 6/6 shared

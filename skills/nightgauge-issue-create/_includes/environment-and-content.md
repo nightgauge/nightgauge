@@ -346,8 +346,8 @@ adjustments from technical notes:
    - ProjectBoardService.ts
 
 > **Model routing consequences**: Size directly determines which model runs each
-> pipeline stage. `size:S` routes validation to Haiku. `size:L` routes planning
-> and dev to Opus. Undersizing causes the AutoModelSelector to assign weaker
+> pipeline stage. `size:S` routes validation to Haiku. `size:L` routes planning <!-- overlay-exempt: explains AutoModelSelector size routing to issue authors -->
+> and dev to Opus. Undersizing causes the AutoModelSelector to assign weaker <!-- overlay-exempt: explains AutoModelSelector size routing to issue authors -->
 > models to complex infrastructure work, increasing failure rates.
 
 **Fallback:** If the complexity model file is missing or unreadable, fall back
