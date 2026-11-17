@@ -9,6 +9,10 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- The Claude Code plugin ships a square 512 px icon at `.claude-plugin/icon.png`, the location the validator auto-detects, clearing the validator's `ICON_MISSING` warning (#2863).
+
 ## [1.9.0] - 2026-02-02
 
 ### Added
