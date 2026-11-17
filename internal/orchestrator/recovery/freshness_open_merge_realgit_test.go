@@ -346,3 +346,67 @@ func TestRealGit_StaleBranchMerge_OpenMergeSurvives(t *testing.T) {
 		})
 	}
 }
+
+// TestRealGit_StaleBranchMerge_NonASCIIConflict is the #3028 regression: a
+// base conflict on café.txt must be reported by its raw name, once, not as the
+// C-quoted string a name-only diff prints.
+func TestRealGit_StaleBranchMerge_NonASCIIConflict(t *testing.T) {
+	src, err := filepath.Abs(filepath.Join("..", "..", "..", "skills", "_shared", "STALE_BRANCH_MERGE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "diff-filter=U") {
+		t.Errorf("%s still enumerates conflicts with a C-quoting name-only diff", src)
+	}
+	block := skillShellFragment(t, src, "MERGE_BASE=\"${BASE_BRANCH:-main}\"", "\nfi\n")
+	if !strings.Contains(block, "stale-branch-merge-conflict") {
+		t.Fatalf("fragment terminated early:\n%s", block)
+	}
+	for _, sh := range blockShells() {
+		t.Run(sh, func(t *testing.T) {
+			ws, stub := openMergeRepo(t)
+			name := "café.txt"
+			write := func(content string) {
+				if err := os.WriteFile(filepath.Join(ws, name), []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Move the conflict onto café.txt: add it on main, diverge both sides.
+			gittest.Run(t, ws, "checkout", "-q", "main")
+			gittest.Run(t, ws, "reset", "-q", "--hard", "HEAD~1")
+			write("base\n")
+			gittest.Run(t, ws, "add", name)
+			gittest.Run(t, ws, "commit", "-q", "-m", "base cafe")
+			write("advanced\n")
+			gittest.Run(t, ws, "commit", "-q", "-am", "advance cafe")
+			gittest.Run(t, ws, "push", "-q", "-f", "origin", "main")
+			gittest.Run(t, ws, "checkout", "-q", testBranch)
+			gittest.Run(t, ws, "reset", "-q", "--hard", "HEAD~1")
+			gittest.Run(t, ws, "merge", "-q", "--ff-only", "main~1")
+			write("feature\n")
+			gittest.Run(t, ws, "commit", "-q", "-am", "feature cafe")
+
+			out, err := runSkillBlock(t, sh, ws, stub, block)
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+				t.Fatalf("want exit 1 on a base conflict, got %v\n%s", err, out)
+			}
+			if !strings.Contains(out, "stale-branch-merge-conflict") {
+				t.Errorf("missing conflict outcome:\n%s", out)
+			}
+			if !strings.Contains(out, "Conflicting files: café.txt\n") {
+				t.Errorf("want exactly `Conflicting files: café.txt`:\n%s", out)
+			}
+			if strings.Count(out, "Conflicting files:") != 1 || strings.Contains(out, `\303`) || strings.Contains(out, `"caf`) {
+				t.Errorf("café.txt reported quoted or more than once:\n%s", out)
+			}
+			if mergeHeadOpen(ws) {
+				t.Errorf("the failed merge was left open\n%s", out)
+			}
+		})
+	}
+}
