@@ -39,6 +39,8 @@ func (g passingGate) Verify(_ context.Context, _ int, _ string) gates.GateResult
 // and the linked issue is NOT closed — rather than write outcome=complete on an
 // unmerged PR.
 func TestScheduler_PRMerge_PhantomSuccess_FailsPipeline(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 
 	for _, dir := range []string{
@@ -170,6 +172,8 @@ func newSchedulerForDeterministicTest() *Scheduler {
 // TestScheduler_PRMerge_DeterministicSkipsLLM asserts the LLM stage runner is
 // NOT invoked for pr-merge when the deterministic runner reports `merged`.
 func TestScheduler_PRMerge_DeterministicSkipsLLM(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRMergeRunner{result: pmstages.PRMergeResult{
 		Path:     pmstages.PathMerged,
@@ -212,6 +216,8 @@ func TestScheduler_PRMerge_DeterministicSkipsLLM(t *testing.T) {
 // path returns false (so the caller invokes the LLM stage runner) and records
 // execution_path = "llm".
 func TestScheduler_PRMerge_PuntInvokesLLM(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRMergeRunner{result: pmstages.PRMergeResult{
 		Path:     pmstages.PathPunt,
@@ -250,6 +256,8 @@ func TestScheduler_PRMerge_PuntInvokesLLM(t *testing.T) {
 // the LLM skill into the same exhausted bucket would burn tokens and risk
 // leaving the issue stuck "In review".
 func TestScheduler_PRMerge_RateLimitedDefersNoLLM(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRMergeRunner{result: pmstages.PRMergeResult{
 		Path:     pmstages.PathPunt,
@@ -288,6 +296,8 @@ func TestScheduler_PRMerge_RateLimitedDefersNoLLM(t *testing.T) {
 // unexpected error from the deterministic runner is treated as a punt — the
 // LLM path runs.
 func TestScheduler_PRMerge_DeterministicErrorFallsThroughToLLM(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRMergeRunner{err: errors.New("unexpected gh failure")}
 	s.WithPRMergeRunner(det)
@@ -314,6 +324,8 @@ func TestScheduler_PRMerge_DeterministicErrorFallsThroughToLLM(t *testing.T) {
 // path was exercised (no CompleteStage call yet, but the deterministic hook
 // itself touches no token state).
 func TestScheduler_PRMerge_DeterministicPath_CostZero(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRMergeRunner{result: pmstages.PRMergeResult{
 		Path:     pmstages.PathMerged,
@@ -355,6 +367,8 @@ func TestScheduler_PRMerge_DeterministicPath_CostZero(t *testing.T) {
 // deterministic hook for any other stage is a no-op — even when a runner is
 // registered.
 func TestScheduler_PRMerge_NonPRMergeStage_NoOp(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRMergeRunner{result: pmstages.PRMergeResult{Path: pmstages.PathMerged}}
 	s.WithPRMergeRunner(det)
@@ -477,6 +491,8 @@ func runDeterministicMergeForCleanupTest(t *testing.T, worktreeDir string) *stat
 }
 
 func TestScheduler_PRMerge_Deterministic_CleansUpRemoteBranch(t *testing.T) {
+	t.Parallel()
+
 	f := setupPRMergeCleanupFixture(t)
 	mainDir, originDir, worktreeDir := f.mainDir, f.originDir, f.worktreeDir
 	const headBranch = prMergeCleanupHeadBranch
@@ -518,6 +534,8 @@ func TestScheduler_PRMerge_Deterministic_CleansUpRemoteBranch(t *testing.T) {
 // PRMergeRunner in this file already returns, so existing callers must not
 // regress by suddenly requiring a real git repo at workdir.
 func TestScheduler_PRMerge_Deterministic_NoHeadRefSkipsCleanup(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRMergeRunner{result: pmstages.PRMergeResult{
 		Path: pmstages.PathMerged, PRNumber: 99, PRState: "MERGED", Reason: pmstages.ReasonAlreadyMerged,
@@ -541,6 +559,8 @@ func TestScheduler_PRMerge_Deterministic_NoHeadRefSkipsCleanup(t *testing.T) {
 // TestScheduler_PRMerge_NilRunner_NoOp asserts that with no runner registered,
 // the hook is a no-op (returns false, no panic).
 func TestScheduler_PRMerge_NilRunner_NoOp(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	// no WithPRMergeRunner — prMergeRunner is nil
 
@@ -562,6 +582,8 @@ func TestScheduler_PRMerge_NilRunner_NoOp(t *testing.T) {
 // branch survives unless the pipeline deletes it. Before the fix, an SSH
 // origin with GITHUB_TOKEN set failed that delete with "invalid auth method"
 // and logged it as "likely already deleted".
+//
+// Serial: sets the environment.
 func TestScheduler_PRMerge_Deterministic_CleansUpRemoteBranchOverSSH(t *testing.T) {
 	f := setupPRMergeCleanupFixture(t)
 
@@ -590,6 +612,8 @@ func TestScheduler_PRMerge_Deterministic_CleansUpRemoteBranchOverSSH(t *testing.
 // TestScheduler_PRMerge_Deterministic_RemoteCleanupFailureIsSurfaced: a delete
 // the remote refuses is reported as itself, in the stage's captured output,
 // without failing a stage whose merge already landed.
+//
+// Serial: sets the environment.
 func TestScheduler_PRMerge_Deterministic_RemoteCleanupFailureIsSurfaced(t *testing.T) {
 	f := setupPRMergeCleanupFixture(t)
 	t.Setenv("GITHUB_TOKEN", "")

@@ -65,6 +65,8 @@ func withCapturedLog(t *testing.T) *lockedLog {
 // case: no OPEN PR exists (the gate fires before feature-dev ever runs), so
 // the log must never claim "PR exists" and the chosen status must be "In
 // progress".
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestSidelineHalt_NoPR_MovesToInProgress(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if ghArgsContain(args, "list") {
@@ -93,6 +95,8 @@ func TestSidelineHalt_NoPR_MovesToInProgress(t *testing.T) {
 // TestSidelineHalt_PRExists_MovesToInReview is the regression guard for the
 // real pr-merge-unmerged case: a PR genuinely exists, so the behavior is
 // unchanged — "In review" with the existing truthful log.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestSidelineHalt_PRExists_MovesToInReview(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if ghArgsContain(args, "list") {
@@ -117,6 +121,8 @@ func TestSidelineHalt_PRExists_MovesToInReview(t *testing.T) {
 
 // TestSidelineHalt_QueryFails_FailsToInProgress: a transient gh error must
 // never be read as "PR confirmed" — the safer state (In progress) wins.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestSidelineHalt_QueryFails_FailsToInProgress(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		return nil, context.DeadlineExceeded
@@ -148,6 +154,8 @@ func parkedCards(t *testing.T, as *AutonomousScheduler, repo string, issue int) 
 // TestOnPipelineComplete_PrMergeUnmerged_RaisesParkedCard pins #3339: a failed
 // pr-merge parked in In review behind an open PR raises a card naming the PR
 // and the refusal, while a halt with no PR (In progress) raises none.
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestOnPipelineComplete_PrMergeUnmerged_RaisesParkedCard(t *testing.T) {
 	const reason = `merge-queue-failed: merge-group code failure: job "test" step "Run go test" failed`
 	for _, tc := range []struct {
@@ -197,6 +205,8 @@ func TestOnPipelineComplete_PrMergeUnmerged_RaisesParkedCard(t *testing.T) {
 // failed run whose PR is open goes to In review through the generic failure
 // tail and raises exactly one parked card — idempotent across a second failure
 // — while a transient kind (Ready) or a missing PR raises none.
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestOnPipelineComplete_FailedRunWithOpenPR_RaisesParkedCard(t *testing.T) {
 	const reason = "pr-merge: required check failed"
 	openPR := map[int]string{42: "feat/900-x"}
@@ -256,6 +266,8 @@ func TestOnPipelineComplete_FailedRunWithOpenPR_RaisesParkedCard(t *testing.T) {
 // TestReconcilePrMergeParkedCards pins #3345's clearing: a parked card clears
 // when its issue leaves In review or its PR is no longer open, and is kept on
 // missing evidence (repo listing failed, issue absent from the graph).
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestReconcilePrMergeParkedCards(t *testing.T) {
 	for _, tc := range []struct {
 		name            string

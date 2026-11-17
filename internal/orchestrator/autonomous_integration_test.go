@@ -241,6 +241,8 @@ func boardStatusForState(state string) string {
 // independent issues in a single repo and 3 slots, all 3 are enqueued in the
 // first cycle.
 func TestIntegration_SingleRepo_ThreeIssues_NoDeps(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "O/core", Number: 1, Title: "Issue A", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "M", Weight: 3},
 		{Repo: "O/core", Number: 2, Title: "Issue B", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "M", Weight: 3},
@@ -286,6 +288,8 @@ func TestIntegration_SingleRepo_ThreeIssues_NoDeps(t *testing.T) {
 // dependency is respected: repo A issue blocks repo B issue; A completes then
 // B auto-enqueues.
 func TestIntegration_TwoRepos_CrossRepoDependency(t *testing.T) {
+	t.Parallel()
+
 	// Platform #10 blocks Flutter #20. Only Platform #10 should run first.
 	makeGraph := func(platformState string) *depgraph.Graph {
 		platBoard := "Ready"
@@ -358,6 +362,8 @@ func TestIntegration_TwoRepos_CrossRepoDependency(t *testing.T) {
 // in wave order. Sub-issues #2 and #3 depend on #1; #4 depends on #2 and #3.
 // Wave 1: #1, Wave 2: #2 + #3, Wave 3: #4.
 func TestIntegration_EpicWithWaves(t *testing.T) {
+	t.Parallel()
+
 	type issueState struct {
 		state string
 	}
@@ -451,6 +457,8 @@ func TestIntegration_EpicWithWaves(t *testing.T) {
 // token budget is exhausted mid-run. The safety rails budget ceiling fires
 // before the legacy budget check, so the status is "safety_tripped".
 func TestIntegration_BudgetExhaustion(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "A", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "S", Weight: 2},
 		{Repo: "R", Number: 2, Title: "B", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "S", Weight: 2},
@@ -539,6 +547,8 @@ func TestIntegration_BudgetExhaustion(t *testing.T) {
 // TestIntegration_CircuitBreaker verifies that 3 consecutive failures trip
 // the circuit breaker and stop the scheduler.
 func TestIntegration_CircuitBreaker(t *testing.T) {
+	t.Parallel()
+
 	issueNum := 0
 	makeGraph := func(state string, num int) *depgraph.Graph {
 		boardStatus := "Ready"
@@ -599,6 +609,8 @@ func TestIntegration_CircuitBreaker(t *testing.T) {
 // TestIntegration_DryRunMode verifies that dry-run mode does NOT enqueue any
 // items into the running set.
 func TestIntegration_DryRunMode(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "A", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "XS", Weight: 1},
 		{Repo: "R", Number: 2, Title: "B", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "S", Weight: 2},
@@ -634,6 +646,8 @@ func TestIntegration_DryRunMode(t *testing.T) {
 // TestIntegration_PauseAndResume verifies that pausing stops dispatch and
 // resuming re-enables it, with state preserved across the transition.
 func TestIntegration_PauseAndResume(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "A", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "XS", Weight: 1},
 		{Repo: "R", Number: 2, Title: "B", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "S", Weight: 2},
@@ -705,6 +719,8 @@ func TestIntegration_PauseAndResume(t *testing.T) {
 // scheduler reversed this and starved P0 stability work behind long P1/P2
 // dependency chains (notably the GitLab forge epic).
 func TestIntegration_PriorityDominatesCriticalPath(t *testing.T) {
+	t.Parallel()
+
 	// Create a chain: #1 -> #2 -> #3 (critical path, all P2)
 	// And an independent #4 (P0, not on critical path)
 	// With 1 slot: the P0 item should be picked first regardless of crit path.
@@ -750,6 +766,8 @@ func TestIntegration_PriorityDominatesCriticalPath(t *testing.T) {
 // TestIntegration_StateRecovery verifies that persisted state survives
 // scheduler reconstruction (simulating a restart).
 func TestIntegration_StateRecovery(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := layouttest.Repo(t)
 
 	// Create initial scheduler with some state
@@ -813,6 +831,8 @@ func TestIntegration_StateRecovery(t *testing.T) {
 // scenario: platform blocks flutter, angular is independent. Verifies correct
 // execution order and cross-repo cascade.
 func TestIntegration_ThreeRepos_MixedDependencies(t *testing.T) {
+	t.Parallel()
+
 	type issueState struct {
 		state string
 	}
@@ -891,6 +911,8 @@ func TestIntegration_ThreeRepos_MixedDependencies(t *testing.T) {
 // TestIntegration_AllComplete_StopsScheduler verifies that the scheduler
 // transitions to "complete" when all items are done and nothing is running.
 func TestIntegration_AllComplete_StopsScheduler(t *testing.T) {
+	t.Parallel()
+
 	issueState := "OPEN"
 
 	graphProvider := func() *depgraph.Graph {
@@ -929,6 +951,8 @@ func TestIntegration_AllComplete_StopsScheduler(t *testing.T) {
 // TestIntegration_SlotLimit verifies that the scheduler respects the
 // max_concurrent limit even when more candidates are available.
 func TestIntegration_SlotLimit(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "A", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "XS", Weight: 1},
 		{Repo: "R", Number: 2, Title: "B", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "XS", Weight: 1},
@@ -962,6 +986,8 @@ func TestIntegration_SlotLimit(t *testing.T) {
 // in the failed list and are not re-dispatched (they stay OPEN in the graph
 // but are not re-enqueued because the scheduler tracks them).
 func TestIntegration_FailedItemsNotRetried(t *testing.T) {
+	t.Parallel()
+
 	graphProvider := func() *depgraph.Graph {
 		nodes := []*depgraph.Node{
 			{Repo: "R", Number: 1, Title: "Flaky", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "XS", Weight: 1},
@@ -1011,6 +1037,8 @@ func TestIntegration_FailedItemsNotRetried(t *testing.T) {
 // TestIntegration_StatePersistence_AcrossCycles verifies that state.json is
 // written after every cycle and contains accurate data.
 func TestIntegration_StatePersistence_AcrossCycles(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "A", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "XS", Weight: 1},
 	}
@@ -1052,6 +1080,8 @@ func TestIntegration_StatePersistence_AcrossCycles(t *testing.T) {
 // TestIntegration_RateLimitTrip verifies that the rate limiter blocks enqueues
 // when the hourly threshold is reached.
 func TestIntegration_RateLimitTrip(t *testing.T) {
+	t.Parallel()
+
 	counter := 0
 	graphProvider := func() *depgraph.Graph {
 		counter++
@@ -1091,6 +1121,8 @@ func TestIntegration_RateLimitTrip(t *testing.T) {
 // TestIntegration_HealthGateTrip verifies that a low health score blocks
 // new enqueues.
 func TestIntegration_HealthGateTrip(t *testing.T) {
+	t.Parallel()
+
 	graphProvider := func() *depgraph.Graph {
 		nodes := []*depgraph.Node{
 			{Repo: "R", Number: 1, Title: "Issue", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "XS", Weight: 1},
@@ -1129,6 +1161,8 @@ func TestIntegration_HealthGateTrip(t *testing.T) {
 // TestIntegration_EpicCheckpointPause verifies that completing all sub-issues
 // of an epic triggers a checkpoint pause via the safety rails.
 func TestIntegration_EpicCheckpointPause(t *testing.T) {
+	t.Parallel()
+
 	graphProvider := func() *depgraph.Graph {
 		nodes := []*depgraph.Node{
 			{Repo: "R", Number: 1, Title: "Issue", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "XS", Weight: 1},
@@ -1191,6 +1225,8 @@ func itoa(n int) string {
 // #4 depends on #2 and #3, both of which depend on #1.
 // #1 must complete first, then #2 and #3 can run in parallel, then #4.
 func TestIntegration_DiamondDependency(t *testing.T) {
+	t.Parallel()
+
 	states := map[int]string{1: "OPEN", 2: "OPEN", 3: "OPEN", 4: "OPEN"}
 
 	graphProvider := func() *depgraph.Graph {
@@ -1260,6 +1296,8 @@ func TestIntegration_DiamondDependency(t *testing.T) {
 // scheduler cleanly. We test this via the harness since Run() requires a
 // real Scheduler with pipeline infrastructure.
 func TestIntegration_StopDuringExecution(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "A", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "XS", Weight: 1},
 		{Repo: "R", Number: 2, Title: "B", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "S", Weight: 2},

@@ -15,6 +15,8 @@ import (
 )
 
 func TestPauseRecordsReasonAndTriggeredBy(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -43,6 +45,8 @@ func TestPauseRecordsReasonAndTriggeredBy(t *testing.T) {
 }
 
 func TestResumeClearsPauseProvenance(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -76,6 +80,8 @@ func TestResumeClearsPauseProvenance(t *testing.T) {
 }
 
 func TestOnStatusChangeFiresOnPause(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -115,6 +121,8 @@ func TestOnStatusChangeFiresOnPause(t *testing.T) {
 }
 
 func TestOnStatusChangeFiresOnResume(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -156,6 +164,8 @@ func TestOnStatusChangeFiresOnResume(t *testing.T) {
 }
 
 func TestOnStatusChangeNotFiredWhenStatusUnchanged(t *testing.T) {
+	t.Parallel()
+
 	// Pause() is a no-op when status isn't "running"; no event should fire.
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
@@ -186,6 +196,8 @@ func TestOnStatusChangeNotFiredWhenStatusUnchanged(t *testing.T) {
 }
 
 func TestPauseReasonDefaultsAreFriendly(t *testing.T) {
+	t.Parallel()
+
 	// Empty reason/triggeredBy should still persist (the Pause method itself
 	// does NOT inject defaults — that's the IPC handler's job per #3251 so
 	// that direct Go callers can record their own provenance).
@@ -225,6 +237,8 @@ func TestPauseReasonDefaultsAreFriendly(t *testing.T) {
 // the rows below are the same behavior expressed against the fact that
 // actually survives an exit path.
 func TestHaltedOnSlotFailure(t *testing.T) {
+	t.Parallel()
+
 	slotHalt := &MachineHaltRecord{Tag: haltTagSlotFailure, Status: "paused"}
 	cases := []struct {
 		name            string
@@ -285,6 +299,8 @@ func TestHaltedOnSlotFailure(t *testing.T) {
 // pause must stay a plain pause — Start resumes it exactly as it always has,
 // and no restart resurrects it.
 func TestPauseLatchesOnlyMachineRaisedHalts(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name      string
 		trigger   string
@@ -328,6 +344,8 @@ func TestPauseLatchesOnlyMachineRaisedHalts(t *testing.T) {
 // TestResumeIsTheOnlyLatchClearer: the latch and its provenance are released
 // together, by Resume, from any status a shutdown might have left behind.
 func TestResumeIsTheOnlyLatchClearer(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{

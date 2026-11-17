@@ -14,6 +14,8 @@ import (
 // operator's pending, ready and paused items, a pending re-queue of an issue
 // whose run is ending, and the platform runs waiting items carry.
 func TestQueueDropProcessing_KeepsEveryWaitingItem(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	s := &Scheduler{
 		trustGate:     allWritersGate(),
@@ -100,6 +102,8 @@ func (b *blockingIssueSvc) GetIssuesByNumbersWithoutRelations(ctx context.Contex
 // child, and a dequeue the window sends after its drop (a fill that waited
 // for its turn, a pipeline's auto-start) would strand its items the same way.
 func TestQueueDropProcessing_RefusesADequeueUnderWay(t *testing.T) {
+	t.Parallel()
+
 	svc := &blockingIssueSvc{
 		mockEpicIssueSvc: newMockEpicIssueSvc(),
 		entered:          make(chan struct{}, 1),
@@ -165,6 +169,8 @@ func newDropTestScheduler(t *testing.T, root string) *Scheduler {
 // puts them back to waiting, each serving the platform run its dispatch
 // served, and removes only the item whose start was under way.
 func TestQueueDropProcessing_HandsBackTheDispatchesNotStarted(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	s := newDropTestScheduler(t, root)
 	s.QueueAddItem(
@@ -216,6 +222,8 @@ func TestQueueDropProcessing_HandsBackTheDispatchesNotStarted(t *testing.T) {
 // they go back to waiting. An answered dequeue's items, and an item marked
 // with no token, go with the runs that end.
 func TestQueueDropProcessing_HandsBackAnUnansweredDequeue(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	s := newDropTestScheduler(t, root)
 	s.QueueAddItem(

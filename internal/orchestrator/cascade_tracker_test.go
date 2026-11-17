@@ -11,6 +11,8 @@ import (
 // failures inside the window MUST trip the breaker, and the trip message
 // MUST identify the involved issues.
 func TestCascadeTracker_TripsOnThirdFailureInWindow(t *testing.T) {
+	t.Parallel()
+
 	c := NewCascadeTracker(CascadeTrackerConfig{Threshold: 3, Window: 30 * time.Minute})
 	base := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 
@@ -42,6 +44,8 @@ func TestCascadeTracker_TripsOnThirdFailureInWindow(t *testing.T) {
 // TestCascadeTracker_DoesNotTripOutsideWindow asserts the sliding-window
 // semantics: failures spaced WIDER than the window must NOT trip.
 func TestCascadeTracker_DoesNotTripOutsideWindow(t *testing.T) {
+	t.Parallel()
+
 	c := NewCascadeTracker(CascadeTrackerConfig{Threshold: 3, Window: 30 * time.Minute})
 	base := time.Now()
 
@@ -61,6 +65,8 @@ func TestCascadeTracker_DoesNotTripOutsideWindow(t *testing.T) {
 // fires exactly once per trip. A 4th, 5th failure after the trip MUST NOT
 // re-emit a trip event so a Discord notifier doesn't get spammed.
 func TestCascadeTracker_TripsOnlyOnceUntilReset(t *testing.T) {
+	t.Parallel()
+
 	c := NewCascadeTracker(CascadeTrackerConfig{Threshold: 3, Window: 30 * time.Minute})
 	base := time.Now()
 
@@ -86,6 +92,8 @@ func TestCascadeTracker_TripsOnlyOnceUntilReset(t *testing.T) {
 // both the recorded failures and the tripped flag so the breaker can fire
 // again on a fresh cascade.
 func TestCascadeTracker_ResetAllowsRetrip(t *testing.T) {
+	t.Parallel()
+
 	c := NewCascadeTracker(CascadeTrackerConfig{Threshold: 3, Window: 30 * time.Minute})
 	base := time.Now()
 
@@ -116,6 +124,8 @@ func TestCascadeTracker_ResetAllowsRetrip(t *testing.T) {
 // TestCascadeTracker_DefaultThresholdAndWindow asserts the documented
 // defaults (3 failures in 30 minutes) so a config-less call to
 // NewCascadeTracker matches what docs/operator runbook describe.
+//
+// Serial: sets the environment.
 func TestCascadeTracker_DefaultThresholdAndWindow(t *testing.T) {
 	// Clear env so the test's defaults reflect the CONST defaults, not
 	// whatever the developer happens to have set locally.
@@ -132,6 +142,8 @@ func TestCascadeTracker_DefaultThresholdAndWindow(t *testing.T) {
 
 // TestCascadeTracker_EnvOverridesApply confirms that the env-var knobs
 // land on the constructed tracker so an operator can tune without rebuild.
+//
+// Serial: sets the environment.
 func TestCascadeTracker_EnvOverridesApply(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_THRESHOLD", "5")
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_WINDOW", "1h")
@@ -147,6 +159,8 @@ func TestCascadeTracker_EnvOverridesApply(t *testing.T) {
 // TestCascadeTracker_EnvOverridesIgnoreMalformed asserts that a typo in a
 // shell rc file never bricks the autonomous loop — malformed env values
 // fall back to defaults rather than panicking.
+//
+// Serial: sets the environment.
 func TestCascadeTracker_EnvOverridesIgnoreMalformed(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_THRESHOLD", "notanumber")
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_WINDOW", "notaduration")
@@ -162,6 +176,8 @@ func TestCascadeTracker_EnvOverridesIgnoreMalformed(t *testing.T) {
 // TestCascadeTracker_CountInWindowPrunesOld checks the housekeeping path:
 // CountInWindow must drop entries older than `window` before reporting.
 func TestCascadeTracker_CountInWindowPrunesOld(t *testing.T) {
+	t.Parallel()
+
 	c := NewCascadeTracker(CascadeTrackerConfig{Threshold: 99, Window: 10 * time.Minute})
 	base := time.Now()
 	c.RecordFailure("r", 1, "x", base)
@@ -180,6 +196,8 @@ func TestCascadeTracker_CountInWindowPrunesOld(t *testing.T) {
 // Race-detector friendly — the internal mutex must serialize every state
 // mutation.
 func TestCascadeTracker_ConcurrentRecordIsSafe(t *testing.T) {
+	t.Parallel()
+
 	c := NewCascadeTracker(CascadeTrackerConfig{Threshold: 5, Window: time.Hour})
 	base := time.Now()
 
@@ -208,6 +226,8 @@ func TestCascadeTracker_ConcurrentRecordIsSafe(t *testing.T) {
 // status bar / Discord embed can list "what tripped me" without the
 // operator having to read the daily JSONL.
 func TestCascadeTracker_TripIncludesIssueRefsForOperator(t *testing.T) {
+	t.Parallel()
+
 	c := NewCascadeTracker(CascadeTrackerConfig{Threshold: 3, Window: 30 * time.Minute})
 	base := time.Now()
 	c.RecordFailure("nightgauge/nightgauge", 3365, "stop_hook_dropped_commit", base)
@@ -234,6 +254,8 @@ func TestCascadeTracker_TripIncludesIssueRefsForOperator(t *testing.T) {
 // orchestrator-level safety-trip case where a failure isn't tied to a
 // specific issue. The trip message must still be readable.
 func TestCascadeTracker_ZeroIssueNumberRendersGracefully(t *testing.T) {
+	t.Parallel()
+
 	c := NewCascadeTracker(CascadeTrackerConfig{Threshold: 2, Window: 30 * time.Minute})
 	base := time.Now()
 	c.RecordFailure("r", 0, "rate-limit-cooldown-expired", base)
@@ -254,6 +276,8 @@ func TestCascadeTracker_ZeroIssueNumberRendersGracefully(t *testing.T) {
 // The test exercises ONLY the generic failure branch (terminalFailureKind=""),
 // since the kind-specific branches (stall_kill, quota_exhausted, ...) short-
 // circuit before the cascade tracker as documented in onPipelineComplete.
+//
+// Serial: sets the environment.
 func TestOnPipelineComplete_CascadeTripsAndPauses(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_THRESHOLD", "")
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_WINDOW", "")
@@ -311,6 +335,8 @@ func TestOnPipelineComplete_CascadeTripsAndPauses(t *testing.T) {
 // TestOnPipelineComplete_TwoFailuresPlusOneOutsideWindow_NoTrip pins the
 // sliding-window semantics through the orchestrator: a stale failure must
 // not contribute to the trip count.
+//
+// Serial: sets the environment.
 func TestOnPipelineComplete_TwoFailuresPlusOneOutsideWindow_NoTrip(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_THRESHOLD", "")
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_WINDOW", "")
@@ -351,6 +377,8 @@ func TestOnPipelineComplete_TwoFailuresPlusOneOutsideWindow_NoTrip(t *testing.T)
 // cascade tracker. A sequence of three stall-kills should NOT trip the
 // breaker because stall-kills are transient infrastructure, not code-quality
 // failures, and the autonomous handler returns before the cascade feed.
+//
+// Serial: sets the environment.
 func TestOnPipelineComplete_StallKillDoesNotFeedCascade(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_THRESHOLD", "")
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_WINDOW", "")
@@ -385,6 +413,8 @@ func TestOnPipelineComplete_StallKillDoesNotFeedCascade(t *testing.T) {
 // operator Resume must clear both the recorded failures AND the tripped flag
 // so the next 3 failures fire a fresh cascade rather than auto-firing on
 // what's already in the window.
+//
+// Serial: sets the environment.
 func TestResume_ClearsCascadeBreaker(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_THRESHOLD", "")
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_WINDOW", "")

@@ -66,6 +66,8 @@ var (
 )
 
 func TestPRMergeHandback_FixThenMerged(t *testing.T) {
+	t.Parallel()
+
 	s, skill, det, rs, root := handbackFixture(t, true, merged)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -85,6 +87,8 @@ func TestPRMergeHandback_FixThenMerged(t *testing.T) {
 }
 
 func TestPRMergeHandback_ExhaustsBudget(t *testing.T) {
+	t.Parallel()
+
 	s, skill, det, rs, root := handbackFixture(t, true, failedCI)
 	s.prAutoFixMaxAttempts = 2
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
@@ -102,6 +106,8 @@ func TestPRMergeHandback_ExhaustsBudget(t *testing.T) {
 }
 
 func TestPRMergeHandback_NoMarkerKeepsSkillResult(t *testing.T) {
+	t.Parallel()
+
 	s, skill, det, rs, root := handbackFixture(t, false, merged)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -115,6 +121,8 @@ func TestPRMergeHandback_NoMarkerKeepsSkillResult(t *testing.T) {
 }
 
 func TestPRMergeHandback_OtherPuntFailsWithoutRerun(t *testing.T) {
+	t.Parallel()
+
 	conflict := pmstages.PRMergeResult{Path: pmstages.PathPunt, PRNumber: 7, PRState: "OPEN", Reason: "not-mergeable: CONFLICTING"}
 	s, skill, _, rs, root := handbackFixture(t, true, conflict)
 	s.prAutoFixMaxAttempts = 3

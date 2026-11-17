@@ -33,6 +33,8 @@ func newDequeueExcludeFixture(t *testing.T, excludeLabels []string) *Scheduler {
 // DequeueIndependent is the chokepoint where a slot is actually claimed, so
 // the guard there covers every route.
 func TestDequeueIndependent_SkipsExcludedLabelWhateverRouteEnqueuedIt(t *testing.T) {
+	t.Parallel()
+
 	s := newDequeueExcludeFixture(t, []string{"owner-action"})
 
 	// Enqueue through the un-filtered route, exactly as IPC queue.add /
@@ -90,6 +92,8 @@ func TestDequeueIndependent_SkipsExcludedLabelWhateverRouteEnqueuedIt(t *testing
 // TestDequeueIndependent_LogsExcludedLabelSkip pins the operator-visible
 // signal: the skip names both the issue and the label that matched, in the
 // style of the prioritize / EnqueueEpic messages.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestDequeueIndependent_LogsExcludedLabelSkip(t *testing.T) {
 	s := newDequeueExcludeFixture(t, []string{"owner-action"})
 	s.QueueAddItem(QueueItem{Repo: "Org/repo", IssueNumber: 401, Title: "Rotate the leaked token", Labels: []string{"owner-action"}})
@@ -122,6 +126,8 @@ func TestDequeueIndependent_LogsExcludedLabelSkip(t *testing.T) {
 // config resolves through resolvedExcludeLabels to the existing
 // ["owner-action"] default rather than disabling the guard.
 func TestDequeueIndependent_ExcludedLabelMatchIsCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
 	t.Run("case-insensitive", func(t *testing.T) {
 		s := newDequeueExcludeFixture(t, []string{"Owner-Action"})
 		s.QueueAddItem(QueueItem{Repo: "Org/repo", IssueNumber: 401, Labels: []string{"OWNER-action"}})
@@ -166,6 +172,8 @@ func TestDequeueIndependent_ExcludedLabelMatchIsCaseInsensitive(t *testing.T) {
 // over-broad: items with no labels, or with labels that are not excluded, are
 // dequeued exactly as before.
 func TestDequeueIndependent_DequeuesUnlabeledItems(t *testing.T) {
+	t.Parallel()
+
 	s := newDequeueExcludeFixture(t, []string{"owner-action"})
 	s.QueueAddItem(
 		QueueItem{Repo: "Org/repo", IssueNumber: 401},

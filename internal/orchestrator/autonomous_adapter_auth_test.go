@@ -21,6 +21,8 @@ import (
 // the adapter-auth-failed kind routes like the other transient infra kinds and
 // — critically — does NOT feed the cascade breaker even when a whole burst of
 // them arrives inside the window.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestOnPipelineComplete_AdapterAuthFailed_TransientNoPauseNoCascade(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
@@ -82,6 +84,8 @@ func TestOnPipelineComplete_AdapterAuthFailed_TransientNoPauseNoCascade(t *testi
 // ClassifyTerminalKind fallback must re-classify and route to the transient
 // branch (no lifetime increment, no pause, backoff set).
 func TestNotifyComplete_EmptyKindAdapterAuthDetail_RoutesTransient(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},

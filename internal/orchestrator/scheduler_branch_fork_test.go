@@ -88,6 +88,8 @@ func (r *branchAwareStageRunner) RunStage(_ context.Context, params StageRunPara
 // token was spent. Detecting the fork "eventually" is not the fix; detecting it
 // before the spend is.
 func TestScheduler_BranchForkPreflight_BlocksBeforeSpendingTokens(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 	root := f.work
 	const branch = "fix/163-orphaned-push"
@@ -193,6 +195,8 @@ func TestScheduler_BranchForkPreflight_BlocksBeforeSpendingTokens(t *testing.T) 
 // would not degrade the pipeline — it would stop it entirely. A branch whose
 // remote copy the run itself pushed must sail through all six stages.
 func TestScheduler_BranchForkPreflight_DoesNotBlockAHealthyRun(t *testing.T) {
+	t.Parallel()
+
 	f := newForkFixture(t)
 	root := f.work
 	const branch = "feat/164-healthy"
@@ -250,6 +254,8 @@ func TestScheduler_BranchForkPreflight_DoesNotBlockAHealthyRun(t *testing.T) {
 // retry then looked like a fresh process death rather than the same
 // unrecoverable fork, which is why the loop was never recognised as a loop.
 func TestClassifyTerminalKind_BranchForked(t *testing.T) {
+	t.Parallel()
+
 	forked := []string{
 		"[branch-forked] origin/fix/163-x is at abc12345, which is NOT an ancestor of the local tip def67890",
 		"PUSH REJECTED: non-fast-forward.",
@@ -337,6 +343,8 @@ func newBranchForkScheduler(t *testing.T, root, branch string) (*Scheduler, *bra
 // lacks but is not an ancestor. The pre-flight recovers it with a plain push
 // and the stages run instead of the run ending branch_forked.
 func TestScheduler_BranchForkPreflight_RecoversSelfFork(t *testing.T) {
+	t.Parallel()
+
 	const branch = "fix/2669-rebased"
 	f, remote := selfForkFixture(t, branch)
 	root := f.work
@@ -358,6 +366,8 @@ func TestScheduler_BranchForkPreflight_RecoversSelfFork(t *testing.T) {
 // TestScheduler_BranchForked_PinsStrandedTipAndNamesItOnTheCard asserts a
 // genuine fork still blocks, and that the run's tip survives cleanup at
 // refs/nightgauge/stranded/<N> with the Action Center card naming it (#2699).
+//
+// Serial: redirects the standard logger.
 func TestScheduler_BranchForked_PinsStrandedTipAndNamesItOnTheCard(t *testing.T) {
 	f := newForkFixture(t)
 	root := f.work

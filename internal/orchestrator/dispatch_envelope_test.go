@@ -11,6 +11,8 @@ import (
 // resolveDispatchEffort has: the grok-family adapters' NIGHTGAUGE_GROK_EFFORT
 // dispatch env var, validated against the canonical EFFORT_LEVELS ladder, and
 // absolutely nothing else (Issue #580).
+//
+// Serial: sets the environment.
 func TestResolveDispatchEffort(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -46,6 +48,8 @@ func TestResolveDispatchEffort(t *testing.T) {
 
 // TestResolveDispatchThinking pins the registry-derived thinking axis and the
 // anthropic-only interlock override (Issue #580).
+//
+// Serial: sets the environment.
 func TestResolveDispatchThinking(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -89,6 +93,8 @@ func TestResolveDispatchThinking(t *testing.T) {
 // the SAME value dispatch_routing.go's modelRoutingMode already resolves for
 // model selection itself (Issue #580, resolves #462) — not a second,
 // independently-drifting notion of "mode".
+//
+// Serial: sets the environment.
 func TestResolveDispatchSelectionMode(t *testing.T) {
 	t.Run("no config: automatic default", func(t *testing.T) {
 		dir := isolatedWorkspace(t)
@@ -136,6 +142,8 @@ func isolateEffortEnv(t *testing.T) {
 // the whole behavioral-compatibility argument for flipping effort precedence
 // to the wire. TS twin: resolveModel.modeKnobAgreement.test.ts (mode knobs)
 // and the resolveStageEffort suite.
+//
+// Serial: sets the environment.
 func TestResolveWireEffort(t *testing.T) {
 	stage := state.StageFeatureDev
 
@@ -224,6 +232,8 @@ func TestResolveWireEffort(t *testing.T) {
 // When no explicit effort resolves, the wire omits the flag and the opus
 // band's rung (the registry's declared default) is what the model runs at;
 // an explicit stage or default effort still outranks it.
+//
+// Serial: sets the environment.
 func TestOpus55EffortDefault(t *testing.T) {
 	stage := state.StageFeatureDev
 	// effective mirrors the dispatch contract: a non-empty wire effort is
@@ -274,6 +284,8 @@ func TestOpus55EffortDefault(t *testing.T) {
 // mode passes the same table because no mode declares a thinking policy
 // (#606): the policy axis exists and is consumed, but its column is empty —
 // so the mode parameter must be behaviorally inert today.
+//
+// Serial: sets the environment.
 func TestResolveWireThinking(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -310,6 +322,8 @@ func TestResolveWireThinking(t *testing.T) {
 // mode declares a policy value yet: a policy overrides the rung's declared
 // default, supplies a value where the rung declares none, an off-vocabulary
 // policy is ignored, and the disable interlock still wins over a policy.
+//
+// Serial: sets the environment.
 func TestWireThinkingUnderPolicy(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -339,6 +353,8 @@ func TestWireThinkingUnderPolicy(t *testing.T) {
 // TestResolveWireEffortStageDefaults pins the built-in per-stage effort (#2512)
 // in every routing mode: opus stages always send an explicit effort, the haiku
 // stages send none. TS twin: modelRoutingConfig.test.ts "per-stage defaults".
+//
+// Serial: sets the environment (via routedWorkspace).
 func TestResolveWireEffortStageDefaults(t *testing.T) {
 	want := map[state.PipelineStage]string{
 		state.StageIssueRefine:     "",
@@ -369,6 +385,8 @@ func TestResolveWireEffortStageDefaults(t *testing.T) {
 // feature-dev's low base by the routing complexity score, on the same buckets
 // as AutoModelSelector.deriveEffort; it touches no other stage, and
 // effort_auto: false keeps the base.
+//
+// Serial: sets the environment.
 func TestResolveWireEffortFeatureDevComplexityRaise(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	isolateEffortEnv(t)

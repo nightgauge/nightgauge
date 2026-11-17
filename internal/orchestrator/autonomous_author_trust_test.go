@@ -53,6 +53,8 @@ func unrefinedIssuesServer(t *testing.T) *httptest.Server {
 // TestRunRefinementCycle_SkipsUntrustedAuthor is the AC #3 assertion for #270:
 // runRefinementCycle must never dispatch refinement for an untrusted-author
 // candidate, even though ListIssuesExcludingLabels only filters on labels.
+//
+// Serial: fails on a wall-clock deadline of 2s, which parallel load can exceed (#2950).
 func TestRunRefinementCycle_SkipsUntrustedAuthor(t *testing.T) {
 	srv := unrefinedIssuesServer(t)
 	defer srv.Close()
@@ -104,6 +106,8 @@ func TestRunRefinementCycle_SkipsUntrustedAuthor(t *testing.T) {
 // promotion gate: a fully-triaged Backlog item is still refused when no
 // writer vouched for it (#270, #2130), and a nil predicate refuses too.
 func TestIsTriagedAndUnblocked_RejectsUntrustedAuthor(t *testing.T) {
+	t.Parallel()
+
 	node := &depgraph.Node{
 		Repo: "nightgauge/nightgauge", Number: 3216, State: "OPEN",
 		BoardStatus: "Backlog", Priority: "P1", Labels: []string{"type:bug"},
@@ -133,6 +137,8 @@ func TestIsTriagedAndUnblocked_RejectsUntrustedAuthor(t *testing.T) {
 // edit made after an approval (or a revoked permission) takes effect on the
 // next cycle, never served from a previous cycle's cache (#2130).
 func TestAutonomousCyclesResetTheEligibilityCache(t *testing.T) {
+	t.Parallel()
+
 	gate, forge := levelsGate(map[string]trust.Level{"writer": trust.LevelWrite})
 	as := &AutonomousScheduler{trustGateOverride: gate}
 	node := &depgraph.Node{Repo: "o/r", Number: 1, AuthorLogin: "writer"}

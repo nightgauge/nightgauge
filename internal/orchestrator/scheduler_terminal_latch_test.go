@@ -35,6 +35,8 @@ import (
 // snapshot; after the run the completion callback sees `terminal: true` and
 // the file is GONE.
 func TestRunPipeline_LatchesTerminalAndSealsTheSnapshot(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	runner := &runIDCapturingRunner{}
 	s := newRunIdentityTestScheduler(t, root, runner)
@@ -123,6 +125,8 @@ func TestRunPipeline_LatchesTerminalAndSealsTheSnapshot(t *testing.T) {
 // spelling here would be a path-dependent vocabulary in a field whose whole
 // purpose is to be path-independent.
 func TestSchedulerTerminalOutcome_MatchesTheExtensionPathVocabulary(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name    string
 		success bool

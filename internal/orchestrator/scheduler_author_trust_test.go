@@ -96,6 +96,8 @@ func readyItemsServerWithLabels(t *testing.T, labels map[int][]string) *httptest
 // (#270, #2130): even when an issue no writer vouched for reaches "Ready" by
 // some other route, PickNext must still refuse to dispatch it.
 func TestPickNext_SkipsUntrustedAuthor(t *testing.T) {
+	t.Parallel()
+
 	srv := readyItemsServer(t)
 	defer srv.Close()
 
@@ -123,6 +125,8 @@ func TestPickNext_SkipsUntrustedAuthor(t *testing.T) {
 // A Ready item whose author has read access and no approval is not
 // dispatched; once a writer approves it, it is (#2130).
 func TestPickNext_DispatchesAReadAuthorsIssueOnceAWriterApprovesIt(t *testing.T) {
+	t.Parallel()
+
 	srv := readyItemsServer(t)
 	defer srv.Close()
 	client := gh.NewClientWithURL("test-token", srv.URL)
@@ -157,6 +161,8 @@ func TestPickNext_DispatchesAReadAuthorsIssueOnceAWriterApprovesIt(t *testing.T)
 
 // A scheduler without a gate refuses everything: fail closed.
 func TestPickNext_NoGateRefusesEverything(t *testing.T) {
+	t.Parallel()
+
 	srv := readyItemsServer(t)
 	defer srv.Close()
 	client := gh.NewClientWithURL("test-token", srv.URL)

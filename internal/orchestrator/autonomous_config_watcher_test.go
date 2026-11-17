@@ -65,6 +65,7 @@ func writeYAML(t *testing.T, path, body string) {
 	}
 }
 
+// Serial: swaps package var configReloadInterval.
 func TestWatchAutonomousConfigReappliesAllowlistOnChange(t *testing.T) {
 	prevInterval := configReloadInterval
 	configReloadInterval = 50 * time.Millisecond
@@ -162,6 +163,7 @@ autonomous:
 	}
 }
 
+// Serial: swaps package var configReloadInterval.
 func TestWatchAutonomousConfigSkipsWhenSchedulerStopped(t *testing.T) {
 	prevInterval := configReloadInterval
 	configReloadInterval = 50 * time.Millisecond
@@ -306,6 +308,8 @@ func manifestWatchFixture(t *testing.T, sched configReloader, resolve ManifestRe
 // TestWatchManifestReplacesRepoSetOnChange is the daemon half of #704: a repo
 // added to the manifest while the daemon runs must reach the scheduler, or the
 // extension's tree shows a repository nothing is processing.
+//
+// Serial: swaps package var configReloadInterval (via manifestWatchFixture).
 func TestWatchManifestReplacesRepoSetOnChange(t *testing.T) {
 	resolved := []depgraph.RepoConfig{
 		{Owner: "nightgauge", Name: "alpha", Project: 1},
@@ -388,6 +392,8 @@ func bumpUntil(t *testing.T, path string, cond func() bool, timeout time.Duratio
 // The resolver call count is what makes this test real: without it, a watcher
 // that never looked at the manifest at all would satisfy "ReplaceRepos was not
 // called" just as well as one that looked and correctly declined.
+//
+// Serial: swaps package var configReloadInterval (via manifestWatchFixture).
 func TestWatchManifestIgnoresEmptyResolution(t *testing.T) {
 	sched := &fakeRepoSetReloader{fakeReloader: fakeReloader{running: true}}
 
@@ -424,6 +430,8 @@ func TestWatchManifestIgnoresEmptyResolution(t *testing.T) {
 //
 // It then starts the scheduler and asserts the change DOES land. Without that
 // second half the test would pass against a watcher that never works at all.
+//
+// Serial: swaps package var configReloadInterval (via manifestWatchFixture).
 func TestWatchManifestSkipsWhenSchedulerStopped(t *testing.T) {
 	sched := &fakeRepoSetReloader{fakeReloader: fakeReloader{running: false}, changed: true}
 
@@ -455,6 +463,8 @@ func TestWatchManifestSkipsWhenSchedulerStopped(t *testing.T) {
 
 // TestWatchManifestNilResolverKeepsLegacyBehavior proves the manifest watch is
 // strictly additive — WatchAutonomousConfig's original contract is unchanged.
+//
+// Serial: swaps package var configReloadInterval (via manifestWatchFixture).
 func TestWatchManifestNilResolverKeepsLegacyBehavior(t *testing.T) {
 	sched := &fakeRepoSetReloader{fakeReloader: fakeReloader{running: true}, changed: true}
 

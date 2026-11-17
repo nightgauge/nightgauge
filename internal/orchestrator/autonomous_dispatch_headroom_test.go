@@ -42,6 +42,8 @@ func withFreshTracker(t *testing.T, user string, remaining int, resetIn time.Dur
 // TestDispatchHeadroom_NoTrackerAllowsDispatch — a scheduler wired without a
 // rate-limit tracker (or without a ghClient) must allow dispatch. The check
 // is opt-in based on tracker presence so CLI/test environments aren't blocked.
+//
+// Serial: sets the environment.
 func TestDispatchHeadroom_NoTrackerAllowsDispatch(t *testing.T) {
 	t.Setenv(dispatchHeadroomFloorEnv, "")
 	as := &AutonomousScheduler{}
@@ -53,6 +55,8 @@ func TestDispatchHeadroom_NoTrackerAllowsDispatch(t *testing.T) {
 // TestDispatchHeadroom_FloorDisabled — an explicit 0 env override disables
 // the gate entirely. Operators who want the old behavior (rely on the
 // per-call floor) can opt out without recompiling.
+//
+// Serial: sets the environment.
 func TestDispatchHeadroom_FloorDisabled(t *testing.T) {
 	t.Setenv(dispatchHeadroomFloorEnv, "0")
 	c, cleanup := withFreshTracker(t, "alice", 50, 30*time.Minute)
@@ -66,6 +70,8 @@ func TestDispatchHeadroom_FloorDisabled(t *testing.T) {
 // TestDispatchHeadroom_BlocksWhenBelowFloor — the core regression: with
 // remaining=200 and floor=2000, the gate MUST block to prevent a new
 // pipeline from blowing through the rest of the bucket.
+//
+// Serial: sets the environment.
 func TestDispatchHeadroom_BlocksWhenBelowFloor(t *testing.T) {
 	t.Setenv(dispatchHeadroomFloorEnv, "2000")
 	c, cleanup := withFreshTracker(t, "alice", 200, 30*time.Minute)
@@ -82,6 +88,8 @@ func TestDispatchHeadroom_BlocksWhenBelowFloor(t *testing.T) {
 
 // TestDispatchHeadroom_AllowsWhenAboveFloor — sanity: when the bucket is
 // healthy, dispatch proceeds without comment.
+//
+// Serial: sets the environment.
 func TestDispatchHeadroom_AllowsWhenAboveFloor(t *testing.T) {
 	t.Setenv(dispatchHeadroomFloorEnv, "2000")
 	c, cleanup := withFreshTracker(t, "alice", 4500, 30*time.Minute)
@@ -95,6 +103,8 @@ func TestDispatchHeadroom_AllowsWhenAboveFloor(t *testing.T) {
 // TestDispatchHeadroom_AllowsWhenResetImminent — if the bucket is about to
 // refill within 30 seconds, don't gate. Holding back at that point just adds
 // latency for no benefit; the per-call floor will catch any in-flight burst.
+//
+// Serial: sets the environment.
 func TestDispatchHeadroom_AllowsWhenResetImminent(t *testing.T) {
 	t.Setenv(dispatchHeadroomFloorEnv, "2000")
 	c, cleanup := withFreshTracker(t, "alice", 100, 10*time.Second)
@@ -109,6 +119,8 @@ func TestDispatchHeadroom_AllowsWhenResetImminent(t *testing.T) {
 // correctly; bad values fall back to the default. This is also where we
 // pin the default so a future change to defaultDispatchHeadroomFloor is a
 // deliberate, reviewed move.
+//
+// Serial: sets the environment.
 func TestDispatchHeadroomFloor_DefaultAndOverride(t *testing.T) {
 	t.Setenv(dispatchHeadroomFloorEnv, "")
 	if got := dispatchHeadroomFloor(); got != defaultDispatchHeadroomFloor {

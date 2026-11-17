@@ -36,6 +36,8 @@ func newCrossRepoEpicFixture(t *testing.T) *Scheduler {
 }
 
 func TestEnqueueEpic_EligibleNamesRepository_2382(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name     string
 		eligible []IssueRef
@@ -62,6 +64,8 @@ func TestEnqueueEpic_EligibleNamesRepository_2382(t *testing.T) {
 }
 
 func TestQueueRemove_ScopedToRepository_2382(t *testing.T) {
+	t.Parallel()
+
 	newQueue := func() *Scheduler {
 		s := &Scheduler{repoRunning: make(map[string]int), mergeLocks: make(map[string]*sync.Mutex)}
 		s.queue = []QueueItem{

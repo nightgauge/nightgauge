@@ -12,6 +12,8 @@ func boolPtr(b bool) *bool { return &b }
 // override targets a repo that isn't in enabled_repos (silently excluded), and
 // when the workspace ceiling is below the number of per-repo-capped repos.
 func TestValidateAutonomousConfig(t *testing.T) {
+	t.Parallel()
+
 	t.Run("clean — override repo is in enabled_repos", func(t *testing.T) {
 		cfg := AutonomousConfig{
 			MaxConcurrent:           3,

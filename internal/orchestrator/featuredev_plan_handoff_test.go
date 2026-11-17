@@ -40,6 +40,8 @@ func writePlanningFixture(t *testing.T, ws string, issue int, planningJSON, plan
 // TestRenderPlanHandoffCarriesPlanAndFileLists: the section quotes the plan
 // and names each file list, in both entry shapes planning writes (#2181).
 func TestRenderPlanHandoffCarriesPlanAndFileLists(t *testing.T) {
+	t.Parallel()
+
 	ws := layouttest.Repo(t)
 	plan := filepath.Join(layouttest.PlansDir(t, ws), "2087-ledger.md")
 	writePlanningFixture(t, ws, 2087,
@@ -72,6 +74,8 @@ func TestRenderPlanHandoffCarriesPlanAndFileLists(t *testing.T) {
 // a missing plan, or a plan_file outside the plans directory all yield "", so
 // the prompt is unchanged.
 func TestRenderPlanHandoffEmptyWithoutAPlan(t *testing.T) {
+	t.Parallel()
+
 	outside := filepath.Join(t.TempDir(), "secret.md")
 	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
 		t.Fatal(err)
@@ -100,6 +104,8 @@ func TestRenderPlanHandoffEmptyWithoutAPlan(t *testing.T) {
 
 // TestRenderPlanHandoffCapsALongPlan: a plan over the cap is cut and says so.
 func TestRenderPlanHandoffCapsALongPlan(t *testing.T) {
+	t.Parallel()
+
 	ws := layouttest.Repo(t)
 	plan := filepath.Join(layouttest.PlansDir(t, ws), "3-p.md")
 	writePlanningFixture(t, ws, 3, `{"plan_file":"`+plan+`"}`, plan, strings.Repeat("x", featureDevPlanHandoffCap+500))

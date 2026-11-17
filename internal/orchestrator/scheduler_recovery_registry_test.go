@@ -136,6 +136,8 @@ func (alwaysPuntPRCreateRunner) Run(_ context.Context, _ int, _, _ string) (pmst
 // fires SkillExitedWithoutMerging, and the run completes with one recovery
 // attempt recorded on the runtime.
 func TestRecoveryRegistry_PRMergeSelfHeal(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 
 	// Pre-write pr-{N}.json so loadPRNumberForRecovery and the gate context
@@ -246,6 +248,8 @@ func TestRecoveryRegistry_PRMergeSelfHeal(t *testing.T) {
 // the cap arithmetic without depending on the full pipeline path. We call
 // TryRecover directly with monotonically increasing attemptsSoFar.
 func TestRecoveryRegistry_HonoursPerRunCap(t *testing.T) {
+	t.Parallel()
+
 	matchedCount := 0
 	a := &alwaysMatchAction{
 		onExecute: func() recovery.RecoveryResult {
@@ -282,6 +286,8 @@ func (a *alwaysMatchAction) Execute(_ context.Context, _ recovery.StageFailure) 
 // from the recovery action's "conflicting_file=" evidence, and degrade
 // gracefully when none are present (#4072 review).
 func TestFormatConflictExhaustion(t *testing.T) {
+	t.Parallel()
+
 	got := formatConflictExhaustion([]string{
 		"pr=1234", "branch=feat/x", "conflicting_file=lib/a.dart", "conflicting_file=lib/b.dart",
 	})
@@ -342,6 +348,8 @@ func (alwaysPuntPRMergeRunner) Run(_ context.Context, _ int, _, _ string) (pmsta
 // rewind and fail the pipeline; the self-bounded BacktrackTargetStage path must
 // bypass that guard so feature-dev re-runs both times and the run lands.
 func TestRecoveryRegistry_ConflictRecoveryRewindsTwice(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	prDir := layouttest.PipelineDir(t, root)
 	if err := os.MkdirAll(prDir, 0755); err != nil {
@@ -410,6 +418,8 @@ func TestRecoveryRegistry_ConflictRecoveryRewindsTwice(t *testing.T) {
 // error must name the conflicting files — and survive a model-escalation retry
 // (MaxEscalationsPerStage:1) that re-runs pr-merge before the loop gives up.
 func TestRecoveryRegistry_ConflictExhaustionNamesFiles(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	prDir := layouttest.PipelineDir(t, root)
 	if err := os.MkdirAll(prDir, 0755); err != nil {
@@ -531,6 +541,8 @@ func (a *capturingRecoveryAction) observed() (int, []recovery.StageFailure) {
 // StageError and TerminalKind whether the reason arrived as a Go error or on the
 // result. `executed == 1` is the "fired at all" assertion — pre-#533 the count
 // on the CLI shape was 0, because no matcher could see anything to match on.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestRecoveryRegistry_FiresOnCLIPathStageError(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	shapes := []struct {

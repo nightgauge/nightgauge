@@ -52,6 +52,8 @@ func jsonEqual(t *testing.T, a, b []byte) bool {
 // AC 0/1: the record Go writes is the fixture's remainder, and splicing it
 // (with the operator steer) into planning_in yields planning_out.
 func TestPartialDeliverySplice_Golden(t *testing.T) {
+	t.Parallel()
+
 	g := loadPartialSpliceGolden(t)
 	ws := gitWorkspace(t)
 
@@ -96,6 +98,8 @@ func TestPartialDeliverySplice_Golden(t *testing.T) {
 
 // No remainder and no steer: the planning context stays byte-identical.
 func TestPartialDeliverySplice_AbsentLeavesPlanningAlone(t *testing.T) {
+	t.Parallel()
+
 	ws := gitWorkspace(t)
 	planPath, _ := stagecontext.ContextPath(ws, 7, "planning")
 	_ = os.MkdirAll(filepath.Dir(planPath), 0o755)
@@ -111,6 +115,8 @@ func TestPartialDeliverySplice_AbsentLeavesPlanningAlone(t *testing.T) {
 }
 
 func TestRemovePartialDeliveryContext(t *testing.T) {
+	t.Parallel()
+
 	ws := gitWorkspace(t)
 	if err := RemovePartialDeliveryContext(ws, 9); err != nil {
 		t.Fatalf("absent file: %v", err)
@@ -130,6 +136,8 @@ func TestRemovePartialDeliveryContext(t *testing.T) {
 // AC 2/3: the feature-dev block quotes the steer and binds the plan only when
 // the plan carries it; otherwise the prompt stays byte-identical.
 func TestOperatorRevisionPromptBlock(t *testing.T) {
+	t.Parallel()
+
 	if got := renderOperatorRevisionBlock(operatorRevision{FilesToModify: []string{"a.go"}}); got != "" {
 		t.Fatalf("no revision, no steer rendered %q", got)
 	}
@@ -164,6 +172,8 @@ func TestOperatorRevisionPromptBlock(t *testing.T) {
 }
 
 func TestPlanRevisionDispute(t *testing.T) {
+	t.Parallel()
+
 	ws := gitWorkspace(t)
 	devPath, _ := stagecontext.ContextPath(ws, 5, "dev")
 	_ = os.MkdirAll(filepath.Dir(devPath), 0o755)
@@ -185,6 +195,8 @@ func TestPlanRevisionDispute(t *testing.T) {
 // DecidePartialNoOp is the decision the extension's stage loop reads through
 // `nightgauge issue partial-noop`; it must match the scheduler's (#3163).
 func TestDecidePartialNoOp_FromWorkspace(t *testing.T) {
+	t.Parallel()
+
 	g := loadPartialSpliceGolden(t)
 	ws := gitWorkspace(t)
 	n := g.IssueNumber

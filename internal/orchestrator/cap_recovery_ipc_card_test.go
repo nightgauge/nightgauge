@@ -12,6 +12,8 @@ import (
 // the same thing.
 
 func TestTheIpcDescentCarriesTheDecisionsOwnSentence(t *testing.T) {
+	t.Parallel()
+
 	const decided = "usage cap hit while running claude-fable-5-1 (band fable) on anthropic; descending to opus"
 	if got := capDescentReason(decided, "fable", "opus"); got != decided {
 		t.Fatalf("reason = %q, want the decision's own sentence carried verbatim", got)
@@ -23,6 +25,8 @@ func TestTheIpcDescentCarriesTheDecisionsOwnSentence(t *testing.T) {
 // "the stage dropped to opus, because of a usage cap" with a thin explanation
 // beats learning nothing, which is the state this issue found.
 func TestAReasonlessDescentStillExplainsItself(t *testing.T) {
+	t.Parallel()
+
 	got := capDescentReason("", "fable", "opus")
 	if got == "" {
 		t.Fatal("a descent with no reported reason produced no sentence at all")

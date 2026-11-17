@@ -14,6 +14,8 @@ func readinessCodes(rs []SkipReason) []string {
 }
 
 func TestDispatchSkipReasons(t *testing.T) {
+	t.Parallel()
+
 	target := ReadinessTarget{Repo: "acme/app", Number: 7, Project: 3}
 	cases := []struct {
 		name string
@@ -47,6 +49,8 @@ func TestDispatchSkipReasons(t *testing.T) {
 
 // Every reason carries a runnable remedy naming the issue, repo and board.
 func TestDispatchSkipReasons_Remedies(t *testing.T) {
+	t.Parallel()
+
 	rs := DispatchSkipReasons(ReadinessInput{Labels: []string{"blocked"}}, ReadinessTarget{Repo: "acme/app", Number: 7, Project: 3})
 	if len(rs) != 3 {
 		t.Fatalf("reasons = %v", rs)
@@ -69,6 +73,8 @@ func TestDispatchSkipReasons_Remedies(t *testing.T) {
 // The codes shared with the refinement scan are the scan's own class names,
 // so the CLI and the scheduler log name a skip identically.
 func TestDispatchSkipReasons_CodesAreSchedulerClasses(t *testing.T) {
+	t.Parallel()
+
 	if SkipBoardStatus != refinementSkipBoardStatus || SkipExcludedLabel != refinementSkipExcludedLabel ||
 		SkipBacklogRefinementOff != refinementSkipBacklogOff {
 		t.Fatal("dispatch-readiness codes drifted from the refinement skip classes")

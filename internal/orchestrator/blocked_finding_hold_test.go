@@ -39,6 +39,8 @@ func nativeEdge(fromRepo string, from int, toRepo string, to int) depgraph.Edge 
 }
 
 func TestBlockedFindingDeferral_RaisesCardWhenNoneIsOpen(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	store := attention.New(root)
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{},
@@ -77,6 +79,8 @@ func TestBlockedFindingDeferral_RaisesCardWhenNoneIsOpen(t *testing.T) {
 }
 
 func TestBlockedFinding_ClearedWhenEveryNativeBlockerIsClosed(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name        string
 		blockers    map[int]string // blocker number -> state
@@ -121,6 +125,8 @@ func TestBlockedFinding_ClearedWhenEveryNativeBlockerIsClosed(t *testing.T) {
 }
 
 func TestUnvalidatedDependency_RaisesCardNamingTheDependency(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	store := attention.New(root)
 	validated := false
@@ -170,6 +176,8 @@ func TestUnvalidatedDependency_RaisesCardNamingTheDependency(t *testing.T) {
 }
 
 func TestUnvalidatedDependency_NoCardWhenAnotherDependencyAlsoHolds(t *testing.T) {
+	t.Parallel()
+
 	deps := []string{"o/app#21", "o/app#22"}
 	g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
 		"o/app#21": {Repo: "o/app", Number: 21, State: "CLOSED", Labels: []string{"program:alpha"}},

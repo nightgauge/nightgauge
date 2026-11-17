@@ -13,6 +13,8 @@ import (
 )
 
 func TestHasCostCapKillMarker(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		err  string
@@ -36,6 +38,8 @@ func TestHasCostCapKillMarker(t *testing.T) {
 }
 
 func TestCanRewindFromStage(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		stage state.PipelineStage
 		want  bool
@@ -78,6 +82,8 @@ func writePlanningContext(t *testing.T, root string, issue int, filesToModify []
 }
 
 func TestClassifyStallSignal_ComplexityFromHighModifyCount(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	writePlanningContext(t, root, 1, []string{"a.go", "b.go", "c.go", "d.go", "e.go"})
 	signal := ClassifyStallSignal(state.StageFeatureDev, "stall kill threshold reached", root, 1)
@@ -96,6 +102,8 @@ func TestClassifyStallSignal_ComplexityFromHighModifyCount(t *testing.T) {
 }
 
 func TestClassifyStallSignal_ScopeDiscoveredFromMissingFiles(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	// Two files, but neither exists on disk.
 	writePlanningContext(t, root, 1, []string{"missing-1.go", "missing-2.go"})
@@ -119,6 +127,8 @@ func TestClassifyStallSignal_ScopeDiscoveredFromMissingFiles(t *testing.T) {
 }
 
 func TestClassifyStallSignal_FallbackPlanRevisionWhenPlanAbsent(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	signal := ClassifyStallSignal(state.StageFeatureDev, "stall kill threshold", root, 1)
 	if signal.SignalType != "PLAN_REVISION_NEEDED" {
@@ -127,6 +137,8 @@ func TestClassifyStallSignal_FallbackPlanRevisionWhenPlanAbsent(t *testing.T) {
 }
 
 func TestClassifyStallSignal_FallbackForNonRewindableStage(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	// Even with a 5-file plan, a stall in pr-create can't trigger
 	// COMPLEXITY_UNDERESTIMATED — the classifier short-circuits to
@@ -139,6 +151,8 @@ func TestClassifyStallSignal_FallbackForNonRewindableStage(t *testing.T) {
 }
 
 func TestClassifyStallSignal_FallbackWhenSmallPlanAllFilesPresent(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	// Create the files so missingFiles is empty; plan size below threshold.
 	for _, f := range []string{"a.go", "b.go"} {
@@ -154,6 +168,8 @@ func TestClassifyStallSignal_FallbackWhenSmallPlanAllFilesPresent(t *testing.T) 
 }
 
 func TestWriteSyntheticFeedbackContext_RoundTrip(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	signal := FeedbackSignal{
 		SignalType:           "PLAN_REVISION_NEEDED",
@@ -193,12 +209,15 @@ func TestWriteSyntheticFeedbackContext_RoundTrip(t *testing.T) {
 // #3020 — flipped default to true so a stall-killed stage rewinds to planning
 // instead of going straight to terminal failure. Original value was false.
 func TestGetAdaptiveStallRecoveryEnabled_DefaultTrue(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	if !GetAdaptiveStallRecoveryEnabled(root) {
 		t.Error("expected true for empty workspace (default flipped to true in #3020)")
 	}
 }
 
+// Serial: sets the environment.
 func TestGetAdaptiveStallRecoveryEnabled_EnvOverride(t *testing.T) {
 	root := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_PIPELINE_ADAPTIVE_STALL_RECOVERY", "true")
@@ -212,6 +231,7 @@ func TestGetAdaptiveStallRecoveryEnabled_EnvOverride(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestGetAdaptiveStallRecoveryEnabled_YAMLTrue(t *testing.T) {
 	root := layouttest.Repo(t)
 	dir := filepath.Join(root, ".nightgauge")
@@ -229,6 +249,7 @@ func TestGetAdaptiveStallRecoveryEnabled_YAMLTrue(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestGetAdaptiveStallRecoveryEnabled_YAMLFalseExplicit(t *testing.T) {
 	root := layouttest.Repo(t)
 	dir := filepath.Join(root, ".nightgauge")
@@ -249,6 +270,8 @@ func TestGetAdaptiveStallRecoveryEnabled_YAMLFalseExplicit(t *testing.T) {
 // this test focused on the parser scope (not the default), use an explicit
 // `pipeline.adaptive_stall_recovery: false` to override the default and
 // assert the top-level value is still ignored.
+//
+// Serial: sets the environment.
 func TestGetAdaptiveStallRecoveryEnabled_OutOfPipelineSection(t *testing.T) {
 	root := layouttest.Repo(t)
 	dir := filepath.Join(root, ".nightgauge")
@@ -267,6 +290,8 @@ func TestGetAdaptiveStallRecoveryEnabled_OutOfPipelineSection(t *testing.T) {
 // A second cap kill keeps its own category; the stall category is untouched
 // (#2812).
 func TestKilledAfterRetryCategory(t *testing.T) {
+	t.Parallel()
+
 	if got := killedAfterRetryCategory(TerminalKindStageCapKill); got != "stage-cap-killed-after-retry" {
 		t.Errorf("cap kill category = %q", got)
 	}

@@ -12,6 +12,8 @@ import (
 // cascadeTracker.RecordFailure, the same way model_unavailable already
 // doesn't. Asserted directly on the tracker's own count, not on a log line,
 // per the issue's verification requirement.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestNetworkUnavailableDoesNotFeedCascadeBreaker(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 

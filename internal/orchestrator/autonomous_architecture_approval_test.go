@@ -30,6 +30,8 @@ import (
 // verifies the kind is excluded from every automatic-retry mechanism, and — the
 // property that actually matters — that repeated halts never walk the issue
 // toward the lifetime cap that stops the whole queue.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestOnPipelineComplete_ArchitectureApproval_NoRetryNoLifetimeIncrementNoCascade(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
@@ -83,6 +85,8 @@ func TestOnPipelineComplete_ArchitectureApproval_NoRetryNoLifetimeIncrementNoCas
 // regression that pins the observed near-miss: the same issue gating more times
 // than MaxLifetimeFailuresPerIssue must still leave the scheduler running.
 // Pre-fix, the second halt was enough to stop the entire workspace.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestOnPipelineComplete_ArchitectureApproval_RepeatedHaltsNeverTripCap(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
@@ -118,6 +122,8 @@ func TestOnPipelineComplete_ArchitectureApproval_RepeatedHaltsNeverTripCap(t *te
 //
 // Observed in production after the first fix shipped: #1181, #1182 and #1185 all
 // hit the gate, and the fleet stopped despite four other issues completing fine.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestArchitectureApproval_DoesNotFeedConsecutiveFailureRail(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
@@ -153,6 +159,8 @@ func TestArchitectureApproval_DoesNotFeedConsecutiveFailureRail(t *testing.T) {
 // no-retry branch via the Go-side ClassifyTerminalKind fallback. This is the
 // shape the a production autonomous run run actually produced — the TS layer knew
 // it was an approval pause, but nothing forwarded a structured kind to Go.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestNotifyComplete_EmptyKindApprovalDetail_Reclassifies(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
@@ -182,6 +190,8 @@ func TestNotifyComplete_EmptyKindApprovalDetail_Reclassifies(t *testing.T) {
 // and a downstream blockedBy dependent must NOT become a dispatch candidate
 // afterward — evaluateDeps requires confirmed PR evidence, not the bare
 // status string, before treating an upstream "In review" as satisfied.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestArchitectureApproval_NoPRSidelinedIssueBlocksDependent(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		return []byte("[]"), nil // no open PRs anywhere — the gate fired before feature-dev
@@ -245,6 +255,8 @@ func approvalCardOpen(t *testing.T, as *AutonomousScheduler, repo string, issue 
 // branch rewrote that verdict to operator_stop: the issue went back to Ready
 // with no Action Center card and the next dispatch re-ran planning into the
 // same gate.
+//
+// Serial: swaps package var reconcileExecGh (via approvalCardScheduler).
 func TestOnPipelineComplete_ArchitectureApprovalSurvivesPendingStop(t *testing.T) {
 	as := approvalCardScheduler(t)
 	as.stopRequested = true
@@ -276,6 +288,8 @@ func TestOnPipelineComplete_ArchitectureApprovalSurvivesPendingStop(t *testing.T
 // TestOnPipelineComplete_PendingStopStillBooksGenericFailureAsOperatorStop is
 // the #1487 guard for the #2577 narrowing: a kind with no human hold that ends
 // between Stop() and the next Run() is still the operator's stop.
+//
+// Serial: swaps package var reconcileExecGh (via approvalCardScheduler).
 func TestOnPipelineComplete_PendingStopStillBooksGenericFailureAsOperatorStop(t *testing.T) {
 	as := approvalCardScheduler(t)
 	as.stopRequested = true
@@ -302,6 +316,8 @@ func TestOnPipelineComplete_PendingStopStillBooksGenericFailureAsOperatorStop(t 
 // TestArchitectureApprovalHold_ReleaseRetractsCard pins the second half of
 // #2577: the card lives as long as the hold. Pre-fix it was retracted only when
 // a run succeeded, so a granted approval left it asking in the inbox.
+//
+// Serial: swaps package var reconcileExecGh (via approvalCardScheduler).
 func TestArchitectureApprovalHold_ReleaseRetractsCard(t *testing.T) {
 	as := approvalCardScheduler(t)
 

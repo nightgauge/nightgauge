@@ -51,6 +51,8 @@ func boundaryDispatched(r *runIDCapturingRunner) []state.PipelineStage {
 // Open at pickup, closed before the next stage: the run ends issue_closed
 // before that stage is dispatched, and the stage error classifies as the
 // non-failure kind the autonomous booking keys on.
+//
+// Serial: sets the environment (via isolateRoutingEnv).
 func TestRunPipeline_IssueClosedAfterPickup_EndsIssueClosed(t *testing.T) {
 	isolateRoutingEnv(t)
 	root := gitWorkspace(t)
@@ -88,6 +90,8 @@ func TestRunPipeline_IssueClosedAfterPickup_EndsIssueClosed(t *testing.T) {
 
 // An issue that stays open runs every stage, one read per pre-merge
 // boundary, and none for issue-pickup.
+//
+// Serial: sets the environment (via isolateRoutingEnv).
 func TestRunPipeline_IssueStaysOpen_EveryStageRuns(t *testing.T) {
 	isolateRoutingEnv(t)
 	root := gitWorkspace(t)
@@ -116,6 +120,8 @@ func TestRunPipeline_IssueStaysOpen_EveryStageRuns(t *testing.T) {
 }
 
 // A failed read fails open: the stages still run.
+//
+// Serial: sets the environment (via isolateRoutingEnv).
 func TestRunPipeline_IssueStateReadError_FailsOpen(t *testing.T) {
 	isolateRoutingEnv(t)
 	root := gitWorkspace(t)
@@ -141,6 +147,8 @@ func TestRunPipeline_IssueStateReadError_FailsOpen(t *testing.T) {
 }
 
 func TestIssueStateBoundaryApplies(t *testing.T) {
+	t.Parallel()
+
 	rt := state.NewRuntimeState("o/r", 1, "item", "run")
 	if issueStateBoundaryApplies(state.StageIssuePickup, rt) {
 		t.Error("boundary must not apply to issue-pickup")
@@ -156,6 +164,8 @@ func TestIssueStateBoundaryApplies(t *testing.T) {
 
 // A post-merge stage is never ended issue_closed, and makes no read.
 func TestIssueClosedAtBoundary_NoReadAfterMerge(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	reader := &boundaryReader{states: []string{"CLOSED"}}
 	s.WithIssueStateReader(reader.read)
@@ -181,6 +191,8 @@ func (issueClosedMergeRunner) Run(context.Context, int, string, string) (pmstage
 // The pr-merge refusal for a closed issue maps to the sentinel the stage loop
 // ends the run on, and its text classifies as issue_closed.
 func TestTryDeterministicPRMerge_IssueClosedRefusal(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	s.WithPRMergeRunner(issueClosedMergeRunner{})
 	rt := state.NewRuntimeState("o/r", 7, "item", "run")

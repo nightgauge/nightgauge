@@ -22,6 +22,8 @@ import (
 // TestSteerRootFor_PrefersThePerRepoRunRoot pins the resolution the writer now
 // shares with the trace listener.
 func TestSteerRootFor_PrefersThePerRepoRunRoot(t *testing.T) {
+	t.Parallel()
+
 	launch := t.TempDir()
 	perRepo := t.TempDir()
 
@@ -55,6 +57,8 @@ func TestSteerRootFor_PrefersThePerRepoRunRoot(t *testing.T) {
 // ever reads. This workspace already holds 20+ such cards, at least one
 // resolved.
 func TestWriteOperatorSteer_RefusesARunlessCard(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 
 	for _, issue := range []int{0, -1} {

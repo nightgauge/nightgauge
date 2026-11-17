@@ -55,6 +55,8 @@ func pickupInput(dir string) IssuePickupInput {
 // The runner produces a context file the real IssuePickupGate accepts, with no
 // model anywhere in the path.
 func TestDeterministicIssuePickup_WritesGatePassingContext(t *testing.T) {
+	t.Parallel()
+
 	dir := layouttest.Repo(t)
 	r, pushes := fakePickupRunner(nil)
 	res, err := r.Run(context.Background(), pickupInput(dir))
@@ -114,6 +116,8 @@ func TestDeterministicIssuePickup_WritesGatePassingContext(t *testing.T) {
 // Keys the runner does not author (knowledge_path stamped on a prior attempt)
 // survive; keys it does author are replaced, including a malformed branch.
 func TestDeterministicIssuePickup_MergesOverExistingContext(t *testing.T) {
+	t.Parallel()
+
 	dir := layouttest.Repo(t)
 	path := filepath.Join(layouttest.PipelineDir(t, dir), "issue-1904.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -146,6 +150,8 @@ func TestDeterministicIssuePickup_MergesOverExistingContext(t *testing.T) {
 // A reader polling the file while the runner rewrites it never sees it empty
 // or unparseable.
 func TestDeterministicIssuePickup_ContextNeverObservedPartial(t *testing.T) {
+	t.Parallel()
+
 	dir := layouttest.Repo(t)
 	r, _ := fakePickupRunner(nil)
 	in := pickupInput(dir)
@@ -196,6 +202,8 @@ func TestDeterministicIssuePickup_ContextNeverObservedPartial(t *testing.T) {
 // A branch-creation failure is an error (the scheduler punts to the skill),
 // and no context file is written for a branch that does not exist.
 func TestDeterministicIssuePickup_BranchFailureWritesNothing(t *testing.T) {
+	t.Parallel()
+
 	dir := layouttest.Repo(t)
 	r, _ := fakePickupRunner(errors.New("boom"))
 	if _, err := r.Run(context.Background(), pickupInput(dir)); err == nil {
@@ -208,6 +216,8 @@ func TestDeterministicIssuePickup_BranchFailureWritesNothing(t *testing.T) {
 
 // An untitled issue cannot name a branch (#1915): the runner refuses.
 func TestDeterministicIssuePickup_RefusesUnnameableIssue(t *testing.T) {
+	t.Parallel()
+
 	r, _ := fakePickupRunner(nil)
 	in := pickupInput(t.TempDir())
 	in.Issue.Title = ""
@@ -217,6 +227,8 @@ func TestDeterministicIssuePickup_RefusesUnnameableIssue(t *testing.T) {
 }
 
 func TestIssueTypeFromBranch(t *testing.T) {
+	t.Parallel()
+
 	for branch, want := range map[string]string{
 		"fix/1-a": "bug", "docs/1-a": "docs", "chore/1-a": "chore",
 		"refactor/1-a": "refactor", "feat/1-a": "feature", "": "feature",
@@ -230,6 +242,8 @@ func TestIssueTypeFromBranch(t *testing.T) {
 
 // #3297: issue-{N}.json carries a wrapped criterion whole, not its first line.
 func TestBuildIssueContext_WrappedCriterion(t *testing.T) {
+	t.Parallel()
+
 	in := IssuePickupInput{Issue: &types.Issue{Number: 3297, Title: "t",
 		Body: "## AC\n- [ ] Wrapped criterion\n  second line.\n- [x] Done\n"}}
 	doc := buildIssueContext(in, "fix/3297-x", "main", 0, time.Unix(0, 0))

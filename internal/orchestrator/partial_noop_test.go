@@ -21,6 +21,8 @@ import (
 // the remainder.
 
 func TestDecidePartialNoOp(t *testing.T) {
+	t.Parallel()
+
 	scope := &state.PartialRerun{PR: 1749, Criteria: []string{"A is handled"}}
 	revised := operatorRevision{Revised: true, FilesToModify: []string{"a.go"}}
 	for _, tc := range []struct {
@@ -133,6 +135,8 @@ func writeOperatorSteerFeedback(t *testing.T, root string, issue int) {
 // AC 4 (platform#1750): a scoped re-run whose feature-dev records zero
 // changes, on a branch the no-diff stop does not end, is booked
 // not_pipeline_actionable — not premature turn end.
+//
+// Serial: swaps package var reconcileExecGh (via partialRerunScheduler).
 func TestPartialNoOp_NotLevelZeroChangesIsNotAFailure(t *testing.T) {
 	inner := &partialRerunRunner{}
 	s, root := partialRerunScheduler(t, inner, true)
@@ -168,6 +172,8 @@ func TestPartialNoOp_NotLevelZeroChangesIsNotAFailure(t *testing.T) {
 // its first lap. The steer reaches feature-dev's prompt (AC 3), the lap is
 // re-dispatched once with the rule restated, and the run proceeds with the
 // change the second lap makes — never skill-no-op.
+//
+// Serial: swaps package var reconcileExecGh (via partialRerunScheduler).
 func TestPartialNoOp_1051OperatorRevisionEndsInAChange(t *testing.T) {
 	inner := &partialRerunRunner{}
 	s, root := partialRerunScheduler(t, inner, true)
@@ -229,6 +235,8 @@ func TestPartialNoOp_1051OperatorRevisionEndsInAChange(t *testing.T) {
 
 // AC 2 / AC 5 variant: a first lap that names the plan step it disputes ends
 // as that dispute, with no second lap.
+//
+// Serial: swaps package var reconcileExecGh (via partialRerunScheduler).
 func TestPartialNoOp_1051NamedDisputeEndsAsDispute(t *testing.T) {
 	inner := &partialRerunRunner{}
 	s, root := partialRerunScheduler(t, inner, true)
@@ -271,6 +279,8 @@ func TestPartialNoOp_1051NamedDisputeEndsAsDispute(t *testing.T) {
 
 // AC 4 booking: the no-op detail feeds neither the cascade breaker nor the
 // per-issue lifetime cap. Two of them tripped the breaker in session 99.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestPartialNoOp_BookingSkipsCascadeAndLifetimeCap(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	as := newAutonomousForCascadeTest(t, 2, 30*time.Minute)
@@ -299,6 +309,8 @@ func TestPartialNoOp_BookingSkipsCascadeAndLifetimeCap(t *testing.T) {
 // base. The operator-revision relap must still apply there (the level-branch
 // stop must not pre-empt it), and a second lap that writes nothing must reach
 // the gate's no-op path, not lap 1's dev context judged stale.
+//
+// Serial: swaps package var reconcileExecGh (via partialRerunScheduler).
 func TestPartialNoOp_LevelBranchRelapsThenBooksNoOp(t *testing.T) {
 	inner := &partialRerunRunner{}
 	s, root := partialRerunScheduler(t, inner, true)

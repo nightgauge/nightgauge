@@ -46,6 +46,8 @@ func newStartupGraphScheduler(t *testing.T) (*AutonomousScheduler, *countingBoar
 // must not build the dependency graph — one full board read per board, and
 // with a ~1,900-item shared board that was the single most expensive thing
 // the daemon did at startup, while status was "stopped".
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestRecoverOrphanedRunning_StoppedSchedulerReadsNoBoard(t *testing.T) {
 	as, board := newStartupGraphScheduler(t)
 	if as.IsRunning() {
@@ -66,6 +68,8 @@ func TestRecoverOrphanedRunning_StoppedSchedulerReadsNoBoard(t *testing.T) {
 // the loop is up the promotion scan still runs, and three repos on one board
 // cost ONE read, not three.
 func TestRecoverOrphanedRunning_RunningSchedulerBuildsOnce(t *testing.T) {
+	t.Parallel()
+
 	as, board := newStartupGraphScheduler(t)
 	as.mu.Lock()
 	as.running = true

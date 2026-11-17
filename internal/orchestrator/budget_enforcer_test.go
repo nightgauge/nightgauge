@@ -8,6 +8,8 @@ import (
 )
 
 func TestBudgetEnforcer_RecordAndCheck(t *testing.T) {
+	t.Parallel()
+
 	cfg := BudgetConfig{
 		PipelineCeilingTokens: 10000,
 		PerStageCeilings:      map[string]int{"feature-dev": 5000},
@@ -41,6 +43,8 @@ func TestBudgetEnforcer_RecordAndCheck(t *testing.T) {
 }
 
 func TestBudgetEnforcer_HardMode_Terminates(t *testing.T) {
+	t.Parallel()
+
 	cfg := BudgetConfig{
 		PipelineCeilingTokens: 1000,
 		GracePercent:          50, // effective limit = 1500
@@ -61,6 +65,8 @@ func TestBudgetEnforcer_HardMode_Terminates(t *testing.T) {
 }
 
 func TestBudgetEnforcer_HardMode_WarnsBeforeTerminate(t *testing.T) {
+	t.Parallel()
+
 	cfg := BudgetConfig{
 		PipelineCeilingTokens: 1000,
 		GracePercent:          50, // effective limit = 1500
@@ -81,6 +87,8 @@ func TestBudgetEnforcer_HardMode_WarnsBeforeTerminate(t *testing.T) {
 }
 
 func TestBudgetEnforcer_SoftMode_NeverTerminates(t *testing.T) {
+	t.Parallel()
+
 	cfg := BudgetConfig{
 		PipelineCeilingTokens: 100,
 		GracePercent:          50,
@@ -100,6 +108,8 @@ func TestBudgetEnforcer_SoftMode_NeverTerminates(t *testing.T) {
 }
 
 func TestBudgetEnforcer_PerStageCeiling(t *testing.T) {
+	t.Parallel()
+
 	cfg := BudgetConfig{
 		PerStageCeilings: map[string]int{"feature-dev": 1000},
 		GracePercent:     50, // effective = 1500
@@ -119,6 +129,8 @@ func TestBudgetEnforcer_PerStageCeiling(t *testing.T) {
 }
 
 func TestBudgetEnforcer_NoCeiling(t *testing.T) {
+	t.Parallel()
+
 	be := NewBudgetEnforcer(DefaultBudgetConfig())
 
 	be.RecordStageTokens("feature-dev", 999999, 999999)
@@ -135,6 +147,8 @@ func TestBudgetEnforcer_NoCeiling(t *testing.T) {
 }
 
 func TestBudgetEnforcer_Reset(t *testing.T) {
+	t.Parallel()
+
 	cfg := BudgetConfig{
 		PipelineCeilingTokens: 10000,
 		GracePercent:          50,
@@ -160,6 +174,8 @@ func TestBudgetEnforcer_Reset(t *testing.T) {
 // Issue #2338 - BudgetOverrunContext tests
 
 func TestReadBudgetOverrun_ValidFile(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "budget-overrun-472.json")
 	content := `{
@@ -200,6 +216,8 @@ func TestReadBudgetOverrun_ValidFile(t *testing.T) {
 }
 
 func TestReadBudgetOverrun_FileNotFound(t *testing.T) {
+	t.Parallel()
+
 	_, err := ReadBudgetOverrun("/nonexistent/path.json")
 	if err == nil {
 		t.Error("expected error for missing file")
@@ -214,6 +232,8 @@ func TestReadBudgetOverrun_FileNotFound(t *testing.T) {
 // Older v1.0 files lacking those fields must still parse and default to
 // the pre-#3666 behavior (no shipping, retry path unchanged).
 func TestReadBudgetOverrun_ShippedPartially_V11(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "budget-overrun-215.json")
 	content := `{
@@ -250,6 +270,8 @@ func TestReadBudgetOverrun_ShippedPartially_V11(t *testing.T) {
 }
 
 func TestReadBudgetOverrun_V10BackCompat_NoShippedFields(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "budget-overrun-100.json")
 	// v1.0 shape — no shipped_partially / shipped_pr_number fields. Readers
@@ -292,6 +314,8 @@ func TestReadBudgetOverrun_V10BackCompat_NoShippedFields(t *testing.T) {
 // race detector and the absence of a "concurrent map writes" panic are the
 // real signal here.
 func TestBudgetEnforcer_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
 	cfg := BudgetConfig{
 		PipelineCeilingTokens: 100000,
 		PerStageCeilings:      map[string]int{"feature-dev": 50000},
@@ -350,6 +374,8 @@ func TestBudgetEnforcer_ConcurrentAccess(t *testing.T) {
 // enforcer emits warn-style decisions (Reason suffixed `_observe_only`)
 // instead of terminating the run, even under "hard" mode.
 func TestBudgetEnforcer_MaximumModeObserveOnly(t *testing.T) {
+	t.Parallel()
+
 	cfg := BudgetConfig{
 		PipelineCeilingTokens: 1000,
 		PerStageCeilings:      map[string]int{"feature-dev": 500},
@@ -395,6 +421,8 @@ func TestBudgetEnforcer_MaximumModeObserveOnly(t *testing.T) {
 // (terminate, warn, no-op) populates BudgetDecision.PerformanceMode so
 // downstream log lines / metrics can attribute the result to a mode.
 func TestBudgetEnforcer_DecisionCarriesMode(t *testing.T) {
+	t.Parallel()
+
 	cfg := BudgetConfig{
 		PipelineCeilingTokens: 1000,
 		PerStageCeilings:      map[string]int{"feature-dev": 500},
@@ -442,6 +470,8 @@ func TestBudgetEnforcer_DecisionCarriesMode(t *testing.T) {
 // "maximum" must NOT switch to observe-only — hard-mode termination still
 // fires.
 func TestBudgetEnforcer_NonMaximumIgnoresDisableCeiling(t *testing.T) {
+	t.Parallel()
+
 	cfg := BudgetConfig{
 		PipelineCeilingTokens: 1000,
 		GracePercent:          50,
@@ -469,6 +499,8 @@ func TestBudgetEnforcer_NonMaximumIgnoresDisableCeiling(t *testing.T) {
 // protection on SetPerformanceMode under concurrent RecordStageTokens. The
 // race detector and the absence of inconsistent mode reads are the signal.
 func TestBudgetEnforcer_SetPerformanceMode_Concurrent(t *testing.T) {
+	t.Parallel()
+
 	cfg := BudgetConfig{
 		PipelineCeilingTokens: 100000,
 		PerStageCeilings:      map[string]int{"feature-dev": 50000},
@@ -523,6 +555,8 @@ func TestBudgetEnforcer_SetPerformanceMode_Concurrent(t *testing.T) {
 }
 
 func TestReadBudgetOverrun_InvalidJSON(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "budget-overrun-99.json")
 	if err := os.WriteFile(fp, []byte("not json"), 0644); err != nil {
@@ -542,6 +576,8 @@ func TestReadBudgetOverrun_InvalidJSON(t *testing.T) {
 // regressions; the totalUsed assertion also catches lost updates if a
 // future change replaces the mutex with a non-atomic write.
 func TestBudgetEnforcer_ConcurrentRecord(t *testing.T) {
+	t.Parallel()
+
 	be := NewBudgetEnforcer(DefaultBudgetConfig())
 
 	const goroutines = 32

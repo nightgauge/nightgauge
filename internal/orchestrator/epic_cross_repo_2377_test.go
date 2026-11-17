@@ -75,6 +75,8 @@ func writeEpicCtxAt(t *testing.T, root string, epicNumber int, note string) {
 // example-org/app#20 and used to be injected into a sub-issue of
 // example-org/platform#20.
 func TestEpicContextSection_ReadsTheParentInItsOwnRepository(t *testing.T) {
+	t.Parallel()
+
 	launch, platform := layouttest.Repo(t), layouttest.Repo(t)
 	writeEpicCtxAt(t, launch, 20, "note recorded for example-org/app#20")
 	writeEpicCtxAt(t, platform, 20, "note recorded for example-org/platform#20")
@@ -106,6 +108,8 @@ func TestEpicContextSection_ReadsTheParentInItsOwnRepository(t *testing.T) {
 // pipeline state, where the reader above looks for it; two epics that share a
 // number no longer share one file.
 func TestWaveOrchestrator_EpicContextLivesInTheEpicsRepository(t *testing.T) {
+	t.Parallel()
+
 	launch, platform := layouttest.Repo(t), layouttest.Repo(t)
 	writeEpicCtxAt(t, launch, 20, "note recorded for example-org/app#20")
 	s := crossRepoEpicScheduler(launch, platform)
@@ -135,6 +139,8 @@ func TestWaveOrchestrator_EpicContextLivesInTheEpicsRepository(t *testing.T) {
 // for a parent in another repository. epic/2000-* there is the branch of that
 // repository's own #2000, and a second one would be stranded: the epic's
 // completion PR is opened in the epic's repository.
+//
+// Serial: sets the environment.
 func TestEnsureEpicBranchForItem_CrossRepoParentGetsNoEpicBranchHere(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH", "true")
 	root := gitWorkspace(t)
@@ -185,6 +191,8 @@ func remoteHeads(t *testing.T, root string) string {
 // The issue context it writes records the same parent_issue, which is read as
 // a number in this repository, as `git branch-create` reports it.
 func TestDeterministicIssuePickup_EpicBranchOnlyForAParentInThisRepository(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name       string
 		parentRepo string
@@ -242,6 +250,8 @@ func TestDeterministicIssuePickup_EpicBranchOnlyForAParentInThisRepository(t *te
 // sub-issue's own: in example-org/app, epic/20-* is the branch of
 // example-org/app#20, not of example-org/platform#20.
 func TestEnqueueEpic_RecordsTheEpicsRepository(t *testing.T) {
+	t.Parallel()
+
 	mock := newMockIssueSvc()
 	mock.addIssue("example-org", "platform", 20, &types.Issue{
 		NodeID: "I_p20", Number: 20, Title: "Platform Epic", State: "OPEN", Repo: "example-org/platform",
@@ -274,6 +284,8 @@ func TestEnqueueEpic_RecordsTheEpicsRepository(t *testing.T) {
 // example-org/app#21 from example-org/app, but the item the wave ran carried
 // the epic's repository, so it ran as example-org/platform#21.
 func TestWaveOrchestrator_RunsASubIssueInItsOwnRepository(t *testing.T) {
+	t.Parallel()
+
 	issueSvc := newMockEpicIssueSvc()
 	issueSvc.addEpic("example-org", "platform", 20, &types.EpicProgress{
 		Number: 20, Title: "Platform Epic", Repo: "example-org/platform", Total: 2, Open: 2,
@@ -310,6 +322,8 @@ func TestWaveOrchestrator_RunsASubIssueInItsOwnRepository(t *testing.T) {
 // does (#3700): a private cross-repo sub-issue may need another identity than
 // the epic's, and an unreadable sub-issue now fails the whole plan (#1702).
 func TestWaveOrchestrator_ReadsEachSubIssueWithItsRepositorysClient(t *testing.T) {
+	t.Parallel()
+
 	issueSvc := newMockEpicIssueSvc()
 	issueSvc.addEpic("example-org", "platform", 20, &types.EpicProgress{
 		Number: 20, Title: "Platform Epic", Repo: "example-org/platform", Total: 2, Open: 2,
@@ -365,6 +379,8 @@ func readyBoardNode(id string, number int, repo, title, labels, subIssues, block
 // Keyed by number alone, example-org/platform#21 was held because
 // example-org/app#21 is a sub-issue of the blocked example-org/platform#20.
 func TestPickNext_EpicBlockingHoldsOnlyTheEpicsOwnSubIssue(t *testing.T) {
+	t.Parallel()
+
 	nodes := strings.Join([]string{
 		readyBoardNode("ITEM_EPIC", 20, "example-org/platform", "Platform Epic", `{"name": "type:epic"}`,
 			`{"id": "I_a21", "number": 21, "title": "App task", "state": "OPEN", "repository": {"nameWithOwner": "example-org/app"}}`,
@@ -448,6 +464,8 @@ func describeRun(rs *state.RuntimeState) string {
 // read from the launch checkout by number, a merged sub-issue counted as
 // failed, or example-org/platform#21's run answered for it.
 func TestWaveOrchestrator_ReadsASubIssuesRunInItsOwnRepository(t *testing.T) {
+	t.Parallel()
+
 	sub := teams.SubIssue{Number: 21, Repo: "example-org/app"}
 	epicItem := types.BoardItem{Number: 20, Repo: "example-org/platform"}
 
@@ -504,6 +522,8 @@ func TestWaveOrchestrator_ReadsASubIssuesRunInItsOwnRepository(t *testing.T) {
 // context's findings. example-org/platform#21 and example-org/app#21 are both
 // sub-issues of example-org/platform#20.
 func TestWaveOrchestrator_KeysSubIssuesByRepository(t *testing.T) {
+	t.Parallel()
+
 	platform, app := layouttest.Repo(t), layouttest.Repo(t)
 	s := platformLaunchedScheduler(platform, app)
 	wo := newWaveOrchestrator(s, 20, "example-org/platform", 2, 0)
@@ -568,6 +588,8 @@ func TestWaveOrchestrator_KeysSubIssuesByRepository(t *testing.T) {
 // pipeline state, named by the epic's number like its context; in the launch
 // checkout, example-org/app#20's wave files were example-org/platform#20's.
 func TestWaveOrchestrator_WaveFilesLiveInTheEpicsRepository(t *testing.T) {
+	t.Parallel()
+
 	launch, platform := layouttest.Repo(t), layouttest.Repo(t)
 	s := crossRepoEpicScheduler(launch, platform)
 	wo := newWaveOrchestrator(s, 20, "example-org/platform", 2, 0)
@@ -590,6 +612,8 @@ func TestWaveOrchestrator_WaveFilesLiveInTheEpicsRepository(t *testing.T) {
 // example-org/platform#21's, and example-org/platform#21 was queued without
 // its open blocker example-org/platform#30.
 func TestEnqueueEpic_SameNumberedSubIssuesKeepTheirOwnBlockers(t *testing.T) {
+	t.Parallel()
+
 	mock := newMockIssueSvc()
 	mock.addIssue("example-org", "platform", 20, &types.Issue{
 		NodeID: "I_p20", Number: 20, Title: "Platform Epic", State: "OPEN", Repo: "example-org/platform",
@@ -630,6 +654,8 @@ func TestEnqueueEpic_SameNumberedSubIssuesKeepTheirOwnBlockers(t *testing.T) {
 // repository. example-org/app#21 is blocked by example-org/platform#5, and
 // example-org/app has an unrelated #5.
 func TestQueueBlockers_AreReadAndMatchedInTheirOwnRepository(t *testing.T) {
+	t.Parallel()
+
 	blocked := QueueItem{Repo: "example-org/app", IssueNumber: 21, Status: "pending",
 		BlockedBy: []QueueBlockingRef{{Number: 5, State: "OPEN", Repo: "example-org/platform"}}}
 
@@ -721,6 +747,8 @@ func (r *promptCapturingRunner) prompt(stage state.PipelineStage) (string, bool)
 // parent's own repository to the feature-planning prompt. Read from the
 // checkout the run is rooted in, example-org/app#21 was handed
 // example-org/app#20's accumulated findings instead of its epic's.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestRunPipeline_PromptCarriesTheParentsEpicContextFromItsOwnRepository(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	launch := gitWorkspace(t) // example-org/app's checkout

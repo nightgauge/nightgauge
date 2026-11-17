@@ -22,6 +22,8 @@ import (
 // cycle. The daemon's SetBoardCache still replaces the private cache, and the
 // embedded Scheduler follows it so its board writes invalidate the right one.
 func TestAutonomousSchedulerReadsBoardsThroughACacheByConstruction(t *testing.T) {
+	t.Parallel()
+
 	var boardReads atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {

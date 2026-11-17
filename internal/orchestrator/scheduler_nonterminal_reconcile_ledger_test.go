@@ -48,6 +48,8 @@ var reconcileExecGhDefault = reconcileExecGh
 
 // Non-terminal reconcile runs on every ambiguous stage failure, in a loop
 // (#1913).
+//
+// Serial: sets the environment (via gateEveryGhSubprocess).
 func TestReconcileExecGhDefaultIsGatedAndLedgered(t *testing.T) {
 	gateEveryGhSubprocess(t)
 
@@ -57,6 +59,7 @@ func TestReconcileExecGhDefaultIsGatedAndLedgered(t *testing.T) {
 	}
 }
 
+// Serial: swaps package var reconcileExecGh.
 func TestReconcileExecGhRemainsStubbable(t *testing.T) {
 	orig := reconcileExecGh
 	t.Cleanup(func() { reconcileExecGh = orig })

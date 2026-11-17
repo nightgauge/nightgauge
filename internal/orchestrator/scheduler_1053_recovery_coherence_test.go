@@ -68,6 +68,8 @@ func gitShowFile(t *testing.T, dir, rev string) string {
 // coherence property — while the edits, which carry no mid-transformation risk,
 // are rescued rather than discarded with them (#1108).
 func TestRecoverUncommittedWork_WithholdsDeletionsFromADominatedTree(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	gitInitRepo(t, dir)
 
@@ -136,6 +138,8 @@ func TestRecoverUncommittedWork_WithholdsDeletionsFromADominatedTree(t *testing.
 //
 // `git add -A` resolves the pair to a single `R`, so the guard must not fire.
 func TestRecoverUncommittedWork_CommitsARenameCoherently(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	gitInitRepo(t, dir)
 	if err := os.WriteFile(filepath.Join(dir, "old.txt"), []byte("stable contents\n"), 0o644); err != nil {
@@ -171,6 +175,8 @@ func TestRecoverUncommittedWork_CommitsARenameCoherently(t *testing.T) {
 // the other direction: deleting one file while adding real work is ordinary and
 // must still be rescued.
 func TestRecoverUncommittedWork_CommitsAMinorityDeletion(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	gitInitRepo(t, dir)
 	for _, s := range []string{"a.txt", "b.txt", "c.txt", "doomed.txt"} {
@@ -203,6 +209,8 @@ func TestRecoverUncommittedWork_CommitsAMinorityDeletion(t *testing.T) {
 // bookkeeping deliverable. A stage whose deliverable IS removal arrives as
 // removals and nothing else, and must still be rescued.
 func TestRecoverUncommittedWork_RescuesAPurelyDeletionalDeliverable(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	gitInitRepo(t, dir)
 	for _, s := range []string{"one.json", "two.json", "three.json"} {
@@ -234,6 +242,8 @@ func TestRecoverUncommittedWork_RescuesAPurelyDeletionalDeliverable(t *testing.T
 // contract directly, so a future change to the parser cannot silently
 // reintroduce the rename miscount.
 func TestStagedDeletions_CountsRenamesAsOneNonDeletion(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	gitInitRepo(t, dir)
 	if err := os.WriteFile(filepath.Join(dir, "old.txt"), []byte("stable\n"), 0o644); err != nil {

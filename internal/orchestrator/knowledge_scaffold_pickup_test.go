@@ -94,6 +94,8 @@ func writeWorktreeContextFile(t *testing.T, worktree string, issue int) string {
 }
 
 func TestScaffoldKnowledgeAtPickup_LandsAtCanonicalRootNotTheWorktree(t *testing.T) {
+	t.Parallel()
+
 	root, wt := worktreeFixture(t)
 	writeKnowledgeConfig(t, root, true, true)
 	contextPath := writeWorktreeContextFile(t, wt, 1205)
@@ -156,6 +158,8 @@ func TestScaffoldKnowledgeAtPickup_LandsAtCanonicalRootNotTheWorktree(t *testing
 }
 
 func TestScaffoldKnowledgeAtPickup_AutoScaffoldFalseDoesNothing(t *testing.T) {
+	t.Parallel()
+
 	root, wt := worktreeFixture(t)
 	writeKnowledgeConfig(t, root, true, false)
 	contextPath := writeWorktreeContextFile(t, wt, 1205)
@@ -175,6 +179,8 @@ func TestScaffoldKnowledgeAtPickup_AutoScaffoldFalseDoesNothing(t *testing.T) {
 }
 
 func TestScaffoldKnowledgeAtPickup_KnowledgeDisabledDoesNothing(t *testing.T) {
+	t.Parallel()
+
 	root, wt := worktreeFixture(t)
 	// enabled=false with auto_scaffold=true: the gate is the parent flag, so a
 	// project that opted out gets nothing written into its tree.
@@ -193,6 +199,8 @@ func TestScaffoldKnowledgeAtPickup_KnowledgeDisabledDoesNothing(t *testing.T) {
 // duplicate — and must still stamp the path, since the first run's context file
 // is gone with its worktree.
 func TestScaffoldKnowledgeAtPickup_IsIdempotent(t *testing.T) {
+	t.Parallel()
+
 	root, wt := worktreeFixture(t)
 	writeKnowledgeConfig(t, root, true, true)
 	contextPath := writeWorktreeContextFile(t, wt, 1205)
@@ -217,6 +225,8 @@ func TestScaffoldKnowledgeAtPickup_IsIdempotent(t *testing.T) {
 // No context file (the pickup skill has not written it yet, or the run was
 // interrupted) must not lose the scaffold or panic — it is an enrichment.
 func TestScaffoldKnowledgeAtPickup_MissingContextFileIsNonFatal(t *testing.T) {
+	t.Parallel()
+
 	root, wt := worktreeFixture(t)
 	writeKnowledgeConfig(t, root, true, true)
 

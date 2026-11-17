@@ -52,6 +52,8 @@ func refineOnce(t *testing.T, as *AutonomousScheduler, number int) {
 // it had not achieved, and the one counter that could have detected the
 // repetition was reset by the very path the failure took.
 func TestRefineIssue_MarkRefinedFailure_RecordsFailedNotCompleted(t *testing.T) {
+	t.Parallel()
+
 	as := newRefinementTestScheduler(t)
 	as.markRefinedFn = func(context.Context, string, string, int) error {
 		return errors.New(`label "pipeline:refined" not found in repo O/R`)
@@ -85,6 +87,8 @@ func TestRefineIssue_MarkRefinedFailure_RecordsFailedNotCompleted(t *testing.T) 
 // TestRefineIssue_MarkRefinedSuccess_RecordsCompleted is the control. Without
 // it, a fix that recorded EVERY run as failed would pass the test above.
 func TestRefineIssue_MarkRefinedSuccess_RecordsCompleted(t *testing.T) {
+	t.Parallel()
+
 	as := newRefinementTestScheduler(t)
 	called := 0
 	as.markRefinedFn = func(context.Context, string, string, int) error {
@@ -116,6 +120,8 @@ func TestRefineIssue_MarkRefinedSuccess_RecordsCompleted(t *testing.T) {
 // times the same deterministic failure recurred. That is why the runaway loop
 // was unbounded in time.
 func TestRefineIssue_RepeatedFailures_ReachThreshold(t *testing.T) {
+	t.Parallel()
+
 	as := newRefinementTestScheduler(t)
 	as.markRefinedFn = func(context.Context, string, string, int) error {
 		return errors.New("label not found")
@@ -145,6 +151,8 @@ func TestRefineIssue_RepeatedFailures_ReachThreshold(t *testing.T) {
 // scalar or on a repo-wide key: one poisoned issue must not stop refinement for
 // every other issue in the repo.
 func TestRefinementExhausted_IsPerIssue(t *testing.T) {
+	t.Parallel()
+
 	as := newRefinementTestScheduler(t)
 	as.markRefinedFn = func(_ context.Context, _, _ string, number int) error {
 		if number == 42 {
@@ -174,6 +182,8 @@ func TestRefinementExhausted_IsPerIssue(t *testing.T) {
 // produce a line every 60s, and — the direction that actually matters — must
 // still produce the FIRST one.
 func TestRefinementWarnOnce_FiresExactlyOnce(t *testing.T) {
+	t.Parallel()
+
 	as := newRefinementTestScheduler(t)
 	calls := 0
 	for i := 0; i < 5; i++ {
@@ -192,6 +202,8 @@ func TestRefinementWarnOnce_FiresExactlyOnce(t *testing.T) {
 // CLOSED on an unusable service rather than returning an empty missing-list,
 // which would read as "all labels present" and re-open the runaway path.
 func TestRefinementLabelsMissing_NilServiceIsAnError(t *testing.T) {
+	t.Parallel()
+
 	as := newRefinementTestScheduler(t)
 	blockers, advisory, err := as.refinementLabelsMissing(context.Background(), nil, "O", "R")
 	if err == nil {
@@ -211,6 +223,8 @@ func TestRefinementLabelsMissing_NilServiceIsAnError(t *testing.T) {
 // which is not obviously the better failure. Only the label whose absence makes
 // MarkRefined hard-error may gate the loop.
 func TestRefinementBlockers_AreNarrowerThanTheRegistry(t *testing.T) {
+	t.Parallel()
+
 	// A repo with pipeline:refined and nothing else.
 	only := map[string]string{gh.LabelRefined: "L_refined"}
 	if got := gh.MissingRefinementBlockers(only); len(got) != 0 {
@@ -254,6 +268,8 @@ func TestRefinementBlockers_AreNarrowerThanTheRegistry(t *testing.T) {
 // provision. If the two drift, a repo passes the preflight and then misbehaves
 // on a label nobody created.
 func TestRequiredLabels_CoverTheLabelsTheOrchestratorReads(t *testing.T) {
+	t.Parallel()
+
 	required := make(map[string]bool)
 	for _, n := range gh.RequiredLabelNames() {
 		required[n] = true
@@ -285,6 +301,8 @@ var _ = fmt.Sprintf
 // same issue is completely silent — the counter re-arms but the notification
 // does not, which converts a visible runaway into an invisible stall.
 func TestRefinementWarned_IsRearmedByResume(t *testing.T) {
+	t.Parallel()
+
 	as := newRefinementTestScheduler(t)
 
 	fired := 0
@@ -315,6 +333,8 @@ func TestRefinementWarned_IsRearmedByResume(t *testing.T) {
 // memoisation cannot prevent it: the cache is per IssueService, and the loop
 // constructs a fresh one every cycle.
 func TestRefinementLabelVerdict_IsCachedByTTL(t *testing.T) {
+	t.Parallel()
+
 	as := newRefinementTestScheduler(t)
 
 	as.mu.Lock()

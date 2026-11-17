@@ -44,6 +44,8 @@ func pendingCount(t *testing.T, root string) int {
 // The neighbouring reconcileEpicRollup was deliberately hoisted above the same
 // gate with the comment that convergence must not depend on free slots; the
 // identical argument was never applied here.
+//
+// Serial: swaps package var finalizeDueSurvivalRecords (via stubSurvivalSweepNoForge).
 func TestRunCycle_SweepsSurvivalWithZeroFreeSlots(t *testing.T) {
 	stubSurvivalSweepNoForge(t)
 	root := layouttest.Repo(t)
@@ -76,6 +78,8 @@ func TestRunCycle_SweepsSurvivalWithZeroFreeSlots(t *testing.T) {
 
 // TestSweepSurvivalRecords_IsPacedIndependently guards against the sweep going
 // back to riding `graphWasFresh`, and against it running on every 30s tick.
+//
+// Serial: swaps package var finalizeDueSurvivalRecords (via stubSurvivalSweepNoForge).
 func TestSweepSurvivalRecords_IsPacedIndependently(t *testing.T) {
 	stubSurvivalSweepNoForge(t)
 	root := layouttest.Repo(t)
@@ -118,6 +122,8 @@ func TestSweepSurvivalRecords_IsPacedIndependently(t *testing.T) {
 // TestSweepSurvivalRecords_NoPendingCostsNothing guards the property that makes
 // this safe to call from the post-merge hook on every single merge.
 func TestSweepSurvivalRecords_NoPendingCostsNothing(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), root)
 	as.trustGateOverride = allWritersGate()

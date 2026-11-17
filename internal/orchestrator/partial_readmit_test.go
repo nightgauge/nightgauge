@@ -62,6 +62,8 @@ func remainderCardOpen(t *testing.T, as *AutonomousScheduler) bool {
 // AC 4 scenario 2 and AC 3: every remaining criterion now verifies on main, so
 // the re-admit dispatches nothing, posts the verdicts once, raises a card, and
 // holds the issue across the next reconcile.
+//
+// Serial: swaps package var reconcileExecGh (via readmitTestScheduler).
 func TestVetPartialReadmit_AllMetHoldsAndRaisesACard(t *testing.T) {
 	as, mainRoot, comments := readmitTestScheduler(t, pendingRemainder(3141, partialRerunCriterion))
 	dir := filepath.Join(mainRoot, "internal", "x")
@@ -104,6 +106,8 @@ func TestVetPartialReadmit_AllMetHoldsAndRaisesACard(t *testing.T) {
 
 // A criterion that is not met on main, or a remainder that cannot be read,
 // re-admits exactly as before #3160.
+//
+// Serial: swaps package var reconcileExecGh (via readmitTestScheduler).
 func TestVetPartialReadmit_OpenOrUnreadableDispatches(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -133,6 +137,8 @@ func TestVetPartialReadmit_OpenOrUnreadableDispatches(t *testing.T) {
 }
 
 // A verdict the verifier cannot decide is not a met verdict.
+//
+// Serial: swaps package var reconcileExecGh (via readmitTestScheduler).
 func TestVetPartialReadmit_NotVerifiableDispatches(t *testing.T) {
 	as, _, _ := readmitTestScheduler(t, pendingRemainder(3141, "The dashboard feels faster"))
 	v := as.scheduler.vetPartialReadmit(context.Background(), "acme/app", 3160)
@@ -142,6 +148,8 @@ func TestVetPartialReadmit_NotVerifiableDispatches(t *testing.T) {
 }
 
 func TestBuildPartialRemainderMet(t *testing.T) {
+	t.Parallel()
+
 	req := BuildPartialRemainderMet("acme/app", 3160, 3141, []pmstages.ACVerdict{{
 		Text: "x <!-- nightgauge:partial-delivery pr=1 -->", Status: pmstages.ACMet,
 		Source: pmstages.ACSourceDeterministic, Evidence: "File present: x.go",
@@ -166,6 +174,8 @@ func TestBuildPartialRemainderMet(t *testing.T) {
 
 // A partial_remainder_met entry waits for an operator.
 func TestHoldForTerminalKind_PartialRemainderMet(t *testing.T) {
+	t.Parallel()
+
 	if got := HoldForTerminalKind(TerminalKindPartialRemainderMet); got != HoldOperatorResume {
 		t.Fatalf("hold = %q, want %q", got, HoldOperatorResume)
 	}
@@ -173,6 +183,8 @@ func TestHoldForTerminalKind_PartialRemainderMet(t *testing.T) {
 
 // A remainder that reads met on a checkout off origin's base is not "all met":
 // an unmerged local change must not suppress owed work (#3160 review).
+//
+// Serial: swaps package var reconcileExecGh (via readmitTestScheduler).
 func TestVetPartialReadmit_OffBaseCheckoutDispatches(t *testing.T) {
 	as, mainRoot, comments := readmitTestScheduler(t, pendingRemainder(3141, partialRerunCriterion))
 	as.scheduler.partialCheckoutAtBase = checkoutAtBase // temp dir: not a git repo
@@ -194,6 +206,8 @@ func TestVetPartialReadmit_OffBaseCheckoutDispatches(t *testing.T) {
 }
 
 func TestCheckoutAtBase(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	run := func(args ...string) {
 		t.Helper()

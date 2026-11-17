@@ -11,6 +11,8 @@ import (
 // ─── Classification (#42) ────────────────────────────────────────────────────
 
 func TestClassifyTerminalKind_ModelUnavailable(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		err  string
@@ -81,6 +83,8 @@ func TestClassifyTerminalKind_ModelUnavailable(t *testing.T) {
 // ─── Downgrade ladder (#42) ──────────────────────────────────────────────────
 
 func TestRetryEngine_EvaluateDowngrade_WalksTiersDownward(t *testing.T) {
+	t.Parallel()
+
 	r := NewRetryEngine(DefaultRetryConfig())
 
 	dg := r.EvaluateDowngrade("fable")
@@ -101,6 +105,8 @@ func TestRetryEngine_EvaluateDowngrade_WalksTiersDownward(t *testing.T) {
 }
 
 func TestRetryEngine_EvaluateDowngrade_ExhaustedAtHaiku(t *testing.T) {
+	t.Parallel()
+
 	r := NewRetryEngine(DefaultRetryConfig())
 	dg := r.EvaluateDowngrade("haiku")
 	if dg.ShouldDowngrade {
@@ -112,6 +118,8 @@ func TestRetryEngine_EvaluateDowngrade_ExhaustedAtHaiku(t *testing.T) {
 }
 
 func TestRetryEngine_EvaluateDowngrade_NonRegistryModelPassesThrough(t *testing.T) {
+	t.Parallel()
+
 	r := NewRetryEngine(DefaultRetryConfig())
 	if dg := r.EvaluateDowngrade("gpt-5-codex"); dg.ShouldDowngrade {
 		t.Fatalf("EvaluateDowngrade(gpt-5-codex) = %+v, want no downgrade (non-Claude adapter model)", dg)
@@ -122,6 +130,8 @@ func TestRetryEngine_EvaluateDowngrade_NonRegistryModelPassesThrough(t *testing.
 }
 
 func TestRetryEngine_DowngradeIsStickyAcrossStagesAndChains(t *testing.T) {
+	t.Parallel()
+
 	r := NewRetryEngine(DefaultRetryConfig())
 
 	// fable rejected → opus, sticky for every later stage regardless of how
@@ -151,6 +161,8 @@ func TestRetryEngine_DowngradeIsStickyAcrossStagesAndChains(t *testing.T) {
 }
 
 func TestRetryEngine_Reset_ClearsDowngrades(t *testing.T) {
+	t.Parallel()
+
 	r := NewRetryEngine(DefaultRetryConfig())
 	r.RecordDowngrade("fable", DowngradeDecision{NewTier: "opus"})
 	r.Reset()
@@ -168,6 +180,8 @@ func TestRetryEngine_Reset_ClearsDowngrades(t *testing.T) {
 // exhausted) is environmental — quota-length backoff, no lifetime-cap
 // increment, no queue pause. Mirrors the api-overloaded transient contract.
 func TestOnPipelineComplete_ModelUnavailable_EnvironmentalNoPause(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},
@@ -256,6 +270,8 @@ func (m *fallbackMockRunner) RunStage(_ context.Context, params StageRunParams) 
 //     (sticky for the remainder of the run) — the rejected model is never
 //     re-attempted.
 func TestScheduler_IpcModelFallback(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 	runner := &fallbackMockRunner{engine: engine}
 
@@ -315,6 +331,8 @@ func TestScheduler_IpcModelFallback(t *testing.T) {
 // ─── Provider-relative downgrade ladder (#56) ────────────────────────────────
 
 func TestRetryEngine_EvaluateDowngrade_CodexWalksProviderLadder(t *testing.T) {
+	t.Parallel()
+
 	r := NewRetryEngine(DefaultRetryConfig())
 
 	// Sol serves opus+fable for OpenAI; the next distinct model below is Terra.
@@ -336,6 +354,8 @@ func TestRetryEngine_EvaluateDowngrade_CodexWalksProviderLadder(t *testing.T) {
 }
 
 func TestRetryEngine_EvaluateDowngrade_GeminiMultiBandModels(t *testing.T) {
+	t.Parallel()
+
 	r := NewRetryEngine(DefaultRetryConfig())
 
 	// gemini-2.5-pro (opus+fable) falls past itself to the sonnet band.

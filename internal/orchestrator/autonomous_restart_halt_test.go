@@ -134,6 +134,8 @@ func runToCompletion(t *testing.T, as *AutonomousScheduler) {
 // with an open card, crash, restart, click Start, and the human gate must still
 // be standing on the other side.
 func TestRestartDoesNotLaunderMachineHalt(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 
 	// --- session 1: a terminal stage failure halts the whole fleet ---------
@@ -195,6 +197,8 @@ func TestRestartDoesNotLaunderMachineHalt(t *testing.T) {
 // the suppression guard read false, so the misleading card comes back one cycle
 // after the restart.
 func TestRestartDoesNotResurrectFleetIdleCard(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 
 	as1 := newRestartHaltScheduler(t, root)
@@ -220,6 +224,8 @@ func TestRestartDoesNotResurrectFleetIdleCard(t *testing.T) {
 // designed #148 flow, now reachable only by answering the card rather than by
 // crashing.
 func TestResumeAfterRestartClearsPreservedHalt(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 
 	as1 := newRestartHaltScheduler(t, root)
@@ -257,6 +263,8 @@ func TestResumeAfterRestartClearsPreservedHalt(t *testing.T) {
 // enters its loop with the halt still in force: alive, ticking, dispatching
 // nothing — exactly the state the crash interrupted.
 func TestRunOnPreservedHaltStaysDormant(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 
 	as1 := newRestartHaltScheduler(t, root)
@@ -348,6 +356,8 @@ func readPersistedState(t *testing.T, root string) AutonomousState {
 // the property Status alone could never provide (every exit path overwrites
 // it).
 func TestLoadStatePreservationIsScopedToMachineRaisedHalts(t *testing.T) {
+	t.Parallel()
+
 	slotHalt := &MachineHaltRecord{Tag: haltTagSlotFailure, Status: "paused"}
 	cascadeHalt := &MachineHaltRecord{Tag: CascadePauseReason, Status: "safety_tripped"}
 
@@ -496,6 +506,8 @@ func TestLoadStatePreservationIsScopedToMachineRaisedHalts(t *testing.T) {
 // and it declines every halt shape, because it reads the latch rather than
 // pattern-matching a status string.
 func TestStartGateIsScopedToMachineRaisedHalts(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name        string
 		status      string
@@ -574,6 +586,8 @@ func TestStartGateIsScopedToMachineRaisedHalts(t *testing.T) {
 
 // TestGracefulShutdownDoesNotLaunderMachineHalt: SIGTERM on a halted fleet.
 func TestGracefulShutdownDoesNotLaunderMachineHalt(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 
 	as1 := newRestartHaltScheduler(t, root)
@@ -617,6 +631,8 @@ func TestGracefulShutdownDoesNotLaunderMachineHalt(t *testing.T) {
 // TestStopThenStartDoesNotLaunderMachineHalt: the operator's own Stop button on
 // a halted fleet, then Start. Stop is not triage either.
 func TestStopThenStartDoesNotLaunderMachineHalt(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 
 	as := newRestartHaltScheduler(t, root)
@@ -676,6 +692,8 @@ func TestStopThenStartDoesNotLaunderMachineHalt(t *testing.T) {
 // A fleet that comes up halted, is left alone, and dies again must come up
 // halted a third time — the restore must not consume the latch.
 func TestSecondCrashWhileLatchedStillPreservesHalt(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 
 	as1 := newRestartHaltScheduler(t, root)
@@ -708,6 +726,8 @@ func TestSecondCrashWhileLatchedStillPreservesHalt(t *testing.T) {
 // cascade trip, raised by the production writer (onPipelineComplete), then a
 // graceful shutdown. complete("cancelled") used to write straight over
 // safety_tripped — the same laundering, on the halt the fleet takes hardest.
+//
+// Serial: sets the environment.
 func TestGracefulShutdownPreservesSafetyTrip(t *testing.T) {
 	root := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_THRESHOLD", "")
@@ -758,6 +778,8 @@ func TestGracefulShutdownPreservesSafetyTrip(t *testing.T) {
 // every board saying "this is dispatchable now". On a halted fleet nothing
 // dispatches, so the operator would return to a board reshuffled by a process
 // that was supposed to be waiting for their decision.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestHaltedFleetDoesNotPromoteOnStartup(t *testing.T) {
 	const promotionRan = "promoteUnblockedOnStartup:"
 
@@ -796,6 +818,8 @@ func TestHaltedFleetDoesNotPromoteOnStartup(t *testing.T) {
 // returns at its `Status != "running"` guard — so that path cannot tell a
 // working suppression from a deleted one.
 func TestFleetIdleSuppressionAtItsRealCallSite(t *testing.T) {
+	t.Parallel()
+
 	t.Run("halt raised mid-cycle suppresses the idle card", func(t *testing.T) {
 		as := newRestartHaltScheduler(t, layouttest.Repo(t))
 		as.mu.Lock()
@@ -839,6 +863,8 @@ func TestFleetIdleSuppressionAtItsRealCallSite(t *testing.T) {
 // autonomous resume`: the same clearer, applied to the state file, leaving a
 // status that does not claim a process is dispatching.
 func TestClearMachineHaltOffline(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	as := newRestartHaltScheduler(t, root)
 	haltFleet(t, as, "octocat/acme", 906)

@@ -23,6 +23,8 @@ func newPhaseTestRuntime() *state.RuntimeState {
 // retro or a survival verdict reads afterwards, and before #1247 a
 // deterministic stage wrote nothing to it.
 func TestDeterministicPhaseReporter_ReachesTheDurableRunRecord(t *testing.T) {
+	t.Parallel()
+
 	rs := newPhaseTestRuntime()
 	s := &Scheduler{}
 	rep := s.newDeterministicPhaseReporter(rs, "nightgauge/nightgauge", 1247)
@@ -61,6 +63,8 @@ func TestDeterministicPhaseReporter_ReachesTheDurableRunRecord(t *testing.T) {
 // tree updates WHILE the stage runs, which means the transitions have to leave
 // the scheduler, not merely land in the runtime.
 func TestDeterministicPhaseReporter_FansOutToTheLiveView(t *testing.T) {
+	t.Parallel()
+
 	rs := newPhaseTestRuntime()
 	s := &Scheduler{}
 
@@ -100,6 +104,8 @@ func TestDeterministicPhaseReporter_FansOutToTheLiveView(t *testing.T) {
 // written during the punt would permanently outrank the skill's real record,
 // and the run would close asserting it declined work it demonstrably did.
 func TestDeterministicPunt_SkillMarkersDoNotContradictEarlierPhases(t *testing.T) {
+	t.Parallel()
+
 	rs := newPhaseTestRuntime()
 	s := &Scheduler{}
 	rep := s.newDeterministicPhaseReporter(rs, "nightgauge/nightgauge", 1247)
@@ -170,6 +176,8 @@ func containsStatus(got []string, want string) bool {
 // TestWithPhaseReporter_NilIsSafe — the scheduler hands a nil reporter through
 // whenever a run has no runtime, and the CLI verb attaches none at all.
 func TestWithPhaseReporter_NilIsSafe(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	if rep := s.newDeterministicPhaseReporter(nil, "r", 1); rep != nil {
 		t.Fatalf("reporter for a nil runtime = %v, want nil", rep)

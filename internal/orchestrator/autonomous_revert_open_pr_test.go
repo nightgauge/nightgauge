@@ -108,6 +108,7 @@ func revertFixture(t *testing.T, pages ...map[int]string) (as *AutonomousSchedul
 	return as, writes, prReads
 }
 
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRevertFailedIssueStatus_OpenPRMovesToInReviewNotReady(t *testing.T) {
 	buf := withCapturedLog(t)
 	// The issue's PR is on the second page: "no PR" must not be read off the first.
@@ -136,6 +137,8 @@ func TestRevertFailedIssueStatus_OpenPRMovesToInReviewNotReady(t *testing.T) {
 // A PR for another issue does not back this one, and an issue the extension
 // parked in In review without a PR still returns to Ready: the board status is
 // not consulted.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRevertFailedIssueStatus_NoOwnPRStillRevertsToReady(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, writes, _ := revertFixture(t, map[int]string{43: "feat/2-other", 44: "feat/10-ten"})
@@ -157,6 +160,8 @@ func TestRevertFailedIssueStatus_NoOwnPRStillRevertsToReady(t *testing.T) {
 // A fork's PR is not the issue's own, whatever its branch is called: anyone
 // who can open a pull request can name a branch feat/<n>-…, and counting it
 // would let them keep a failed issue out of Ready (#1707).
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRevertFailedIssueStatus_ForkPRDoesNotBackTheIssue(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, writes, _ := revertFixture(t, map[int]string{42: "fork:feat/1-x"})
@@ -178,6 +183,8 @@ func TestRevertFailedIssueStatus_ForkPRDoesNotBackTheIssue(t *testing.T) {
 // The in-review reconcile, the blocked-PR sweep, the dependency evidence gate
 // and sidelineHalt all read their open PRs from openPRMergeStatesForRepo, so a
 // fork's PR must not reach any of them either (#1707).
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestOpenPRMergeStatesForRepo_IgnoresForkPRs(t *testing.T) {
 	var jsonFields string
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
@@ -210,6 +217,8 @@ func TestOpenPRMergeStatesForRepo_IgnoresForkPRs(t *testing.T) {
 
 // An unanswered PR query is not permission to revert, even when an earlier
 // page answered: the issue is left where it is, and the log says why.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRevertFailedIssueStatus_PRQueryFailureLeavesStatusUnchanged(t *testing.T) {
 	for name, pages := range map[string][]map[int]string{
 		"first page": {nil},
@@ -235,6 +244,8 @@ func TestRevertFailedIssueStatus_PRQueryFailureLeavesStatusUnchanged(t *testing.
 // The whole path: a non-transient terminal kind that can end a run in
 // pr-merge, after pr-create opened the PR, must not send the issue to Ready.
 // Transient kinds go to Ready on purpose (#2554), covered below.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestOnPipelineComplete_FailureAfterPRCreate_DoesNotRevertToReady(t *testing.T) {
 	for _, kind := range []string{TerminalKindOperatorStop, ""} {
 		t.Run("kind="+kind, func(t *testing.T) {
@@ -261,6 +272,8 @@ func TestOnPipelineComplete_FailureAfterPRCreate_DoesNotRevertToReady(t *testing
 // Startup orphan recovery returns a crashed session's running items to Ready,
 // and a session can crash in pr-merge, after pr-create opened the PR: it takes
 // the same open-PR evidence as the failed-run revert (#1707).
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRecoverOrphanedRunningItems_RespectsTheIssuesOwnOpenPR(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -321,6 +334,8 @@ func TestRecoverOrphanedRunningItems_RespectsTheIssuesOwnOpenPR(t *testing.T) {
 // #1496: a failed issue whose only PR is merged ends in Ready, the status the
 // revert-status line names. A merged PR is not in the open list, so it does
 // not back the issue, and no writer may put the issue in In review.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRevertFailedIssueStatus_MergedPROnlyEndsReady(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, writes, _ := revertFixture(t, map[int]string{})
@@ -341,6 +356,8 @@ func TestRevertFailedIssueStatus_MergedPROnlyEndsReady(t *testing.T) {
 
 // moveIssueToInReview requires the open PR as evidence (#1496): without one it
 // writes nothing at all, so "In review" never stands for a PR that is not there.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestMoveIssueToInReview_RequiresOpenPREvidence(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, writes, prReads := revertFixture(t)
@@ -367,6 +384,8 @@ func TestMoveIssueToInReview_RequiresOpenPREvidence(t *testing.T) {
 // retry backoff gates the re-dispatch and the resume path runs pr-merge on the
 // PR it already has. #1501's runaway kill mid-gate otherwise sat in In review
 // with nothing left to re-run it.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRevertFailedIssueStatus_TransientKindWithOpenPRMovesToReady(t *testing.T) {
 	for _, kind := range []string{TerminalKindRunawayProgress, TerminalKindStallKill, TerminalKindStageCapKill, TerminalKindHostSlept, TerminalKindApiOverloaded} {
 		t.Run(kind, func(t *testing.T) {
@@ -390,6 +409,8 @@ func TestRevertFailedIssueStatus_TransientKindWithOpenPRMovesToReady(t *testing.
 }
 
 // Non-transient kinds keep the #1707 behaviour: an open PR means In review.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRevertFailedIssueStatus_NonTransientKindWithOpenPRStaysInReview(t *testing.T) {
 	for _, kind := range []string{TerminalKindOperatorStop, TerminalKindValidationFailed, ""} {
 		t.Run(kind, func(t *testing.T) {
@@ -412,6 +433,8 @@ func TestRevertFailedIssueStatus_NonTransientKindWithOpenPRStaysInReview(t *test
 // The whole path for #1501: a runaway kill in a resumed pr-merge takes the
 // stall-kill route (fixed backoff, no lifetime charge) and returns the issue to
 // Ready on top of its open PR, where the resume path re-runs pr-merge (#2554).
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestOnPipelineComplete_TransientFailureAfterPRCreate_RevertsToReady(t *testing.T) {
 	for _, kind := range []string{TerminalKindRunawayProgress, TerminalKindStallKill, TerminalKindStageCapKill, TerminalKindHostSlept, TerminalKindStreamIdleTimeout} {
 		t.Run("kind="+kind, func(t *testing.T) {
@@ -445,6 +468,8 @@ func TestOnPipelineComplete_TransientFailureAfterPRCreate_RevertsToReady(t *test
 
 // #2607: an unread open-PR list queues the issue for the PR-recheck sweep and
 // asks no human to move it by hand; the sweep retries once the forge answers.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRevertFailedIssueStatus_PRQueryFailureQueuesARecheck(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, _, _ := revertFixture(t)
@@ -461,6 +486,7 @@ func TestRevertFailedIssueStatus_PRQueryFailureQueuesARecheck(t *testing.T) {
 	}
 }
 
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRecoverOrphanedRunningItems_PRQueryFailureQueuesARecheck(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, _, _ := revertFixture(t)
@@ -478,6 +504,8 @@ func TestRecoverOrphanedRunningItems_PRQueryFailureQueuesARecheck(t *testing.T) 
 // A transient kill after pr-create records the run's PR; any other kind, or a
 // run with no PR, records nothing.
 func TestRecordTransientRunPR(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name   string
 		kind   string
@@ -515,6 +543,8 @@ func TestRecordTransientRunPR(t *testing.T) {
 // The merged PR closes the issue and it leaves the board graph; its Failed
 // entry must outlive that while the recheck is pending, and only then.
 func TestReconcileStateAgainstGraph_KeepsAFailureWithAPendingRecheck(t *testing.T) {
+	t.Parallel()
+
 	as, _, _ := revertFixture(t)
 	as.state.Failed = []FailedItem{
 		{Repo: "O/a", Number: 1, Kind: TerminalKindApiConnectionLost},
@@ -540,6 +570,8 @@ func parkedCount(t *testing.T, as *AutonomousScheduler, repo string, issue int) 
 // when the In review write lands, and none when it is refused, no PR of the
 // issue's own is open, or the PR list is unread.
 func TestRevertAndRecovery_ParkedCardOnlyWhenInReviewWriteLands(t *testing.T) {
+	t.Parallel()
+
 	own := map[int]string{42: "feat/1-x"}
 	for _, tc := range []struct {
 		name      string
@@ -580,6 +612,8 @@ func TestRevertAndRecovery_ParkedCardOnlyWhenInReviewWriteLands(t *testing.T) {
 
 // TestOnPipelineComplete_SuccessRetractsParkedCard: a run that succeeds is no
 // longer parked behind its PR, so its card clears; another issue's survives.
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestOnPipelineComplete_SuccessRetractsParkedCard(t *testing.T) {
 	as := heldTestScheduler(t)
 	as.attention = attention.New(layouttest.Repo(t))
@@ -599,6 +633,8 @@ func TestOnPipelineComplete_SuccessRetractsParkedCard(t *testing.T) {
 // TestPrMergeParkedCard_ReAlertsAfterRetraction: each failure is its own
 // event, so a raise after the previous card cleared opens a new card instead
 // of matching the cleared one (#2876).
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestPrMergeParkedCard_ReAlertsAfterRetraction(t *testing.T) {
 	as := heldTestScheduler(t)
 	as.attention = attention.New(layouttest.Repo(t))
@@ -614,6 +650,8 @@ func TestPrMergeParkedCard_ReAlertsAfterRetraction(t *testing.T) {
 }
 
 func TestParkedPRReason(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct{ kind, detail, want string }{
 		{"k", " boom ", "boom"},
 		{"k", "  ", "pipeline failed (k) with PR open"},

@@ -22,6 +22,8 @@ import (
 // that cannot see any other process's in-flight runs. Whatever protection the
 // sweep is given, a constructor is the wrong place to exercise it.
 func TestNewScheduler_ConstructionReclaimsNothing(t *testing.T) {
+	t.Parallel()
+
 	root, wt := mergedWorktreeRepo(t, 706)
 
 	_ = NewScheduler(nil, SchedulerConfig{WorkspaceRoot: root})
@@ -56,6 +58,8 @@ func defaultBranchWorktreeRepo(t *testing.T, issue int) (string, string) {
 // operator-visible record of the most destructive reclaim asserted a check that
 // never ran. A log that states a reason the code did not evaluate is worse than
 // no log: it is evidence pointing away from the actual authorization.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestMergedWorktreeSweep_DefaultBranchReclaimIsNotLoggedAsMerged(t *testing.T) {
 	root, wt := defaultBranchWorktreeRepo(t, 410)
 

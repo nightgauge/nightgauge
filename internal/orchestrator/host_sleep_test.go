@@ -11,6 +11,8 @@ import (
 
 // The arithmetic: wall span minus awake span, never negative (#3136).
 func TestHostSleptDuration(t *testing.T) {
+	t.Parallel()
+
 	start := time.Now()
 	if got := HostSleptDuration(start, start.Add(20*time.Minute)); got != 0 {
 		t.Errorf("Add moves wall and monotonic together, so no sleep: got %v", got)
@@ -32,6 +34,8 @@ func TestHostSleptDuration(t *testing.T) {
 // A gate timeout, a stall kill and a stage cap are host_slept when the host
 // slept 900 s, and keep today's kind at 0 s and at exactly the threshold.
 func TestReclassifyForHostSleep(t *testing.T) {
+	t.Parallel()
+
 	for _, kind := range []string{TerminalKindValidationError, TerminalKindStallKill, TerminalKindStageCapKill, TerminalKindSubagentCrash, ""} {
 		for _, tc := range []struct {
 			slept time.Duration
@@ -55,6 +59,8 @@ func TestReclassifyForHostSleep(t *testing.T) {
 }
 
 func TestHostSleptIsTransient(t *testing.T) {
+	t.Parallel()
+
 	if !isTransientRevertKind(TerminalKindHostSlept) {
 		t.Error("host_slept must return the issue to Ready like a stall kill")
 	}
@@ -67,6 +73,8 @@ const modelUnavailableSpoofText = "Error: unknown model id claude-nope"
 // Only the structured verdict yields host_slept (#3158): a "[host-slept]"
 // marker in error text keeps the kind the text would have had without it.
 func TestResolveTerminalKindHostSleptVerdict(t *testing.T) {
+	t.Parallel()
+
 	genuine := HostSleptStageError("feature-validate", 20*time.Minute, 15*time.Minute+27*time.Second)
 	cases := []struct {
 		name      string
@@ -101,6 +109,8 @@ func TestResolveTerminalKindHostSleptVerdict(t *testing.T) {
 
 // bookHostSleptStage replaces the stage error only when the stage slept past
 // the threshold and its kind is one sleep explains.
+//
+// Serial: swaps package var measureHostSleep.
 func TestBookHostSleptStage(t *testing.T) {
 	prev := measureHostSleep
 	t.Cleanup(func() { measureHostSleep = prev })
@@ -132,6 +142,8 @@ func TestBookHostSleptStage(t *testing.T) {
 // The card and the stage error say how long the host slept and how to stop
 // it, and never call the run a validation failure or cite the lifetime cap.
 func TestHostSleptOperatorText(t *testing.T) {
+	t.Parallel()
+
 	detail := HostSleptStageError("feature-validate", 20*time.Minute, 15*time.Minute+27*time.Second)
 	body := hostSleptCardBody("O/a", 1, "t", detail)
 	for name, text := range map[string]string{"stage error": detail, "card": body} {
@@ -152,6 +164,8 @@ func TestHostSleptOperatorText(t *testing.T) {
 // host_slept charges no lifetime failure and the slot-failure repo halt is
 // declined for it.
 func TestOnPipelineCompleteHostSleptDoesNotHaltOrCharge(t *testing.T) {
+	t.Parallel()
+
 	as, _, _ := revertFixture(t, map[int]string{})
 	as.state.Running = []RunningItem{{Repo: "O/a", Number: 1, Title: "t"}}
 

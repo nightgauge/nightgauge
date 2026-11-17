@@ -28,6 +28,8 @@ func (f *fakeClosingMerges) LatestClosingMerge(_ context.Context, owner, repo st
 }
 
 func TestPostMergeRerunVerdict(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		marker  hooks.ValidationMarkerOutcome
 		wantErr bool
@@ -52,6 +54,8 @@ func TestPostMergeRerunVerdict(t *testing.T) {
 }
 
 func TestRerunPostMerge(t *testing.T) {
+	t.Parallel()
+
 	marker := hooks.ValidationMarkerWritten
 	var gotPR int
 	newSched := func(reader ClosingMergeReader) *Scheduler {
@@ -103,6 +107,8 @@ func TestRerunPostMerge(t *testing.T) {
 // #3352: over the real issue service, a merged PR in another repository that
 // closes the issue is not a merge to validate, so the hook never runs.
 func TestRerunPostMergeIgnoresCrossRepoClosingMerge(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"nodes":[{"number":7,"repository":{"nameWithOwner":"other/app"},"merged":true,"mergedAt":"2026-11-02T12:00:00Z","mergeCommit":{"oid":"f0re1gn0"}}]}}}}}`))
@@ -126,6 +132,8 @@ func TestRerunPostMergeIgnoresCrossRepoClosingMerge(t *testing.T) {
 
 // #3353: the verdict names the main-check outcome, not just "no marker".
 func TestPostMergeRerunVerdictNamesMainChecks(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		mc   hooks.MainCheckResult
 		want string
@@ -146,6 +154,8 @@ func TestPostMergeRerunVerdictNamesMainChecks(t *testing.T) {
 }
 
 func TestResolveRerunTargetReturnsThePR(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{closingMergeReader: &fakeClosingMerges{merge: &gh.ClosingMerge{Number: 7}}}
 	pr, err := s.ResolveRerunTarget(context.Background(), "o/app", 21)
 	if err != nil || pr != 7 {

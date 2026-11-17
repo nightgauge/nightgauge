@@ -16,6 +16,8 @@ import (
 // tests pin the two properties that make it that rather than a notification.
 
 func TestOutOfScopeBlockerOffersARealRetraction(t *testing.T) {
+	t.Parallel()
+
 	r := BuildOutOfScopeBlocker("octocat/acme", 42, "run-1", "feature-validate")
 
 	primary := r.FindOption("cleared")
@@ -43,6 +45,8 @@ func TestOutOfScopeBlockerOffersARealRetraction(t *testing.T) {
 }
 
 func TestOutOfScopeBlockerIsAnEventNotAStandingCondition(t *testing.T) {
+	t.Parallel()
+
 	r := BuildOutOfScopeBlocker("octocat/acme", 42, "run-1", "feature-validate")
 
 	// Standing inherits ADR-015 §M suppression and needs a scan to auto-resolve
@@ -62,6 +66,8 @@ func TestOutOfScopeBlockerIsAnEventNotAStandingCondition(t *testing.T) {
 // The body has to tell an operator what NOT to expect, or the missing
 // blockedBy edges read as a bug rather than the decision #1147 made.
 func TestOutOfScopeBlockerBodyStatesThatNoEdgesWereCreated(t *testing.T) {
+	t.Parallel()
+
 	r := BuildOutOfScopeBlocker("octocat/acme", 42, "run-1", "feature-validate")
 
 	for _, want := range []string{"blockedBy", "add-blocked-by", BlockedFindingsDirName} {
@@ -75,6 +81,8 @@ func TestOutOfScopeBlockerBodyStatesThatNoEdgesWereCreated(t *testing.T) {
 // runstate.ArchiveRun from sweeping the finding into history/<runID>/ at the
 // end of the very run that wrote it.
 func TestBlockedFindingPathIsUnderASubdirectoryOfPipeline(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	got := BlockedFindingPath(root, 42)
 	want := filepath.Join(layouttest.PipelineDir(t, root), "blocked-findings", "42.json")
@@ -91,6 +99,8 @@ func TestBlockedFindingPathIsUnderASubdirectoryOfPipeline(t *testing.T) {
 // primary option does end to end — delete the finding AND release the
 // scheduler hold, then rescan (#3170).
 func TestOutOfScopeBlockerBodyStatesTheHoldRelease(t *testing.T) {
+	t.Parallel()
+
 	req := BuildOutOfScopeBlocker("o/r", 7, "run-1", "feature-planning")
 	for _, want := range []string{"deletes the finding", "releases any scheduler hold on #7", "rescan"} {
 		if !strings.Contains(req.Body, want) {

@@ -29,6 +29,8 @@ import (
 // refinementSem release runs bare with no recover (autonomous.go's
 // goTracked/wg.Go), so an unrecovered panic here models a crashed daemon, not
 // just a failed assertion.
+//
+// Serial: fails on a wall-clock deadline of 5s, which parallel load can exceed (#2950).
 func TestRunRefinementCycle_ReposShrinkMidScanDoesNotPanic(t *testing.T) {
 	release := make(chan struct{})
 	entered := make(chan struct{})
@@ -127,6 +129,8 @@ func TestRunRefinementCycle_ReposShrinkMidScanDoesNotPanic(t *testing.T) {
 // only slot (modelling a refinement that spans the tick boundary), cycle 2
 // runs while the slot is still held and must scan nothing, and cycle 3 —
 // once the slot is released — must land on r2, not r1 again.
+//
+// Serial: fails on a wall-clock deadline of 5s, which parallel load can exceed (#2950).
 func TestRunRefinementCycle_OffsetDoesNotAdvanceOnSaturatedCycle(t *testing.T) {
 	srv := twoRepoUnrefinedIssuesServer(t)
 	defer srv.Close()

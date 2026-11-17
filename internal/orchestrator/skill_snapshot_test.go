@@ -15,6 +15,8 @@ import (
 )
 
 func TestRunSkillSnapshotCopiesOnceAndReuses(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
@@ -40,6 +42,8 @@ func TestRunSkillSnapshotCopiesOnceAndReuses(t *testing.T) {
 }
 
 func TestRunSkillSnapshotSkipsSymlinks(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
@@ -58,6 +62,8 @@ func TestRunSkillSnapshotSkipsSymlinks(t *testing.T) {
 }
 
 func TestRunSkillSnapshotPrunesOtherRuns(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
@@ -76,6 +82,8 @@ func TestRunSkillSnapshotPrunesOtherRuns(t *testing.T) {
 }
 
 func TestRunSkillSnapshotNoSkillsAndBadRunID(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
@@ -113,6 +121,8 @@ func TestRunSkillSnapshotNoSkillsAndBadRunID(t *testing.T) {
 // A run of one issue never prunes a concurrent run of another issue: the
 // checkout is shared, the snapshot directories are not (#2813 review).
 func TestRunSkillSnapshotKeepsOtherIssuesSnapshots(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
@@ -136,6 +146,8 @@ func TestRunSkillSnapshotKeepsOtherIssuesSnapshots(t *testing.T) {
 // A run that inherits a finished run's ID starts from the current skills; a
 // resume of the same run keeps its frozen copy (#2813 review).
 func TestResetSkillSnapshotForRunDropsInheritedCopies(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
@@ -170,6 +182,8 @@ func TestResetSkillSnapshotForRunDropsInheritedCopies(t *testing.T) {
 // decision is A's own lifecycle's (beginRunLifecycle), not the shared record
 // (#2813).
 func TestResetSkillSnapshotKeepsResumeWhileAnotherIssueOwnsRunState(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
@@ -198,6 +212,8 @@ func TestResetSkillSnapshotKeepsResumeWhileAnotherIssueOwnsRunState(t *testing.T
 // started under adopts the run-start copy instead of copying the edited tree
 // (#2813 review: MarkRunning mints its own ID).
 func TestResetSkillSnapshotResumeAdoptsCopyUnderAnotherID(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
@@ -225,6 +241,8 @@ func TestResetSkillSnapshotResumeAdoptsCopyUnderAnotherID(t *testing.T) {
 
 // A run that ends without a resume removes its snapshot; other issues keep theirs.
 func TestDropSkillSnapshotRemovesOnlyThatIssue(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
@@ -250,6 +268,8 @@ func TestDropSkillSnapshotRemovesOnlyThatIssue(t *testing.T) {
 // A run that resumed nothing discards the issue's earlier copy, whatever its
 // key, and renders the current skills (#2813).
 func TestResetSkillSnapshotNotResumedDropsOtherCopies(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	thawOnCleanup(t, root)
 	layouttest.MkCheckoutDir(t, root)
@@ -279,6 +299,8 @@ func TestResetSkillSnapshotNotResumedDropsOtherCopies(t *testing.T) {
 // earlier stage edited; a fresh run after a completed one renders the edit
 // (#2813 review: the resume decision is beginRunLifecycle's, not the run ID's
 // provenance).
+//
+// Serial: sets the environment.
 func TestPlatformRunResumingPausedRecordRendersFromSnapshot(t *testing.T) {
 	t.Setenv(skillrender.SkillsRootEnv, "")
 	root := layouttest.Repo(t)
@@ -338,6 +360,8 @@ func thawOnCleanup(t *testing.T, dir string) {
 }
 
 func TestRunSkillSnapshotFreezesDirectories(t *testing.T) {
+	t.Parallel()
+
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses directory permissions")
 	}

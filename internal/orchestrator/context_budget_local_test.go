@@ -5,6 +5,8 @@ import "testing"
 // TestIsLocalDispatch (#2186): only an opencode model on a local provider key
 // prefers the compact profile.
 func TestIsLocalDispatch(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	for _, tc := range []struct {
 		adapter, model string

@@ -8,6 +8,8 @@ import (
 // TestPauseDeferred_AddsNewItem verifies that PauseDeferred adds a new queue
 // item when none exists for the issue number. (Issue #3004)
 func TestPauseDeferred_AddsNewItem(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
@@ -44,6 +46,8 @@ func TestPauseDeferred_AddsNewItem(t *testing.T) {
 // with the same issue number replaces the PausedReason without duplicating
 // the entry.
 func TestPauseDeferred_UpdatesExistingItem(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
@@ -65,6 +69,8 @@ func TestPauseDeferred_UpdatesExistingItem(t *testing.T) {
 }
 
 func TestListPausedByKind_FiltersByKind(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{repoRunning: make(map[string]int), mergeLocks: make(map[string]*sync.Mutex)}
 	upstream := QueuePausedReason{Kind: "upstream_failure", FailedRunID: "1"}
 	baseline := QueuePausedReason{Kind: "baseline_ci_red", Workflow: "ci.yml"}
@@ -87,6 +93,8 @@ func TestListPausedByKind_FiltersByKind(t *testing.T) {
 }
 
 func TestResumePaused_ResumesPaused(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
@@ -108,6 +116,8 @@ func TestResumePaused_ResumesPaused(t *testing.T) {
 }
 
 func TestResumePaused_NotPausedReturnsFalse(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{repoRunning: make(map[string]int), mergeLocks: make(map[string]*sync.Mutex)}
 	s.queue = []QueueItem{{IssueNumber: 5, Status: "pending"}}
 	if s.ResumePaused("", 5) {
@@ -116,6 +126,8 @@ func TestResumePaused_NotPausedReturnsFalse(t *testing.T) {
 }
 
 func TestResumePaused_MissingReturnsFalse(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{repoRunning: make(map[string]int), mergeLocks: make(map[string]*sync.Mutex)}
 	if s.ResumePaused("", 404) {
 		t.Error("expected false for missing issue")
@@ -125,6 +137,8 @@ func TestResumePaused_MissingReturnsFalse(t *testing.T) {
 // TestPauseAndResume_SameNumberInTwoRepos pins #2416: with app#21 and
 // platform#21 both queued, pausing and resuming one never touches the other.
 func TestPauseAndResume_SameNumberInTwoRepos(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),

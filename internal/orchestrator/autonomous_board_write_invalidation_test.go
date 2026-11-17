@@ -31,6 +31,8 @@ import (
 // landed), so the test needs no MoveStatus fixture, only proof that the write
 // was attempted through the wrapped service.
 func TestSchedulerStatusMovesInvalidateSharedBoardCache(t *testing.T) {
+	t.Parallel()
+
 	moves := map[string]func(as *AutonomousScheduler, ctx context.Context){
 		"revertFailedIssueStatus": func(as *AutonomousScheduler, ctx context.Context) {
 			as.revertFailedIssueStatus(ctx, "O/a", 1, "", "")
@@ -93,6 +95,8 @@ func TestSchedulerStatusMovesInvalidateSharedBoardCache(t *testing.T) {
 // TestSchedulerWithoutBoardCacheStillWrites pins the CLI shape: no shared
 // cache set, and the board write still goes out, unwrapped.
 func TestSchedulerWithoutBoardCacheStillWrites(t *testing.T) {
+	t.Parallel()
+
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -121,6 +125,8 @@ func TestSchedulerWithoutBoardCacheStillWrites(t *testing.T) {
 // Scoped to autonomous*.go: the per-run Scheduler (epic.go's post-merge board
 // sync) holds no board cache to invalidate and is not covered here.
 func TestSchedulerBoardWritesHaveOneConstructor(t *testing.T) {
+	t.Parallel()
+
 	files, err := filepath.Glob("autonomous*.go")
 	if err != nil {
 		t.Fatal(err)
@@ -152,6 +158,8 @@ func TestSchedulerBoardWritesHaveOneConstructor(t *testing.T) {
 // hand it the same cache so moving the merged issue to Done drops the open
 // snapshot.
 func TestEpicPostMergeBoardSyncInvalidatesSharedBoardCache(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"errors":[{"message":"forced failure"}]}`))

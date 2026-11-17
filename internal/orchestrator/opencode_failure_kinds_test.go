@@ -43,6 +43,8 @@ func openCodeStageReason(t *testing.T, leg string) string {
 }
 
 func TestOpenCodeCapturedFailuresClassify(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		leg  string
 		want string
@@ -88,6 +90,8 @@ func TestOpenCodeCapturedFailuresClassify(t *testing.T) {
 // reconcile re-admits. The issue must never be a candidate again. bash and
 // edit are the controls: the permission a marker names is the model's tool
 // choice and never changes the outcome.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestOpenCodeReadRejectionParks(t *testing.T) {
 	for _, tool := range []string{"read", "bash", "edit"} {
 		t.Run(tool, func(t *testing.T) {
@@ -149,6 +153,8 @@ func TestOpenCodeReadRejectionParks(t *testing.T) {
 // itself raises (ADR-022 § 20) and classifies them as the scheduler records a
 // dispatch refusal: execution.Manager's wrapper, then `exit 0: `.
 func TestOpenCodeIncompatibleRefusalsClassify(t *testing.T) {
+	t.Parallel()
+
 	if TerminalKindAdapterIncompatible != adapters.OpenCodeIncompatible {
 		t.Fatalf("TerminalKindAdapterIncompatible = %q, but the refusal carries %q", TerminalKindAdapterIncompatible, adapters.OpenCodeIncompatible)
 	}
@@ -181,6 +187,8 @@ func TestOpenCodeIncompatibleRefusalsClassify(t *testing.T) {
 // window, permission rule and binary, so the stage must be dispatched once and
 // the run recorded with the parked kind.
 func TestOpenCodeParkedFailuresAreNotEscalated(t *testing.T) {
+	t.Parallel()
+
 	overflow, err := os.ReadFile(filepath.Join(openCodeCaptureDir, "overflow-lmstudio.stderr"))
 	if err != nil {
 		t.Fatal(err)
@@ -247,6 +255,8 @@ func TestOpenCodeParkedFailuresAreNotEscalated(t *testing.T) {
 // mirrors the adapter's kind word, the marker texts the parser and the retry
 // watchdog write classify to distinct kinds, and only no-route parks.
 func TestOpenCodeProviderFailureKinds(t *testing.T) {
+	t.Parallel()
+
 	mirrors := map[string]string{
 		TerminalKindAdapterProviderNoRoute:   adapters.OpenCodeProviderNoRoute,
 		TerminalKindAdapterProviderTransport: adapters.OpenCodeProviderTransport,

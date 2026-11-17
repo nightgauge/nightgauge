@@ -127,6 +127,8 @@ func equalStages(got, want []state.PipelineStage) bool {
 // the bug — not a harmless extra: it hands a hand-written issue straight past
 // planning and implementation with no diff written for it.
 func TestDependabotFastTrackAppliesOnlyToRemediationPullRequests(t *testing.T) {
+	t.Parallel()
+
 	fastTracked := []state.PipelineStage{
 		state.StageIssuePickup,
 		state.StageFeatureValidate,
@@ -231,6 +233,8 @@ func TestDependabotFastTrackAppliesOnlyToRemediationPullRequests(t *testing.T) {
 // attributes the skip to this route rather than to the change-class fast-track,
 // and the reason is the only place the rationale is recorded.
 func TestDependabotFastTrackTracesSourceAndRationale(t *testing.T) {
+	t.Parallel()
+
 	h := newFastTrackHarness(t)
 	item := types.BoardItem{Number: 101, IsPR: true, Labels: []string{"dependencies", "security"}}
 
@@ -266,6 +270,8 @@ func TestDependabotFastTrackTracesSourceAndRationale(t *testing.T) {
 // that breaks the build is a worse outcome than one that lands late. Anything
 // that adds a stage here silently weakens the merge gate.
 func TestDependabotFastTrackSkipSetIsExactlyPlanningAndDev(t *testing.T) {
+	t.Parallel()
+
 	skips := dependabotFastTrackSkipSet()
 
 	want := []state.PipelineStage{state.StageFeaturePlanning, state.StageFeatureDev}
@@ -300,6 +306,8 @@ func TestDependabotFastTrackSkipSetIsExactlyPlanningAndDev(t *testing.T) {
 // counted twice. Reading the skipped half off runtime.SkippedStages — not off
 // the skip-set helper — is what makes deleting the SkipStage call fail here.
 func TestDependabotFastTrackPartitionsWhatItRecords(t *testing.T) {
+	t.Parallel()
+
 	h := newFastTrackHarness(t)
 	full := fullStageOrder()
 
@@ -346,6 +354,8 @@ func TestDependabotFastTrackPartitionsWhatItRecords(t *testing.T) {
 // TestDependabotFastTrackKeepsValidateCreateAndMerge asserts the surviving
 // route, in order: issue-pickup → feature-validate → pr-create → pr-merge.
 func TestDependabotFastTrackKeepsValidateCreateAndMerge(t *testing.T) {
+	t.Parallel()
+
 	h := newFastTrackHarness(t)
 
 	got := applyDependabotFastTrack(
@@ -368,6 +378,8 @@ func TestDependabotFastTrackKeepsValidateCreateAndMerge(t *testing.T) {
 // appends spike-materialize after pr-merge, and any stage the route does not
 // recognise must survive untouched rather than being dropped on the floor.
 func TestDependabotFastTrackLeavesStagesItDoesNotOwnAlone(t *testing.T) {
+	t.Parallel()
+
 	h := newFastTrackHarness(t)
 	full := append(fullStageOrder(), state.StageSpikeMaterialize)
 
@@ -385,6 +397,8 @@ func TestDependabotFastTrackLeavesStagesItDoesNotOwnAlone(t *testing.T) {
 // were really in the order, or a run whose order never contained feature-dev
 // reports two skips for one removal and its success arithmetic over-counts.
 func TestDependabotFastTrackRecordsOnlyStagesTheOrderContained(t *testing.T) {
+	t.Parallel()
+
 	h := newFastTrackHarness(t)
 	// An order that already omits feature-dev — e.g. a route the change-class
 	// fast-track narrowed first.

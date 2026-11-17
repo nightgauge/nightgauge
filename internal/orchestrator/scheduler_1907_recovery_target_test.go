@@ -27,6 +27,8 @@ func revParse(t *testing.T, dir, ref string) string {
 // must refuse, name the dirty paths, commit nothing, and leave the edits dirty
 // and byte-identical.
 func TestRecoverUncommittedWork_RefusesPrimaryCheckoutOnDefaultBranch(t *testing.T) {
+	t.Parallel()
+
 	primary := t.TempDir()
 	gittest.Run(t, primary, "init")
 	gittest.Run(t, primary, "checkout", "-b", "main")
@@ -76,6 +78,8 @@ func TestRecoverUncommittedWork_RefusesPrimaryCheckoutOnDefaultBranch(t *testing
 // branch half on its own: even a linked worktree may not take a rescue commit
 // while HEAD is the default branch or detached.
 func TestRecoverUncommittedWork_RefusesLinkedWorktreeOnDefaultBranch(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name, want string
 		checkout   []string

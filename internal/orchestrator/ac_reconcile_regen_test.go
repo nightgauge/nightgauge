@@ -55,6 +55,8 @@ func readReport(t *testing.T, path string) preflight.ACReconcileResult {
 // An earlier run's 9-criterion report is replaced by one built from the
 // 13-criterion body the issue has now (#3228).
 func TestRegenerateACReconcile_ReplacesStaleReport(t *testing.T) {
+	t.Parallel()
+
 	ws := gitWorkspace(t)
 	path := writeStaleReport(t, ws)
 	body := regenCriteria(13)
@@ -75,6 +77,8 @@ func TestRegenerateACReconcile_ReplacesStaleReport(t *testing.T) {
 // A body that cannot be read fails the regeneration, and the earlier run's
 // report is left as it was rather than presented as current.
 func TestRegenerateACReconcile_ReadErrorFails(t *testing.T) {
+	t.Parallel()
+
 	ws := gitWorkspace(t)
 	path := writeStaleReport(t, ws)
 	before, _ := os.ReadFile(path)
@@ -94,6 +98,8 @@ func TestRegenerateACReconcile_ReadErrorFails(t *testing.T) {
 
 // A report that cannot be written fails the regeneration.
 func TestRegenerateACReconcile_WriteErrorFails(t *testing.T) {
+	t.Parallel()
+
 	ws := gitWorkspace(t)
 	path, err := stagecontext.ContextPath(ws, 42, "ac-reconcile")
 	if err != nil {
@@ -114,6 +120,8 @@ func TestRegenerateACReconcile_WriteErrorFails(t *testing.T) {
 // A body with no criteria still writes its (empty) report and posts the
 // one-time note the skill's --notify-empty used to post (#2906).
 func TestRegenerateACReconcile_NoCriteriaNotifies(t *testing.T) {
+	t.Parallel()
+
 	ws := gitWorkspace(t)
 	notified := 0
 	s := &Scheduler{
@@ -153,6 +161,8 @@ func planningPipelineScheduler(t *testing.T) (*Scheduler, *refusalCapturingStage
 // The scheduler rebuilds the report before feature-planning dispatches: the
 // planning stage finds the current body's 13 criteria beside its output.
 func TestScheduler_RegeneratesACReconcileBeforePlanning(t *testing.T) {
+	t.Parallel()
+
 	s, runner := planningPipelineScheduler(t)
 	body := regenCriteria(13)
 	s.acReconcileBody = func(context.Context, types.BoardItem) (string, error) { return body, nil }
@@ -173,6 +183,8 @@ func TestScheduler_RegeneratesACReconcileBeforePlanning(t *testing.T) {
 // A failed regeneration fails feature-planning before it dispatches, with the
 // cause recorded under the stage.
 func TestScheduler_FailedACReconcileRegenerationFailsTheStage(t *testing.T) {
+	t.Parallel()
+
 	s, runner := planningPipelineScheduler(t)
 	s.acReconcileBody = func(context.Context, types.BoardItem) (string, error) {
 		return "", errors.New("HTTP 502")
@@ -196,6 +208,8 @@ func TestScheduler_FailedACReconcileRegenerationFailsTheStage(t *testing.T) {
 // A body whose author has write access is vouched for after the read and is
 // reconciled (#3231).
 func TestRegenerateACReconcile_VouchedBodyReconciles(t *testing.T) {
+	t.Parallel()
+
 	ws := gitWorkspace(t)
 	path := writeStaleReport(t, ws)
 	body := regenCriteria(13)
@@ -214,6 +228,8 @@ func TestRegenerateACReconcile_VouchedBodyReconciles(t *testing.T) {
 // An outsider's body is refused after the read: the stage errors with the
 // gate's reason and the earlier report is neither replaced nor used (#3231).
 func TestRegenerateACReconcile_UnvouchedBodyRefused(t *testing.T) {
+	t.Parallel()
+
 	ws := gitWorkspace(t)
 	path := writeStaleReport(t, ws)
 	before, _ := os.ReadFile(path)
@@ -238,6 +254,8 @@ func TestRegenerateACReconcile_UnvouchedBodyRefused(t *testing.T) {
 
 // A forge that cannot answer the trust question fails closed (#3231).
 func TestRegenerateACReconcile_UndecidableFailsClosed(t *testing.T) {
+	t.Parallel()
+
 	ws := gitWorkspace(t)
 	path := writeStaleReport(t, ws)
 	before, _ := os.ReadFile(path)

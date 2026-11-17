@@ -15,6 +15,8 @@ import (
 // A throttle that arrives while the auto-scheduler reads the board holds the
 // item the read picked: it is not dispatched, and waits for a later poll
 // (#2352).
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRunAuto_HoldsTheItemWhenTheThrottleArrivesDuringTheBoardRead(t *testing.T) {
 	throttle := NewDispatchThrottle()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

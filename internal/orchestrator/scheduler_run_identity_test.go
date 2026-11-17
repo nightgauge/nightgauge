@@ -128,6 +128,8 @@ func newRunIdentityTestScheduler(t *testing.T, root string, runner StageRunner) 
 // than "non-empty": non-empty would pass if someone minted a SECOND id at the
 // dispatch site, which is the identity-splitting this ADR exists to prevent.
 func TestRunPipeline_DispatchCarriesTheMintedRunID(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	runner := &runIDCapturingRunner{}
 	s := newRunIdentityTestScheduler(t, root, runner)
@@ -174,6 +176,8 @@ func TestRunPipeline_DispatchCarriesTheMintedRunID(t *testing.T) {
 //
 // So: force the mint to fail, then assert on the funnel's observable effects
 // rather than on the return itself.
+//
+// Serial: swaps package var newRunID.
 func TestRunPipeline_MintFailureIsBookedThroughTheTerminalFunnel(t *testing.T) {
 	root := gitWorkspace(t)
 	runner := &runIDCapturingRunner{}
@@ -255,6 +259,8 @@ func TestRunPipeline_MintFailureIsBookedThroughTheTerminalFunnel(t *testing.T) {
 // every snapshot is a phantom. A spec-compliant v7 remote id still correlates —
 // pinned by the sibling case below.
 func TestRunPipeline_IgnoresANonIdentityRemoteRunID_AndMintsLocally(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name   string
 		remote string
@@ -323,6 +329,8 @@ func TestRunPipeline_IgnoresANonIdentityRemoteRunID_AndMintsLocally(t *testing.T
 // (A NON-compliant one loses correlation until ADR-017 Decision 2 threads
 // `remoteRunId` as its own attribute rather than as the identity.)
 func TestRunPipeline_AcceptsACanonicalRemoteRunID(t *testing.T) {
+	t.Parallel()
+
 	root := gitWorkspace(t)
 	runner := &runIDCapturingRunner{}
 	s := newRunIdentityTestScheduler(t, root, runner)
@@ -357,6 +365,8 @@ func TestRunPipeline_AcceptsACanonicalRemoteRunID(t *testing.T) {
 // board reset, concurrency slot released) rather than run to completion while
 // every Persist is silently refused at the state sink. The forced mint here
 // stands in for that future path.
+//
+// Serial: swaps package var newRunID.
 func TestRunPipeline_PreflightRefusesANonIdentity_AndBooksThroughTheFunnel(t *testing.T) {
 	root := gitWorkspace(t)
 	runner := &runIDCapturingRunner{}

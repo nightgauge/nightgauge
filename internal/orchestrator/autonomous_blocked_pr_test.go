@@ -16,6 +16,8 @@ import (
 // Ready and the ENTIRE pipeline re-runs against a PR that still can't merge
 // (the dogfood unmergeable-PR retry loop).
 func TestPrioritize_SkipsOpenPRBlocked(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "Blocked PR", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "XS", Weight: 1},
 		{Repo: "R", Number: 2, Title: "No PR", State: "OPEN", BoardStatus: "Ready", Priority: "P2", Size: "M", Weight: 3},
@@ -42,6 +44,8 @@ func TestPrioritize_SkipsOpenPRBlocked(t *testing.T) {
 // (never refreshed yet, or all queries failed) reads as all-false — the guard is
 // fail-open and never suppresses dispatch when we have no PR knowledge.
 func TestPrioritize_NilBlockedSetDispatchesNormally(t *testing.T) {
+	t.Parallel()
+
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "A", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "XS", Weight: 1},
 	}
@@ -63,6 +67,8 @@ func TestPrioritize_NilBlockedSetDispatchesNormally(t *testing.T) {
 // dispatchable, open, non-epic issues whose OPEN PR is BLOCKED. Mergeable/
 // behind/dirty PRs, non-dispatchable statuses, epics, and issues with no open
 // PR are all left dispatchable (unmarked). One gh pr list per repo.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestRefreshBlockedReadyPRs_MarksOnlyBlocked(t *testing.T) {
 	calls := 0
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
@@ -107,6 +113,8 @@ func TestRefreshBlockedReadyPRs_MarksOnlyBlocked(t *testing.T) {
 // TestRefreshBlockedReadyPRs_GhErrorFailsOpen: when the gh query fails the sweep
 // records nothing for that repo (fail-open) rather than marking issues blocked —
 // dispatch is never suppressed on a transient GitHub error.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestRefreshBlockedReadyPRs_GhErrorFailsOpen(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
 		return nil, context.DeadlineExceeded
@@ -131,6 +139,8 @@ func TestRefreshBlockedReadyPRs_GhErrorFailsOpen(t *testing.T) {
 // is both stale and failing a required check reports BEHIND — the state the
 // pre-#159 guard read as "fine, dispatch". Each row asserts the union verdict.
 func TestPRCannotMergeReason_Matrix(t *testing.T) {
+	t.Parallel()
+
 	known := branchCheckPolicy{Known: true, Required: map[string]bool{"ci": true}}
 	unknown := branchCheckPolicy{}
 
@@ -218,6 +228,8 @@ func TestPRCannotMergeReason_Matrix(t *testing.T) {
 // branch-protection probe must fire only for PRs whose verdict actually depends
 // on it — never for a CLEAN PR, and never for one already conclusively BLOCKED.
 func TestPRNeedsBranchPolicy_OnlyWhenTheVerdictTurnsOnIt(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		pr   openPR
@@ -244,6 +256,8 @@ func TestPRNeedsBranchPolicy_OnlyWhenTheVerdictTurnsOnIt(t *testing.T) {
 // both be classified here. In-flight checks are NOT failures — treating them as
 // such would suppress dispatch for every PR with CI still running.
 func TestFailedCheckNames_ClassifiesRollupRows(t *testing.T) {
+	t.Parallel()
+
 	rows := []checkRollupRow{
 		{TypeName: "CheckRun", Name: "go-test", Status: "COMPLETED", Conclusion: "FAILURE"},
 		{TypeName: "CheckRun", Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS"},
@@ -317,6 +331,8 @@ func readyGraph(numbers ...int) *depgraph.Graph {
 // real sweep — batched list call included — so the wiring (rollup fields on the
 // same list call, lazily-resolved branch policy) is covered, not just the pure
 // predicate.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestRefreshBlockedReadyPRs_UnionMatrix(t *testing.T) {
 	const failingCI = `"statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"FAILURE"}]`
 	const greenCI = `"statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]`
@@ -387,6 +403,8 @@ func TestRefreshBlockedReadyPRs_UnionMatrix(t *testing.T) {
 // contract (#159 hard constraint). The check rollup must ride along on the
 // single batched list call, and the branch policy must be resolved once per
 // base branch — never once per PR, no matter how many candidates share the repo.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestRefreshBlockedReadyPRs_OneListAndOnePolicyCallPerRepo(t *testing.T) {
 	stub := &blockedPRGhStub{
 		prListJSON: `[
@@ -424,6 +442,8 @@ func TestRefreshBlockedReadyPRs_OneListAndOnePolicyCallPerRepo(t *testing.T) {
 
 // TestRefreshBlockedReadyPRs_CleanPRsSkipTheBranchPolicyLookup: a repo whose
 // open PRs are all mergeable must pay nothing beyond the batched list call.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestRefreshBlockedReadyPRs_CleanPRsSkipTheBranchPolicyLookup(t *testing.T) {
 	stub := &blockedPRGhStub{
 		prListJSON: `[{"number":10,"headRefName":"feat/1-a","baseRefName":"main","mergeStateStatus":"CLEAN",
@@ -447,6 +467,8 @@ func TestRefreshBlockedReadyPRs_CleanPRsSkipTheBranchPolicyLookup(t *testing.T) 
 // probe fails (no scope, transient error) the guard degrades to its pre-#159
 // BLOCKED-only behaviour instead of inventing a block. Fail-open is preserved
 // for BOTH queries, not just the list call.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestRefreshBlockedReadyPRs_BranchPolicyErrorFailsOpen(t *testing.T) {
 	stub := &blockedPRGhStub{
 		prListJSON: `[{"number":10,"headRefName":"feat/1-a","baseRefName":"main","mergeStateStatus":"BEHIND",
@@ -467,6 +489,8 @@ func TestRefreshBlockedReadyPRs_BranchPolicyErrorFailsOpen(t *testing.T) {
 // first (no administration:read needed), classic branch protection second —
 // the same two-source union internal/github uses for required check names. A
 // repo on classic protection must still yield its required contexts.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestFetchBranchCheckPolicy_FallsBackToClassicProtection(t *testing.T) {
 	var paths []string
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
@@ -493,6 +517,8 @@ func TestFetchBranchCheckPolicy_FallsBackToClassicProtection(t *testing.T) {
 
 // TestFetchBranchCheckPolicy_RulesetsShortCircuitClassic: when rulesets answer,
 // the classic endpoint is not probed at all — one call, not two.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestFetchBranchCheckPolicy_RulesetsShortCircuitClassic(t *testing.T) {
 	calls := 0
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -513,6 +539,8 @@ func TestFetchBranchCheckPolicy_RulesetsShortCircuitClassic(t *testing.T) {
 // TestIsWellFormedBranch guards the ref before it is interpolated into a GitHub
 // API path.
 func TestIsWellFormedBranch(t *testing.T) {
+	t.Parallel()
+
 	for _, ok := range []string{"main", "release/1.2", "feat/159-guard"} {
 		if !isWellFormedBranch(ok) {
 			t.Errorf("expected %q to be well formed", ok)

@@ -50,6 +50,7 @@ func stubIssueStates(t *testing.T, states map[string]string) *[]string {
 
 const blockedDetail = "BLOCKED — the deliverable depends on #77 and acme/lib#5, neither of which is on main (#42)"
 
+// Serial: swaps package var reconcileExecGh (via stubIssueStates).
 func TestClosedNamedBlockers(t *testing.T) {
 	asked := stubIssueStates(t, map[string]string{
 		"nightgauge/nightgauge#77": "closed",
@@ -65,6 +66,7 @@ func TestClosedNamedBlockers(t *testing.T) {
 	}
 }
 
+// Serial: swaps package var reconcileExecGh (via stubIssueStates).
 func TestClosedNamedBlockers_UnreadableIsOpen(t *testing.T) {
 	stubIssueStates(t, nil)
 	if got := closedNamedBlockers(context.Background(), "o/r", 42, "BLOCKED — waits on #9"); len(got) != 0 {
@@ -72,6 +74,7 @@ func TestClosedNamedBlockers_UnreadableIsOpen(t *testing.T) {
 	}
 }
 
+// Serial: swaps package var reconcileExecGh (via stubIssueStates).
 func TestRecheckBlockedOutcome(t *testing.T) {
 	const repo = "nightgauge/nightgauge"
 	cases := []struct {
@@ -162,6 +165,8 @@ func TestRecheckBlockedOutcome(t *testing.T) {
 
 // A resumed worktree whose base merge conflicts stops before any stage, with a
 // merge_conflict reason naming the files rather than not_pipeline_actionable.
+//
+// Serial: sets the environment (via isolateRoutingEnv).
 func TestRunPipeline_BaseRefreshConflictStopsBeforeDispatch(t *testing.T) {
 	isolateRoutingEnv(t)
 	root := gitWorkspace(t)
@@ -196,6 +201,8 @@ func TestRunPipeline_BaseRefreshConflictStopsBeforeDispatch(t *testing.T) {
 
 // A resumed worktree behind its base is brought up to date before the first
 // stage runs, in the run worktree, and the run goes on to dispatch.
+//
+// Serial: swaps package var refreshResumedBase.
 func TestRunPipeline_BaseRefreshRunsBeforeTheFirstStage(t *testing.T) {
 	isolateRoutingEnv(t)
 	root := gitWorkspace(t)
@@ -238,6 +245,8 @@ func (r *blockedRunner) RunStage(ctx context.Context, params StageRunParams) (*S
 // A stage blocked on a now-closed issue triggers one base refresh in the run
 // worktree, at most once per run however often the stage re-runs; an open
 // blocker triggers none.
+//
+// Serial: sets the environment (via isolateRoutingEnv).
 func TestRunPipeline_BlockedOnAClosedIssueRefreshesOnce(t *testing.T) {
 	for _, tc := range []struct {
 		state     string

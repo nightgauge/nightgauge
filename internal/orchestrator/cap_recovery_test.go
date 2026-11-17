@@ -39,6 +39,8 @@ func neverUsable(string) (bool, string) { return false, "not signed in" }
 // fails loudly and the whole cap-recovery ladder should be re-derived rather
 // than silently double-applied.
 func TestTheObservedMarkerStillClassifiesAccountWide(t *testing.T) {
+	t.Parallel()
+
 	if got := ClassifyTerminalKind(capRejectionMarker); got != TerminalKindRateLimitQuotaExhausted {
 		t.Fatalf("the #1545 marker must still classify account-wide, got %q", got)
 	}
@@ -51,6 +53,8 @@ func TestTheObservedMarkerStillClassifiesAccountWide(t *testing.T) {
 // criterion 1: a rate_limit_event rejection while running fable, with other
 // tiers available, descends to opus and continues — no global cooldown.
 func TestCapRejectionOnFableDescendsInsteadOfCoolingTheFleetDown(t *testing.T) {
+	t.Parallel()
+
 	d := DecideCapRecovery(CapRecoveryInput{
 		Kind:          ClassifyTerminalKind(capRejectionMarker),
 		DispatchModel: "fable",
@@ -77,6 +81,8 @@ func TestCapRejectionOnFableDescendsInsteadOfCoolingTheFleetDown(t *testing.T) {
 // spent in full — fable → opus → sonnet → haiku — before the provider walk is
 // even consulted. The cheapest recovery is exhausted first.
 func TestDescentWalksTheWholeLadderBeforeAnythingElse(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 	kind := ClassifyTerminalKind(capRejectionMarker)
 	model := "fable"
@@ -116,6 +122,8 @@ func TestDescentWalksTheWholeLadderBeforeAnythingElse(t *testing.T) {
 // 2: a rejection that persists across the whole tier ladder walks
 // adapter_fallback_chain to the next installed, authenticated provider.
 func TestExhaustedLadderHopsToTheNextAuthenticatedProvider(t *testing.T) {
+	t.Parallel()
+
 	probed := []string{}
 	d := DecideCapRecovery(CapRecoveryInput{
 		Kind:          ClassifyTerminalKind(capRejectionMarker),
@@ -151,6 +159,8 @@ func TestExhaustedLadderHopsToTheNextAuthenticatedProvider(t *testing.T) {
 // once a run has hopped onto codex and been capped there too, the walk moves
 // past it rather than back onto it.
 func TestTheWalkNeverRevisitsAProviderThisRunAlreadyTried(t *testing.T) {
+	t.Parallel()
+
 	d := DecideCapRecovery(CapRecoveryInput{
 		Kind:          TerminalKindRateLimitQuotaExhausted,
 		DispatchModel: "haiku",
@@ -169,6 +179,8 @@ func TestTheWalkNeverRevisitsAProviderThisRunAlreadyTried(t *testing.T) {
 // removed, it is DEFERRED. With the ladder spent and no chain configured — the
 // default configuration — behaviour is exactly what it was before #1545.
 func TestAccountWideRejectionWithAnEmptyChainStillCoolsDown(t *testing.T) {
+	t.Parallel()
+
 	d := DecideCapRecovery(CapRecoveryInput{
 		Kind:          ClassifyTerminalKind(capRejectionMarker),
 		DispatchModel: "haiku",
@@ -192,6 +204,8 @@ func TestAccountWideRejectionWithAnEmptyChainStillCoolsDown(t *testing.T) {
 // shape: a chain IS configured, but nothing in it is usable. The fleet still
 // gets its cooldown rather than spinning through dead candidates.
 func TestAChainOfUnreachableProvidersAlsoCoolsDown(t *testing.T) {
+	t.Parallel()
+
 	d := DecideCapRecovery(CapRecoveryInput{
 		Kind:          TerminalKindRateLimitQuotaExhausted,
 		DispatchModel: "haiku",
@@ -211,6 +225,8 @@ func TestAChainOfUnreachableProvidersAlsoCoolsDown(t *testing.T) {
 // health probe wired, no candidate is assumed reachable. An unprobed provider
 // is not a provider we know we can reach, and guessing costs a full stage.
 func TestAnUnprobedChainIsNotAUsableChain(t *testing.T) {
+	t.Parallel()
+
 	d := DecideCapRecovery(CapRecoveryInput{
 		Kind:          TerminalKindRateLimitQuotaExhausted,
 		DispatchModel: "haiku",
@@ -227,6 +243,8 @@ func TestAnUnprobedChainIsNotAUsableChain(t *testing.T) {
 // one of the two cap kinds returns not-applicable with its kind unchanged, so
 // the caller's existing routing is bit-for-bit what it was.
 func TestNonCapFailuresAreUntouched(t *testing.T) {
+	t.Parallel()
+
 	for _, kind := range []string{
 		TerminalKindStallKill,
 		TerminalKindSubagentCrash,
@@ -258,6 +276,8 @@ func TestNonCapFailuresAreUntouched(t *testing.T) {
 // account's quota, and halting every repo over one would be this issue's bug
 // with the kinds swapped.
 func TestAPlainModelUnavailableNeverCoolsTheFleetDown(t *testing.T) {
+	t.Parallel()
+
 	d := DecideCapRecovery(CapRecoveryInput{
 		Kind:          TerminalKindModelUnavailable,
 		DispatchModel: "haiku",
@@ -280,6 +300,8 @@ func TestAPlainModelUnavailableNeverCoolsTheFleetDown(t *testing.T) {
 // operator cannot read is a decision they will debug from go-backend.log at 3am,
 // which is the failure mode the card exists to remove.
 func TestEveryVerdictExplainsItselfNamingTierProviderAndWhy(t *testing.T) {
+	t.Parallel()
+
 	descend := DecideCapRecovery(CapRecoveryInput{
 		Kind: TerminalKindRateLimitQuotaExhausted, DispatchModel: "fable",
 		ServedModel: "claude-fable-5-1", Engine: NewRetryEngine(DefaultRetryConfig()),
@@ -308,6 +330,8 @@ func TestEveryVerdictExplainsItselfNamingTierProviderAndWhy(t *testing.T) {
 // guessed. On the IPC path Go holds no adapter at all, and a re-derivation that
 // guessed wrong would walk an xai rejection down the anthropic ladder.
 func TestAttributionPrefersServedEvidenceOverGoSideInference(t *testing.T) {
+	t.Parallel()
+
 	d := DecideCapRecovery(CapRecoveryInput{
 		Kind:          TerminalKindRateLimitQuotaExhausted,
 		DispatchModel: "fable",
@@ -331,6 +355,8 @@ func TestAttributionPrefersServedEvidenceOverGoSideInference(t *testing.T) {
 // served report (the Go-direct path, where nothing rides back over a wire),
 // execMgr's adapter names the provider.
 func TestGoDirectPathAttributesFromItsOwnAdapter(t *testing.T) {
+	t.Parallel()
+
 	d := DecideCapRecovery(CapRecoveryInput{
 		Kind:          TerminalKindRateLimitQuotaExhausted,
 		DispatchModel: "fable",
@@ -348,6 +374,8 @@ func TestGoDirectPathAttributesFromItsOwnAdapter(t *testing.T) {
 // across a hop would start the new provider partway down a ladder it never
 // refused — a worse dispatch bought with the recovery meant to help.
 func TestClearDowngradesGivesTheHoppedProviderItsOwnLadder(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 	first := engine.EvaluateDowngrade("fable")
 	engine.RecordDowngrade("fable", first)
@@ -381,6 +409,8 @@ func TestClearDowngradesGivesTheHoppedProviderItsOwnLadder(t *testing.T) {
 // half proves it: the same machine with the gate open is usable, so a probe
 // that never found the binary cannot pass the closed-gate half for the wrong
 // reason.
+//
+// Serial: sets the environment.
 func TestOpenCodeIsNeverACapHopTargetWhileGated(t *testing.T) {
 	stubOpenCodeMachine(t)
 
@@ -434,6 +464,8 @@ func stubOpenCodeMachine(t *testing.T) {
 // row misreads a manifest load failure as that adapter's own verdict.
 // AdapterUsableForCapHop must select the row by name instead.
 func TestAdapterUsableForCapHop_SelectsRowByNameNotPosition(t *testing.T) {
+	t.Parallel()
+
 	restore := doctor.SwapCompatManifestLoadForTest(errors.New("manifest boom for the #1712 regression"))
 	defer restore()
 

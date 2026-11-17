@@ -144,6 +144,8 @@ func ranStage(r *partialRerunRunner, stage state.PipelineStage) bool {
 // AC 4 scenario 1 and AC 1: the remaining criterion is the run's scope. The
 // runtime carries it, the planning context names it, and the planning and
 // feature-dev prompts say the rest of the issue is already on main.
+//
+// Serial: swaps package var reconcileExecGh (via partialRerunScheduler).
 func TestPartialRerun_RemainderIsTheRunScope(t *testing.T) {
 	runner := &partialRerunRunner{}
 	s, root := partialRerunScheduler(t, runner, false)
@@ -200,6 +202,8 @@ func TestPartialRerun_RemainderIsTheRunScope(t *testing.T) {
 
 // An unscoped run's planning and feature-dev prompts carry no scope block, so
 // the cache prefix holds.
+//
+// Serial: swaps package var reconcileExecGh (via partialRerunScheduler).
 func TestPartialRerun_UnscopedPromptHasNoBlock(t *testing.T) {
 	if got := partialRerunPromptBlock(state.StageFeatureDev, nil); got != "" {
 		t.Fatalf("nil scope rendered %q, want \"\"", got)
@@ -225,6 +229,8 @@ func TestPartialRerun_UnscopedPromptHasNoBlock(t *testing.T) {
 // AC 4 scenario 3 and AC 2: a partial re-run whose feature-dev leaves the
 // branch level ends not_pipeline_actionable before feature-validate, with the
 // remainder commented once and the issue left open.
+//
+// Serial: swaps package var reconcileExecGh (via partialRerunScheduler).
 func TestPartialRerun_NoDiffEndsBeforeValidate(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -266,6 +272,8 @@ func TestPartialRerun_NoDiffEndsBeforeValidate(t *testing.T) {
 
 // The same level branch on an unscoped run is unchanged: with no gate it goes
 // on to feature-validate.
+//
+// Serial: swaps package var reconcileExecGh (via partialRerunScheduler).
 func TestPartialRerun_UnscopedNoDiffStillValidates(t *testing.T) {
 	runner := &partialRerunRunner{}
 	s, _ := partialRerunScheduler(t, runner, false)
@@ -285,6 +293,8 @@ func TestPartialRerun_UnscopedNoDiffStillValidates(t *testing.T) {
 
 // A partial re-run whose feature-dev produced a change continues to
 // feature-validate.
+//
+// Serial: swaps package var reconcileExecGh (via partialRerunScheduler).
 func TestPartialRerun_WithDiffValidates(t *testing.T) {
 	runner := &partialRerunRunner{}
 	s, root := partialRerunScheduler(t, runner, false)
@@ -387,6 +397,8 @@ func scopeOf(t *testing.T, s *Scheduler, ws string) []string {
 // listed, 5 the partial PR delivered (prose, so undetectable) and 4 added
 // after the PR. The brief is the 4 listed plus the 4 new.
 func TestScopePartialRerun_AddsCriteriaNewSincePR(t *testing.T) {
+	t.Parallel()
+
 	var listed, delivered, added []string
 	for i := 0; i < 4; i++ {
 		listed = append(listed, fmt.Sprintf("Listed behaviour %d is handled by the scheduler", i))
@@ -410,6 +422,8 @@ func TestScopePartialRerun_AddsCriteriaNewSincePR(t *testing.T) {
 // (#3235 steer) A criterion the partial PR reported met is not re-added,
 // though the rules cannot prove prose met and the body was edited since.
 func TestScopePartialRerun_MetInPartialPRNotReadded(t *testing.T) {
+	t.Parallel()
+
 	listed := []string{"Remaining behaviour is handled by the scheduler"}
 	met := "Delivered behaviour is handled by the scheduler"
 	s := partialRerunFixture(listed, unchecked(met, listed[0]), partialPRBody([]string{met}, listed),
@@ -422,6 +436,8 @@ func TestScopePartialRerun_MetInPartialPRNotReadded(t *testing.T) {
 // (#3235 steer) A criterion the partial PR listed unmet but the comment did
 // not (a trimmed remainder) is not new either.
 func TestScopePartialRerun_UnmetInPartialPRNotNew(t *testing.T) {
+	t.Parallel()
+
 	listed := []string{"Remaining behaviour is handled by the scheduler"}
 	other := "Another unmet behaviour is handled by the scheduler"
 	s := partialRerunFixture(listed, unchecked(listed[0], other), partialPRBody(nil, []string{listed[0], other}),
@@ -434,6 +450,8 @@ func TestScopePartialRerun_UnmetInPartialPRNotNew(t *testing.T) {
 // (#3235 steer) A body unedited since the partial PR opened holds no new
 // criteria, whatever the PR body names.
 func TestScopePartialRerun_UneditedBodyAddsNothing(t *testing.T) {
+	t.Parallel()
+
 	listed := []string{"Remaining behaviour is handled by the scheduler"}
 	unnamed := "Unnamed behaviour is handled by the scheduler"
 	for _, edited := range []*time.Time{nil, ptrTime(partialOpened.Add(-time.Hour))} {
@@ -446,6 +464,8 @@ func TestScopePartialRerun_UneditedBodyAddsNothing(t *testing.T) {
 
 // (#3235) A listed criterion removed from the body leaves the brief, is
 // recorded as dropped in the context file and logged.
+//
+// Serial: redirects the standard logger.
 func TestScopePartialRerun_DropsRemovedCriterion(t *testing.T) {
 	ws := gitWorkspace(t)
 	kept, removed := "Kept behaviour is handled", "Removed behaviour is handled"
@@ -474,6 +494,8 @@ func TestScopePartialRerun_DropsRemovedCriterion(t *testing.T) {
 // (#3235 review) Every listed criterion removed and none new: the run is
 // scoped to no work, never widened to the whole issue.
 func TestScopePartialRerun_AllDroppedScopesToNothing(t *testing.T) {
+	t.Parallel()
+
 	ws := gitWorkspace(t)
 	kept, removed := "Delivered behaviour is handled", "Removed behaviour is handled"
 	s := partialRerunFixture([]string{removed}, []string{"- [x] " + kept}, partialPRBody([]string{kept}, []string{removed}),
@@ -500,6 +522,8 @@ func TestScopePartialRerun_AllDroppedScopesToNothing(t *testing.T) {
 // (#3235) An unreadable partial PR adds nothing new: without its met and
 // unmet sections, delivered prose criteria cannot be told apart from new ones.
 func TestScopePartialRerun_PRReadFailureAddsNothingNew(t *testing.T) {
+	t.Parallel()
+
 	listed := []string{"Remaining behaviour is handled by the scheduler"}
 	unlisted := "Unlisted behaviour is handled by the scheduler"
 	s := partialRerunFixture(listed, unchecked(unlisted, listed[0]), "", partialOpened, nil)
@@ -512,6 +536,8 @@ func TestScopePartialRerun_PRReadFailureAddsNothingNew(t *testing.T) {
 
 // (#3235) An unreadable body keeps the comment's list as the brief.
 func TestScopePartialRerun_BodyReadFailureKeepsCommentList(t *testing.T) {
+	t.Parallel()
+
 	listed := []string{"A is handled", "B is handled"}
 	s := partialRerunFixture(listed, nil, "", partialOpened, nil)
 	s.acReconcileBody = func(context.Context, types.BoardItem) (string, error) { return "", errors.New("forge down") }
@@ -523,6 +549,8 @@ func TestScopePartialRerun_BodyReadFailureKeepsCommentList(t *testing.T) {
 // (#3235) A listed entry shortened or re-punctuated in the PR body still
 // names its body criterion: it is kept, not dropped.
 func TestReconcilePartialRemainder_TolerantMatch(t *testing.T) {
+	t.Parallel()
+
 	body := "The scheduler logs every dropped criterion with its issue number."
 	rec := preflight.ReconcileACs(t.TempDir(), 1, partialRemainderBody("- [ ] "+body))
 	listed := []string{"the scheduler logs every dropped criterion", "Short"}
@@ -538,6 +566,8 @@ func TestReconcilePartialRemainder_TolerantMatch(t *testing.T) {
 // (#3235) partialPRCriteria reads both sections of a rendered body, met
 // bullets without their status label.
 func TestPartialPRCriteria_ReadsMetAndUnmet(t *testing.T) {
+	t.Parallel()
+
 	got := partialPRCriteria(partialPRBody([]string{"Met one"}, []string{"Unmet one"}))
 	if len(got) != 2 || got[0] != "Unmet one" || !strings.HasPrefix(got[1], "Met one (this PR — diff: ") {
 		t.Fatalf("criteria = %q", got)
@@ -547,6 +577,8 @@ func TestPartialPRCriteria_ReadsMetAndUnmet(t *testing.T) {
 // (#3235 steer) The planning prompt fixes focus_acs to the brief; the
 // feature-dev prompt keeps the plan's focus over the list.
 func TestPartialRerunPromptBlock_FocusIsTheBrief(t *testing.T) {
+	t.Parallel()
+
 	scope := &state.PartialRerun{PR: 1, Criteria: []string{"A is handled"}}
 	for _, goPath := range []bool{true, false} {
 		plan := renderPartialRerunPromptBlock(state.StageFeaturePlanning, scope, goPath)
@@ -563,6 +595,8 @@ func TestPartialRerunPromptBlock_FocusIsTheBrief(t *testing.T) {
 // (#3242) Both paths reconcile the list against the issue body, so both
 // blocks say so; an empty reconciled scope renders "nothing remains".
 func TestPartialRerunScopeBlocks_ReconciledAndEmpty(t *testing.T) {
+	t.Parallel()
+
 	for _, goPath := range []bool{true, false} {
 		scope := &state.PartialRerun{PR: 1, Criteria: []string{"A is handled"}}
 		if !strings.Contains(renderPartialRerunPromptBlock(state.StageFeatureDev, scope, goPath), "reconciled against the current issue body") {
@@ -584,6 +618,8 @@ func TestPartialRerunScopeBlocks_ReconciledAndEmpty(t *testing.T) {
 // the branch level with its base, with criteria still open in the issue body,
 // ends as a no-op before pr-create: not_pipeline_actionable (no lifetime-cap
 // increment), with one comment naming the open criteria.
+//
+// Serial: swaps package var reconcileExecGh (via partialRerunScheduler).
 func TestNoDiffBeforePRCreate_EndsAsNoOp(t *testing.T) {
 	runner := &partialRerunRunner{}
 	s, _ := partialRerunScheduler(t, runner, false)
@@ -619,6 +655,8 @@ func TestNoDiffBeforePRCreate_EndsAsNoOp(t *testing.T) {
 
 // With every criterion ticked the boundary does not stop the run: pr-create's
 // own no-diff settlement closes the issue with its evidence (#2941).
+//
+// Serial: swaps package var reconcileExecGh (via partialRerunScheduler).
 func TestNoDiffBeforePRCreate_AllTickedContinues(t *testing.T) {
 	runner := &partialRerunRunner{}
 	s, _ := partialRerunScheduler(t, runner, false)
@@ -638,6 +676,8 @@ func TestNoDiffBeforePRCreate_AllTickedContinues(t *testing.T) {
 // The no-op booking: not_pipeline_actionable leaves the failure counter
 // unchanged.
 func TestNoDiffBeforePRCreate_BookingLeavesFailureCounter(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{MaxConcurrent: 3},

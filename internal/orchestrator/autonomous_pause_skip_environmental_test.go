@@ -20,6 +20,8 @@ import (
 // Pause() must decline so Status stays running and autonomous resumes
 // automatically when the cooldown expires.
 func TestPause_DeclinedWhenQuotaCooldownActive(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -51,6 +53,8 @@ func TestPause_DeclinedWhenQuotaCooldownActive(t *testing.T) {
 // follow-up failure after the bucket recovered). The guard is conditional,
 // not absolute.
 func TestPause_AllowedAfterQuotaCooldownExpired(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -74,6 +78,8 @@ func TestPause_AllowedAfterQuotaCooldownExpired(t *testing.T) {
 // user-initiated pause MUST land. The guard targets only haltQueueOnSlotFailure
 // (auto-triggered post-failure) — not deliberate operator actions.
 func TestPause_UserActionAlwaysAllowed(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -98,6 +104,8 @@ func TestPause_UserActionAlwaysAllowed(t *testing.T) {
 // abuse, circuit-breaker, lifetime-failure cap) that requires manual triage,
 // separate from environmental backoff.
 func TestPause_SafetyTripAlwaysAllowed(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
@@ -118,6 +126,8 @@ func TestPause_SafetyTripAlwaysAllowed(t *testing.T) {
 // haltQueueOnSlotFailure pauses normally (the common case for non-environmental
 // failures like validation_error or subagent_crash).
 func TestPause_NoCooldownStillHalts(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{

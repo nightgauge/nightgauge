@@ -57,6 +57,8 @@ func addRunning(as *AutonomousScheduler, repo string, number int, title string) 
 // TestAutonomous_CascadePausesAfterThreshold is the end-to-end integration:
 // drive the scheduler through 3 failures inside the window and assert that
 // state.Status transitions to safety_tripped with the canonical pause tag.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestAutonomous_CascadePausesAfterThreshold(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 
@@ -90,6 +92,8 @@ func TestAutonomous_CascadePausesAfterThreshold(t *testing.T) {
 // don't feed the cascade breaker — they short-circuit earlier in
 // onPipelineComplete. Without this carve-out, a quiet half-hour of
 // legitimate retries would burn down the threshold.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestAutonomous_CascadeIgnoresStallKills(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	for _, num := range []int{200, 201, 202, 203, 204} {
@@ -107,6 +111,8 @@ func TestAutonomous_CascadeIgnoresStallKills(t *testing.T) {
 
 // TestAutonomous_CascadeIgnoresQuotaExhausted mirrors the stall-kill test
 // for the environmental quota exhaustion path.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestAutonomous_CascadeIgnoresQuotaExhausted(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	for _, num := range []int{300, 301, 302, 303} {
@@ -135,6 +141,8 @@ func TestAutonomous_CascadeIgnoresQuotaExhausted(t *testing.T) {
 //     every unrelated Ready issue. The issue itself is sidelined to
 //     "In review" (moveIssueToInReview) so it is not re-dispatched into the
 //     same blocker.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestAutonomous_PrMergeUnmerged_Recoverable(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
@@ -176,6 +184,8 @@ func TestAutonomous_PrMergeUnmerged_Recoverable(t *testing.T) {
 // TestAutonomous_CascadeResetsOnResume verifies that an explicit operator
 // Resume clears the breaker so the next cluster can re-trip. This is the
 // "manual triage" contract from the issue text.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestAutonomous_CascadeResetsOnResume(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.safetyRails = NewSafetyRails(DefaultSafetyConfig()) // Resume() requires safetyRails too
@@ -201,6 +211,8 @@ func TestAutonomous_CascadeResetsOnResume(t *testing.T) {
 // TestAutonomous_CascadeFiresStatusChange ensures the cascade pause path
 // emits an autonomous.statusChanged signal so the IPC server can light up
 // the VSCode badge and the DiscordService can fire a webhook.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestAutonomous_CascadeFiresStatusChange(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	var observed []AutonomousStatusChange
@@ -233,6 +245,8 @@ func TestAutonomous_CascadeFiresStatusChange(t *testing.T) {
 // TestAutonomous_CascadeOnlyFiresOnce asserts that a 4th, 5th failure after
 // the breaker trips does NOT emit additional status-change events with the
 // cascade tag — the Discord webhook should fire exactly once per trip.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestAutonomous_CascadeOnlyFiresOnce(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	cascadeStatusEvents := 0
@@ -256,6 +270,8 @@ func TestAutonomous_CascadeOnlyFiresOnce(t *testing.T) {
 // TestAutonomous_CascadeBreakerNilTrackerIsNoop guards the construction
 // path: if anything ever drops the cascadeTracker initialization, the
 // onPipelineComplete path must still work (just without cascade detection).
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestAutonomous_CascadeBreakerNilTrackerIsNoop(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.cascadeTracker = nil // simulate older state file or test scaffold
@@ -275,6 +291,8 @@ func TestAutonomous_CascadeBreakerNilTrackerIsNoop(t *testing.T) {
 // that promoteUnblockedOnStartup runs even when state.Running is empty — the
 // early-return path that pre-fix skipped the promotion scan entirely on
 // every clean start, the overwhelmingly common case.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestRecoverOrphanedRunning_PromotesOnCleanStart(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.Running = nil // clean start — nothing to recover
@@ -304,6 +322,8 @@ func TestRecoverOrphanedRunning_PromotesOnCleanStart(t *testing.T) {
 // asserts the cascade path considers Backlog nodes that are NOT dependents of
 // the completed issue — pre-fix, an empty revAdj[completedKey] short-circuited
 // the whole function before any independent node was ever examined.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestPromoteUnblockedToReady_PromotesIndependentBacklogNode(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 

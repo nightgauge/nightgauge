@@ -10,6 +10,8 @@ import (
 // number — the deps-gate check → promote lifecycle (Issue #231). Mirrors the
 // baseline-CI pause round-trip (baseline_pause_test.go).
 func TestPauseDeferred_BlockedDependency_RoundTrip(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
@@ -65,6 +67,8 @@ func TestPauseDeferred_BlockedDependency_RoundTrip(t *testing.T) {
 // TestPauseDeferred_BlockedDependency_Idempotent verifies re-pausing the same
 // issue updates the reason without duplicating the queue entry.
 func TestPauseDeferred_BlockedDependency_Idempotent(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),

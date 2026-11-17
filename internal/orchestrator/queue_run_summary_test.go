@@ -16,6 +16,8 @@ import (
 // followed by exit 0 — which a script and a first-time user both read as
 // success — on a run whose only issue terminated in failure.
 func TestQueueRunSummary_ExitStatusAndReport(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name        string
 		summary     QueueRunSummary
@@ -92,6 +94,8 @@ func TestQueueRunSummary_ExitStatusAndReport(t *testing.T) {
 // TestQueueRunFailedError_NamesTheCounts checks the one-line form cobra prints
 // to stderr. It complements, and must not duplicate, the stdout summary.
 func TestQueueRunFailedError_NamesTheCounts(t *testing.T) {
+	t.Parallel()
+
 	err := &QueueRunFailedError{Summary: QueueRunSummary{Outcomes: []QueueOutcome{
 		{Repo: "o/r", IssueNumber: 1, Kind: QueueOutcomeCompleted},
 		{Repo: "o/r", IssueNumber: 2, Kind: QueueOutcomeFailed, TerminalKind: "stall_kill"},
@@ -113,6 +117,8 @@ func TestQueueRunFailedError_NamesTheCounts(t *testing.T) {
 // runPipeline returned nothing at all, so a terminal failure was invisible to
 // its own caller and `queue run` had no way to exit non-zero even in principle.
 func TestRunPipelineReportsItsTerminalOutcome(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	seedRefusalRepo(t, root, allRefusalStageSkills)
 

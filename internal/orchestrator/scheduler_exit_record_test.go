@@ -56,6 +56,8 @@ func readExitRecords(t *testing.T, rootDir string) []diagnostics.StageExitRecord
 // TestWriteStageExitRecord_Success pins the schema for a healthy stage exit.
 // The record carries success=true, the actual cost, and an elapsed_ms ≥ 0.
 func TestWriteStageExitRecord_Success(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runID := testRunID()
@@ -116,6 +118,8 @@ func TestWriteStageExitRecord_Success(t *testing.T) {
 // file without joining the V3 record. Stall-kill exit text gets mapped to
 // the canonical TerminalKindStallKill.
 func TestWriteStageExitRecord_FailureClassifiesTerminalKind(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runID := testRunID()
@@ -151,6 +155,8 @@ func TestWriteStageExitRecord_FailureClassifiesTerminalKind(t *testing.T) {
 // last_bash_command, stop_hook_errored, session_id, idle_ms_at_exit) round-trip
 // from StageRunResult into the persisted record.
 func TestWriteStageExitRecord_ForwardsTSDiagnosticFields(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runID := testRunID()
@@ -224,6 +230,8 @@ func TestWriteStageExitRecord_ForwardsTSDiagnosticFields(t *testing.T) {
 // surfaces disagreed about the identical failure. This pins that they no
 // longer can.
 func TestWriteStageExitRecord_CLIFailureCarriesTerminalKindAndStderrTail(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runID := testRunID()
@@ -271,6 +279,8 @@ func TestWriteStageExitRecord_CLIFailureCarriesTerminalKindAndStderrTail(t *test
 // retry attempt) being misread as a failure signal. Success must classify
 // nothing.
 func TestWriteStageExitRecord_SuccessCarriesNoTerminalKindOrStderrTail(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runID := testRunID()
@@ -303,6 +313,8 @@ func TestWriteStageExitRecord_SuccessCarriesNoTerminalKindOrStderrTail(t *testin
 // — the CLI carry exists only to fill the gap when IPC mode's StderrTail is
 // unset, never to overwrite it.
 func TestWriteStageExitRecord_IPCStderrTailWinsOverCLICarry(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runID := testRunID()
@@ -338,6 +350,8 @@ func TestWriteStageExitRecord_IPCStderrTailWinsOverCLICarry(t *testing.T) {
 // Four unrelated limits share that one label, and the one that did fire is
 // derived at runtime (`stall warn threshold × 8`) and configured nowhere.
 func TestWriteStageExitRecord_ForwardsKillCeiling(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runID := testRunID()
@@ -387,6 +401,8 @@ func TestWriteStageExitRecord_ForwardsKillCeiling(t *testing.T) {
 // with `--no-session-persistence`, no transcript exists to settle it. The ring
 // shows the suite ran first, and shows it failed.
 func TestWriteStageExitRecord_ForwardsRecentBash(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runID := testRunID()
@@ -446,6 +462,8 @@ func TestWriteStageExitRecord_ForwardsRecentBash(t *testing.T) {
 // if a caller bypasses the TS-side ring. Both write paths call the same helper,
 // so a record cannot grow without limit from either direction. (#156)
 func TestWriteStageExitRecord_BoundsRecentBash(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 156, "item-id", testRunID())
@@ -480,6 +498,8 @@ func TestWriteStageExitRecord_BoundsRecentBash(t *testing.T) {
 // fields zero), Go still writes a valid record carrying just the Go-side
 // truth (timestamp, repo, issue, stage, success, exit_code, tokens, elapsed).
 func TestWriteStageExitRecord_PreUpdateTSStillWrites(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3605, "item-id", testRunID())
@@ -515,6 +535,8 @@ func TestWriteStageExitRecord_PreUpdateTSStillWrites(t *testing.T) {
 // retros can `jq` cancelled-at-gate exits straight from the file. The latest
 // gate result for the stage is the one recorded.
 func TestWriteStageExitRecord_GateNoOpSnapshot(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runID := testRunID()
@@ -559,6 +581,8 @@ func TestWriteStageExitRecord_GateNoOpSnapshot(t *testing.T) {
 // terminal_kind="premature_turn_end", with the no-op gate snapshot alongside
 // so retros can jq the ended-on-a-promise exits straight from the file.
 func TestWriteStageExitRecord_PrematureTurnEndClassified(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runID := testRunID()
@@ -597,6 +621,8 @@ func TestWriteStageExitRecord_PrematureTurnEndClassified(t *testing.T) {
 // gate_kind="ok", and that when multiple gate results exist for a stage the
 // latest one wins (the reconcile path can append a second result).
 func TestWriteStageExitRecord_GatePassedSnapshot(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3863, "item-id", testRunID())
@@ -631,6 +657,8 @@ func TestWriteStageExitRecord_GatePassedSnapshot(t *testing.T) {
 // stage with no recorded gate result keeps gate_kind empty (no verdict was
 // given) but still says why in gate_reason (#1919).
 func TestWriteStageExitRecord_NoGateNamesWhyAndLeavesKindEmpty(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3863, "item-id", testRunID())
@@ -657,6 +685,8 @@ func TestWriteStageExitRecord_NoGateNamesWhyAndLeavesKindEmpty(t *testing.T) {
 // harness convention). This prevents tests that don't care about diagnostics
 // from accidentally scribbling into CWD.
 func TestWriteStageExitRecord_EmptyWorkspaceRootIsNoop(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	runtime := state.NewRuntimeState("repo", 1, "id", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "repo"}
@@ -671,6 +701,8 @@ func TestWriteStageExitRecord_EmptyWorkspaceRootIsNoop(t *testing.T) {
 // the scheduler (the cross-pipeline forensic signal) and never the caller
 // itself.
 func TestSnapshotConcurrentPipelines_ExcludesSelf(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	// Seed two siblings + self.
 	_, c1 := context.WithCancel(context.Background())
@@ -701,6 +733,8 @@ func TestSnapshotConcurrentPipelines_ExcludesSelf(t *testing.T) {
 // the caller's number in another repository is a sibling, not the caller, and
 // the fallback snapshot names it by repository.
 func TestSnapshotConcurrentPipelines_SameNumberInAnotherRepo(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	_, c1 := context.WithCancel(context.Background())
 	_, c2 := context.WithCancel(context.Background())
@@ -718,6 +752,8 @@ func TestSnapshotConcurrentPipelines_SameNumberInAnotherRepo(t *testing.T) {
 // on the JSON tag so healthy single-pipeline runs don't carry a useless
 // empty array.
 func TestSnapshotConcurrentPipelines_EmptyWhenAlone(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	_, c1 := context.WithCancel(context.Background())
 	s.registerActiveStage(testStageRunID(3605), "repo", 3605, func(error) { c1() })
@@ -733,6 +769,8 @@ func TestSnapshotConcurrentPipelines_EmptyWhenAlone(t *testing.T) {
 // configured github client. Production code distinguishes -1 from 0
 // (genuinely empty bucket) via this sentinel — see #3368 retro.
 func TestRateLimitRemainingAtExit_NoClientReturnsSentinel(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	if got := s.rateLimitRemainingAtExit(); got != -1 {
 		t.Errorf("rateLimitRemainingAtExit = %d, want -1 (no tracker)", got)
@@ -743,6 +781,8 @@ func TestRateLimitRemainingAtExit_NoClientReturnsSentinel(t *testing.T) {
 // path stays `<pipeline state dir>/exit-records/YYYY-MM-DD.jsonl` —
 // any rename of this path would break the `exit-records tail` CLI reader.
 func TestWriteStageExitRecord_DailyPathHasOwnerSlashName(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	s := newSchedulerForDeterministicTest()
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 1, "id", testRunID())
@@ -775,6 +815,8 @@ func TestWriteStageExitRecord_DailyPathHasOwnerSlashName(t *testing.T) {
 // exit record is written on every terminal path, including the ones with no
 // code of their own left to run, so it is where a stranded stash has to appear.
 func TestWriteStageExitRecord_NamesUnreclaimedPipelineStashes(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := t.TempDir()
 	gittest.Run(t, root, "init", "-b", "main")
@@ -835,6 +877,8 @@ func TestWriteStageExitRecord_NamesUnreclaimedPipelineStashes(t *testing.T) {
 // A stage that leaked nothing must produce no field at all — a record that
 // always carries the key trains readers to ignore it.
 func TestWriteStageExitRecord_OmitsStashFieldWhenNothingLeaked(t *testing.T) {
+	t.Parallel()
+
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 693, "item-id", testRunID())
@@ -862,6 +906,8 @@ func TestWriteStageExitRecord_OmitsStashFieldWhenNothingLeaked(t *testing.T) {
 // A genuine host-sleep booking (#3158) carries the structured verdict through
 // to the exit record as host_slept, while a stage error that merely echoes
 // the "[host-slept]" marker keeps the kind of the rest of its text.
+//
+// Serial: swaps package var measureHostSleep.
 func TestWriteStageExitRecord_HostSleptFromStructuredVerdict(t *testing.T) {
 	prev := measureHostSleep
 	t.Cleanup(func() { measureHostSleep = prev })

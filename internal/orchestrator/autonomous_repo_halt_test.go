@@ -73,6 +73,8 @@ func dispatchedRepoHalt(hay []string, needle string) bool {
 // assertion fails. Restore the guard but widen it to `len(PausedRepos) > 0`
 // (the fleet-wide reading) and the SECOND assertion fails instead: acme/api
 // stops too. Neither neuter is a compile error.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestRepoHalt_StopsOnlyItsOwnRepository(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	as, dispatched := newRepoHaltScheduler(t)
@@ -100,6 +102,8 @@ func TestRepoHalt_StopsOnlyItsOwnRepository(t *testing.T) {
 // the halt any self-clearing expiry, and the post-resume assertion fails. Make
 // PauseRepo non-persistent / cleared at the top of runCycle and the
 // "still halted on the second cycle" assertion fails.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestRepoHalt_RequiresAnExplicitResume(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	as, dispatched := newRepoHaltScheduler(t)
@@ -138,6 +142,8 @@ func TestRepoHalt_RequiresAnExplicitResume(t *testing.T) {
 // BEHAVIOURAL RED-PROOF: drop `len(as.state.PausedRepos) > 0` from Resume's
 // guard (restoring the status-only test) and this goes red.
 func TestRepoHalt_FleetResumeReleasesEveryRepo(t *testing.T) {
+	t.Parallel()
+
 	as, _ := newRepoHaltScheduler(t)
 	as.PauseRepo("acme/web", "boom", haltTagSlotFailure, 10, "feature-validate")
 	as.PauseRepo("acme/api", "boom", haltTagSlotFailure, 20, "feature-validate")
@@ -156,6 +162,8 @@ func TestRepoHalt_FleetResumeReleasesEveryRepo(t *testing.T) {
 // TestRepoHalt_ResumeIsScopedToOneRepo — resuming acme/web must not release
 // acme/api. Two halts are two independent triage decisions.
 func TestRepoHalt_ResumeIsScopedToOneRepo(t *testing.T) {
+	t.Parallel()
+
 	as, _ := newRepoHaltScheduler(t)
 	as.PauseRepo("acme/web", "boom", haltTagSlotFailure, 10, "feature-validate")
 	as.PauseRepo("acme/api", "boom", haltTagSlotFailure, 20, "feature-validate")
@@ -174,6 +182,8 @@ func TestRepoHalt_ResumeIsScopedToOneRepo(t *testing.T) {
 // the operator cannot see is a halted repo that gets forgotten, which is the
 // failure mode narrowing the halt would otherwise introduce.
 func TestRepoHalt_IsDiscoverable(t *testing.T) {
+	t.Parallel()
+
 	as, _ := newRepoHaltScheduler(t)
 	as.PauseRepo("acme/web", "haltQueueOnSlotFailure: issue #10 failed at feature-validate",
 		haltTagSlotFailure, 10, "feature-validate")
@@ -206,6 +216,8 @@ func TestRepoHalt_IsDiscoverable(t *testing.T) {
 // reconcileTerminalFailureCards' `stillHalted` and this goes red — the card
 // retracts on the first cycle after a repo-scoped halt.
 func TestRepoHalt_KeepsTheTerminalFailureCardAlive(t *testing.T) {
+	t.Parallel()
+
 	st := &AutonomousState{
 		PausedRepos: map[string]*RepoPauseRecord{
 			"acme/web": {Repo: "acme/web", TriggeredBy: haltTagSlotFailure},
@@ -230,6 +242,8 @@ func TestRepoHalt_KeepsTheTerminalFailureCardAlive(t *testing.T) {
 // would drop the gate entirely. PauseRepo refuses; the caller falls back to
 // the fleet halt.
 func TestRepoHalt_RefusesAnUnattributedRepo(t *testing.T) {
+	t.Parallel()
+
 	as, _ := newRepoHaltScheduler(t)
 	if as.PauseRepo("", "boom", haltTagSlotFailure, 10, "feature-validate") {
 		t.Errorf("PauseRepo accepted an empty repo — an unattributable halt must not silently succeed")
@@ -256,6 +270,8 @@ func twoIssueRepoScheduler(t *testing.T, labels ...string) (*AutonomousScheduler
 //
 // BEHAVIOURAL RED-PROOF: drop TerminalKindReviewCapReached from TerminalKindParks
 // and the run takes the failure path: the lifetime assertion fails.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestReviewCap_LeavesTheRepositoryDispatching(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	as, dispatched := twoIssueRepoScheduler(t)
@@ -298,6 +314,8 @@ func TestReviewCap_LeavesTheRepositoryDispatching(t *testing.T) {
 // refineBeforeDispatch in runCycle and the candidate dispatches into the halted
 // repository, failing the first assertion. Move RecordPipelineStart above that
 // call and the start-count assertion fails instead.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestRepoHalt_RaisedDuringRefinementStopsThatDispatch(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	as, dispatched := twoIssueRepoScheduler(t)

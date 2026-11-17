@@ -74,6 +74,8 @@ func equalInts(a, b []int) bool {
 // then Backlog-with-a-priority — and within a tier by the dispatch scan's own
 // priority ordering, not by issue age.
 func TestPlanRefinement_OrdersByDispatchTier(t *testing.T) {
+	t.Parallel()
+
 	const repo = "o/r"
 	nodes := map[string]*depgraph.Node{
 		repo + "#10": boardNode(repo, 10, "Backlog", "P1"), // tier 2
@@ -99,6 +101,8 @@ func TestPlanRefinement_OrdersByDispatchTier(t *testing.T) {
 // cap is inert here because the board issue is already refined — the whole
 // point being that "higher tier pending" means UNREFINED, not merely present.
 func TestPlanRefinement_TierThreeIsOldestFirstAndLast(t *testing.T) {
+	t.Parallel()
+
 	const repo = "o/r"
 	nodes := map[string]*depgraph.Node{
 		repo + "#5": boardNode(repo, 5, "Ready", "P0", gh.LabelRefined),
@@ -117,6 +121,8 @@ func TestPlanRefinement_TierThreeIsOldestFirstAndLast(t *testing.T) {
 // TestPlanRefinement_CapsPerCycle: the per-repo cap of five survives the
 // reordering — what changed is WHICH five, not how many.
 func TestPlanRefinement_CapsPerCycle(t *testing.T) {
+	t.Parallel()
+
 	const repo = "o/r"
 	nodes := map[string]*depgraph.Node{}
 	var issues []gh.UnrefinedIssue
@@ -136,6 +142,8 @@ func TestPlanRefinement_CapsPerCycle(t *testing.T) {
 // dispatch, so refining it would spend a model call on a body no pipeline will
 // read.
 func TestPlanRefinement_SkipClasses(t *testing.T) {
+	t.Parallel()
+
 	const repo = "o/r"
 	const key = repo + "#1"
 
@@ -230,6 +238,8 @@ func TestPlanRefinement_SkipClasses(t *testing.T) {
 // rate rail is not spent on tier 3 — including in a different repo, which is
 // why the cap is derived from the whole graph rather than per repo.
 func TestPlanRefinement_TierCapHoldsBudgetForHigherTiers(t *testing.T) {
+	t.Parallel()
+
 	nodes := map[string]*depgraph.Node{
 		"o/other#5": boardNode("o/other", 5, "Ready", "P1"), // unrefined tier 1, another repo
 	}
@@ -260,6 +270,8 @@ func TestPlanRefinement_TierCapHoldsBudgetForHigherTiers(t *testing.T) {
 // the operator labelled auto-process, which is them asking for this issue by
 // name.
 func TestPlanRefinement_BacklogOffNeverTouchesTierThree(t *testing.T) {
+	t.Parallel()
+
 	const repo = "o/r"
 	v := viewOver(false, map[string]*depgraph.Node{})
 	if v.higherTierPending {
@@ -281,6 +293,8 @@ func TestPlanRefinement_BacklogOffNeverTouchesTierThree(t *testing.T) {
 // TestDefaultAutonomousConfig_RefinementBacklogOff pins the default: the cost
 // opt-in is opt-IN.
 func TestDefaultAutonomousConfig_RefinementBacklogOff(t *testing.T) {
+	t.Parallel()
+
 	if DefaultAutonomousConfig().RefinementBacklog {
 		t.Fatal("autonomous.refinement_backlog must default to false (#1514)")
 	}
@@ -319,6 +333,8 @@ func tieredIssuesServer(t *testing.T) *httptest.Server {
 // synchronously as the candidates are chosen. The dispatch callbacks are not
 // an order oracle: refineIssue runs each candidate in its own goroutine, so
 // with more than one slot their callbacks legitimately interleave.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRunRefinementCycle_RefinesInDispatchOrder(t *testing.T) {
 	logs := withCapturedLog(t)
 	srv := tieredIssuesServer(t)
@@ -392,6 +408,8 @@ var hookItem = CandidateItem{Repo: "o/r", Number: 7, Title: "issue", BoardStatus
 // FIRST — synchronously, which is what makes "then dispatched" true rather than
 // a race the caller wins by accident.
 func TestRefineBeforeDispatch_RefinesThenDispatches(t *testing.T) {
+	t.Parallel()
+
 	as := hookScheduler(t, 1)
 	refined := make(chan int, 1)
 	as.WithRefinementRunner(func(_ context.Context, _, _ string, n int) error { refined <- n; return nil })
@@ -416,6 +434,8 @@ func TestRefineBeforeDispatch_RefinesThenDispatches(t *testing.T) {
 // TestRefineBeforeDispatch_NoSlotDispatchesUnrefined: a busy refinement slot
 // must delay the dispatch by nothing at all — the issue goes out unrefined and
 // one line says so.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRefineBeforeDispatch_NoSlotDispatchesUnrefined(t *testing.T) {
 	logs := withCapturedLog(t)
 	as := hookScheduler(t, 1)
@@ -437,6 +457,8 @@ func TestRefineBeforeDispatch_NoSlotDispatchesUnrefined(t *testing.T) {
 // TestRefineBeforeDispatch_RateRailExhaustedDispatchesUnrefined: the hook is
 // bounded by the SAME hourly rail as the scan, and a spent rail is not a reason
 // to hold up a dispatch.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRefineBeforeDispatch_RateRailExhaustedDispatchesUnrefined(t *testing.T) {
 	logs := withCapturedLog(t)
 	as := hookScheduler(t, 1)
@@ -463,6 +485,8 @@ func TestRefineBeforeDispatch_RateRailExhaustedDispatchesUnrefined(t *testing.T)
 // TestRefineBeforeDispatch_AlreadyRefinedIsSilent: the hook is called on every
 // dispatch, so the common case — an already-refined issue — must do nothing and
 // say nothing.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRefineBeforeDispatch_AlreadyRefinedIsSilent(t *testing.T) {
 	logs := withCapturedLog(t)
 	as := hookScheduler(t, 1)
@@ -483,6 +507,8 @@ func TestRefineBeforeDispatch_AlreadyRefinedIsSilent(t *testing.T) {
 // not return the whole label list we cannot prove the issue is unrefined, and a
 // wrong answer here rewrites a human-reviewed body (#993/#998).
 func TestRefineBeforeDispatch_TruncatedLabelsFailClosed(t *testing.T) {
+	t.Parallel()
+
 	as := hookScheduler(t, 1)
 	as.WithRefinementRunner(func(_ context.Context, _, _ string, _ int) error {
 		t.Error("must not refine on a truncated label list")
@@ -500,6 +526,8 @@ func TestRefineBeforeDispatch_TruncatedLabelsFailClosed(t *testing.T) {
 // eligibility gate (#270, #2130) is not a slot question — text no writer
 // vouched for never reaches the model, and the dispatch decision is
 // unaffected.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestRefineBeforeDispatch_UntrustedAuthorDispatchesUnrefined(t *testing.T) {
 	logs := withCapturedLog(t)
 	as := hookScheduler(t, 1)
@@ -523,6 +551,8 @@ func TestRefineBeforeDispatch_UntrustedAuthorDispatchesUnrefined(t *testing.T) {
 // refinement, or one that started at Ready or past it, never moves the status;
 // Backlog and off-board keep the pre-#2505 Ready/Backlog rule.
 func TestRefinementBoardTarget(t *testing.T) {
+	t.Parallel()
+
 	type flags struct{ autoProcess, autoActionable bool }
 	flagSets := []flags{{true, false}, {false, true}, {false, false}}
 	for _, source := range []string{refinementSourceCycle, refinementSourcePreDispatch} {
@@ -550,6 +580,8 @@ func TestRefinementBoardTarget(t *testing.T) {
 // TestPlanRefinement_CarriesBoardStatus proves the cycle hands refineIssue the
 // board status at plan time, and empty for an off-board issue.
 func TestPlanRefinement_CarriesBoardStatus(t *testing.T) {
+	t.Parallel()
+
 	const repo = "o/r"
 	nodes := map[string]*depgraph.Node{
 		repo + "#20": boardNode(repo, 20, "Ready", "P1"),

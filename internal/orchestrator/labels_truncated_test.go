@@ -14,6 +14,8 @@ import (
 // labels is excluded. The exclusion cannot be evaluated on a partial set, so
 // the answer is "excluded" — the same polarity the refinement scan chose in
 // #993 — not "nothing matched".
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestPrioritize_RefusesItemWithTruncatedLabels(t *testing.T) {
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "Heavily labelled", State: "OPEN", BoardStatus: "Ready",
@@ -48,6 +50,8 @@ func TestPrioritize_RefusesItemWithTruncatedLabels(t *testing.T) {
 // flagged LabelsTruncated is held with a machine-readable reason, not
 // dispatched, even when its visible labels are all harmless.
 func TestDispatch_RefusesItemWithTruncatedLabels(t *testing.T) {
+	t.Parallel()
+
 	s := newDequeueExcludeFixture(t, []string{"owner-action"})
 	s.QueueAddItem(
 		QueueItem{Repo: "Org/repo", IssueNumber: 401, Title: "Heavily labelled", Labels: []string{"type:bug"}, LabelsTruncated: true},

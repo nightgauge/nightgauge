@@ -86,6 +86,8 @@ func assertSteerSet(t *testing.T, r attention.DecisionRequest) {
 }
 
 func TestProducerWorkExhaustionEmitsFleetCard(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.raiseWorkExhaustion(3)
 
@@ -120,6 +122,8 @@ func TestProducerWorkExhaustionEmitsFleetCard(t *testing.T) {
 // LastPromotionEligible count rather than the old (semantically wrong)
 // sum-of-rejection-reasons value.
 func TestIdleBranch_WorkExhaustionUsesLastPromotionEligible(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.state.Status = "running"
 	as.state.LastPromotionEligible = 3
@@ -143,6 +147,8 @@ func TestIdleBranch_WorkExhaustionUsesLastPromotionEligible(t *testing.T) {
 }
 
 func TestProducerOwnerActionHandoffEmitsAndDedups(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.raiseOwnerActionHandoff("octocat/acme", 51, "Rotate Cloudflare token", "owner-action")
 	// Re-detection on a later cycle must UPDATE in place, not duplicate.
@@ -170,6 +176,8 @@ func TestProducerOwnerActionHandoffEmitsAndDedups(t *testing.T) {
 }
 
 func TestProducerCascadePauseEmitsBlockingFleet(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.raiseCascadePause("octocat/acme", 12, "safety:cascading-failures — 3 failures in 10m")
 
@@ -189,6 +197,8 @@ func TestProducerCascadePauseEmitsBlockingFleet(t *testing.T) {
 }
 
 func TestProducerBlockedByDeferralEmitsChoose(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.raiseBlockedByDeferral("octocat/acme", 77, "Add login flow", "blocked by open dependency #70")
 
@@ -211,6 +221,8 @@ func TestProducerBlockedByDeferralEmitsChoose(t *testing.T) {
 // is a human decision left no durable trace, so missing the toast meant the
 // issue sat sidelined with no visible way back in.
 func TestProducerArchitectureApprovalEmitsApprove(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.raiseArchitectureApproval("octocat/acme", 900, "Voice session gateway",
 		"ARCHITECTURE APPROVAL REQUIRED — production-touching change")
@@ -250,6 +262,8 @@ var untrustedDecision = trust.Decision{Author: "stranger", AuthorLevel: trust.Le
 // disappears from autonomous consideration. The card says how to approve the
 // issue and offers no "promote" action, which would not make it eligible.
 func TestProducerUntrustedAuthorSkipEmitsApprove(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.raiseUntrustedAuthorSkip("octocat", "acme", 900, "Stranger's issue", untrustedDecision, "refinement")
 
@@ -282,6 +296,8 @@ func TestProducerUntrustedAuthorSkipEmitsApprove(t *testing.T) {
 // (refinement candidate selection and Backlog->Ready promotion) observing the
 // same issue update a single card rather than spawning duplicates.
 func TestUntrustedAuthorSkipDedupesAcrossGates(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.raiseUntrustedAuthorSkip("octocat", "acme", 900, "Stranger's issue", untrustedDecision, "refinement")
 	as.raiseUntrustedAuthorSkip("octocat", "acme", 900, "Stranger's issue", untrustedDecision, "triage-promotion")
@@ -295,6 +311,8 @@ func TestUntrustedAuthorSkipDedupesAcrossGates(t *testing.T) {
 // production: the gate re-fires on every dispatch attempt, and the operator must
 // still end up with exactly one card.
 func TestArchitectureApprovalReHaltNeverGrowsTheInbox(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	for i := 0; i < 4; i++ {
 		as.raiseArchitectureApproval("octocat/acme", 900, "Voice session gateway",
@@ -310,6 +328,8 @@ func TestArchitectureApprovalReHaltNeverGrowsTheInbox(t *testing.T) {
 // approved issue's card must clear while every other pending approval survives —
 // retracting the whole producer would silently drop decisions nobody made.
 func TestArchitectureApprovalRetractsOnlyTheApprovedIssue(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.raiseArchitectureApproval("octocat/acme", 900, "Voice gateway", "gate: production-touching")
 	as.raiseArchitectureApproval("octocat/acme", 901, "QuestionSet contract", "gate: trade-off signals")
@@ -339,6 +359,8 @@ func TestArchitectureApprovalRetractsOnlyTheApprovedIssue(t *testing.T) {
 }
 
 func TestProducerStuckEpicOffersEscalationVerb(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.raiseStuckEpic("octocat/acme", 100, "Auth epic", "3 open sub-issues, 0 eligible")
 
@@ -376,6 +398,8 @@ func alertingTransitions(t *testing.T, as *AutonomousScheduler) int {
 // every observation is a fresh event and the inbox fills with copies of one
 // problem.
 func TestRunLoopStandingProducersDeclareStandingAndAFingerprint(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.raiseWorkExhaustion(3)
 	as.raiseOwnerActionHandoff("octocat/acme", 51, "Rotate Cloudflare token", "owner-action")
@@ -409,6 +433,8 @@ func TestRunLoopStandingProducersDeclareStandingAndAFingerprint(t *testing.T) {
 // of the reported failure: the watchdog re-fires on every idle cycle, and the
 // operator must end up with one card and one alert.
 func TestReDetectingOneStalledEpicNeverGrowsTheInbox(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	for i := 0; i < 6; i++ {
 		// The epic gets retitled between cycles. Prose moves on its own; only
@@ -429,6 +455,8 @@ func TestReDetectingOneStalledEpicNeverGrowsTheInbox(t *testing.T) {
 // half of standing semantics: the card clears itself, distinguishably from a
 // decision someone made.
 func TestStandingCardsRetractWhenTheirConditionStopsBeingObserved(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.raiseWorkExhaustion(3)
 	as.raiseStuckEpic("octocat/acme", 100, "Auth epic", "epic #100 stalled: #101 ready but undispatched")
@@ -462,6 +490,8 @@ func TestStandingCardsRetractWhenTheirConditionStopsBeingObserved(t *testing.T) 
 }
 
 func TestProducerBudgetCeilingHitEmitsApprove(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	s.raiseBudgetCeilingHit("octocat/acme", 42, "run-1", 12.5, 25.0)
 
@@ -481,6 +511,8 @@ func TestProducerBudgetCeilingHitEmitsApprove(t *testing.T) {
 }
 
 func TestProducerBranchProtectionBlockEmitsUnblock(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	s.raiseBranchProtectionBlock("octocat/acme", 42, 99, "run-1", "review-not-approved: needs 1 more approval")
 
@@ -500,6 +532,8 @@ func TestProducerBranchProtectionBlockEmitsUnblock(t *testing.T) {
 }
 
 func TestProducerAuthFailureEmitsProvideInput(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	s.raiseAuthFailure("octocat/acme", 42, "run-1", "token expired")
 
@@ -521,6 +555,8 @@ func TestProducerAuthFailureEmitsProvideInput(t *testing.T) {
 // --- Producer (unnumbered): terminal failure halt (#148) ---------------------
 
 func TestProducerTerminalFailureNamesConflictingFiles(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	reason := "haltQueueOnSlotFailure: [merge-conflict] conflicting files: internal/a.go, b.md"
 	if !as.PauseRepo("octocat/acme", reason, "haltQueueOnSlotFailure", 49, "pr-merge") {
@@ -539,6 +575,8 @@ func TestProducerTerminalFailureNamesConflictingFiles(t *testing.T) {
 }
 
 func TestProducerTerminalFailureEmitsUnblockBlockingFleet(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.RaiseTerminalFailure("octocat/acme", 42, "feature-dev", "validation_error", 3.25)
 
@@ -581,6 +619,8 @@ func TestProducerTerminalFailureEmitsUnblockBlockingFleet(t *testing.T) {
 // having landed yet: an omitted/zero cost must not block the card, and the
 // body must not claim a spend that was never observed.
 func TestProducerTerminalFailureDegradesGracefullyWithoutCost(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.RaiseTerminalFailure("octocat/acme", 43, "pr-merge", "", 0)
 
@@ -605,6 +645,8 @@ func TestProducerTerminalFailureDegradesGracefullyWithoutCost(t *testing.T) {
 // offering "retry with escalation" would be dishonest — the next dispatch is
 // refused regardless, so only Retry and Park remain.
 func TestProducerTerminalFailureNoEscalationWhenCapReached(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.mu.Lock()
 	as.state.LifetimeIssueFailures = map[string]int{"octocat/acme#44": MaxLifetimeFailuresPerIssue}
@@ -629,6 +671,8 @@ func TestProducerTerminalFailureNoEscalationWhenCapReached(t *testing.T) {
 // TestArchitectureApprovalReHaltNeverGrowsTheInbox: repeated raises for the
 // same issue collapse onto one card via the idempotency key.
 func TestTerminalFailureReHaltNeverGrowsTheInbox(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	for i := 0; i < 3; i++ {
 		as.RaiseTerminalFailure("octocat/acme", 45, "feature-dev", "validation_error", 1.0)
@@ -643,6 +687,8 @@ func TestTerminalFailureReHaltNeverGrowsTheInbox(t *testing.T) {
 // survive every reconcile call while still halted for that reason, and must
 // be gone the instant Resume() clears the pause.
 func TestReconcileTerminalFailureCardsRetractsOnceResumed(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.state.Status = "running"
 	as.Pause("haltQueueOnSlotFailure: issue #46 failed at feature-dev", "haltQueueOnSlotFailure")
@@ -683,6 +729,8 @@ func TestReconcileTerminalFailureCardsRetractsOnceResumed(t *testing.T) {
 // `stillHalted == false`, which is the *legitimately not halted* branch, and
 // that branch retracts every open terminal-failure card. The halt is still in
 // force; the operator's inbox just goes quiet.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestReconcileTerminalFailureCardsNilStateRetractsNothing(t *testing.T) {
 	as := newAttentionProducerScheduler(t)
 	as.state.Status = "running"
@@ -731,6 +779,8 @@ func TestReconcileTerminalFailureCardsNilStateRetractsNothing(t *testing.T) {
 // PauseTriggeredBy leaves the latch — and therefore the card — standing, which
 // is exactly the property the latch exists to give.
 func TestReconcileTerminalFailureCardsRetractsWhenGenuinelyNotHalted(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.state.Status = "running"
 	as.Pause("haltQueueOnSlotFailure: issue #48 failed at feature-dev", "haltQueueOnSlotFailure")
@@ -750,6 +800,8 @@ func TestReconcileTerminalFailureCardsRetractsWhenGenuinelyNotHalted(t *testing.
 // --- Producer (unnumbered): unverified-deliverable streak (#177) -------------
 
 func TestUnverifiedDeliverableStreakFirstOccurrenceRaisesFYIStreakOne(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierE2E, 42, "run-1", "no framework detected")
 
@@ -778,6 +830,8 @@ func TestUnverifiedDeliverableStreakFirstOccurrenceRaisesFYIStreakOne(t *testing
 // rather than duplicating it, and escalates the fingerprint to streak:2 while
 // staying at FYI severity (escalation only crosses into blocking_run at 3+).
 func TestUnverifiedDeliverableStreakReoccurrenceUpdatesInPlace(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierE2E, 42, "run-1", "no framework detected")
 	s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierE2E, 43, "run-2", "no framework detected")
@@ -799,6 +853,8 @@ func TestUnverifiedDeliverableStreakReoccurrenceUpdatesInPlace(t *testing.T) {
 // severity ladder crosses into blocking_run (never blocking_fleet) once the
 // streak reaches 3 consecutive occurrences.
 func TestUnverifiedDeliverableStreakEscalatesAtThreeOccurrences(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	for i, issue := range []int{42, 43, 44} {
 		s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierUnit, issue, fmt.Sprintf("run-%d", i), "reason")
@@ -821,6 +877,8 @@ func TestUnverifiedDeliverableStreakEscalatesAtThreeOccurrences(t *testing.T) {
 // resets the streak: the next occurrence starts back at streak:1, not resumes
 // from where it left off.
 func TestUnverifiedDeliverableStreakResetsOnExecution(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierIntegration, 42, "run-1", "reason")
 	s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierIntegration, 43, "run-2", "reason")
@@ -846,6 +904,8 @@ func TestUnverifiedDeliverableStreakResetsOnExecution(t *testing.T) {
 // was called with, leaving other open tiers' streak cards for the same repo
 // untouched — the exact mistake AutoResolveUnobserved would make here.
 func TestUnverifiedDeliverableStreakResolveIsScopedToOneTier(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierUnit, 42, "run-1", "reason")
 	s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierE2E, 42, "run-1", "reason")
@@ -870,6 +930,8 @@ func TestUnverifiedDeliverableStreakResolveIsScopedToOneTier(t *testing.T) {
 // only action that unblocks a run was also the one that erased the evidence,
 // capping the count at 3 forever.
 func TestUnverifiedDeliverableStreakSurvivesAcknowledgement(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	repo, tier := "octocat/acme", deliverable.TierUnit
 
@@ -923,6 +985,8 @@ func TestUnverifiedDeliverableStreakSurvivesAcknowledgement(t *testing.T) {
 // spaced further apart than ExpiresAt are exactly the slow-burn case #177 cares
 // about, where cost accrues against N files before the first execution.
 func TestUnverifiedDeliverableStreakSurvivesCardExpiry(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	repo, tier := "octocat/acme", deliverable.TierE2E
 	key := keyUnverifiedDeliverableStreak(repo, tier)
@@ -953,6 +1017,8 @@ func TestUnverifiedDeliverableStreakSurvivesCardExpiry(t *testing.T) {
 // it even when no card is open to retract, since the operator may already have
 // acknowledged it (#243).
 func TestUnverifiedDeliverableStreakResetsOnExecutionWithNoOpenCard(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	repo, tier := "octocat/acme", deliverable.TierUnit
 	key := keyUnverifiedDeliverableStreak(repo, tier)
@@ -983,6 +1049,8 @@ func TestUnverifiedDeliverableStreakResetsOnExecutionWithNoOpenCard(t *testing.T
 
 // One tier's streak must not disturb another's.
 func TestUnverifiedDeliverableStreakCountsAreScopedPerTier(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	repo := "octocat/acme"
 
@@ -1039,6 +1107,8 @@ func buildersIdentity(t *testing.T, r attention.DecisionRequest) string {
 // this red instead of silently giving the operator two different cards for one
 // condition depending on which surface saw it.
 func TestRunScopedProducersDelegateToSharedBuilders(t *testing.T) {
+	t.Parallel()
+
 	t.Run("budget-ceiling", func(t *testing.T) {
 		s := newAttentionProducerRunScheduler(t)
 		s.raiseBudgetCeilingHit("octocat/acme", 42, "run-1", 12.5, 25.0)
@@ -1075,6 +1145,8 @@ func TestRunScopedProducersDelegateToSharedBuilders(t *testing.T) {
 // to re-derive it in TypeScript — two implementations of one number, with
 // nothing that fails when they disagree.
 func TestProposedCeilingUSDIsOneRule(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		ceiling, spent, want float64
 	}{
@@ -1109,6 +1181,8 @@ func TestProposedCeilingUSDIsOneRule(t *testing.T) {
 // blocking_run card recommending a re-dispatch would tell the operator to undo
 // their own Stop, at a severity ADR-015 §I routes to alerting.
 func TestProducerAbandonedDispatchIsAnInformationalStopCard(t *testing.T) {
+	t.Parallel()
+
 	r := BuildAbandonedDispatch("octocat/acme", 42, "run-1", "feature-dev", AbandonedSlotWorktreePreserved)
 
 	if r.Producer != ProducerAbandonedDispatch {
@@ -1188,6 +1262,8 @@ func TestProducerAbandonedDispatchIsAnInformationalStopCard(t *testing.T) {
 // CARRY its own facts and to NOT carry the other situations' — the second half
 // is what a shared body would break.
 func TestAbandonedDispatchBodySaysOnlyWhatIsTrueOfItsSituation(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		situation   AbandonedDispatchSituation
 		stage       string
@@ -1297,6 +1373,8 @@ func TestAbandonedDispatchBodySaysOnlyWhatIsTrueOfItsSituation(t *testing.T) {
 // TestAbandonedDispatchSituationsAreClosed pins the enum the IPC boundary
 // validates against to the set the builder actually switches on.
 func TestAbandonedDispatchSituationsAreClosed(t *testing.T) {
+	t.Parallel()
+
 	declared := AbandonedDispatchSituations()
 	if len(declared) != 3 {
 		t.Fatalf("AbandonedDispatchSituations() = %v, want the three declared situations", declared)
@@ -1329,6 +1407,8 @@ func TestAbandonedDispatchSituationsAreClosed(t *testing.T) {
 // used from two packages, so a rename on either side must fail here rather than
 // silently stop carding branch-protection blocks.
 func TestIsBranchProtectionPuntMatchesDecideReasons(t *testing.T) {
+	t.Parallel()
+
 	blocking := []pmstages.PRViewSnapshot{
 		{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN", ReviewDecision: "REVIEW_REQUIRED"},
 		{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN", ReviewDecision: "CHANGES_REQUESTED"},
@@ -1402,6 +1482,8 @@ func TestIsBranchProtectionPuntMatchesDecideReasons(t *testing.T) {
 // single-identity trigger: no identityChecker is wired, and a permission
 // failure in a stage's output still raises exactly one auth-failure card.
 func TestEscalationGatePermissionRaisesAuthFailureCard(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]string{
 		"http 401":            "remote: HTTP 401: Bad credentials",
 		"invalid auth method": "error: failed to push some refs: invalid auth method",
@@ -1438,6 +1520,8 @@ func TestEscalationGatePermissionRaisesAuthFailureCard(t *testing.T) {
 // TestEscalationGateInfraFailureRaisesNoAuthCard: a non-permission failure must
 // not raise an auth card.
 func TestEscalationGateInfraFailureRaisesNoAuthCard(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	item := types.BoardItem{Repo: "octocat/acme", Number: 42}
 	if blocked, _ := s.permissionBlockedEscalation(item, "run-1", "dial tcp: connection refused"); blocked {
@@ -1451,6 +1535,8 @@ func TestEscalationGateInfraFailureRaisesNoAuthCard(t *testing.T) {
 // TestAuthFailureTriggersCoalesce: the identity preflight and the CatPermission
 // gate share one idempotency key, so firing both leaves one open card.
 func TestAuthFailureTriggersCoalesce(t *testing.T) {
+	t.Parallel()
+
 	s := newAttentionProducerRunScheduler(t)
 	s.WithIdentityChecker(&fakeIdentityChecker{allowed: false, reason: "token expired"})
 	item := types.BoardItem{Repo: "octocat/acme", Number: 42, ID: "I_42"}
@@ -1469,6 +1555,8 @@ func TestAuthFailureTriggersCoalesce(t *testing.T) {
 // A parked stop raises no card by itself, and an operator has no other way to
 // hear about a stage that never started (#2723). Both funnels leave one card.
 func TestGatePluginMissingRaisesOneCard(t *testing.T) {
+	t.Parallel()
+
 	store := attention.New(layouttest.Repo(t))
 	s := &Scheduler{attention: store}
 	detail := "stderr tail\nexit 1: [gate-plugin-missing] stopped before any work: system/init lists no nightgauge plugin\nmore tail"
@@ -1501,6 +1589,8 @@ func TestGatePluginMissingRaisesOneCard(t *testing.T) {
 }
 
 func TestGatePluginMissingParks(t *testing.T) {
+	t.Parallel()
+
 	if !TerminalKindParks(TerminalKindGatePluginMissing) {
 		t.Error("a retry meets the same install, so the kind must park")
 	}
@@ -1511,6 +1601,8 @@ func TestGatePluginMissingParks(t *testing.T) {
 
 // TestProducerReviewCapNamesTheFindingsAndTheWorktree is AC 2 and AC 3.
 func TestProducerReviewCapNamesTheFindingsAndTheWorktree(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	line := 12
 	stored, err := json.Marshal(review.Outcome{Verdict: "catch", Fix: []review.Finding{
@@ -1556,6 +1648,8 @@ func TestProducerReviewCapNamesTheFindingsAndTheWorktree(t *testing.T) {
 // a finding cannot add links or emphasis to the card (#2875). Paths render as
 // code spans, where Markdown is inert, so they stay exact (#3129).
 func TestProducerReviewCapEscapesFindingText(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	stored, err := json.Marshal(review.Outcome{Verdict: "catch", Fix: []review.Finding{
 		{Pass: "security", File: "x[y](z).go", Claim: "see [here](http://evil) **now**", Severity: "major"},
@@ -1590,6 +1684,8 @@ func TestProducerReviewCapEscapesFindingText(t *testing.T) {
 // TestProducerReviewCapFallsBackToTheFailureText: a missing record still names
 // the cap.
 func TestProducerReviewCapFallsBackToTheFailureText(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.raiseReviewCapReached("octocat/acme", 2865, "Capped", "[review-cap-reached] stopped")
 	reqs := openRequests(t, as)
@@ -1601,6 +1697,8 @@ func TestProducerReviewCapFallsBackToTheFailureText(t *testing.T) {
 // TestReviewCapCardRetractsOnRelease covers a release from the CLI, which never
 // touches the card.
 func TestReviewCapCardRetractsOnRelease(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	as.state.Failed = []FailedItem{{Repo: "octocat/acme", Number: 2865, Kind: TerminalKindReviewCapReached}}
 	as.raiseReviewCapReached("octocat/acme", 2865, "Capped", "text")
@@ -1619,6 +1717,8 @@ func TestReviewCapCardRetractsOnRelease(t *testing.T) {
 // TestReviewCapOnAnUnchangedTreeFillsTheCard drives the real path (#2876): three
 // catches, a consult of the third tree, then the card.
 func TestReviewCapOnAnUnchangedTreeFillsTheCard(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	root := as.workspaceRoot
 	dir, err := layout.PipelineStateDir(root)
@@ -1664,6 +1764,8 @@ func TestReviewCapOnAnUnchangedTreeFillsTheCard(t *testing.T) {
 // TestReviewCapAfterReleaseRaisesANewCard: a later cap after an operator resolution must not match the
 // released card's fingerprint (#2876).
 func TestReviewCapAfterReleaseRaisesANewCard(t *testing.T) {
+	t.Parallel()
+
 	as := newAttentionProducerScheduler(t)
 	appendCap := func(runID string) {
 		stored, err := json.Marshal(review.Outcome{Verdict: "catch", Fix: []review.Finding{}})
@@ -1697,6 +1799,8 @@ func TestReviewCapAfterReleaseRaisesANewCard(t *testing.T) {
 
 // A path renders as a code span, verbatim, whatever Markdown punctuation it holds (#3129).
 func TestReviewCapRecordRendersPathsAsCodeSpans(t *testing.T) {
+	t.Parallel()
+
 	line := 7
 	rec := &review.CapRecord{
 		Worktree: "/tmp/a_b/*c*/d`e",
@@ -1719,6 +1823,8 @@ func TestReviewCapRecordRendersPathsAsCodeSpans(t *testing.T) {
 
 // TestBuildPrMergeParkedBlock pins the parked-PR card's identity (#3339).
 func TestBuildPrMergeParkedBlock(t *testing.T) {
+	t.Parallel()
+
 	const reason = "merge-queue-failed: merge-group code failure: job \"test\""
 	req := BuildPrMergeParkedBlock("octocat/acme", 42, 99, "run-1", reason)
 	if req.IdempotencyKey != "pr-merge-parked:octocat/acme#42" || req.Producer != ProducerPrMergeParked {

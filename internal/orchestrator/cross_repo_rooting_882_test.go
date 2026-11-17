@@ -137,6 +137,8 @@ func crossRepoScheduler(t *testing.T, launchRoot string, runner StageRunner) *Sc
 // the LAUNCH repo's default branch and PUSHED to the LAUNCH repo's remote. The
 // target repo received nothing.
 func TestCrossRepoRun_RootsStateAndEpicBranchAtTargetRepo(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	launchRoot, launchOrigin := repoWithOrigin(t, workspace, "owner", "launch")
 	targetRoot, targetOrigin := repoWithOrigin(t, workspace, "owner", "target")
@@ -206,6 +208,8 @@ func TestCrossRepoRun_RootsStateAndEpicBranchAtTargetRepo(t *testing.T) {
 // with a REAL remote: writing another project's work there is worse than not
 // running. Nothing may be dispatched, created or pushed.
 func TestCrossRepoRun_UnresolvableTargetRepoRefusesTheRun(t *testing.T) {
+	t.Parallel()
+
 	launchRoot, launchOrigin := repoWithOrigin(t, t.TempDir(), "owner", "launch")
 
 	runner := &exitZeroNoContextRunner{}
@@ -251,6 +255,8 @@ func TestCrossRepoRun_UnresolvableTargetRepoRefusesTheRun(t *testing.T) {
 // repo is still refused, because the launch root's own config names a different
 // repo than the item does.
 func TestCrossRepoRun_NoResolverRefusesANonLaunchRepo(t *testing.T) {
+	t.Parallel()
+
 	launchRoot, _ := repoWithOrigin(t, t.TempDir(), "owner", "launch")
 	s := crossRepoScheduler(t, launchRoot, &exitZeroNoContextRunner{})
 
@@ -271,6 +277,8 @@ func TestCrossRepoRun_NoResolverRefusesANonLaunchRepo(t *testing.T) {
 // that were never in danger, which is a worse outcome than the mis-rooting it
 // prevents.
 func TestOriginRepoSlug_RejectsLocalPathRemotes(t *testing.T) {
+	t.Parallel()
+
 	root, _ := repoWithOrigin(t, t.TempDir(), "owner", "launch") // origin is a local bare repo path
 	if got := originRepoSlug(root); got != "" {
 		t.Errorf("originRepoSlug on a local-path remote = %q, want \"\"", got)
@@ -283,6 +291,8 @@ func TestOriginRepoSlug_RejectsLocalPathRemotes(t *testing.T) {
 }
 
 func TestRepoSlugsMatch(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		a, b string
 		want bool

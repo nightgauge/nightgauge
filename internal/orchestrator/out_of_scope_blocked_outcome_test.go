@@ -39,6 +39,8 @@ func completeFailure(as *AutonomousScheduler, detail string) {
 }
 
 func TestOutOfScopeBlockedStop_WithFinding_NotCharged(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	path := writeBlockedFindingFile(t, root, 7, validFinding7)
 	as := outOfScopeScheduler(root)
@@ -72,6 +74,8 @@ func TestOutOfScopeBlockedStop_WithFinding_NotCharged(t *testing.T) {
 }
 
 func TestOutOfScopeBlockedStop_WithoutFinding_StillCharged(t *testing.T) {
+	t.Parallel()
+
 	as := outOfScopeScheduler(layouttest.Repo(t))
 	completeFailure(as, outOfScopeDetail)
 	if got := as.state.LifetimeIssueFailures["#7"]; got != 1 {
@@ -80,6 +84,8 @@ func TestOutOfScopeBlockedStop_WithoutFinding_StillCharged(t *testing.T) {
 }
 
 func TestRealFailures_StillReachLifetimeCap(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	writeBlockedFindingFile(t, root, 7, validFinding7)
 	as := outOfScopeScheduler(root)
@@ -92,6 +98,8 @@ func TestRealFailures_StillReachLifetimeCap(t *testing.T) {
 }
 
 func TestIsOutOfScopeBlockedOutcome(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]bool{
 		outOfScopeDetail: true,
 		"BLOCKED — PR #12 unmerged: required check failing.":                    false,

@@ -22,6 +22,8 @@ const realFableCapLine = "You've reached your Fable limit. Switch to another mod
 // received "exit 1: " and booked subagent_crash, and #1545's fable→opus ladder
 // was never consulted.
 func TestModelCapReachesTheDescentLadder(t *testing.T) {
+	t.Parallel()
+
 	// The exact stdout shape captured on 2026-09-07: a full streaming-JSON
 	// transcript whose terminal envelope declares the error.
 	stdout := `{"type":"system","subtype":"init"}` + "\n" +
@@ -42,6 +44,8 @@ func TestModelCapReachesTheDescentLadder(t *testing.T) {
 }
 
 func TestVendorStdoutFailureReason(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name   string
 		stdout string
@@ -102,6 +106,8 @@ func TestVendorStdoutFailureReason(t *testing.T) {
 // TestStderrStillWins pins that the fallback is a LAST resort: whenever the
 // adapter wrote its own stderr reason, that reason is unchanged by #1556.
 func TestStderrStillWins(t *testing.T) {
+	t.Parallel()
+
 	stdout := `{"type":"result","is_error":true,"result":"` + realFableCapLine + `"}` + "\n"
 	errorText, _ := cliFailureText(stdout, "Error: Couldn't set model: \"unknown model id\"\n")
 	if want := "Error: Couldn't set model: \"unknown model id\""; errorText != want {
@@ -114,6 +120,8 @@ func TestStderrStillWins(t *testing.T) {
 // abandon a model that was never the problem; it must not reach the ladder even
 // though it now reaches the classifier.
 func TestAccountLimitDoesNotDowngrade(t *testing.T) {
+	t.Parallel()
+
 	stdout := `{"type":"result","is_error":true,"result":"You've reached your weekly limit · resets Sep 11 at 10pm"}` + "\n"
 	errorText, _ := cliFailureText(stdout, "")
 	if errorText == "" {

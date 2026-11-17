@@ -33,6 +33,8 @@ import (
 // drives the merged=true path directly and asserts every automatic-retry
 // mechanism is skipped, while the failure is still visible for human triage
 // (an Action Center card via as.state.Failed).
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestOnPipelineComplete_MergedFailure_NoRevertNoLifetimeIncrementNoCascade(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
@@ -90,6 +92,8 @@ func TestOnPipelineComplete_MergedFailure_NoRevertNoLifetimeIncrementNoCascade(t
 // and DOES increment the counters. If this test failed, the merged=true
 // test above would prove nothing — the harness might simply never reach the
 // GENERIC branch at all.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestOnPipelineComplete_MergedFailure_FalsePositiveGuard(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
@@ -120,6 +124,8 @@ func TestOnPipelineComplete_MergedFailure_FalsePositiveGuard(t *testing.T) {
 // the issue, so it leaves the board graph. When the forge answers again the
 // post-merge path runs exactly once, through Scheduler.runPostMerge, and the
 // validation marker is written. Nothing asks a human to move the issue.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
 func TestTransientKill_PRMergedWhileOffline_PostMergeRunsOnceOnReconnect(t *testing.T) {
 	buf := withCapturedLog(t)
 	// No open-PR pages: every list read fails, as it does offline.

@@ -10,6 +10,8 @@ import (
 // of it: it returns as soon as the state matches, it is woken BY the
 // transition rather than by a timer, and when it gives up it reports the
 // state as it actually is — never the state the caller asked for.
+//
+// Serial: fails on a wall-clock deadline of 5s, which parallel load can exceed (#2950).
 func TestWaitForRunning(t *testing.T) {
 	t.Run("already satisfied returns immediately", func(t *testing.T) {
 		as := &AutonomousScheduler{}

@@ -16,6 +16,8 @@ import (
 // TestRateAwareCadence_NoAvgCostFailsOpen — cold start (no cycles observed
 // yet) must behave exactly like today's fixed cadence.
 func TestRateAwareCadence_NoAvgCostFailsOpen(t *testing.T) {
+	t.Parallel()
+
 	base := 30 * time.Second
 	got := rateAwareCadence(base, 4000, 5000, time.Now().Add(30*time.Minute), 0, 2000, 10*time.Minute)
 	if got != base {
@@ -26,6 +28,8 @@ func TestRateAwareCadence_NoAvgCostFailsOpen(t *testing.T) {
 // TestRateAwareCadence_RemainingZeroFailsOpen — no remaining/limit data
 // (remaining<=0) must also fail open rather than force the ceiling.
 func TestRateAwareCadence_RemainingZeroFailsOpen(t *testing.T) {
+	t.Parallel()
+
 	base := 30 * time.Second
 	got := rateAwareCadence(base, 0, 5000, time.Now().Add(30*time.Minute), 50, 2000, 10*time.Minute)
 	if got != base {
@@ -36,6 +40,8 @@ func TestRateAwareCadence_RemainingZeroFailsOpen(t *testing.T) {
 // TestRateAwareCadence_ResetInPastFailsOpen — a stale resetAt (already
 // passed) must fail open rather than gate on data that's about to refresh.
 func TestRateAwareCadence_ResetInPastFailsOpen(t *testing.T) {
+	t.Parallel()
+
 	base := 30 * time.Second
 	got := rateAwareCadence(base, 4000, 5000, time.Now().Add(-1*time.Minute), 50, 2000, 10*time.Minute)
 	if got != base {
@@ -46,6 +52,8 @@ func TestRateAwareCadence_ResetInPastFailsOpen(t *testing.T) {
 // TestRateAwareCadence_AmpleHeadroomReturnsBase — plenty of remaining quota
 // relative to time-to-reset must not stretch cadence at all.
 func TestRateAwareCadence_AmpleHeadroomReturnsBase(t *testing.T) {
+	t.Parallel()
+
 	base := 30 * time.Second
 	// 4800 usable over 1 hour at 10 points/cycle => ~480 allowed cycles,
 	// needed interval ~7.5s — far below base, so base wins.
@@ -60,6 +68,8 @@ func TestRateAwareCadence_AmpleHeadroomReturnsBase(t *testing.T) {
 // little usable headroom left before reset, the interval must stretch well
 // past base, bounded by the ceiling.
 func TestRateAwareCadence_TightHeadroomStretchesTowardCeiling(t *testing.T) {
+	t.Parallel()
+
 	base := 30 * time.Second
 	ceiling := 10 * time.Minute
 	// usable = 2500-2000 = 500; avgCost=100/cycle => 5 allowed cycles over
@@ -77,6 +87,8 @@ func TestRateAwareCadence_TightHeadroomStretchesTowardCeiling(t *testing.T) {
 // is already at or below the dispatch floor; stretch to the ceiling without
 // doing any further math.
 func TestRateAwareCadence_UsableBelowZeroReturnsCeilingImmediately(t *testing.T) {
+	t.Parallel()
+
 	base := 30 * time.Second
 	ceiling := 10 * time.Minute
 	got := rateAwareCadence(base, 1900, 5000, time.Now().Add(30*time.Minute), 50, 2000, ceiling)
@@ -90,6 +102,8 @@ func TestRateAwareCadence_UsableBelowZeroReturnsCeilingImmediately(t *testing.T)
 // result must never go below base — rate-awareness only ever slows cadence
 // down, never speeds it up past the configured floor.
 func TestRateAwareCadence_NeverBelowBase(t *testing.T) {
+	t.Parallel()
+
 	base := 30 * time.Second
 	got := rateAwareCadence(base, 4999, 5000, time.Now().Add(1*time.Hour), 1, 2000, 10*time.Minute)
 	if got != base {
@@ -101,6 +115,8 @@ func TestRateAwareCadence_NeverBelowBase(t *testing.T) {
 // is false, scanCadence must behave exactly like the pre-#172 fixed cadence
 // regardless of tracker state.
 func TestScanCadence_RateAwareDisabledReturnsFixedBase(t *testing.T) {
+	t.Parallel()
+
 	c, cleanup := withFreshTracker(t, "alice", 2000, 30*time.Minute)
 	defer cleanup()
 	as := &AutonomousScheduler{
@@ -120,6 +136,8 @@ func TestScanCadence_RateAwareDisabledReturnsFixedBase(t *testing.T) {
 // TestScanCadence_RateAwareNoTrackerFailsOpen — RateAwareCadence enabled but
 // no ghClient/tracker (e.g. tests, early startup) must fail open to base.
 func TestScanCadence_RateAwareNoTrackerFailsOpen(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
@@ -137,6 +155,8 @@ func TestScanCadence_RateAwareNoTrackerFailsOpen(t *testing.T) {
 // scanCadence(): a tight tracker reading plus a populated EWMA average must
 // stretch the returned interval above base.
 func TestScanCadence_RateAwareStretchesUnderPressure(t *testing.T) {
+	t.Parallel()
+
 	c, cleanup := withFreshTracker(t, "alice", 2200, 40*time.Minute)
 	defer cleanup()
 	as := &AutonomousScheduler{
@@ -161,6 +181,8 @@ func TestScanCadence_RateAwareStretchesUnderPressure(t *testing.T) {
 // window reset (remaining increases => negative diff) must be discarded
 // rather than corrupting the running average.
 func TestGraphQLCostEWMA_ConvergesTowardStepChange(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{state: &AutonomousState{}}
 
 	applySample := func(cost int) {
@@ -209,6 +231,8 @@ func TestGraphQLCostEWMA_ConvergesTowardStepChange(t *testing.T) {
 // GraphQL budget. A future change that silently multiplies per-cycle cost or
 // disables rate-awareness will fail this test.
 func TestSustainedHourBudgetSimulation(t *testing.T) {
+	t.Parallel()
+
 	const limit = 5000
 	const measuredCostPerCycle = 50
 	const floor = 2000
@@ -290,6 +314,8 @@ func TestSustainedHourBudgetSimulation(t *testing.T) {
 // TestRateLimitPressure_SingleBlipDoesNotTrip — a lone rejected cycle inside
 // an otherwise-clean rolling window must not set RateLimitPressureActive.
 func TestRateLimitPressure_SingleBlipDoesNotTrip(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{state: &AutonomousState{}}
 	for i := 0; i < rateLimitPressureWindow-1; i++ {
 		as.state.LastRejectionReasons = map[string]int{}
@@ -307,6 +333,8 @@ func TestRateLimitPressure_SingleBlipDoesNotTrip(t *testing.T) {
 // RateLimitPressureActive; once the window fills back up with clean cycles,
 // it clears.
 func TestRateLimitPressure_SustainedRejectionsTripAndRecover(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{state: &AutonomousState{}}
 
 	// Fill the window with rejections well past the 25% threshold.

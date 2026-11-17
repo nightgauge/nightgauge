@@ -134,6 +134,8 @@ func assertRebuilt(t *testing.T, worktree, path, branch string) map[string]inter
 }
 
 func TestRecoverIssueContext_RebuildsAMissingFile(t *testing.T) {
+	t.Parallel()
+
 	root, wt := branchStampFixture(t, "fix/1919-pickup-context")
 	path := contextPathIn(t, wt)
 	if res := pickupGate(wt); res.Passed || res.Reason != "issue context file missing" {
@@ -150,6 +152,8 @@ func TestRecoverIssueContext_RebuildsAMissingFile(t *testing.T) {
 }
 
 func TestRecoverIssueContext_RewritesInvalidJSON(t *testing.T) {
+	t.Parallel()
+
 	root, wt := branchStampFixture(t, "fix/1919-pickup-context")
 	path := plantContext(t, wt, `{"schema_version":"1.5","issue_number":1919,"branch":`)
 
@@ -160,6 +164,8 @@ func TestRecoverIssueContext_RewritesInvalidJSON(t *testing.T) {
 }
 
 func TestRecoverIssueContext_RewritesASchemaMismatchAndKeepsOtherKeys(t *testing.T) {
+	t.Parallel()
+
 	// The #1904 shape: `branch` serialised as an object, not a string.
 	root, wt := branchStampFixture(t, "fix/1919-pickup-context")
 	path := plantContext(t, wt, `{"issue_number":1919,"branch":{"name":"fix/1919-pickup-context"},"knowledge_path":"/kb/1919"}`)
@@ -174,6 +180,8 @@ func TestRecoverIssueContext_RewritesASchemaMismatchAndKeepsOtherKeys(t *testing
 }
 
 func TestRecoverIssueContext_StampsOnlyTheBranchOnAnOtherwiseValidFile(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct{ name, body string }{
 		{"empty", `{"schema_version":"1.5","issue_number":1919,"title":"the skill's own title","branch":""}`},
 		{"absent", `{"schema_version":"1.5","issue_number":1919,"title":"the skill's own title"}`},
@@ -202,6 +210,8 @@ func TestRecoverIssueContext_StampsOnlyTheBranchOnAnOtherwiseValidFile(t *testin
 }
 
 func TestRecoverIssueContext_NeverTouchesAValidFile(t *testing.T) {
+	t.Parallel()
+
 	// Including a wrong-looking branch: an empty slug is #1915's defect, and
 	// silently rewriting it here would hide that bug rather than fix it.
 	root, wt := branchStampFixture(t, "fix/1919-full-slug")
@@ -217,6 +227,8 @@ func TestRecoverIssueContext_NeverTouchesAValidFile(t *testing.T) {
 }
 
 func TestRecoverIssueContext_RecoversNothingWhenHEADIsNotThisIssuesBranch(t *testing.T) {
+	t.Parallel()
+
 	// No branch for this issue was ever created, so the stage really did
 	// produce nothing and the gate must still fail it.
 	for _, tc := range []struct{ name, body string }{
@@ -248,6 +260,8 @@ func TestRecoverIssueContext_RecoversNothingWhenHEADIsNotThisIssuesBranch(t *tes
 }
 
 func TestRecoverIssueContext_IssueFetchFailureWritesNothing(t *testing.T) {
+	t.Parallel()
+
 	root, wt := branchStampFixture(t, "fix/1919-pickup-context")
 	path := contextPathIn(t, wt)
 	s := &Scheduler{issueSvc: newMockIssueSvc()} // serves no issues
@@ -266,6 +280,8 @@ func TestRecoverIssueContext_IssueFetchFailureWritesNothing(t *testing.T) {
 // The call-site guard: only a skill-path pickup that reported success is
 // repaired, and the repair is recorded on the stage's evidence.
 func TestRecoverPickupAfterSkill_Guards(t *testing.T) {
+	t.Parallel()
+
 	stage := state.StageIssuePickup
 	cases := []struct {
 		name      string

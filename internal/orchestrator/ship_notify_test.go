@@ -29,6 +29,7 @@ func writeWorkspaceConfig(t *testing.T, yaml string) string {
 	return root
 }
 
+// Serial: sets the environment.
 func TestResolveShipNotify_Defaults(t *testing.T) {
 	t.Setenv(config.DefaultShipNotifyWebhookEnv, "https://discord/wh")
 	root := t.TempDir() // no config.yaml
@@ -45,6 +46,7 @@ func TestResolveShipNotify_Defaults(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestResolveShipNotify_ConfigOverrides(t *testing.T) {
 	t.Setenv("MY_SHIP_HOOK", "https://discord/custom")
 	root := writeWorkspaceConfig(t, `
@@ -68,6 +70,8 @@ ready_to_ship:
 }
 
 func TestShipNotifyMessage_CarriesDeployCommand(t *testing.T) {
+	t.Parallel()
+
 	e := shipNotifyMessage("o/r", 4067, "gh workflow run deploy-stores.yml -f platforms=all")
 	if !strings.Contains(e.Title, "#4067") || !strings.Contains(e.Title, "o/r") {
 		t.Errorf("title must name the epic, got %q", e.Title)
@@ -87,6 +91,7 @@ func TestShipNotifyMessage_CarriesDeployCommand(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestEmitReadyToShipAlert_PostsWhenConfigured(t *testing.T) {
 	var hits int32
 	var body []byte
@@ -113,6 +118,7 @@ func TestEmitReadyToShipAlert_PostsWhenConfigured(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestEmitReadyToShipAlert_NoOpWhenNoWebhook(t *testing.T) {
 	t.Setenv(config.DefaultShipNotifyWebhookEnv, "") // no webhook
 	s := &Scheduler{workspaceRoot: t.TempDir()}
@@ -124,6 +130,8 @@ func TestEmitReadyToShipAlert_NoOpWhenNoWebhook(t *testing.T) {
 // TestEmitReadyToShipAlert_FailsClosedOnConfigError locks the #4076 review fix:
 // a malformed config.yaml (config.Load errors) must SKIP the notification, not
 // fall back to enabled-by-default and fire despite a user's opt-out intent.
+//
+// Serial: sets the environment.
 func TestEmitReadyToShipAlert_FailsClosedOnConfigError(t *testing.T) {
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -142,6 +150,7 @@ func TestEmitReadyToShipAlert_FailsClosedOnConfigError(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestEmitReadyToShipAlert_DisabledByConfig(t *testing.T) {
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -163,6 +172,8 @@ func TestEmitReadyToShipAlert_DisabledByConfig(t *testing.T) {
 // no Discord webhook is set. Delivery is covered by SlackSink's own tests; this
 // asserts the caller resolves credentials from the shared config block (#1089),
 // which is the wiring that decides whether the alert can reach Slack at all.
+//
+// Serial: sets the environment.
 func TestEmitReadyToShipAlert_BuildsSlackSinkFromSharedConfig(t *testing.T) {
 	t.Setenv("TEST_SLACK_TOKEN", "xoxb-test")
 	enabled := true

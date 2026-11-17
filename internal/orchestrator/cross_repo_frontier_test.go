@@ -19,6 +19,8 @@ import (
 // unrelated #7. The blocker's state in ITS OWN repository decides dispatch,
 // whether or not o/a#7 is on a board, and an unknown state fails closed.
 func TestEvaluateDeps_CrossRepoFrontier(t *testing.T) {
+	t.Parallel()
+
 	const dep = "o/a#7"
 	sameNumberOtherRepo := &depgraph.Node{Repo: "o/b", Number: 7, State: "CLOSED", BoardStatus: "Done"}
 
@@ -79,6 +81,8 @@ func TestEvaluateDeps_CrossRepoFrontier(t *testing.T) {
 // blocker outside any program keeps closure-based release; an unknown standing
 // fails closed.
 func TestEvaluateDeps_ProgramValidationGate(t *testing.T) {
+	t.Parallel()
+
 	const dep = "o/a#7"
 	program := []string{"program:billing"}
 	tests := []struct {
@@ -164,6 +168,8 @@ func (m *markerComments) TrustedComments(_ context.Context, owner, repo string, 
 // ResolveValidationByKey reads trusted comments only for program members,
 // reads labels for off-board keys, and leaves undecidable keys out.
 func TestResolveValidationByKey(t *testing.T) {
+	t.Parallel()
+
 	mock := newMockIssueSvc()
 	mock.issues["o/b#5"] = &types.Issue{Number: 5, State: "CLOSED", Labels: []string{"program:x"}}
 	mock.issues["o/b#6"] = &types.Issue{Number: 6, State: "CLOSED", Labels: []string{"type:bug"}}

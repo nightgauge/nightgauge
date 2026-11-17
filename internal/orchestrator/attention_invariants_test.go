@@ -45,6 +45,8 @@ type accountingManifest struct {
 // funnel being accounted for, not a behavior the funnel performs, which is what
 // "(20 behaviors + this row)" means.
 func TestForceClearAccountingIsExhaustive(t *testing.T) {
+	t.Parallel()
+
 	data, err := os.ReadFile(filepath.Join("testdata", "terminal_behaviors.json"))
 	if err != nil {
 		t.Fatalf("read terminal_behaviors.json: %v", err)
@@ -121,6 +123,8 @@ func TestForceClearAccountingIsExhaustive(t *testing.T) {
 // the ADR, and a producer the ADR does not enumerate carries `(unnumbered)`
 // rather than a plausible-looking number of its own.
 func TestProducerLabelsMatchTheADRNumbering(t *testing.T) {
+	t.Parallel()
+
 	adr, err := os.ReadFile(filepath.Join("..", "..", "docs", "decisions", "015-decision-requests.md"))
 	if err != nil {
 		t.Fatalf("read ADR-015: %v", err)

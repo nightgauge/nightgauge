@@ -20,6 +20,8 @@ func (m *mockLicenseChecker) CheckLicense(_ context.Context, _ int) (*LicenseChe
 }
 
 func TestPreflightLicense_NilChecker_ReturnsCommunity(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "nightgauge/test"}
@@ -34,6 +36,8 @@ func TestPreflightLicense_NilChecker_ReturnsCommunity(t *testing.T) {
 }
 
 func TestPreflightLicense_ProTier_ReturnsTier(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
@@ -53,6 +57,8 @@ func TestPreflightLicense_ProTier_ReturnsTier(t *testing.T) {
 }
 
 func TestPreflightLicense_Blocked_ReturnsEmptyTier(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
@@ -72,6 +78,8 @@ func TestPreflightLicense_Blocked_ReturnsEmptyTier(t *testing.T) {
 }
 
 func TestPreflightLicense_Error_DegradesToCommunity(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
@@ -93,6 +101,8 @@ func TestPreflightLicense_Error_DegradesToCommunity(t *testing.T) {
 // ─── revalidateLicense (#4156 — mid-run re-validation) ─────────────────────
 
 func TestRevalidateLicense_NilChecker_StillAllowed(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "nightgauge/test"}
@@ -110,6 +120,8 @@ func TestRevalidateLicense_NilChecker_StillAllowed(t *testing.T) {
 // guard: a mid-run re-validation that comes back CONFIRMED revoked must halt
 // progression (allowed=false), not just flag-and-continue.
 func TestRevalidateLicense_ConfirmedRevoked_Halts(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
@@ -130,6 +142,8 @@ func TestRevalidateLicense_ConfirmedRevoked_Halts(t *testing.T) {
 
 // TestRevalidateLicense_ConfirmedSuspended_Halts mirrors the revoked case.
 func TestRevalidateLicense_ConfirmedSuspended_Halts(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
@@ -153,6 +167,8 @@ func TestRevalidateLicense_ConfirmedSuspended_Halts(t *testing.T) {
 // IpcLicenseChecker returns for a generic timeout with no prior confirmed-bad
 // status) must NOT halt the run.
 func TestRevalidateLicense_UnreachableFailOpen_StillAllowed(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
@@ -175,6 +191,8 @@ func TestRevalidateLicense_UnreachableFailOpen_StillAllowed(t *testing.T) {
 // (flagged, notified after completion) instead of promoting it to a hard
 // mid-run halt, which the epic didn't ask for.
 func TestRevalidateLicense_Blocked_NonRevokedStatus_StillAllowed(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
@@ -194,6 +212,8 @@ func TestRevalidateLicense_Blocked_NonRevokedStatus_StillAllowed(t *testing.T) {
 // from the ctx.Done() fail-open path, which resolves to a result rather than
 // an error) is treated as transient and does not block.
 func TestRevalidateLicense_Error_TreatedAsTransient(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
@@ -213,6 +233,8 @@ func TestRevalidateLicense_Error_TreatedAsTransient(t *testing.T) {
 // updates the runtime's LicenseSnapshot so the next staleness check reuses
 // the new cacheUntil window rather than re-validating on every stage.
 func TestRevalidateLicense_Allowed_RefreshesSnapshot(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
@@ -243,6 +265,8 @@ func TestRevalidateLicense_Allowed_RefreshesSnapshot(t *testing.T) {
 }
 
 func TestStageRunParams_SkillContent(t *testing.T) {
+	t.Parallel()
+
 	// Verify SkillContent is correctly propagated in StageRunParams
 	params := StageRunParams{
 		Stage:        state.StageFeatureDev,
@@ -258,6 +282,8 @@ func TestStageRunParams_SkillContent(t *testing.T) {
 }
 
 func TestWithSkillService_SetsService(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	if s.skillService != nil {
 		t.Error("expected skillService to be nil initially")
@@ -271,6 +297,8 @@ func TestWithSkillService_SetsService(t *testing.T) {
 }
 
 func TestStageRunParams_SkillFallbackUsed_Field(t *testing.T) {
+	t.Parallel()
+
 	// Verify SkillFallbackUsed field exists and defaults to false
 	params := StageRunParams{
 		Stage:       state.StageFeatureDev,
@@ -287,6 +315,8 @@ func TestStageRunParams_SkillFallbackUsed_Field(t *testing.T) {
 }
 
 func TestStageRunParams_SkillFallbackUsed_CommunityTier_NotSet(t *testing.T) {
+	t.Parallel()
+
 	// Community tier never sets SkillFallbackUsed because no platform call is made.
 	// This test documents the expected behavior: with nil skillService,
 	// SkillFallbackUsed must remain false regardless of tier.
@@ -305,6 +335,8 @@ func TestStageRunParams_SkillFallbackUsed_CommunityTier_NotSet(t *testing.T) {
 }
 
 func TestStageRunParams_SkillFallbackUsed_WhenPlatformSucceeds_NotSet(t *testing.T) {
+	t.Parallel()
+
 	// When platform resolution succeeds, SkillFallbackUsed must be false.
 	params := StageRunParams{
 		Stage:             state.StageFeatureDev,

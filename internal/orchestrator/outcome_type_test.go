@@ -3,6 +3,8 @@ package orchestrator
 import "testing"
 
 func TestOutcomeTypeForTerminalFailure(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		text string

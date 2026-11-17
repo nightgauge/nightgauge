@@ -14,6 +14,8 @@ import (
 )
 
 func TestRetryEngine_EvaluateBacktrack_NoFile(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 	decision, err := engine.EvaluateBacktrack("/nonexistent/feedback.json")
 	if err != nil {
@@ -25,6 +27,8 @@ func TestRetryEngine_EvaluateBacktrack_NoFile(t *testing.T) {
 }
 
 func TestRetryEngine_EvaluateBacktrack_BlockingSignal(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 
 	dir := layouttest.Repo(t)
@@ -59,6 +63,8 @@ func TestRetryEngine_EvaluateBacktrack_BlockingSignal(t *testing.T) {
 }
 
 func TestRetryEngine_EvaluateBacktrack_MaxBacktracksExceeded(t *testing.T) {
+	t.Parallel()
+
 	cfg := DefaultRetryConfig()
 	cfg.MaxBacktracks = 1
 	engine := NewRetryEngine(cfg)
@@ -93,6 +99,8 @@ func TestRetryEngine_EvaluateBacktrack_MaxBacktracksExceeded(t *testing.T) {
 }
 
 func TestRetryEngine_EvaluateBacktrack_OscillationDetected(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 	// Record a prior backtrack on the same edge
 	engine.RecordBacktrack("feature-dev", "feature-planning", "")
@@ -126,6 +134,8 @@ func TestRetryEngine_EvaluateBacktrack_OscillationDetected(t *testing.T) {
 }
 
 func TestRetryEngine_EvaluateBacktrack_IgnoresEscalationSignals(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 
 	dir := layouttest.Repo(t)
@@ -154,6 +164,8 @@ func TestRetryEngine_EvaluateBacktrack_IgnoresEscalationSignals(t *testing.T) {
 }
 
 func TestRetryEngine_EvaluateEscalation(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 
 	// Should escalate from sonnet to opus
@@ -167,6 +179,8 @@ func TestRetryEngine_EvaluateEscalation(t *testing.T) {
 }
 
 func TestRetryEngine_EvaluateEscalation_AtCeiling(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 
 	decision := engine.EvaluateEscalation("feature-dev", "opus")
@@ -179,6 +193,8 @@ func TestRetryEngine_EvaluateEscalation_AtCeiling(t *testing.T) {
 }
 
 func TestRetryEngine_EvaluateEscalation_MaxPerStage(t *testing.T) {
+	t.Parallel()
+
 	cfg := DefaultRetryConfig()
 	cfg.MaxEscalationsPerStage = 1
 	engine := NewRetryEngine(cfg)
@@ -194,6 +210,8 @@ func TestRetryEngine_EvaluateEscalation_MaxPerStage(t *testing.T) {
 }
 
 func TestRetryEngine_NextModel(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 
 	tests := []struct {
@@ -216,6 +234,8 @@ func TestRetryEngine_NextModel(t *testing.T) {
 }
 
 func TestRetryEngine_Reset(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 	engine.RecordBacktrack("feature-dev", "feature-planning", "")
 	engine.RecordEscalation("feature-dev", "opus")
@@ -239,6 +259,8 @@ func TestRetryEngine_Reset(t *testing.T) {
 // leaks across runs/issues (the RetryEngine is reused for every issue) and
 // silently denies a later issue its first conflict re-dispatch.
 func TestRetryEngine_Reset_ClearsConflictEdges(t *testing.T) {
+	t.Parallel()
+
 	cfg := DefaultRetryConfig()
 	cfg.MaxConflictRedispatch = 2
 	engine := NewRetryEngine(cfg)
@@ -265,6 +287,8 @@ func TestRetryEngine_Reset_ClearsConflictEdges(t *testing.T) {
 }
 
 func TestRetryEngine_NextModel_EmptyCurrentModel(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 
 	// Empty model should escalate to opus (next after sonnet in ladder)
@@ -278,6 +302,8 @@ func TestRetryEngine_NextModel_EmptyCurrentModel(t *testing.T) {
 }
 
 func TestRetryEngine_NextModel_UnknownModel(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 
 	// Unknown model not in ladder — should not escalate
@@ -288,6 +314,8 @@ func TestRetryEngine_NextModel_UnknownModel(t *testing.T) {
 }
 
 func TestRetryEngine_EscalationTriggersOnEmptyModel(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 
 	// Simulate a stage failure with empty model (the bug we're fixing)
@@ -301,6 +329,8 @@ func TestRetryEngine_EscalationTriggersOnEmptyModel(t *testing.T) {
 }
 
 func TestRetryEngine_EscalationSonnetToOpus(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 
 	decision := engine.EvaluateEscalation("feature-dev", "sonnet")
@@ -313,6 +343,8 @@ func TestRetryEngine_EscalationSonnetToOpus(t *testing.T) {
 }
 
 func TestRetryEngine_EscalationOpusCeiling(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 
 	decision := engine.EvaluateEscalation("feature-dev", "opus")
@@ -328,6 +360,8 @@ func TestRetryEngine_EscalationOpusCeiling(t *testing.T) {
 // Issue #3198. The test must pass under `go test -race`; any regression that
 // drops a mutex will be caught by the detector.
 func TestRetryEngine_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
 	cfg := DefaultRetryConfig()
 	cfg.MaxBacktracks = 1000          // generous so RecordBacktrack does not become a no-op
 	cfg.MaxEscalationsPerStage = 1000 // same — keep the path hot
@@ -395,6 +429,8 @@ func TestRetryEngine_ConcurrentAccess(t *testing.T) {
 }
 
 func TestLoadLatestRetro(t *testing.T) {
+	t.Parallel()
+
 	dir := layouttest.Repo(t)
 	retroDir := layouttest.RetrosDir(t, dir)
 	if err := os.MkdirAll(retroDir, 0o755); err != nil {
@@ -431,6 +467,8 @@ func TestLoadLatestRetro(t *testing.T) {
 }
 
 func TestLoadLatestRetro_NoFile(t *testing.T) {
+	t.Parallel()
+
 	dir := layouttest.Repo(t)
 	result := loadLatestRetro(dir, 999, "feature-dev")
 	if result != "" {
@@ -467,6 +505,8 @@ func writeConflictFeedback(t *testing.T, dir string) string {
 // and stall-rewind sites) must IGNORE CONFLICT_RESOLUTION_NEEDED signals so it
 // never re-consumes a lingering conflict signal and self-loops feature-dev.
 func TestRetryEngine_GenericBacktrackSkipsConflictSignal(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 	feedbackFile := writeConflictFeedback(t, t.TempDir())
 
@@ -485,6 +525,8 @@ func TestRetryEngine_GenericBacktrackSkipsConflictSignal(t *testing.T) {
 // and the third declines with LimitReached — even though MaxBacktracks=1 would
 // have capped a generic edge at a single traversal (#4072 review).
 func TestRetryEngine_ConflictBacktrackBoundedByEdgeCount(t *testing.T) {
+	t.Parallel()
+
 	cfg := DefaultRetryConfig()
 	cfg.MaxBacktracks = 1 // a generic edge would be capped at 1
 	cfg.MaxConflictRedispatch = 2
@@ -527,6 +569,8 @@ func TestRetryEngine_ConflictBacktrackBoundedByEdgeCount(t *testing.T) {
 // model-unavailable rejection descends EFFORT within the one model instead of
 // exhausting, and the decision carries the envelope of the accepted rung.
 func TestEvaluateDowngrade_FullyCollapsedProviderDescendsEffort(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 	dg := engine.EvaluateDowngrade("grok-4.6")
 	if !dg.ShouldDowngrade {
@@ -551,6 +595,8 @@ func TestEvaluateDowngrade_FullyCollapsedProviderDescendsEffort(t *testing.T) {
 // substituted tier descends again (opus → sonnet, grok-4.6@medium) — the
 // provider-aware evaluation resolves the band within xai.
 func TestEvaluateDowngrade_DescentChainsThroughTheLadder(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 	first := engine.EvaluateDowngrade("grok-4.6")
 	engine.RecordDowngrade("grok-4.6", first)
@@ -581,6 +627,8 @@ func TestEvaluateDowngrade_DescentChainsThroughTheLadder(t *testing.T) {
 // serving envelope, and the provider has a real weaker MODEL to fall to, so
 // the model ladder stays the honest downgrade and the same-model skip stays.
 func TestEvaluateDowngrade_PartiallyCollapsedProviderKeepsSameModelSkip(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 
 	// google: flash serves sonnet AND haiku. A flash rejection finds only
@@ -611,6 +659,8 @@ func TestEvaluateDowngrade_PartiallyCollapsedProviderKeepsSameModelSkip(t *testi
 // chain of every post-downgrade anthropic stage: only a same-model descent
 // may substitute effort.
 func TestRecordDowngrade_CrossModelRecordsNoStickyEffort(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 	dg := engine.EvaluateDowngrade("opus")
 	if !dg.ShouldDowngrade || dg.SameModelDescent {
@@ -626,6 +676,8 @@ func TestRecordDowngrade_CrossModelRecordsNoStickyEffort(t *testing.T) {
 // runs; a leaked effort substitution would silently rewrite a later run's
 // wire effort.
 func TestRetryEngine_ResetClearsStickyEfforts(t *testing.T) {
+	t.Parallel()
+
 	engine := NewRetryEngine(DefaultRetryConfig())
 	dg := engine.EvaluateDowngrade("grok-4.6")
 	engine.RecordDowngrade("grok-4.6", dg)
@@ -649,6 +701,8 @@ func TestRetryEngine_ResetClearsStickyEfforts(t *testing.T) {
 // Every non-xai row is the #606 scoping, and the two empty-input rows are the
 // honest-unknown contract: "" must never be read as "probably xai".
 func TestDowngradeProviderForServedModel(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name   string
 		served string
@@ -696,6 +750,8 @@ func TestDowngradeProviderForServedModel(t *testing.T) {
 // same model and worktree carries the recorded OpenCode session; any of the
 // three changing clears it.
 func TestResolveResumeSessionID(t *testing.T) {
+	t.Parallel()
+
 	const stage = state.StageFeatureDev
 
 	newRuntimeWithSession := func(adapter, model, worktree, sessionID string) *state.RuntimeState {

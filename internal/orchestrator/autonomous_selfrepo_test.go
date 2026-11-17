@@ -38,6 +38,8 @@ func selfRepoTestNodes() []*depgraph.Node {
 }
 
 func TestPrioritize_RefusesSelfRepoIssue(t *testing.T) {
+	t.Parallel()
+
 	as := newSelfRepoTestScheduler(t, "octocat/toolrepo", false)
 	g := buildTestGraph(selfRepoTestNodes(), nil)
 
@@ -75,6 +77,8 @@ func TestPrioritize_RefusesSelfRepoIssue(t *testing.T) {
 // Re-scanning the same refused issue must update one card in place, never
 // grow the inbox.
 func TestPrioritize_SelfRepoRefusalNeverGrowsInbox(t *testing.T) {
+	t.Parallel()
+
 	as := newSelfRepoTestScheduler(t, "octocat/toolrepo", false)
 	g := buildTestGraph(selfRepoTestNodes(), nil)
 
@@ -93,6 +97,8 @@ func TestPrioritize_SelfRepoRefusalNeverGrowsInbox(t *testing.T) {
 // The card retracts itself when the condition stops being observed (issue
 // closed/moved) — a stale refusal card is noise.
 func TestPrioritize_SelfRepoRefusalRetractsWhenIssueGone(t *testing.T) {
+	t.Parallel()
+
 	as := newSelfRepoTestScheduler(t, "octocat/toolrepo", false)
 	as.prioritize(context.Background(), buildTestGraph(selfRepoTestNodes(), nil))
 
@@ -120,6 +126,8 @@ func TestPrioritize_SelfRepoRefusalRetractsWhenIssueGone(t *testing.T) {
 // The documented escape hatch: autonomous.allow_self_repo / --allow-self-repo
 // dispatches the issue and raises nothing.
 func TestPrioritize_SelfRepoAllowedByOverride(t *testing.T) {
+	t.Parallel()
+
 	as := newSelfRepoTestScheduler(t, "octocat/toolrepo", true)
 	g := buildTestGraph(selfRepoTestNodes(), nil)
 
@@ -136,6 +144,8 @@ func TestPrioritize_SelfRepoAllowedByOverride(t *testing.T) {
 // than refusing blindly: refusing nothing real is safe, refusing everything
 // that shares a name with nothing is not a behavior.
 func TestPrioritize_SelfRepoUnknownIdentityDisablesGuard(t *testing.T) {
+	t.Parallel()
+
 	as := newSelfRepoTestScheduler(t, "", false)
 	g := buildTestGraph(selfRepoTestNodes(), nil)
 
@@ -149,6 +159,8 @@ func TestPrioritize_SelfRepoUnknownIdentityDisablesGuard(t *testing.T) {
 // a candidate that slipped past the prioritize gate is refused before any
 // state mutation — Running stays empty and the refusal is carded.
 func TestEnqueueItem_RefusesSelfRepo(t *testing.T) {
+	t.Parallel()
+
 	as := newSelfRepoTestScheduler(t, "octocat/toolrepo", false)
 
 	as.enqueueItem(context.Background(), CandidateItem{Repo: "octocat/toolrepo", Number: 292, Title: "Fix the tool"})
@@ -168,6 +180,8 @@ func TestEnqueueItem_RefusesSelfRepo(t *testing.T) {
 // Case-insensitive slug match: GitHub slugs are case-insensitive and the
 // origin remote's casing may differ from the board's.
 func TestPrioritize_SelfRepoMatchIsCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
 	as := newSelfRepoTestScheduler(t, "OctoCat/ToolRepo", false)
 	g := buildTestGraph(selfRepoTestNodes(), nil)
 

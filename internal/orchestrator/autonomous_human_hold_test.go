@@ -58,6 +58,8 @@ func isCandidate(candidates []CandidateItem, repo string, number int) bool {
 // board row still reads "Ready" (the sideline's move to In progress is
 // asynchronous and has not landed, which is precisely how the bug reached
 // dispatch).
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestArchitectureApprovalHalt_HeldByReconcileAndNotACandidate(t *testing.T) {
 	as := heldTestScheduler(t)
 
@@ -89,6 +91,8 @@ func TestArchitectureApprovalHalt_HeldByReconcileAndNotACandidate(t *testing.T) 
 // TestArchitectureApprovalHold_ReleasedByApprovalLabel — the human action the
 // halt's own message names. The label is the grant `nightgauge approval-gate`
 // reads, so applying it must re-admit the issue on the very next reconcile.
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestArchitectureApprovalHold_ReleasedByApprovalLabel(t *testing.T) {
 	as := heldTestScheduler(t)
 	as.state.Failed = []FailedItem{{
@@ -122,6 +126,8 @@ func TestArchitectureApprovalHold_ReleasedByApprovalLabel(t *testing.T) {
 // TestArchitectureApprovalHold_ReleasedByApprovalFile covers the gate's second
 // grant, so the reconcile and `nightgauge approval-gate` cannot disagree about
 // what counts as approved.
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestArchitectureApprovalHold_ReleasedByApprovalFile(t *testing.T) {
 	as := heldTestScheduler(t)
 	as.state.Failed = []FailedItem{{
@@ -149,6 +155,8 @@ func TestArchitectureApprovalHold_ReleasedByApprovalFile(t *testing.T) {
 // TestArchitectureApprovalHold_UnapprovedFileDoesNotRelease — an approval file
 // that says `false`, or malformed JSON, is not approval. The hold fails toward
 // keeping the human in the loop.
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestArchitectureApprovalHold_UnapprovedFileDoesNotRelease(t *testing.T) {
 	as := heldTestScheduler(t)
 	as.state.Failed = []FailedItem{{
@@ -175,6 +183,8 @@ func TestArchitectureApprovalHold_UnapprovedFileDoesNotRelease(t *testing.T) {
 // TestNotPipelineActionable_StaysParkedAcrossRescans is the dashboard#778
 // regression: the park was undone two seconds after it was raised, and the
 // re-dispatched run then discovered a blocked dependency and scheduled a retry.
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestNotPipelineActionable_StaysParkedAcrossRescans(t *testing.T) {
 	as := heldTestScheduler(t)
 
@@ -201,6 +211,8 @@ func TestNotPipelineActionable_StaysParkedAcrossRescans(t *testing.T) {
 
 // TestNotPipelineActionable_ReleasedByExplicitResume — `autonomous resume` is
 // the operator act the hold waits for.
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestNotPipelineActionable_ReleasedByExplicitResume(t *testing.T) {
 	as := heldTestScheduler(t)
 	as.state.Status = "paused"
@@ -224,6 +236,8 @@ func TestNotPipelineActionable_ReleasedByExplicitResume(t *testing.T) {
 // TestNotPipelineActionable_ReleasedByClearIssueFailures — the per-issue escape
 // hatch. It must work even though this kind never increments
 // LifetimeIssueFailures, which is the map every pre-#1486 return path keyed on.
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestNotPipelineActionable_ReleasedByClearIssueFailures(t *testing.T) {
 	as := heldTestScheduler(t)
 	as.state.Failed = []FailedItem{{
@@ -243,6 +257,8 @@ func TestNotPipelineActionable_ReleasedByClearIssueFailures(t *testing.T) {
 // TestResume_DoesNotGrantArchitectureApproval — Resume means "go again", not "I
 // reviewed this architecture". Releasing the approval hold here would buy back
 // exactly the unapproved production-touching run #1486 reports.
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestResume_DoesNotGrantArchitectureApproval(t *testing.T) {
 	as := heldTestScheduler(t)
 	as.state.Status = "paused"
@@ -261,6 +277,8 @@ func TestResume_DoesNotGrantArchitectureApproval(t *testing.T) {
 
 // TestRetryableFailure_StillReadmitted pins the behaviour the fix must NOT
 // change: an ordinary crash is still recovered by the rescan.
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestRetryableFailure_StillReadmitted(t *testing.T) {
 	as := heldTestScheduler(t)
 	as.state.Failed = []FailedItem{
@@ -281,6 +299,8 @@ func TestRetryableFailure_StillReadmitted(t *testing.T) {
 // TestHoldForTerminalKind pins the classification itself, including the kinds
 // that are unrecoverable by retry but are NOT human decision points.
 func TestHoldForTerminalKind(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]string{
 		TerminalKindArchitectureApprovalRequired: HoldArchitectureApproval,
 		TerminalKindNotPipelineActionable:        HoldOperatorResume,
@@ -308,6 +328,8 @@ func TestHoldForTerminalKind(t *testing.T) {
 // file written by this binary round-trips the kind, and one written before the
 // field existed loads with an empty kind (i.e. retryable) rather than failing.
 func TestFailedItemStateRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	original := AutonomousState{Failed: []FailedItem{
 		{Repo: "acme/flutter", Number: 530, FailedAt: "2026-09-05T16:53:15Z",
 			AttemptCount: 1, Kind: TerminalKindArchitectureApprovalRequired},
@@ -357,6 +379,8 @@ func TestFailedItemStateRoundTrip(t *testing.T) {
 // the newest attempt, so a halt after a crash holds the issue and a crash after
 // an approval does not.
 func TestRecordFailureLocked_KindTracksLatestAttempt(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{state: &AutonomousState{}}
 	as.recordFailureLocked("r", 1, "A", "2026-09-05T01:00:00Z", "crash", TerminalKindSubagentCrash)
 	as.recordFailureLocked("r", 1, "A", "2026-09-05T01:00:01Z", "gate", TerminalKindArchitectureApprovalRequired)
@@ -373,6 +397,8 @@ func TestRecordFailureLocked_KindTracksLatestAttempt(t *testing.T) {
 // TestDedupeFailedItems_KindFollowsLatest — legacy duplicate rows (one per
 // attempt) must not collapse a hold into a retryable entry.
 func TestDedupeFailedItems_KindFollowsLatest(t *testing.T) {
+	t.Parallel()
+
 	out := dedupeFailedItems([]FailedItem{
 		{Repo: "r", Number: 1, FailedAt: "2026-09-05T01:00:00Z", Kind: TerminalKindSubagentCrash},
 		{Repo: "r", Number: 1, FailedAt: "2026-09-05T01:00:01Z", Kind: TerminalKindArchitectureApprovalRequired},
@@ -393,6 +419,8 @@ func TestDedupeFailedItems_KindFollowsLatest(t *testing.T) {
 // forever. Drive cap+2 denials through the real completion path, the
 // reconcile and the candidate filter: below the cap the issue retries, from
 // the cap on it is held for an operator and its count is kept.
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestPermissionDeniedCap_IsTerminalAcrossReconcile(t *testing.T) {
 	as := heldTestScheduler(t)
 	const repo, n = "acme/app", 1756

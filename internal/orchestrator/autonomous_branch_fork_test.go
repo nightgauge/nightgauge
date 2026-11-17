@@ -21,6 +21,8 @@ import (
 // lifetime-cap increment, no per-issue failure count, no backoff entry (there
 // is nothing to back off INTO), and no cascade-breaker feed even when several
 // arrive inside the window.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestOnPipelineComplete_BranchForked_NoRetryNoLifetimeIncrementNoCascade(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
@@ -74,6 +76,8 @@ func TestOnPipelineComplete_BranchForked_NoRetryNoLifetimeIncrementNoCascade(t *
 // no-retry branch via the Go-side ClassifyTerminalKind fallback. The observed
 // #163 evidence was exactly this shape — `echo "PUSH REJECTED:
 // non-fast-forward."` in the bash ring, with no structured kind attached.
+//
+// Serial: sets the environment (via newAutonomousForCascadeTest).
 func TestNotifyComplete_EmptyKindBranchForkedDetail_Reclassifies(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}

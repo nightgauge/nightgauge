@@ -15,6 +15,8 @@ import (
 // here, which is how such a line used to dispatch over its real blocker before
 // the #2349 review.
 func TestPrioritize_UnresolvedRepositoryNameFailsClosed(t *testing.T) {
+	t.Parallel()
+
 	const repo = "owner/repo"
 	aliases := depgraph.WorkspaceRepoAliases([]string{repo})
 	refs := depgraph.ParseDependencyRefs("Blocked by core #12", repo, aliases)

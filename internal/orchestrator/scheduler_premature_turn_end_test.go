@@ -25,6 +25,8 @@ import (
 // shape (clean exit, output narrating intent, no state change) tripped
 // neither the idle-stall ticker nor the exit-code check and was recorded as
 // a success.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestScheduler_FeaturePlanning_PrematureTurnEnd_FailsPipeline(t *testing.T) {
 	stubReconcileGhUnreachable(t)
 	root := gitWorkspace(t)

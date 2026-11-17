@@ -75,6 +75,8 @@ var spawnPinTable = map[string]spawnFileSpec{
 // `go test` gate would not notice its return — the leak shows up as a
 // ~25-50% flake in some other test, or not at all.
 func TestEveryDetachedSpawnInAutonomousGoesThroughGoTracked(t *testing.T) {
+	t.Parallel()
+
 	for file, spec := range spawnPinTable {
 		t.Run(file, func(t *testing.T) {
 			if spec.trackedFunc != "" {
@@ -202,6 +204,8 @@ func checkAllowlistedSpawns(t *testing.T, file string, allowed map[int]string) {
 // goTracked that spawns without adding to the generation's WaitGroup) makes
 // waitBackground return early — which this test observes deterministically,
 // with no -race and no sleeps.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestWaitBackgroundBlocksUntilTrackedWorkReturns(t *testing.T) {
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
@@ -270,6 +274,8 @@ func TestWaitBackgroundBlocksUntilTrackedWorkReturns(t *testing.T) {
 // one. Under the fix the drain returns in microseconds; under any of those
 // reverts the 5s bound fires. Without it, reverting all six derivations leaked
 // 17 real `gh pr list` invocations with the whole package still green.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestDrainBackground_CancelReachesInFlightGhExec(t *testing.T) {
 	entered := make(chan struct{})
 	var once sync.Once
@@ -325,6 +331,8 @@ func TestDrainBackground_CancelReachesInFlightGhExec(t *testing.T) {
 // retire and a mutant that never retires anything is indistinguishable from the
 // fix. Measured: without this line the no-re-arm mutant SURVIVES.
 func TestDrainBackground_ReArmsLifecycleContext(t *testing.T) {
+	t.Parallel()
+
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
 	if err := as.backgroundContext().Err(); err != nil {
 		t.Fatalf("a freshly created lifecycle generation is already cancelled: %v", err)
@@ -351,6 +359,8 @@ func TestDrainBackground_ReArmsLifecycleContext(t *testing.T) {
 //
 // The run context staying LIVE across the drain is the whole point of the
 // shape: cancelling it first would make the test pass with no arm at all.
+//
+// Serial: fails on a wall-clock deadline of 5s, which parallel load can exceed (#2950).
 func TestRun_RefinementLoopReleasesDrain(t *testing.T) {
 	cfg := DefaultAutonomousConfig()
 	cfg.RefinementEnabled = true

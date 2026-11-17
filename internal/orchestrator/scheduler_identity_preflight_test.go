@@ -44,6 +44,8 @@ func newPreflightScheduler(checker IdentityChecker) *Scheduler {
 // with the specific reason (via SetStageError) rather than allowed through to a
 // later silent merge failure.
 func TestPreflightIdentity_RejectsNoPushIdentity(t *testing.T) {
+	t.Parallel()
+
 	checker := &fakeIdentityChecker{
 		allowed: false,
 		reason:  `identity "octocat" lacks push access on Acme-Community/acmesvc-tracker`,
@@ -80,6 +82,8 @@ func TestPreflightIdentity_RejectsNoPushIdentity(t *testing.T) {
 // when no IdentityChecker is wired (CLI mode / single-identity repos): the run
 // is allowed and no stage error is recorded.
 func TestPreflightIdentity_SkippedWhenUnconfigured(t *testing.T) {
+	t.Parallel()
+
 	s := newPreflightScheduler(nil) // no checker → gate disabled
 
 	item := types.BoardItem{Repo: "nightgauge/nightgauge", Number: 1, ID: "I_1"}
@@ -97,6 +101,8 @@ func TestPreflightIdentity_SkippedWhenUnconfigured(t *testing.T) {
 // TestPreflightIdentity_AllowsWhenIdentityHasPush verifies a configured identity
 // with push passes the gate cleanly.
 func TestPreflightIdentity_AllowsWhenIdentityHasPush(t *testing.T) {
+	t.Parallel()
+
 	checker := &fakeIdentityChecker{allowed: true}
 	s := newPreflightScheduler(checker)
 
@@ -119,6 +125,8 @@ func TestPreflightIdentity_AllowsWhenIdentityHasPush(t *testing.T) {
 // owner/name) does not block the run on a parsing gap — the gate allows rather
 // than failing closed on a malformed item.
 func TestPreflightIdentity_SkipsUnqualifiedRepo(t *testing.T) {
+	t.Parallel()
+
 	checker := &fakeIdentityChecker{allowed: false, reason: "should not be consulted"}
 	s := newPreflightScheduler(checker)
 
@@ -139,6 +147,8 @@ func TestPreflightIdentity_SkipsUnqualifiedRepo(t *testing.T) {
 // single-identity workspaces are unaffected — and that it does so WITHOUT
 // building a client (no network).
 func TestConfigIdentityChecker_SkipsWhenNoGitHubUser(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{Owner: "nightgauge"} // no github_user, no github_auth.users
 	checker := NewConfigIdentityChecker(cfg)
 	if checker == nil {
@@ -162,6 +172,8 @@ func TestConfigIdentityChecker_SkipsWhenNoGitHubUser(t *testing.T) {
 // TestNewConfigIdentityChecker_NilConfig verifies a nil config yields a nil
 // checker so the scheduler keeps the gate disabled.
 func TestNewConfigIdentityChecker_NilConfig(t *testing.T) {
+	t.Parallel()
+
 	if c := NewConfigIdentityChecker(nil); c != nil {
 		t.Errorf("NewConfigIdentityChecker(nil) = %v, want nil", c)
 	}

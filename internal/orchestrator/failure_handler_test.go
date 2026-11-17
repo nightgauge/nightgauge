@@ -32,6 +32,8 @@ var parkedKinds = []string{
 // neither re-admit the entry nor offer it as a candidate. Routing any of these
 // kinds through the transient-retry branch that api_overloaded takes fails
 // every one of those assertions.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestParkedKinds_NoRetryNoLifetimeIncrementNoCascade(t *testing.T) {
 	for _, kind := range parkedKinds {
 		t.Run(kind, func(t *testing.T) {
@@ -106,6 +108,8 @@ func TestParkedKinds_NoRetryNoLifetimeIncrementNoCascade(t *testing.T) {
 // leave the entry held; the reason must name the act that releases it from a
 // running fleet, clearing the issue's failures, and that act must make the
 // issue a candidate again.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGhUnreachable).
 func TestParkedKinds_ReleasedByTheCommandTheReasonNames(t *testing.T) {
 	for _, kind := range parkedKinds {
 		t.Run(kind, func(t *testing.T) {
@@ -151,6 +155,8 @@ func TestParkedKinds_ReleasedByTheCommandTheReasonNames(t *testing.T) {
 // TestTerminalKindParks_OnlyTheThreeKinds pins the set, so a kind joining it
 // by accident (and losing its retries) is a visible change here.
 func TestTerminalKindParks_OnlyTheThreeKinds(t *testing.T) {
+	t.Parallel()
+
 	for _, kind := range parkedKinds {
 		if !TerminalKindParks(kind) {
 			t.Errorf("TerminalKindParks(%q) = false, want true", kind)
@@ -173,6 +179,8 @@ func TestTerminalKindParks_OnlyTheThreeKinds(t *testing.T) {
 }
 
 func TestIsStageDeclaredBlockedOutcome(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		detail string
 		want   bool
@@ -193,6 +201,8 @@ func TestIsStageDeclaredBlockedOutcome(t *testing.T) {
 }
 
 func TestDemoteWarningOnlyQuotaKind(t *testing.T) {
+	t.Parallel()
+
 	warning := "[rate-limit-quota-exhausted] idle 15m after rate_limit_event (status=allowed_warning; seven_day bucket; resetsAt=1)"
 	cases := []struct {
 		kind, detail, want string
@@ -216,6 +226,8 @@ func TestDemoteWarningOnlyQuotaKind(t *testing.T) {
 
 // The text skillRunner stamps on a soft kill must classify as a stall.
 func TestSoftQuotaKillTextClassifiesAsStall(t *testing.T) {
+	t.Parallel()
+
 	detail := "[skillRunner] Stage [stall-killed] idle 15m 0s after rate_limit_event (status=allowed_warning; seven_day bucket; resetsAt=1778403000) — forcibly terminating process after 40m 0s (idle for 15m 0s)."
 	if got := ClassifyTerminalKind(detail); got != TerminalKindStallKill {
 		t.Fatalf("ClassifyTerminalKind = %q, want %q", got, TerminalKindStallKill)
@@ -224,6 +236,8 @@ func TestSoftQuotaKillTextClassifiesAsStall(t *testing.T) {
 
 // A stall after a quota warning must not climb to a stronger model.
 func TestIsWarningOnlyQuotaStall(t *testing.T) {
+	t.Parallel()
+
 	soft := "[skillRunner] Stage [stall-killed] idle 15m 0s after rate_limit_event (status=allowed_warning; seven_day bucket; resetsAt=1)"
 	cases := []struct {
 		name, kind, detail string
@@ -244,6 +258,8 @@ func TestIsWarningOnlyQuotaStall(t *testing.T) {
 }
 
 func TestDemoteEnvironmentalKindForOutcome(t *testing.T) {
+	t.Parallel()
+
 	blocked := "BLOCKED — PR unmerged: Remediation: You've hit your usage limit"
 	npa := "[not-pipeline-actionable] codex: usage limit"
 	cases := []struct {

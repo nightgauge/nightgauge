@@ -9,6 +9,8 @@ import (
 // #2756: an architecture-approval hold books as a non-failure, every other
 // terminal kind keeps its failure representation.
 func TestApplyNonFailureOutcome(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name, kind, outcome, outcomeType string
 		wantOutcome, wantType            string

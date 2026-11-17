@@ -37,6 +37,8 @@ func newStartTestScheduler(t *testing.T) (*AutonomousScheduler, string) {
 // Start claims the loop before it returns (#2891): a `go Run` left a window in
 // which Stop() was a no-op and the loop came up afterwards.
 func TestStartClaimsSynchronously(t *testing.T) {
+	t.Parallel()
+
 	as, _ := newStartTestScheduler(t)
 	if err := as.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -47,6 +49,8 @@ func TestStartClaimsSynchronously(t *testing.T) {
 }
 
 func TestStartThenStopIsJoinedByWaitStopped(t *testing.T) {
+	t.Parallel()
+
 	as, root := newStartTestScheduler(t)
 	if err := as.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -76,6 +80,8 @@ func TestStartThenStopIsJoinedByWaitStopped(t *testing.T) {
 }
 
 func TestStartWhileRunningReturnsErrAlreadyRunning(t *testing.T) {
+	t.Parallel()
+
 	as, _ := newStartTestScheduler(t)
 	if err := as.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -90,6 +96,8 @@ func TestStartWhileRunningReturnsErrAlreadyRunning(t *testing.T) {
 }
 
 func TestWaitStoppedZeroValue(t *testing.T) {
+	t.Parallel()
+
 	if !(&AutonomousScheduler{}).WaitStopped(time.Millisecond) {
 		t.Fatal("WaitStopped on a never-started scheduler must return true")
 	}

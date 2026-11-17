@@ -61,6 +61,8 @@ const truncatedPlanningJSON = `{
 // nothing on this path spliced at all. A test that called the splice function
 // would prove the logic and leave the wiring exactly as broken as it was.
 func TestValidateStageOutput_SplicesACReconcile(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	writePipelineFile(t, root, "ac-reconcile-228.json", acReportJSON)
 	planningPath := writePipelineFile(t, root, "planning-228.json", truncatedPlanningJSON)
@@ -106,6 +108,8 @@ func TestValidateStageOutput_SplicesACReconcile(t *testing.T) {
 // A stage that succeeded must not be failed, and the planning file must not be
 // corrupted, just because the reconciler produced nothing.
 func TestValidateStageOutput_NoReportLeavesPlanningIntact(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	planningPath := writePipelineFile(t, root, "planning-228.json", truncatedPlanningJSON)
 
@@ -124,6 +128,8 @@ func TestValidateStageOutput_NoReportLeavesPlanningIntact(t *testing.T) {
 
 // TestValidateStageOutput_OtherStagesAreUntouched keeps the splice scoped.
 func TestValidateStageOutput_OtherStagesAreUntouched(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	writePipelineFile(t, root, "ac-reconcile-228.json", acReportJSON)
 	prPath := writePipelineFile(t, root, "pr-228.json", `{"issue_number":228,"pr_number":1}`)

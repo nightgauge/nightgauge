@@ -28,6 +28,7 @@ func stubCaffeinate(t *testing.T) (argvFile string) {
 	return argvFile
 }
 
+// Serial: sets the environment (via stubCaffeinate).
 func TestSleepAssertionHoldsCaffeinateForThePid(t *testing.T) {
 	argvFile := stubCaffeinate(t)
 	a := &SleepAssertion{goos: "darwin", absPath: filepath.Join(t.TempDir(), "missing"), lookPath: exec.LookPath}
@@ -62,6 +63,7 @@ func TestSleepAssertionHoldsCaffeinateForThePid(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment (via stubCaffeinate).
 func TestSleepAssertionIsANoOpOffDarwin(t *testing.T) {
 	argvFile := stubCaffeinate(t)
 	var buf bytes.Buffer
@@ -87,6 +89,7 @@ func TestSleepAssertionIsANoOpOffDarwin(t *testing.T) {
 	}
 }
 
+// Serial: sets the environment.
 func TestSleepAssertionReportsAMissingCaffeinate(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	a := &SleepAssertion{goos: "darwin", absPath: filepath.Join(t.TempDir(), "missing"), lookPath: exec.LookPath}

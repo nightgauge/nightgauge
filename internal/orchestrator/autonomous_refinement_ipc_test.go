@@ -69,6 +69,8 @@ func ipcRefinementScheduler(t *testing.T, runner StageRunner) (*AutonomousSchedu
 // before the registration there is no execution path at all and every
 // refinement cycle returns at the top.
 func TestRefinementIsViableOnceIPCRefinementIsRegistered(t *testing.T) {
+	t.Parallel()
+
 	ws := t.TempDir()
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: ws, Adapter: nil})
 	sched.WithStageRunner(&refinementStageRunner{})
@@ -90,6 +92,8 @@ func TestRefinementIsViableOnceIPCRefinementIsRegistered(t *testing.T) {
 // hard-refused at the dispatch boundary (ADR-017 step 0b), and a WorktreePath
 // that is not the target repo's root refines an issue against the wrong
 // checkout in a multi-repo daemon.
+//
+// Serial: swaps package var refineSkillRoots (via ipcRefinementScheduler).
 func TestRefineViaStageRunnerBuildsARefinementStageDispatch(t *testing.T) {
 	runner := &refinementStageRunner{}
 	as, ws := ipcRefinementScheduler(t, runner)
@@ -134,6 +138,8 @@ func TestRefineViaStageRunnerBuildsARefinementStageDispatch(t *testing.T) {
 // is a FAILED refinement. The fire-and-forget predecessor could not express
 // this at all — it returned at handoff — so a failed refinement was recorded
 // as a success and the issue was labelled pipeline:refined regardless.
+//
+// Serial: swaps package var refineSkillRoots (via ipcRefinementScheduler).
 func TestRefineViaStageRunnerFailsOnNonZeroExit(t *testing.T) {
 	runner := &refinementStageRunner{result: &StageRunResult{ExitCode: 2, ErrorText: "skill blew up"}}
 	as, _ := ipcRefinementScheduler(t, runner)
@@ -151,6 +157,8 @@ func TestRefineViaStageRunnerFailsOnNonZeroExit(t *testing.T) {
 // B on the IPC path: refinement_max_concurrent bounds in-flight REFINEMENTS,
 // not handoffs. While the stage is running the slot stays taken; it is
 // released only after the runner returns.
+//
+// Serial: swaps package var refineSkillRoots (via ipcRefinementScheduler).
 func TestRefineIssueHoldsTheSlotUntilTheStageResultArrives(t *testing.T) {
 	release := make(chan struct{})
 	runner := &refinementStageRunner{block: release}
@@ -194,6 +202,8 @@ func TestRefineIssueHoldsTheSlotUntilTheStageResultArrives(t *testing.T) {
 // TestRefineIssueLogsOneLinePerRefinement pins the operator-visible outcome
 // line, which is the only thing that distinguishes "refinement ran" from
 // "refinement was silently off" in a daemon log.
+//
+// Serial: swaps package var refineSkillRoots (via ipcRefinementScheduler).
 func TestRefineIssueLogsOneLinePerRefinement(t *testing.T) {
 	var logs strings.Builder
 	oldOut, oldFlags := log.Writer(), log.Flags()
@@ -216,6 +226,8 @@ func TestRefineIssueLogsOneLinePerRefinement(t *testing.T) {
 
 // TestRefineIssueLogsTheFailureReason: the failure line names the stage's own
 // reason, so an operator can tell a broken skill from a missing runner.
+//
+// Serial: swaps package var refineSkillRoots (via ipcRefinementScheduler).
 func TestRefineIssueLogsTheFailureReason(t *testing.T) {
 	var logs strings.Builder
 	oldOut, oldFlags := log.Writer(), log.Flags()
@@ -241,6 +253,8 @@ func TestRefineIssueLogsTheFailureReason(t *testing.T) {
 // the off switch is still an off switch: with autonomous.refinement_enabled
 // false the pre-dispatch hook dispatches the issue unrefined and NOTHING
 // crosses the stage bridge.
+//
+// Serial: swaps package var refineSkillRoots (via ipcRefinementScheduler).
 func TestRefinementDisabledSendsNoStageTraffic(t *testing.T) {
 	var logs strings.Builder
 	oldOut, oldFlags := log.Writer(), log.Flags()
@@ -267,6 +281,8 @@ func TestRefinementDisabledSendsNoStageTraffic(t *testing.T) {
 // model verbatim, so under maximum the refinement it runs must arrive as opus
 // at effort high, the mode's envelope for an unpinned stage (#2384). It used
 // to arrive as sonnet at effort high.
+//
+// Serial: sets the environment.
 func TestRefineViaStageRunnerCarriesMaximumsEnvelope(t *testing.T) {
 	isolateRoutingEnv(t)
 	t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "maximum")

@@ -17,6 +17,8 @@ import (
 // TestOpenCodeCompactionCountLogsARefusal: an events path that is a symlink
 // to /etc/hosts counts 0, and the reader's refusal is logged rather than
 // silently swallowed or failing the stage (#1653).
+//
+// Serial: redirects the standard logger.
 func TestOpenCodeCompactionCountLogsARefusal(t *testing.T) {
 	if _, err := os.Stat("/etc/hosts"); err != nil {
 		t.Skip("no /etc/hosts on this machine")
@@ -42,6 +44,8 @@ func TestOpenCodeCompactionCountLogsARefusal(t *testing.T) {
 // reaches the scheduler's StageRunResult, and a feature-dev stage run as
 // sub-sessions keeps its largest session's peak, never their sum (#1653).
 func TestStageResultCarriesThePeakStepPrompt(t *testing.T) {
+	t.Parallel()
+
 	if got := cliRunResultToStageResult(&adapters.RunResult{PeakStepInputTokens: 12010}).PeakStepInputTokens; got != 12010 {
 		t.Errorf("StageRunResult.PeakStepInputTokens = %d, want 12010", got)
 	}
@@ -61,6 +65,8 @@ func TestStageResultCarriesThePeakStepPrompt(t *testing.T) {
 // each attempt replaces the stage's entry, and an attempt that ran no
 // session (a deterministic, refused or rate-limited arm) clears it.
 func TestStageContextProbeRecordsEachAttempt(t *testing.T) {
+	t.Parallel()
+
 	const compaction = `{"v":1,"ts":"t","kind":"compaction","session_id":"s","child":false,"detail":{}}` + "\n"
 	intp := func(n int) *int { return &n }
 	earlier := state.StageContext{PeakStepInputTokens: 9000, ContextWindowTokens: 131072, Compactions: intp(3)}
@@ -158,6 +164,8 @@ func TestStageContextProbeRecordsEachAttempt(t *testing.T) {
 // began, and says nothing for an attempt that did not compact or has no
 // events file.
 func TestStageContextProbeCompactionNote(t *testing.T) {
+	t.Parallel()
+
 	const compaction = `{"v":1,"ts":"t","kind":"compaction","session_id":"s","child":false,"detail":{}}` + "\n"
 	runID, err := runstate.NewRunID()
 	if err != nil {

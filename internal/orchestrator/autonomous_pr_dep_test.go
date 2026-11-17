@@ -13,6 +13,8 @@ import (
 // runs through prioritize, with the resolver reading the mock, and evaluateDeps
 // supplies the reason the log prints.
 func TestPrioritize_DependencyOnPullRequestOrMissingNumber(t *testing.T) {
+	t.Parallel()
+
 	const repo, dep = "owner/repo", "owner/repo#7"
 	for name, tc := range map[string]struct {
 		state      string
@@ -75,6 +77,8 @@ func TestPrioritize_DependencyOnPullRequestOrMissingNumber(t *testing.T) {
 }
 
 func TestCountConfirmedDeps_ExcludesMissing(t *testing.T) {
+	t.Parallel()
+
 	got := countConfirmedDeps(map[string]string{"a": forge.DepStateMissing, "b": forge.DepStatePRMerged, "c": "OPEN"})
 	if got != 2 {
 		t.Fatalf("count = %d, want 2", got)

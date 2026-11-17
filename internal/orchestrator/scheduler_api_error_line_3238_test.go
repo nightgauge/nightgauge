@@ -18,6 +18,8 @@ const (
 )
 
 func TestCliFailureText_APIErrorLine_3238(t *testing.T) {
+	t.Parallel()
+
 	noise := "hook: post-tool ok\n[skillRunner] self-check passed\nwarning: deprecated flag\n"
 	cases := []struct {
 		name, stdout, stderr, want string

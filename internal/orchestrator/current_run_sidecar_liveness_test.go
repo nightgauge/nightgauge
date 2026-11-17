@@ -33,6 +33,8 @@ import (
 // the other. A rename of `issue_number` or `pid` fails HERE rather than silently
 // disarming the reader's Go-scheduler arm.
 func TestCurrentRunSidecar_ProtectsItsIssueThroughTheStateReader(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	if err := writeCurrentRunSidecar(root, CurrentRunSidecar{
 		RunID:       testRunID(),
@@ -62,6 +64,8 @@ func TestCurrentRunSidecar_ProtectsItsIssueThroughTheStateReader(t *testing.T) {
 // both promote gates do) unlinked the live run's current-run.json — the
 // TypeScript side's index into that run — fabricated a terminal-failure
 // RunRecord for it, and paused the queue.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestRecoverOrchestratorCrash_LiveRunIsLeftAlone(t *testing.T) {
 	root := layouttest.Repo(t)
 	if err := writeCurrentRunSidecar(root, CurrentRunSidecar{
@@ -110,6 +114,8 @@ func TestRecoverOrchestratorCrash_LiveRunIsLeftAlone(t *testing.T) {
 // disable recovery, which is the whole point of the sidecar. A pid that is gone —
 // the actual crash — still produces the terminal record, the pause and the unlink.
 func TestRecoverOrchestratorCrash_DeadPidStillSynthesizes(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	startedAt := time.Now().UTC().Add(-30 * time.Second)
 	if err := writeCurrentRunSidecar(root, CurrentRunSidecar{

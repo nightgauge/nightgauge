@@ -158,6 +158,8 @@ func assertEveryDispatchEffort(t *testing.T, calls []StageRunParams, want string
 // Swapping the clamp and the sticky substitution in scheduler.go turns the
 // second red; dropping either grokEnvEffortSet guard turns the third red;
 // dropping the clamp turns the first red.
+//
+// Serial: sets the environment (via runEffortEnvelopeFixture).
 func TestRunPipeline_EffortEnvelopeClampsBeforeSubstitutingTheDescentRung(t *testing.T) {
 	t.Run("the mode ceiling clamps the resolved wire effort onto every dispatch", func(t *testing.T) {
 		assertEveryDispatchEffort(t, runEffortEnvelopeFixture(t, "", false), effortEnvelopeClamped)

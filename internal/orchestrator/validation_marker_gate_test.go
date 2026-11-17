@@ -36,6 +36,8 @@ func marker(sha, created string) trust.Comment {
 }
 
 func TestMarkerValidates(t *testing.T) {
+	t.Parallel()
+
 	legacy := func(created string) trust.Comment {
 		return trust.Comment{Body: "<!-- opencode-program:validated -->", CreatedAt: at(created)}
 	}
@@ -71,6 +73,8 @@ func TestMarkerValidates(t *testing.T) {
 // issue was reopened and closed again by PR #2628 at 2346803d, merged after
 // the marker. It needs a marker for 2346803d.
 func TestMarkerValidates_Issue2611(t *testing.T) {
+	t.Parallel()
+
 	cs := []trust.Comment{marker("dadc5798", "2026-10-27T21:00:00Z")}
 	latest := &gh.ClosingMerge{Number: 2628, SHA: "2346803d", MergedAt: at("2026-10-27T23:52:45Z")}
 	if MarkerValidates(cs, latest) {
@@ -85,6 +89,8 @@ func TestMarkerValidates_Issue2611(t *testing.T) {
 // The dependency gate holds a program blocker whose marker is older than its
 // latest closing merge, and fails closed on a nil or failing merge reader.
 func TestResolveValidationByKey_StaleMarkerBlocks(t *testing.T) {
+	t.Parallel()
+
 	comments := &markerComments{byKey: map[string][]trust.Comment{
 		"o/a#1": {marker("dadc5798", "2026-10-27T21:00:00Z")},
 	}}

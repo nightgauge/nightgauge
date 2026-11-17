@@ -314,6 +314,8 @@ func parseSourceDir(t *testing.T, fset *token.FileSet, dir string) *walkedPackag
 
 // TestNoInlineAttentionReachableFromAVerb is the AC2 pin.
 func TestNoInlineAttentionReachableFromAVerb(t *testing.T) {
+	t.Parallel()
+
 	fset := token.NewFileSet()
 	ipc := parseSourceDir(t, fset, filepath.Join("..", "ipc"))
 	roots, inline := verbRoots(ipc)
@@ -343,6 +345,8 @@ func TestNoInlineAttentionReachableFromAVerb(t *testing.T) {
 
 // TestVerbWalkFlagsInlineAndPassesDispatched proves the walker can go red.
 func TestVerbWalkFlagsInlineAndPassesDispatched(t *testing.T) {
+	t.Parallel()
+
 	const src = `package x
 type Store struct{}
 type AS struct { attention *attention.Store; inner *Inner }

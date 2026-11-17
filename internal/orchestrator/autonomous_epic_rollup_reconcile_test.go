@@ -78,6 +78,8 @@ func newRollupScheduler(t *testing.T, repos ...depgraph.RepoConfig) *AutonomousS
 // delete the `as.reconcileEpicRollup(ctx)` call from runCycle and this goes
 // red. It drives the real runCycle rather than calling the receiver directly,
 // so it covers the wiring and not merely the function body.
+//
+// Serial: swaps package var reconcileExecGh (via recordingBoardReconciler).
 func TestEpicRollupBackstop_RunsOnTheAutonomousCycle(t *testing.T) {
 	as := newRollupScheduler(t, depgraph.RepoConfig{Owner: "acme", Name: "web", Project: 7, OwnerType: gh.OwnerTypeOrg})
 	calls := recordingBoardReconciler(t, as, nil)
@@ -99,6 +101,8 @@ func TestEpicRollupBackstop_RunsOnTheAutonomousCycle(t *testing.T) {
 // fleet is exactly when hand-merged PRs pile up unrolled-up, so the backstop
 // must sit above that gate. Moving the call below it compiles, passes the
 // test above, and silently reinstates half the defect.
+//
+// Serial: swaps package var reconcileExecGh (via recordingBoardReconciler).
 func TestEpicRollupBackstop_RunsEvenWithNoFreeSlots(t *testing.T) {
 	as := newRollupScheduler(t, depgraph.RepoConfig{Owner: "acme", Name: "web", Project: 7})
 	calls := recordingBoardReconciler(t, as, nil)
@@ -121,6 +125,8 @@ func TestEpicRollupBackstop_RunsEvenWithNoFreeSlots(t *testing.T) {
 // sweep paginates every item on the board. Running it per cycle would spend a
 // board-sized GraphQL bill 120 times an hour to observe a fact that only
 // changes when a human merges something.
+//
+// Serial: swaps package var reconcileExecGh (via recordingBoardReconciler).
 func TestEpicRollupBackstop_PacedNotPerCycle(t *testing.T) {
 	as := newRollupScheduler(t, depgraph.RepoConfig{Owner: "acme", Name: "web", Project: 7})
 	calls := recordingBoardReconciler(t, as, nil)
@@ -147,6 +153,8 @@ func TestEpicRollupBackstop_PacedNotPerCycle(t *testing.T) {
 // one board (the N:1 workspace topology) and ReconcileBoard sweeps a BOARD,
 // not a repo — paying for the same pagination once per member repo is pure
 // waste against the same GraphQL budget the pipeline preflight depends on.
+//
+// Serial: swaps package var reconcileExecGh (via recordingBoardReconciler).
 func TestEpicRollupBackstop_SharedBoardSweptOnce(t *testing.T) {
 	as := newRollupScheduler(t,
 		depgraph.RepoConfig{Owner: "acme", Name: "web", Project: 7},
@@ -173,6 +181,8 @@ func TestEpicRollupBackstop_SharedBoardSweptOnce(t *testing.T) {
 // TestEpicRollupBackstop_SkipsRepoWithNoResolvedProject. Guessing a board
 // number here is not a cosmetic error: ReconcileBoard CLOSES ISSUES on the
 // board it is handed. A repo whose project did not resolve is skipped loudly.
+//
+// Serial: swaps package var reconcileExecGh (via recordingBoardReconciler).
 func TestEpicRollupBackstop_SkipsRepoWithNoResolvedProject(t *testing.T) {
 	as := newRollupScheduler(t,
 		depgraph.RepoConfig{Owner: "acme", Name: "unresolved", Project: 0},
@@ -194,6 +204,8 @@ func TestEpicRollupBackstop_SkipsRepoWithNoResolvedProject(t *testing.T) {
 // TestEpicRollupBackstop_FailureIsNonFatal. A backstop that can wedge the
 // autonomous loop is worse than no backstop: the cycle must complete, later
 // boards must still be swept, and the next interval must retry.
+//
+// Serial: swaps package var reconcileExecGh (via recordingBoardReconciler).
 func TestEpicRollupBackstop_FailureIsNonFatal(t *testing.T) {
 	as := newRollupScheduler(t,
 		depgraph.RepoConfig{Owner: "acme", Name: "web", Project: 7},
@@ -222,6 +234,8 @@ func TestEpicRollupBackstop_FailureIsNonFatal(t *testing.T) {
 // TestEpicRollupBackstop_NoReconcilerIsANoOp. NewAutonomousScheduler is called
 // with a nil forge client in several entry points and in most tests; the sweep
 // must not panic there.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestEpicRollupBackstop_NoReconcilerIsANoOp(t *testing.T) {
 	as := newRollupScheduler(t, depgraph.RepoConfig{Owner: "acme", Name: "web", Project: 7})
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) { return []byte("[]"), nil })
@@ -234,6 +248,8 @@ func TestEpicRollupBackstop_NoReconcilerIsANoOp(t *testing.T) {
 // TestEpicRollupBackstop_IntervalIsSlowerThanTheCycle guards the pacing
 // decision against a future edit that quietly drops it to the cycle cadence.
 func TestEpicRollupBackstop_IntervalIsSlowerThanTheCycle(t *testing.T) {
+	t.Parallel()
+
 	cfg := DefaultAutonomousConfig()
 	if epicRollupReconcileInterval <= cfg.GraphCacheTTL {
 		t.Fatalf("epicRollupReconcileInterval=%s must be slower than the graph TTL (%s): a board-wide sweep is far heavier than the reconcilers gated on that TTL",

@@ -120,6 +120,8 @@ func schedulerSink(rt *state.RuntimeState) pmstages.PhaseReporter {
 // exactly the shape AC4 names — no skips written, and the phase the runner was
 // inside recorded `failed`.
 func TestPhaseRecorderMatchesTheSchedulerReporter(t *testing.T) {
+	t.Parallel()
+
 	direct := &state.RuntimeState{}
 	rec := NewPhaseRecorder()
 
@@ -162,6 +164,8 @@ func TestPhaseRecorderMatchesTheSchedulerReporter(t *testing.T) {
 // through the reporter interface directly here — which is the exact surface the
 // runner uses, in the order prmerge_phases_test.go proves it uses.
 func TestPhaseRecorderMatchesAcrossTheWholeStatusVocabulary(t *testing.T) {
+	t.Parallel()
+
 	direct := &state.RuntimeState{}
 	rec := NewPhaseRecorder()
 	tee := teeReporter{a: schedulerSink(direct), b: rec}
@@ -212,6 +216,8 @@ func TestPhaseRecorderMatchesAcrossTheWholeStatusVocabulary(t *testing.T) {
 // up to fifteen minutes and then jumps to the end — the reported symptom, not a
 // fix for it. Each transition must be on the wire when it is reported.
 func TestStreamingPhaseRecorderEmitsAsItGoes(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	rec := NewStreamingPhaseRecorder(&buf)
 
@@ -252,6 +258,8 @@ func TestStreamingPhaseRecorderEmitsAsItGoes(t *testing.T) {
 // TestStreamingPhaseRecorderSurvivesABrokenPipe: a closed progress channel must
 // never fail the merge that was reporting progress.
 func TestStreamingPhaseRecorderSurvivesABrokenPipe(t *testing.T) {
+	t.Parallel()
+
 	rec := NewStreamingPhaseRecorder(failingWriter{})
 	rec.PhaseStart("pr-merge", "merge", 9, 14)
 	rec.PhaseComplete("pr-merge", "merge")
@@ -277,6 +285,8 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("broken p
 // Same direction as TestPhaseRegistryParityWithTypeScript: Go reads the TS
 // source and compares.
 func TestPhaseStreamPrefixParityWithTypeScript(t *testing.T) {
+	t.Parallel()
+
 	root := phaseRecorderRepoRoot(t)
 	path := filepath.Join(root, "packages", "nightgauge", "src", "services", "prStagePhaseStream.ts")
 	src, err := os.ReadFile(path)

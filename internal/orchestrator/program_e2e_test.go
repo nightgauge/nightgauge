@@ -99,6 +99,8 @@ func (c programMainChecks) GetRequiredCheckNames(context.Context, string, string
 // author; the real post-merge hook writes the marker only on a green main,
 // and the next cycle dispatches #20.
 func TestIntegration_Program_TwoRepos_ValidationGated(t *testing.T) {
+	t.Parallel()
+
 	const (
 		blockerKey = "O/platform#10"
 		mergeSHA   = "feedc0de"
@@ -232,6 +234,8 @@ func TestIntegration_Program_TwoRepos_ValidationGated(t *testing.T) {
 // The legacy bypass marker (#2575) releases a program blocker only from a
 // trusted comment: the same trust filter gates it as the current marker.
 func TestResolveValidationByKey_LegacyMarkerTrustGated(t *testing.T) {
+	t.Parallel()
+
 	const key = "O/platform#10"
 	program := []string{"program:demo"}
 	resolve := func(author string) ValidationState {

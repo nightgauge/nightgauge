@@ -181,6 +181,8 @@ func assertLogLineStartsWith(t *testing.T, out, want, why string) {
 // re-dispatch had already committed on the branch, so the local tip no longer
 // matched the PR's pushed head — and reconciled the genuine failure away. Number
 // identity is immune to that: commits move, PR numbers do not.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_OwnRunPrOpen_DoesNotReconcile(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
@@ -202,6 +204,8 @@ func TestReconcileIssueResolved_OwnRunPrOpen_DoesNotReconcile(t *testing.T) {
 // non-terminal stage can only be failing after pr-create because something
 // rewound the run, which is precisely the shape where the branch's open PR is
 // this run's. The completed-stage record answers it when the sidecar cannot.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_ReachedPRCreate_NoRecordedNumber_DoesNotReconcile(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
@@ -219,6 +223,8 @@ func TestReconcileIssueResolved_ReachedPRCreate_NoRecordedNumber_DoesNotReconcil
 
 // TestReconcileIssueResolved_PRNumberMismatch covers both sides of the number
 // comparison, which is the whole ownership test.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_PRNumberMismatch(t *testing.T) {
 	t.Run("a different number is a different run's PR", func(t *testing.T) {
 		stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
@@ -259,6 +265,8 @@ func TestReconcileIssueResolved_PRNumberMismatch(t *testing.T) {
 // re-work shape), and the run's own OPEN PR must not veto the MERGED evidence.
 // A single-pass "first interesting PR decides" scan would answer "blocked" here
 // purely because of list order.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_MergedAmongOwnOpen_ReconcilesViaMerged(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
@@ -284,6 +292,8 @@ func TestReconcileIssueResolved_MergedAmongOwnOpen_ReconcilesViaMerged(t *testin
 // has unfinished work. A single-pass scan reconciles here on list order alone —
 // which is a real forge shape, since `gh pr list` orders by PR number and a
 // prior run's PR is older.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_ForeignOpenBeforeOwnOpen_StillBlocked(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
@@ -306,6 +316,8 @@ func TestReconcileIssueResolved_ForeignOpenBeforeOwnOpen_StillBlocked(t *testing
 // usable PR number. This arm's mistake direction is laundering a real failure
 // into a recorded success, so "could not tell" must read as "ours" — never as "a
 // prior run's".
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_UnidentifiablePR_FailsClosed(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -356,6 +368,8 @@ func TestReconcileIssueResolved_UnidentifiablePR_FailsClosed(t *testing.T) {
 // It also guards the reverse: headRefOid is NOT requested. The head SHA answered
 // this question wrongly in both directions and is gone; re-adding it to the
 // query is the first step of re-adding the comparison.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestBranchPrProbe_RequestsPRNumber(t *testing.T) {
 	var jsonFields string
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
@@ -387,6 +401,8 @@ func TestBranchPrProbe_RequestsPRNumber(t *testing.T) {
 // TestHasReachedPRCreate pins the belt's source of truth: the run's own
 // completed-stage record, read through the mutex-guarded snapshot.
 func TestHasReachedPRCreate(t *testing.T) {
+	t.Parallel()
+
 	if hasReachedPRCreate(nil) {
 		t.Errorf("a nil runtime cannot have reached pr-create")
 	}
@@ -412,6 +428,8 @@ func TestHasReachedPRCreate(t *testing.T) {
 // taught these accessors about fired" are opposite claims, and a bare `default:`
 // returning the reconcileNone text would report the second as the first.
 func TestReconcileOutcome_EnumHygiene(t *testing.T) {
+	t.Parallel()
+
 	unknown := reconcileOutcome(99)
 
 	if got := unknown.String(); got == reconcileNone.String() {
@@ -447,6 +465,8 @@ func TestReconcileOutcome_EnumHygiene(t *testing.T) {
 // taken from the forge at completion time (issueClosedOnForge, which fails
 // closed), never an inference from the merge.
 func TestCompletionBoardStatus_ObservedClosureWins(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name           string
 		arm            reconcileOutcome
@@ -494,6 +514,8 @@ func TestCompletionBoardStatus_ObservedClosureWins(t *testing.T) {
 // mapping (#398). Done means exactly one thing in this codebase — the issue is
 // CLOSED — so only the arm that observed that may write it.
 func TestCompletionBoardStatus_PerArm(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		arm  reconcileOutcome
 		want state.BoardStatus
@@ -518,6 +540,8 @@ func TestCompletionBoardStatus_PerArm(t *testing.T) {
 // TestCompletionBoardStatus_PartialDelivery (#2706): a `Refs` merge keeps the
 // hook's Ready; an observed closure still wins.
 func TestCompletionBoardStatus_PartialDelivery(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name   string
 		arm    reconcileOutcome
@@ -541,6 +565,8 @@ func TestCompletionBoardStatus_PartialDelivery(t *testing.T) {
 // only thing between a real failure and a recorded success, so an operator
 // asking "why did my run stay failed" must read the answer rather than infer it
 // from silence.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestReconcileIssueResolved_DeclineIsAlwaysLoud(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -629,6 +655,8 @@ func TestReconcileIssueResolved_DeclineIsAlwaysLoud(t *testing.T) {
 // and the re-dispatch committed on the branch with the push deferred — so the
 // local tip is AHEAD of the PR's pushed head. That is exactly where a head-SHA
 // ownership test read "foreign" and laundered the failure.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestScheduler_NonTerminalReconcile_OwnRunPrOpen_FailurePreserved(t *testing.T) {
 	const (
 		issueNumber   = 398
@@ -686,6 +714,8 @@ func TestScheduler_NonTerminalReconcile_OwnRunPrOpen_FailurePreserved(t *testing
 // head-SHA test that equality read "ours" and blocked the reconcile — killing
 // #3873's arm in the one shape it was written for. Identity is unmoved: this run
 // recorded no PR and never reached pr-create, so no PR on the branch is its own.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestScheduler_NonTerminalReconcile_ForeignPrOpen_StillReconciles(t *testing.T) {
 	const (
 		issueNumber = 396
@@ -740,6 +770,8 @@ func TestScheduler_NonTerminalReconcile_ForeignPrOpen_StillReconciles(t *testing
 // stage loop and consumed after it exits, so this is the test that the carrier
 // actually survives the loop break — a per-iteration flag would pass every
 // decision-level test above and still write In Review here.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestScheduler_NonTerminalReconcile_PerArmBoardStatus(t *testing.T) {
 	// wantStatus is derived from the state.BoardStatus constants, never spelled
 	// as a literal: the log line under assertion is formatted from those same

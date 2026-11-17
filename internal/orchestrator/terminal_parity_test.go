@@ -99,6 +99,8 @@ func normalizeFence(src string) string {
 }
 
 func TestTerminalBehaviorAnchors(t *testing.T) {
+	t.Parallel()
+
 	m := loadParityManifest(t)
 	sources := map[string]string{}
 	source := func(rel string) string {
@@ -147,6 +149,8 @@ func TestTerminalBehaviorAnchors(t *testing.T) {
 }
 
 func TestTerminalFunnelFencesPinned(t *testing.T) {
+	t.Parallel()
+
 	m := loadParityManifest(t)
 	for _, f := range m.Fences {
 		src := repoRootFile(t, f.File)

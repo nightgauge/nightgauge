@@ -13,6 +13,8 @@ import (
 // on the run record, carried on the failing stage (which always has a stage
 // detail in the V2 record; a skipped feature-validate may not).
 func TestRecordValidationSkipped(t *testing.T) {
+	t.Parallel()
+
 	stages := []state.PipelineStage{
 		state.StageIssuePickup, state.StageFeatureDev, state.StageFeatureValidate,
 		state.StagePRCreate, state.StagePRMerge,

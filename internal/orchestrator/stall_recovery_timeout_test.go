@@ -15,6 +15,8 @@ import (
 // a real stall, a feature-dev timeout, or a missing dev handoff still
 // takes the rewind path.
 func TestRetryInPlaceOnTimeout(t *testing.T) {
+	t.Parallel()
+
 	ws := layouttest.Repo(t)
 	const timeout = "exit -1: [stage-timeout] stage stopped at its stage timeout of 2h15m0s after 2h15m0s elapsed"
 	const stall = "exit -1: [stall-killed] no output for 20m"

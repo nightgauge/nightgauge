@@ -21,6 +21,8 @@ func noOpRun(as *AutonomousScheduler) {
 
 // TestResumeNoOp_Parks: the no-op parks with a hold the reconcile keeps, and no
 // candidate comes back.
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestResumeNoOp_Parks(t *testing.T) {
 	as := heldTestScheduler(t)
 
@@ -43,6 +45,8 @@ func TestResumeNoOp_Parks(t *testing.T) {
 
 // TestReconcile_ParkedOnBoardIsNotReadmitted covers both lists: an excluded
 // label or Backlog keeps the entry, and lifting the park re-admits it.
+//
+// Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestReconcile_ParkedOnBoardIsNotReadmitted(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -75,6 +79,8 @@ func TestReconcile_ParkedOnBoardIsNotReadmitted(t *testing.T) {
 // TestResumeNoOpKind: only a resumed run that merged nothing and left the issue
 // open reports the kind; a full run with an externally merged PR does not.
 func TestResumeNoOpKind(t *testing.T) {
+	t.Parallel()
+
 	run := func(resumed, withheld bool) *state.RuntimeState {
 		rs := &state.RuntimeState{}
 		if resumed {
@@ -108,6 +114,8 @@ func TestResumeNoOpKind(t *testing.T) {
 // TestWithheldCompletionStatus: a withheld partial delivery never lands in In
 // Review, and a closed issue stays Done.
 func TestWithheldCompletionStatus(t *testing.T) {
+	t.Parallel()
+
 	if got := withheldCompletionStatus(state.StatusInReview, true); got != state.StatusBacklog {
 		t.Errorf("withheld = %s, want Backlog", got)
 	}

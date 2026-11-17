@@ -210,6 +210,8 @@ func newWorktreeRunScheduler(root string, runner StageRunner) *Scheduler {
 //
 // The assertion is on the probe, not on a mocked helper: the `gh pr list --head`
 // call is the observable proof that the resolved branch reached the forge check.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestScheduler_NonTerminalReconcile_WorktreeIsolatedRun_ReachesPRCheck(t *testing.T) {
 	const (
 		issueNumber = 299
@@ -303,6 +305,8 @@ func findHistoryRecord(t *testing.T, workspaceRoot string, issueNumber int) stat
 // name the branch — here the issue context exists but carries none — the branch
 // probe is genuinely unavailable, and the pipeline must SAY that instead of
 // quietly degrading to the issue-closed check alone.
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestScheduler_NonTerminalReconcile_UnresolvableBranch_LogsTheSkip(t *testing.T) {
 	const (
 		issueNumber = 298
@@ -355,6 +359,8 @@ func TestScheduler_NonTerminalReconcile_UnresolvableBranch_LogsTheSkip(t *testin
 // construction. Logging there would fire the line on every failed pickup and
 // train readers to ignore it; it must mean "a branch should exist but nothing
 // could name it".
+//
+// Serial: swaps package var reconcileExecGh (via stubReconcileGh).
 func TestScheduler_NonTerminalReconcile_IssuePickupFailure_NoSkipLog(t *testing.T) {
 	const (
 		issueNumber = 297
@@ -406,6 +412,8 @@ func recordHistoryForWorktreeRun(t *testing.T, workspaceRoot string, snap *state
 // the branch and BuildV2Record substituted a synthetic `feat/{N}` placeholder —
 // a value indistinguishable from a real branch to every downstream reader.
 func TestScheduler_RecordV2History_WorktreeIsolatedRun_PersistsRealBranch(t *testing.T) {
+	t.Parallel()
+
 	const (
 		repo   = "nightgauge/nightgauge"
 		branch = "fix/299-resolve-feature-branch"
@@ -478,6 +486,8 @@ func TestScheduler_RecordV2History_WorktreeIsolatedRun_PersistsRealBranch(t *tes
 //
 // The log line is asserted too: "" on disk is honest but silent about WHICH run
 // could not name its branch, and that is a resolution gap worth seeing.
+//
+// Serial: redirects the standard logger (via captureLog).
 func TestScheduler_RecordV2History_UnresolvedBranch_KeyPresentEmptyMeansUndetermined(t *testing.T) {
 	const repo = "nightgauge/nightgauge"
 	root := gitWorkspace(t)

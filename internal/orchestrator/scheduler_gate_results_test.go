@@ -10,6 +10,8 @@ import (
 // Run records keep every gate row, so the earlier "catch" stays visible after
 // a later "pass" supersedes it for the gate (#2746).
 func TestLoadGateResults_KeepsSupersededCatch(t *testing.T) {
+	t.Parallel()
+
 	ws := layouttest.Repo(t)
 	if err := state.AppendGateMetric(ws, 2746, "adversarial-review", "catch", "x", "2026-10-31T00:00:00Z"); err != nil {
 		t.Fatalf("append catch: %v", err)

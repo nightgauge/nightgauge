@@ -41,6 +41,8 @@ func hasDailyJSONL(t *testing.T, workspaceRoot string) bool {
 // removed, and the downstream queue is paused — none of which happened before
 // the reconciler learned to scan registered repo roots.
 func TestRecoverOrchestratorCrash_ReconcilesCrossRepoSidecar(t *testing.T) {
+	t.Parallel()
+
 	launchRoot := layouttest.Repo(t)
 	targetRoot := layouttest.Repo(t) // a different, non-primary repo root
 
@@ -120,6 +122,8 @@ func TestRecoverOrchestratorCrash_ReconcilesCrossRepoSidecar(t *testing.T) {
 // a registered path, so repoScanRoots must dedup and reconcile the single
 // sidecar exactly once (one synthesized record, not two).
 func TestRecoverOrchestratorCrash_NoDuplicateWhenPrimaryIsRegistered(t *testing.T) {
+	t.Parallel()
+
 	launchRoot := layouttest.Repo(t)
 
 	startedAt := time.Now().UTC().Add(-30 * time.Second)
@@ -160,6 +164,8 @@ func TestRecoverOrchestratorCrash_NoDuplicateWhenPrimaryIsRegistered(t *testing.
 // scanned. A sidecar sitting under an unregistered non-launch directory is left
 // untouched — recovery never reaches beyond the launch root.
 func TestRecoverOrchestratorCrash_LaunchRootOnlyWhenResolverNil(t *testing.T) {
+	t.Parallel()
+
 	launchRoot := layouttest.Repo(t)
 	strayRoot := layouttest.Repo(t)
 
@@ -202,6 +208,8 @@ func TestRecoverOrchestratorCrash_LaunchRootOnlyWhenResolverNil(t *testing.T) {
 // launch root is always first, registered paths follow, and duplicates (empty
 // strings, the launch root re-registered) are collapsed.
 func TestCrashScanRoots_DedupsAndOrders(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{
 		trustGate:     allWritersGate(),
 		workspaceRoot: "/launch",

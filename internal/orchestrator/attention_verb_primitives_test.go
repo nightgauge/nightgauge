@@ -8,6 +8,8 @@ import (
 )
 
 func TestBudgetCeilingOverrideHonoredByResolver(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 
 	// No override → default ceiling.
@@ -44,6 +46,8 @@ func TestBudgetCeilingOverrideHonoredByResolver(t *testing.T) {
 // spent, no signal that the click did nothing. If either half of this pair is
 // changed alone, the paths diverge again in exactly that silent way.
 func TestBudgetCeilingOverrideIsTheSameContractTheExtensionReads(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 
 	if got := PipelineBudgetCeilingUSD(root); got != 75.0 {
@@ -67,12 +71,16 @@ func TestBudgetCeilingOverrideIsTheSameContractTheExtensionReads(t *testing.T) {
 }
 
 func TestBudgetCeilingOverrideRejectsNonPositive(t *testing.T) {
+	t.Parallel()
+
 	if err := WriteBudgetCeilingOverride(t.TempDir(), 0, "a", "b"); err == nil {
 		t.Error("expected error for non-positive ceiling")
 	}
 }
 
 func TestEscalationOverrideConsumeOnce(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	if err := WriteEscalationOverride(root, 42, "opus", "octocat"); err != nil {
 		t.Fatalf("WriteEscalationOverride: %v", err)
@@ -89,6 +97,8 @@ func TestEscalationOverrideConsumeOnce(t *testing.T) {
 }
 
 func TestOperatorSteerWritesWarningSignal(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	if err := WriteOperatorSteer(root, 7, "skip the flaky test this run", "feature-dev"); err != nil {
 		t.Fatalf("WriteOperatorSteer: %v", err)

@@ -46,6 +46,8 @@ func writeIssueContext(t *testing.T, root string, issue int, devModel string, co
 //
 // Deleting the Go-manager candidate must turn this red.
 func TestLoadIssueContext_FindsGoManagerWorktree(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	// The Go manager's layout: <repoRoot>/.nightgauge/worktrees/{repo}-issue-N
 	wt := filepath.Join(root, ".nightgauge", "worktrees", "widget-issue-42")
@@ -72,6 +74,8 @@ func TestLoadIssueContext_FindsGoManagerWorktree(t *testing.T) {
 
 // TestLoadIssueContext_FindsExtensionWorktree covers the other live layout.
 func TestLoadIssueContext_FindsExtensionWorktree(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	writeIssueContext(t, filepath.Join(root, ".worktrees", "issue-7"), 7, "opus", 5)
 
@@ -84,6 +88,8 @@ func TestLoadIssueContext_FindsExtensionWorktree(t *testing.T) {
 // TestLoadIssueContext_ExplicitWorktreeWins guards the ordering: when the
 // caller knows the run's worktree, a stale file at the root must not shadow it.
 func TestLoadIssueContext_ExplicitWorktreeWins(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	writeIssueContext(t, root, 9, "haiku", 1)   // stale, at the root
 	wt := filepath.Join(root, "somewhere-else") //
@@ -99,6 +105,8 @@ func TestLoadIssueContext_ExplicitWorktreeWins(t *testing.T) {
 // TestLoadIssueContext_StillReadsThePlainRoot is the control: a run with no
 // worktree at all must keep working exactly as before.
 func TestLoadIssueContext_StillReadsThePlainRoot(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	writeIssueContext(t, root, 11, "sonnet", 2)
 
@@ -112,6 +120,8 @@ func TestLoadIssueContext_StillReadsThePlainRoot(t *testing.T) {
 // A fabricated default here is what #304 removed, and the corpus cannot tell a
 // fabricated prediction from a measured one.
 func TestLoadIssueContext_MissingEverywhereIsZero(t *testing.T) {
+	t.Parallel()
+
 	score, path, model := loadIssueContext(t.TempDir(), "", "acme/widget", 99)
 	if score != 0 || path != "" || model != "" {
 		t.Errorf("got score=%d path=%q model=%q, want all zero — a missing context must "+
@@ -125,6 +135,8 @@ func TestLoadIssueContext_MissingEverywhereIsZero(t *testing.T) {
 // prediction it was meant to repair; reRouteContext would have written a decoy
 // file beside the real one.
 func TestResolveIssueContextPath_FindsTheFileTheStagesUse(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	wt := filepath.Join(root, ".nightgauge", "worktrees", "widget-issue-42")
 	writeIssueContext(t, wt, 42, "sonnet", 3)
@@ -150,6 +162,8 @@ func TestResolveIssueContextPath_FindsTheFileTheStagesUse(t *testing.T) {
 // what turns a corpus that was 100% empty on both halves into one that records
 // what the router actually predicted.
 func TestResolveOutcomePrediction_UpgradesFromTheWorktree(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	wt := filepath.Join(root, ".nightgauge", "worktrees", "widget-issue-42")
 	writeIssueContext(t, wt, 42, "opus", 7)
@@ -172,6 +186,8 @@ func TestResolveOutcomePrediction_UpgradesFromTheWorktree(t *testing.T) {
 // re-read that finds nothing keeps the caller's score, and records no model
 // prediction at all rather than a tier dispatch never used (#2537).
 func TestResolveOutcomePrediction_NeverDowngrades(t *testing.T) {
+	t.Parallel()
+
 	s := &Scheduler{}
 	score, model := s.resolveOutcomePrediction(t.TempDir(), "", "acme/widget", 42, 4)
 	if score != 4 || model != "" {
@@ -185,6 +201,8 @@ func TestResolveOutcomePrediction_NeverDowngrades(t *testing.T) {
 // that the feature-dev stage default overrides on every dispatch — and an old
 // context carrying only dev_model records no prediction (no fallback).
 func TestResolveOutcomePrediction_ScoresTheDispatchSelection(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	dir := layouttest.MkPipelineDir(t, layouttest.Init(t, root))
 	write := func(issue int, body string) {
@@ -209,6 +227,8 @@ func TestResolveOutcomePrediction_ScoresTheDispatchSelection(t *testing.T) {
 // naive "if either is set, take both" rule: a context carrying a model but no
 // score must not discard a score the caller already had.
 func TestResolveOutcomePrediction_UpgradesEachHalfIndependently(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	// Model present, score zero.
 	writeIssueContext(t, root, 5, "opus", 0)
@@ -233,6 +253,8 @@ func TestResolveOutcomePrediction_UpgradesEachHalfIndependently(t *testing.T) {
 // This drives recordOutcome and reads the row back out of the corpus, so
 // removing the call site fails here.
 func TestRecordOutcome_RecordsThePredictionFromTheWorktree(t *testing.T) {
+	t.Parallel()
+
 	root := layouttest.Repo(t)
 	// The context exists ONLY in the run's worktree — the real-world shape.
 	wt := filepath.Join(root, ".nightgauge", "worktrees", "widget-issue-42")

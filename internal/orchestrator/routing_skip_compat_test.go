@@ -68,6 +68,8 @@ func skipListsUnderTest() map[string][]string {
 // punt on a missing-*-context precondition. pr-merge's deterministic arm needs
 // only pr-{N}.json, which pr-create (never skippable) writes.
 func TestRoutingSkipLists_CompatibleWithDeterministicArms(t *testing.T) {
+	t.Parallel()
+
 	for name, skip := range skipListsUnderTest() {
 		t.Run(name, func(t *testing.T) {
 			s := newSchedulerForDeterministicTest()
@@ -97,6 +99,8 @@ func TestRoutingSkipLists_CompatibleWithDeterministicArms(t *testing.T) {
 // routing seam classifies docs-only skips feature-validate, and pr-create
 // still takes its deterministic path, recording that validate was skipped.
 func TestDocsOnlyRoute_ReachesDeterministicPRCreate(t *testing.T) {
+	t.Parallel()
+
 	d := routing.Derive(routing.DeriveInput{
 		Title:  "docs: fix a typo in the README",
 		Labels: []string{"type:docs", "component:docs", "size:XS"},
