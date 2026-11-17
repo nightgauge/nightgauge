@@ -9,6 +9,10 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Security
+
+- Tree-view hover tooltips no longer trust Markdown built from issue titles, branches, blocker titles or error text (#3369). Seven items set `isTrusted = true` and inserted those values raw, so anyone who could open an issue on a watched repository could plant a live `command:` link in a tooltip. Trust is removed, and every forge- or agent-derived value a views tooltip shows is escaped (or shown as a code span) through a new `markdownEscape` helper that mirrors the Go `attention.EscapeMarkdown`/`CodeSpan`. Action Center tooltips link a card URL only when it is `https:`. A guard test fails if any file under `src/views/` marks a tooltip trusted.
+
 ### Fixed
 
 - The pre-flight cost estimate is now the p75 of the 30 most recent completed whole runs of the same size, narrowed to the same model routing once 5 such runs exist, instead of a sum of per-stage p75s that came out about 4x the actual cost and the same for S and M issues (#3364). The estimate is published whether it is above or below the static figure. The per-stage sum is used only when fewer than 3 same-size runs have completed. Replayed against 229 completed runs since 2026-11-01, 87% of estimates land within 2x of the actual, with a median estimate/actual of 1.18. `scripts/backtest-cost-estimate.ts` reproduces those numbers.

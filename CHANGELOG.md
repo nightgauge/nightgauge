@@ -14,6 +14,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Security
+
+- Tree-view hover tooltips no longer trust Markdown built from issue titles, branches, blocker titles or error text (#3369). Seven items set `isTrusted = true` and inserted those values raw, so anyone who could open an issue on a watched repository could plant a live `command:` link in a tooltip. Trust is removed, and every forge- or agent-derived value a views tooltip shows is escaped (or shown as a code span) through a new `markdownEscape` helper that mirrors the Go `attention.EscapeMarkdown`/`CodeSpan`. Action Center tooltips link a card URL only when it is `https:`. A guard test fails if any file under `src/views/` marks a tooltip trusted.
+
 ### Changed
 
 - `internal/orchestrator`'s tests now run in parallel, apart from the ones that set the environment, swap a package-level seam, redirect the standard logger or wait on a short wall-clock deadline (#3144). Each serial test says why in a `// Serial:` comment, and a new policy test fails when a parallel test reaches shared state or a test has no reason. The package's plain `go test` drops from 187s to 132s on 30 cores. The gain is limited because Go forks one subprocess at a time per process and these tests spawn git constantly. The unsharded race pass is slower, 241s to 281s, and the gate's 8 sharded orchestrator steps barely change (142s to 133s).

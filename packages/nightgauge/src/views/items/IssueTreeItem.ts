@@ -9,6 +9,7 @@ import * as vscode from "vscode";
 import { BaseTreeItem } from "./BaseTreeItem";
 import { isDependabotIssue, getDependabotType } from "../../utils/dependabotUtils";
 import { getBranchDisplayText, UNDETERMINED_BRANCH_LABEL } from "../dashboard/DashboardComponents";
+import { escapeMarkdown, codeSpan } from "../markdownEscape";
 
 /** Priority levels parsed from labels (matches ReadyIssueTreeItem) */
 type Priority = "P0" | "P1" | "P2" | "P3";
@@ -204,20 +205,19 @@ export class IssueTreeItem extends BaseTreeItem {
    */
   private createTooltip(): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
-    md.isTrusted = true;
     md.appendMarkdown(`**Issue #${this.issueInfo.number}**\n\n`);
-    md.appendMarkdown(`${this.issueInfo.title}\n\n`);
+    md.appendMarkdown(`${escapeMarkdown(this.issueInfo.title)}\n\n`);
     // A resolved branch keeps its code-span treatment; an undetermined one is
     // rendered as prose so the label is not mistaken for a literal branch name
     // (an empty code span `` would read as a dangling "Branch:" — #448).
     md.appendMarkdown(
       this.issueInfo.branch?.trim()
-        ? `Branch: \`${this.issueInfo.branch}\`\n\n`
+        ? `Branch: ${codeSpan(this.issueInfo.branch)}\n\n`
         : `Branch: ${UNDETERMINED_BRANCH_LABEL}\n\n`
     );
 
     if (this.issueInfo.baseBranch) {
-      md.appendMarkdown(`Target: \`${this.issueInfo.baseBranch}\`\n\n`);
+      md.appendMarkdown(`Target: ${codeSpan(this.issueInfo.baseBranch)}\n\n`);
     }
 
     const labels = this.issueInfo.labels ?? [];
@@ -247,7 +247,7 @@ export class IssueTreeItem extends BaseTreeItem {
         .filter(
           (l) => !l.startsWith("priority:") && !l.startsWith("size:") && !l.startsWith("status:")
         )
-        .map((l) => `\`${l}\``);
+        .map((l) => codeSpan(l));
       if (displayLabels.length > 0) {
         md.appendMarkdown(`Labels: ${displayLabels.join(", ")}\n\n`);
       }

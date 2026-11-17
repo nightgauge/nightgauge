@@ -9,6 +9,7 @@
 
 import * as vscode from "vscode";
 import { BaseTreeItem } from "./BaseTreeItem";
+import { codeSpan } from "../markdownEscape";
 
 /**
  * BranchSelectorTreeItem - Shows and allows changing target branch
@@ -61,7 +62,7 @@ export class BranchSelectorTreeItem extends BaseTreeItem {
   private createTooltip(): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
     md.appendMarkdown(`**Target Branch**\n\n`);
-    md.appendMarkdown(`Current: \`${this.currentBranch}\`\n\n`);
+    md.appendMarkdown(`Current: ${codeSpan(this.currentBranch)}\n\n`);
 
     if (this.isProtected) {
       md.appendMarkdown(`$(lock) This branch is protected\n\n`);

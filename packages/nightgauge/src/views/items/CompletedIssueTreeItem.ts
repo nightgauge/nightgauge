@@ -8,7 +8,7 @@
 import * as vscode from "vscode";
 import { BaseTreeItem } from "./BaseTreeItem";
 import type { IssueReference } from "../../types/completedIssues";
-import { getBranchDisplayText } from "../dashboard/DashboardComponents";
+import { escapeMarkdown, branchMarkdown } from "../markdownEscape";
 
 /**
  * CompletedIssueTreeItem - Represents a completed issue in the tree
@@ -102,16 +102,15 @@ export class CompletedIssueTreeItem extends BaseTreeItem {
    */
   private createTooltip(): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
-    md.isTrusted = true;
 
     md.appendMarkdown(`**Issue #${this.issue.issue_number}**\n\n`);
-    md.appendMarkdown(`${this.issue.title}\n\n`);
+    md.appendMarkdown(`${escapeMarkdown(this.issue.title)}\n\n`);
     // `bootstrap/services.ts` feeds this from `PipelineState.branch`, which is
     // legitimately `""` when no branch was ever determined (#448) — and the
     // onStageError fallback passes `""` outright. Rendering it bare left a
     // dangling "**Branch:**" with nothing after it.
-    md.appendMarkdown(`**Branch:** ${getBranchDisplayText(this.issue.branch)}\n\n`);
-    md.appendMarkdown(`**Completed:** ${this.issue.timestamp}\n\n`);
+    md.appendMarkdown(`**Branch:** ${branchMarkdown(this.issue.branch)}\n\n`);
+    md.appendMarkdown(`**Completed:** ${escapeMarkdown(String(this.issue.timestamp))}\n\n`);
     md.appendMarkdown(`✓ Pipeline completed successfully`);
 
     if (this.issue.cost_anomaly_exceeded) {

@@ -347,7 +347,7 @@ describe("Issue #3001 — QueuedIssueTreeItem paused rendering", () => {
     const tooltipValue = (tree.tooltip as any)?.value ?? "";
     expect(tooltipValue).toContain("⏸ Paused");
     expect(tooltipValue).toContain("999-2026-04-25T13:00:00Z");
-    expect(tooltipValue).toContain("stage feature-dev: stall_kill");
+    expect(tooltipValue).toContain("stage feature-dev: stall\\_kill");
   });
 
   it("accessibility label announces the paused state for screen readers", () => {

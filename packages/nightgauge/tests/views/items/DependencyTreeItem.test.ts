@@ -118,12 +118,12 @@ describe("DependencyTreeItem", () => {
       expect(tooltip.value).toContain("no longer blocks work");
     });
 
-    it("should be trusted markdown", () => {
+    it("should not be trusted markdown (#3369)", () => {
       const blockingIssue = createMockBlockingIssue();
       const item = new DependencyTreeItem(blockingIssue);
 
       const tooltip = item.tooltip as vscode.MarkdownString;
-      expect(tooltip.isTrusted).toBe(true);
+      expect(tooltip.isTrusted).not.toBe(true);
     });
   });
 

@@ -409,12 +409,12 @@ describe("ReadyIssueTreeItem", () => {
       expect(tooltip.value).toContain("Dependency 2");
     });
 
-    it("should be trusted markdown", () => {
+    it("should not be trusted markdown (#3369)", () => {
       const issue = createMockReadyIssue();
       const item = new ReadyIssueTreeItem(issue);
 
       const tooltip = item.tooltip as vscode.MarkdownString;
-      expect(tooltip.isTrusted).toBe(true);
+      expect(tooltip.isTrusted).not.toBe(true);
     });
 
     it("should not show dependencies in tooltip when showDependencies is false", () => {

@@ -28,6 +28,7 @@ function pausedReasonAriaLabel(r: QueueItemPausedReason): string {
 }
 import { isBlocked, getBlockerTitles } from "../../utils/dependencyUtils";
 import type { ReadyIssue } from "../../services/ProjectBoardService";
+import { escapeMarkdown, codeSpan } from "../markdownEscape";
 
 /**
  * Get icon for queue item status
@@ -217,13 +218,13 @@ export class QueuedIssueTreeItem extends BaseTreeItem {
    * Includes blocker details when blocked (Issue #823)
    */
   private createTooltip(item: QueueItem, itemIsBlocked: boolean): vscode.MarkdownString {
-    let text = `**Issue #${item.issueNumber}**\n\n` + `${item.title}\n\n`;
+    let text = `**Issue #${item.issueNumber}**\n\n` + `${escapeMarkdown(item.title)}\n\n`;
 
     if (itemIsBlocked && item.blockedBy) {
       text += `**🔒 Blocked By:**\n\n`;
       for (const blocker of item.blockedBy) {
         const stateIcon = blocker.state === "OPEN" ? "🔴" : "✅";
-        text += `- ${stateIcon} #${blocker.number}: ${blocker.title}\n`;
+        text += `- ${stateIcon} #${blocker.number}: ${escapeMarkdown(blocker.title)}\n`;
       }
       text += `\n`;
     }
@@ -235,40 +236,40 @@ export class QueuedIssueTreeItem extends BaseTreeItem {
       text += `**⏸ Paused**\n\n`;
       if (r.kind === "upstream_failure") {
         text += `Reason: upstream failure\n`;
-        text += `Failed run: \`${r.failed_run_id}\`\n`;
+        text += `Failed run: ${codeSpan(r.failed_run_id)}\n`;
         if (r.summary) {
-          text += `Summary: ${r.summary}\n`;
+          text += `Summary: ${escapeMarkdown(r.summary)}\n`;
         }
         text += `\nResumes only via explicit operator action (Retry / Skip / Discard).\n\n`;
       } else if (r.kind === "baseline_ci_red") {
         text += `Reason: baseline-CI red\n`;
-        text += `Workflow: \`${r.workflow}\`\n`;
+        text += `Workflow: ${codeSpan(r.workflow)}\n`;
         if (r.job) {
-          text += `Job: \`${r.job}\`\n`;
+          text += `Job: ${codeSpan(r.job)}\n`;
         }
         if (typeof r.failed_runs === "number" && typeof r.lookback_runs === "number") {
           text += `Failed: ${r.failed_runs}/${r.lookback_runs} recent runs\n`;
         }
         if (r.summary) {
-          text += `Summary: ${r.summary}\n`;
+          text += `Summary: ${escapeMarkdown(r.summary)}\n`;
         }
         text += `\nThe autonomous daemon re-checks this workflow and resumes the item once \`main\`'s baseline is green again. To release it immediately, run \`nightgauge baseline-gate promote\` in this workspace.\n\n`;
       } else if (r.kind === "blocked_dependency") {
         text += `Reason: blocked by open dependency\n`;
         for (const b of r.blockingIssues) {
-          text += `- 🔴 #${b.number}${b.title ? `: ${b.title}` : ""}\n`;
+          text += `- 🔴 #${b.number}${b.title ? `: ${escapeMarkdown(b.title)}` : ""}\n`;
         }
         if (r.summary) {
-          text += `Summary: ${r.summary}\n`;
+          text += `Summary: ${escapeMarkdown(r.summary)}\n`;
         }
         text += `\n\`deps-gate promote\` (and the autonomous cascade) auto-resumes this item when its blockers close.\n\n`;
       } else if (r.kind === "excluded_label") {
         text += `Reason: human-only label\n`;
         if (r.label) {
-          text += `Label: \`${r.label}\`\n`;
+          text += `Label: ${codeSpan(r.label)}\n`;
         }
         if (r.summary) {
-          text += `Summary: ${r.summary}\n`;
+          text += `Summary: ${escapeMarkdown(r.summary)}\n`;
         }
         text += `\nThis issue carries a label listed in \`autonomous.exclude_labels\` — work only a person can do, so the scheduler holds it instead of claiming a slot. Nothing resumes it automatically: remove the label and re-queue the issue, or discard the item.\n\n`;
       }
@@ -276,7 +277,7 @@ export class QueuedIssueTreeItem extends BaseTreeItem {
 
     text +=
       `Queue Position: ${item.position}\n` +
-      `Status: ${item.status}\n` +
+      `Status: ${escapeMarkdown(item.status)}\n` +
       `Added: ${new Date(item.addedAt).toLocaleString()}`;
 
     return new vscode.MarkdownString(text);

@@ -27,6 +27,7 @@ import {
   type StageDisplayState,
   type ToolCallLike,
 } from "./stageActivity";
+import { escapeMarkdown } from "../markdownEscape";
 
 /**
  * Stage status types
@@ -441,7 +442,7 @@ export class StageTreeItem extends BaseTreeItem {
   private createTooltip(): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
     md.appendMarkdown(`**${STAGE_LABELS[this.stage]}**\n\n`);
-    md.appendMarkdown(`Status: ${this.status}\n\n`);
+    md.appendMarkdown(`Status: ${escapeMarkdown(this.status)}\n\n`);
 
     // Show retry status if retrying
     if (this.isRetrying && this.nextRetryAt) {
@@ -527,10 +528,9 @@ export class StageTreeItem extends BaseTreeItem {
           .join("; "),
       ]);
     }
-    // Backslashes first, so an escaped pipe cannot be un-escaped by the input;
-    // newlines would end the table row.
-    const esc = (v: string) =>
-      v.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+    // escapeMarkdown escapes pipes and backslashes and turns newlines into
+    // spaces, so a value cannot end the table row or inject markup (#3369).
+    const esc = escapeMarkdown;
     return (
       `\n---\n\n**Activity:**\n\n| | |\n| --- | --- |\n` +
       rows.map(([k, v]) => `| ${k} | ${esc(v)} |`).join("\n") +

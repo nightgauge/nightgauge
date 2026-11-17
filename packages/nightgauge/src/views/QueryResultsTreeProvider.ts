@@ -11,6 +11,7 @@ import { BaseTreeItem } from "./items/BaseTreeItem";
 import { ReadyIssueTreeItem } from "./items/ReadyIssueTreeItem";
 import type { QueryService } from "../services/QueryService";
 import type { QueryContext } from "../types/QueryTypes";
+import { escapeMarkdown, codeSpan } from "./markdownEscape";
 
 /**
  * Action tree item for displaying status messages
@@ -50,18 +51,18 @@ class QueryResultIssueItem extends BaseTreeItem {
 
     // Set tooltip
     this.tooltip = new vscode.MarkdownString();
-    this.tooltip.appendMarkdown(`**#${issue.number}** ${issue.title}\n\n`);
+    this.tooltip.appendMarkdown(`**#${issue.number}** ${escapeMarkdown(issue.title)}\n\n`);
     if (issue.priority) {
-      this.tooltip.appendMarkdown(`Priority: ${issue.priority}\n\n`);
+      this.tooltip.appendMarkdown(`Priority: ${escapeMarkdown(issue.priority)}\n\n`);
     }
     if (issue.size) {
-      this.tooltip.appendMarkdown(`Size: ${issue.size}\n\n`);
+      this.tooltip.appendMarkdown(`Size: ${escapeMarkdown(issue.size)}\n\n`);
     }
     if (issue.status) {
-      this.tooltip.appendMarkdown(`Status: ${issue.status}\n\n`);
+      this.tooltip.appendMarkdown(`Status: ${escapeMarkdown(issue.status)}\n\n`);
     }
     if (issue.labels.length > 0) {
-      this.tooltip.appendMarkdown(`Labels: ${issue.labels.join(", ")}\n\n`);
+      this.tooltip.appendMarkdown(`Labels: ${issue.labels.map(codeSpan).join(", ")}\n\n`);
     }
 
     // Set context value for menu contributions

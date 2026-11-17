@@ -9,7 +9,7 @@
 import * as vscode from "vscode";
 import { BaseTreeItem } from "./BaseTreeItem";
 import type { FailedIssueReference } from "../../types/completedIssues";
-import { getBranchDisplayText } from "../dashboard/DashboardComponents";
+import { escapeMarkdown, branchMarkdown } from "../markdownEscape";
 
 /**
  * ErrorDetailsTreeItem - Simple tree item for error details display
@@ -122,18 +122,19 @@ export class FailedIssueTreeItem extends BaseTreeItem {
    */
   private createTooltip(): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
-    md.isTrusted = true;
 
     md.appendMarkdown(`**Issue #${this.issue.issue_number}** ❌\n\n`);
-    md.appendMarkdown(`${this.issue.title}\n\n`);
+    md.appendMarkdown(`${escapeMarkdown(this.issue.title)}\n\n`);
     // The failure path is where an undetermined branch is most likely: a run
     // that dies before issue-pickup never had one, and `bootstrap/services.ts`
     // passes `""` outright on its onStageError fallback. Render the state, not
     // a blank (#448).
-    md.appendMarkdown(`**Branch:** ${getBranchDisplayText(this.issue.branch)}\n\n`);
-    md.appendMarkdown(`**Failed Stage:** ${this.formatStageName(this.issue.failed_stage)}\n\n`);
-    md.appendMarkdown(`**Error:** ${this.issue.error}\n\n`);
-    md.appendMarkdown(`**Failed:** ${this.issue.timestamp}\n\n`);
+    md.appendMarkdown(`**Branch:** ${branchMarkdown(this.issue.branch)}\n\n`);
+    md.appendMarkdown(
+      `**Failed Stage:** ${escapeMarkdown(this.formatStageName(this.issue.failed_stage))}\n\n`
+    );
+    md.appendMarkdown(`**Error:** ${escapeMarkdown(this.issue.error)}\n\n`);
+    md.appendMarkdown(`**Failed:** ${escapeMarkdown(String(this.issue.timestamp))}\n\n`);
 
     if (this.issue.retry_count > 0) {
       md.appendMarkdown(`**Retry Count:** ${this.issue.retry_count}\n\n`);
@@ -144,7 +145,7 @@ export class FailedIssueTreeItem extends BaseTreeItem {
         `⚠️ Max retry attempts reached (${MAX_RETRIES}). Manual intervention required.`
       );
     } else {
-      md.appendMarkdown(`Right-click to retry from ${this.issue.failed_stage}`);
+      md.appendMarkdown(`Right-click to retry from ${escapeMarkdown(this.issue.failed_stage)}`);
     }
 
     return md;

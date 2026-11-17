@@ -15,6 +15,7 @@ import {
   describeWorkspaceThrottle,
   type WorkspaceThrottle,
 } from "../../services/WorkspaceThrottle";
+import { escapeMarkdown } from "../markdownEscape";
 
 /**
  * Get icon for queue status
@@ -111,9 +112,9 @@ export class QueueSectionTreeItem extends BaseTreeItem {
       if (this.runningCount > 0) {
         tooltipText += `**${this.runningCount}** currently running (shown here and in the run view — one record, two views)\n`;
       }
-      tooltipText += `Status: ${this.queueStatus}`;
+      tooltipText += `Status: ${escapeMarkdown(String(this.queueStatus))}`;
       if (this.pauseReason) {
-        tooltipText += `\n\n⚠️ ${this.pauseReason}`;
+        tooltipText += `\n\n⚠️ ${escapeMarkdown(this.pauseReason)}`;
       }
     }
     if (this.workspaceThrottle) {
