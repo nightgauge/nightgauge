@@ -302,8 +302,10 @@ export function render(input) {
   if (notices.length > 0) lines.push("", `_${escapeText(notices.join(" "))}_`);
   lines.push(
     "",
-    "_Advisory review of a pull request the pipeline did not author; it does not block " +
-      "merging. Passes and severities: `docs/PR_REVIEW_PASSES.md`._"
+    "_Review of a pull request the pipeline did not author. Hold findings (every blocker, " +
+      "and a correctness major on `README*`, `docs/**` or `packages/*/package.json`) stop " +
+      "`pr-merge` from merging; other findings do not. Passes and severities: " +
+      "`docs/PR_REVIEW_PASSES.md`._"
   );
   return lines.join("\n") + "\n";
 }

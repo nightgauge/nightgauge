@@ -28,7 +28,7 @@ const review2757 = `<!-- nightgauge:pr-review -->
 - **nitpick** (correctness) ` + "`a.go:1`" + ` — Rename this.
   - Fix: Rename it.
 
-_Advisory review of a pull request the pipeline did not author; it does not block merging._
+_Review of a pull request the pipeline did not author. Hold findings (every blocker, and a correctness major on ` + "`README*`, `docs/**` or `packages/*/package.json`" + `) stop ` + "`pr-merge`" + ` from merging; other findings do not._
 `
 
 const reviewFileOnly = `<!-- nightgauge:pr-review -->

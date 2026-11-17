@@ -98,6 +98,9 @@ expect "starts with marker" "<!-- nightgauge:pr-review -->" "${OUT%%$'\n'*}"
 FIRST="$(sed -nE '/^- \*\*/{s/^- \*\*([a-z]+)\*\*.*/\1/;p;q;}' <<<"$OUT")"
 expect "blocker ranked first" "blocker" "$FIRST"
 expect "file-level finding has no line" 1 "$(printf '%s\n' "$OUT" | grep -c '`scripts/x.sh` ')"
+FOOTER='_Review of a pull request the pipeline did not author. Hold findings (every blocker, and a correctness major on `README*`, `docs/**` or `packages/*/package.json`) stop `pr-merge` from merging; other findings do not. Passes and severities: `docs/PR_REVIEW_PASSES.md`._'
+expect "footer states the merge gate" "$FOOTER" "${OUT##*$'\n'}"
+expect "footer does not claim to be advisory" 0 "$(printf '%s\n' "$OUT" | grep -c 'does not block merging')"
 
 NITS="$(fixture nits '.findings = [range(8) as $i | {pass: "correctness",
   file: "a.go", line: ($i + 1), claim: "n", severity: "nitpick", fix: "f"}]')"
