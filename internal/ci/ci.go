@@ -1,12 +1,10 @@
 package ci
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -36,22 +34,6 @@ type Check struct {
 	Command  string `json:"command"`
 	Workflow string `json:"workflow"`
 	Step     string `json:"step"`
-}
-
-// ParityResult is the output of CheckParity.
-type ParityResult struct {
-	Passed      bool         `json:"passed"`
-	CommandsRun []string     `json:"commands_run"`
-	Failures    []ParityFail `json:"failures"`
-	Timestamp   string       `json:"timestamp"`
-}
-
-// ParityFail describes a single CI parity check failure.
-type ParityFail struct {
-	Command     string `json:"command"`
-	FailureType string `json:"failure_type"` // "format"|"lint"|"typecheck"|"test"|"build"
-	Output      string `json:"output"`
-	ExitCode    int    `json:"exit_code"`
 }
 
 // workflowYAML is used for YAML unmarshalling of GitHub Actions workflow files.
@@ -167,41 +149,6 @@ func DiscoverCommands(_ context.Context, workdir, workflowPath string) (Discover
 // DiscoverCommandsJSON is a convenience wrapper returning JSON bytes.
 func DiscoverCommandsJSON(ctx context.Context, workdir, workflowPath string) ([]byte, error) {
 	result, err := DiscoverCommands(ctx, workdir, workflowPath)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(result)
-}
-
-// CheckParity runs each command in workdir and returns structured failure information.
-func CheckParity(_ context.Context, workdir string, commands []string) (ParityResult, error) {
-	ts := time.Now().UTC().Format(time.RFC3339)
-	result := ParityResult{
-		Passed:      true,
-		CommandsRun: commands,
-		Failures:    []ParityFail{},
-		Timestamp:   ts,
-	}
-
-	for _, cmdStr := range commands {
-		out, exitCode, err := runShellCmd(workdir, cmdStr)
-		if err != nil || exitCode != 0 {
-			result.Passed = false
-			result.Failures = append(result.Failures, ParityFail{
-				Command:     cmdStr,
-				FailureType: ClassifyCommand(cmdStr),
-				Output:      out,
-				ExitCode:    exitCode,
-			})
-		}
-	}
-
-	return result, nil
-}
-
-// CheckParityJSON is a convenience wrapper returning JSON bytes.
-func CheckParityJSON(ctx context.Context, workdir string, commands []string) ([]byte, error) {
-	result, err := CheckParity(ctx, workdir, commands)
 	if err != nil {
 		return nil, err
 	}
@@ -523,7 +470,7 @@ func containsAny(s string, subs []string) bool {
 
 // blockCommands turns one run: block into commands. A block with any unsafe
 // or setup line is dropped whole. A block of several logical lines is returned
-// whole as one newline-joined command, which CheckParity runs through a shell:
+// whole as one newline-joined command, because
 // its lines (if/fi, loops, `rc=$?`, `wait`) are fragments on their own. A
 // single-line block is one command. Backslash continuations are joined (#194).
 func blockCommands(run string) []string {
@@ -715,145 +662,7 @@ func ClassifyCommand(cmd string) string {
 	}
 }
 
-// tokenizeCommand splits a command string into an argv, honoring single/double
-// quotes and backslash escapes (POSIX-ish), so a command with a quoted argument
-// that contains spaces — e.g. `prettier --write "src/a b.ts"` — tokenizes into
-// the intended 3 args instead of being naively whitespace-split by
-// strings.Fields into 4 broken fragments. Returns an error on an unterminated
-// quote rather than silently mis-splitting.
-//
-// SECURITY NOTE: this is argv tokenization ONLY. runShellCmd execs the binary
-// directly via exec.Command (there is no `sh -c`), so shell metacharacters
-// (`;` `|` `&` `$()` backticks) are never interpreted — they remain literal
-// argument text. This function must NOT grow any shell-expansion behavior.
-func tokenizeCommand(cmdStr string) ([]string, error) {
-	const (
-		none = iota
-		single
-		double
-	)
-	var (
-		tokens  []string
-		cur     strings.Builder
-		inToken bool
-		quote   = none
-		runes   = []rune(cmdStr)
-	)
-	for i := 0; i < len(runes); i++ {
-		c := runes[i]
-		switch quote {
-		case single:
-			if c == '\'' {
-				quote = none
-			} else {
-				cur.WriteRune(c)
-			}
-		case double:
-			switch {
-			case c == '"':
-				quote = none
-			case c == '\\' && i+1 < len(runes) &&
-				(runes[i+1] == '"' || runes[i+1] == '\\' || runes[i+1] == '$' || runes[i+1] == '`'):
-				i++
-				cur.WriteRune(runes[i])
-			default:
-				cur.WriteRune(c)
-			}
-		default: // none
-			switch {
-			case c == '\'':
-				inToken = true
-				quote = single
-			case c == '"':
-				inToken = true
-				quote = double
-			case c == '\\' && i+1 < len(runes):
-				i++
-				cur.WriteRune(runes[i])
-				inToken = true
-			case c == ' ' || c == '\t' || c == '\n' || c == '\r':
-				if inToken {
-					tokens = append(tokens, cur.String())
-					cur.Reset()
-					inToken = false
-				}
-			default:
-				cur.WriteRune(c)
-				inToken = true
-			}
-		}
-	}
-	if quote != none {
-		kind := "double"
-		if quote == single {
-			kind = "single"
-		}
-		return nil, fmt.Errorf("unterminated %s quote in command: %q", kind, cmdStr)
-	}
-	if inToken {
-		tokens = append(tokens, cur.String())
-	}
-	return tokens, nil
-}
-
-func runShellCmd(workdir, cmdStr string) (string, int, error) {
-	// A compound block (if/fi, loops, heredocs) is only valid whole and needs
-	// a real shell; single-line commands keep the shell-free exec path below.
-	if strings.Contains(cmdStr, "\n") {
-		cmd := exec.Command("sh", "-c", cmdStr)
-		cmd.Dir = workdir
-		var buf bytes.Buffer
-		cmd.Stdout = &buf
-		cmd.Stderr = &buf
-		if err := cmd.Run(); err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				return buf.String(), exitErr.ExitCode(), err
-			}
-			return buf.String(), 1, err
-		}
-		return buf.String(), 0, nil
-	}
-	parts, err := tokenizeCommand(cmdStr)
-	if err != nil {
-		return "", 1, err
-	}
-	if len(parts) == 0 {
-		return "", 0, nil
-	}
-	// GitHub Actions commonly prefixes commands with one or more environment
-	// assignments (for example `GOFLAGS=-p=2 go test ./...`). These are shell
-	// syntax, not executable names. Preserve their semantics without invoking a
-	// shell by moving validated leading assignments into exec.Cmd.Env.
-	var assignments []string
-	for len(parts) > 0 && isEnvironmentAssignment(parts[0]) {
-		assignments = append(assignments, parts[0])
-		parts = parts[1:]
-	}
-	if len(parts) == 0 {
-		return "", 1, fmt.Errorf("CI command contains environment assignments but no executable: %q", cmdStr)
-	}
-	cmd := exec.Command(parts[0], parts[1:]...)
-	cmd.Dir = workdir
-	cmd.Env = append(os.Environ(), assignments...)
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	err = cmd.Run()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return buf.String(), exitErr.ExitCode(), err
-		}
-		return buf.String(), 1, err
-	}
-	return buf.String(), 0, nil
-}
-
 var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
-func isEnvironmentAssignment(token string) bool {
-	name, _, ok := strings.Cut(token, "=")
-	return ok && environmentName.MatchString(name)
-}
 
 func fileExists(path string) bool {
 	_, err := os.Stat(path)

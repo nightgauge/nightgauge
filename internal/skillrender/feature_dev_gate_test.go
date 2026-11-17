@@ -68,7 +68,7 @@ func TestFeatureDev_RunsNoGateCommand(t *testing.T) {
 		Stage: "feature-dev", SkillsRoots: []string{realSkillsRoot(t)}, Profile: ProfileCompact,
 	})
 	fence := regexp.MustCompile("(?s)```bash\n(.*?)```")
-	gate := regexp.MustCompile(`(?m)^[^#\n]*\b(ci parity-check|ci-local\.sh)`)
+	gate := regexp.MustCompile(`(?m)^[^#\n]*\bci-local\.sh`)
 	for name, content := range map[string]string{"full": full.Content, "compact": compact.Content} {
 		for _, block := range fence.FindAllStringSubmatch(content, -1) {
 			if hit := gate.FindString(block[1]); hit != "" {

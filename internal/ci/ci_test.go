@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -256,68 +255,6 @@ jobs:
 	}
 }
 
-func TestCheckParity_AllPass(t *testing.T) {
-	dir := t.TempDir()
-	commands := []string{"echo pass1", "echo pass2"}
-	result, err := CheckParity(context.Background(), dir, commands)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !result.Passed {
-		t.Errorf("expected Passed=true, got failures: %v", result.Failures)
-	}
-	if len(result.Failures) != 0 {
-		t.Errorf("expected 0 failures, got %d", len(result.Failures))
-	}
-}
-
-func TestCheckParity_OneFails(t *testing.T) {
-	dir := t.TempDir()
-	commands := []string{"echo pass", "false"}
-	result, err := CheckParity(context.Background(), dir, commands)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Passed {
-		t.Error("expected Passed=false")
-	}
-	if len(result.Failures) != 1 {
-		t.Errorf("expected 1 failure, got %d", len(result.Failures))
-	}
-	if result.Failures[0].Command != "false" {
-		t.Errorf("expected failed command=false, got %s", result.Failures[0].Command)
-	}
-}
-
-func TestCheckParity_EmptyCommands(t *testing.T) {
-	dir := t.TempDir()
-	result, err := CheckParity(context.Background(), dir, []string{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !result.Passed {
-		t.Error("expected Passed=true for empty commands")
-	}
-}
-
-func TestRunShellCmd_LeadingEnvironmentAssignments(t *testing.T) {
-	out, exitCode, err := runShellCmd(t.TempDir(),
-		`NIGHTGAUGE_CI_ASSIGNMENT=present NIGHTGAUGE_SECOND="two words" sh -c 'printf "%s|%s" "$NIGHTGAUGE_CI_ASSIGNMENT" "$NIGHTGAUGE_SECOND"'`)
-	if err != nil || exitCode != 0 {
-		t.Fatalf("runShellCmd() error = %v, exitCode = %d, output = %q", err, exitCode, out)
-	}
-	if out != "present|two words" {
-		t.Fatalf("output = %q, want %q", out, "present|two words")
-	}
-}
-
-func TestRunShellCmd_AssignmentWithoutExecutableFails(t *testing.T) {
-	_, exitCode, err := runShellCmd(t.TempDir(), "GOFLAGS=-p=2")
-	if err == nil || exitCode == 0 {
-		t.Fatalf("runShellCmd() error = %v, exitCode = %d; want a failure", err, exitCode)
-	}
-}
-
 func TestClassifyFailureType(t *testing.T) {
 	cases := []struct {
 		cmd  string
@@ -400,52 +337,6 @@ func TestDetectFramework(t *testing.T) {
 			t.Errorf("expected unknown, got %s", got)
 		}
 	})
-}
-
-func TestTokenizeCommand(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want []string
-	}{
-		{"simple", "npm run build", []string{"npm", "run", "build"}},
-		{"empty", "", nil},
-		{"whitespace only", "   \t  ", nil},
-		{"extra spaces collapse", "go   test    ./...", []string{"go", "test", "./..."}},
-		{"double-quoted arg with space", `prettier --write "src/a b.ts"`, []string{"prettier", "--write", "src/a b.ts"}},
-		{"single-quoted arg with space", `sh -c 'echo hi there'`, []string{"sh", "-c", "echo hi there"}},
-		{"escaped space outside quotes", `cmd a\ b`, []string{"cmd", "a b"}},
-		{"double-quote escaped quote", `echo "a\"b"`, []string{"echo", `a"b`}},
-		{"empty quoted arg", `cmd ""`, []string{"cmd", ""}},
-		{"adjacent quoted concatenation", `cmd "a"'b'c`, []string{"cmd", "abc"}},
-		{"flags with equals and quotes", `npx vitest run --reporter="json file"`, []string{"npx", "vitest", "run", `--reporter=json file`}},
-		// Shell metacharacters are NOT interpreted — exec.Command runs the binary
-		// directly (no `sh -c`), so these stay literal argument text. This locks in
-		// that the tokenizer must never grow shell-expansion behavior.
-		{"semicolon stays literal", "echo a;b", []string{"echo", "a;b"}},
-		{"pipe stays literal", "echo a|b", []string{"echo", "a|b"}},
-		{"command-substitution stays literal", "echo $(whoami)", []string{"echo", "$(whoami)"}},
-		{"single-quotes preserve backslash literally", `cmd 'a\b'`, []string{"cmd", `a\b`}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := tokenizeCommand(tc.in)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("tokenizeCommand(%q) = %#v, want %#v", tc.in, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestTokenizeCommand_UnterminatedQuote(t *testing.T) {
-	for _, in := range []string{`echo "unterminated`, `echo 'unterminated`, `prettier --write "a b`} {
-		if _, err := tokenizeCommand(in); err == nil {
-			t.Errorf("tokenizeCommand(%q) expected an unterminated-quote error, got nil", in)
-		}
-	}
 }
 
 func writeTestWorkflow(t *testing.T, dir, name, body string) {
@@ -537,13 +428,6 @@ jobs:
 	if len(result.Checks) != 1 || !strings.HasPrefix(result.Checks[0].Command, "U=") ||
 		!strings.HasSuffix(result.Checks[0].Command, "\nfi") {
 		t.Fatalf("expected one whole block, got %q", result.Commands)
-	}
-}
-
-func TestRunShellCmd_MultiLineBlockUsesShell(t *testing.T) {
-	_, code, _ := runShellCmd(t.TempDir(), "X=1\nif [ \"$X\" = 1 ]; then exit 3; fi")
-	if code != 3 {
-		t.Errorf("exit code = %d, want 3", code)
 	}
 }
 
