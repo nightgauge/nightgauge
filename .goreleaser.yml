@@ -87,6 +87,21 @@ archives:
       - NOTICE
       - THIRD_PARTY_NOTICES
       - README.md
+      # Script payloads ship beside the binary, not inside it (#3383);
+      # internal/shippedfiles finds them at <exe dir>/<name>.
+      # strip_parent flattens to the basename, so each plugin directory
+      # level is its own entry.
+      - src: internal/execution/opencodeplugin/plugin/*.js*
+        dst: opencode-plugin
+        strip_parent: true
+      - src: internal/execution/opencodeplugin/plugin/nightgauge/*.js
+        dst: opencode-plugin/nightgauge
+        strip_parent: true
+      - src: scripts/git-hooks/pre-push
+        dst: git-hooks
+        strip_parent: true
+        info:
+          mode: 0755
 
 checksum:
   name_template: checksums.txt

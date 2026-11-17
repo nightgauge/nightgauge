@@ -9065,7 +9065,7 @@ before spawning:
   that is not an absolute path, or that names something that cannot be run,
   is not a file or is not executable; no pin and no `opencode` on `PATH`; a
   version that cannot be read, or one below the manifest's `fail_closed`
-  floor. Each names the managed install as its remedy. A version newer than
+  floor. Each names `nightgauge opencode install` as its remedy. A version newer than
   the manifest's `max_tested` is never refused or warned about.
 - **Model:** a model that is not `<provider>/<model>`; an `anthropic/` model
   OpenCode's bundled catalog does not list, or one of its fast-mode entries
@@ -9077,6 +9077,32 @@ before spawning:
 - **Machine config:** unless `opencode.inherit_user_config` is on, managed
   OpenCode config on the machine. A populated `~/.opencode` is no longer
   refused: a run that does not inherit gets its own `HOME`.
+
+### OpenCode — Managed Install
+
+```bash
+nightgauge opencode install
+```
+
+Installs the `opencode` build the compat manifest's `max_tested` names, the
+remedy every OpenCode version refusal and `nightgauge doctor` print (#3300,
+#3383). The download and the check run in Go (`adapters.InstallManagedOpenCode`);
+no shell download command is carried in the binary or printed:
+
+1. Downloads the manifest's `install.installer` over https only (a redirect
+   off https is refused) to a private temporary file, up to 4 MiB, hashing it
+   as it is written.
+2. Refuses the file unless its sha256 is the manifest's
+   `install.installer_sha256`. A refused file is removed, and nothing runs.
+3. Runs `bash <installer> --no-modify-path --version <max_tested>` with the
+   caller's terminal.
+4. Prints the path to pin: `opencode.binary: ~/.opencode/bin/opencode` (as an
+   absolute path) in the machine-tier config.
+
+It exits 1, with no success line, on an installer URL that is not https, a
+manifest with no pinned sha256 or `max_tested`, a download that fails, is not
+HTTP 200 or is over the size cap, a digest mismatch (the error names both
+digests), or an installer that exits non-zero.
 
 ### knowledge — Knowledge Base Operations
 

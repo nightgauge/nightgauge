@@ -1918,31 +1918,22 @@ func TestForeignRepoBinaryNeverExecuted(t *testing.T) {
 	}
 }
 
-// installedPrePushHook writes the git pre-push hook `nightgauge pre-push
-// install` ships to a temp file and returns its path. The script exists only
-// as the prePushHookScript literal in cmd/nightgauge/cmd_pre_push.go, which
-// this package cannot import, so it is read from that source file: the arms
-// above then execute the shipped bytes, not a hand-kept copy (#2764).
+// installedPrePushHook copies the git pre-push hook `nightgauge pre-push
+// install` ships (scripts/git-hooks/pre-push, the only copy, #3383) to a temp
+// file and returns its path, so the arms above execute the shipped bytes, not
+// a hand-kept copy (#2764).
 func installedPrePushHook(t *testing.T, guardPath string) string {
 	t.Helper()
-	src := filepath.Join(filepath.Dir(guardPath), "..", "..", "..", "..", "cmd", "nightgauge", "cmd_pre_push.go")
+	src := filepath.Join(filepath.Dir(guardPath), "..", "..", "..", "..", "scripts", "git-hooks", "pre-push")
 	data, err := os.ReadFile(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const open = "const prePushHookScript = `"
-	text := string(data)
-	start := strings.Index(text, open)
-	if start < 0 {
-		t.Fatalf("%s carries no prePushHookScript literal", src)
-	}
-	body := text[start+len(open):]
-	end := strings.Index(body, "`")
-	if end < 0 || !strings.Contains(body[:end], devRepoBinEnv) {
-		t.Fatalf("prePushHookScript is unterminated or lacks the %s gate", devRepoBinEnv)
+	if !strings.Contains(string(data), devRepoBinEnv) {
+		t.Fatalf("%s lacks the %s gate", src, devRepoBinEnv)
 	}
 	path := filepath.Join(t.TempDir(), "pre-push")
-	if err := os.WriteFile(path, []byte(body[:end]), 0o755); err != nil {
+	if err := os.WriteFile(path, data, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return path

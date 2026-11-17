@@ -3610,6 +3610,25 @@ paragraph in full.
   therefore arrive while the first model request is in flight, but no tool
   runs before the check.
 
+## The plugin ships beside the binary, pinned by digest (amendment 2026-11-17, #3383)
+
+This supersedes "embedded" wherever this record says the plugin is embedded
+in the binary.
+
+- **Location.** The plugin tree is not in the binary. It ships as
+  `opencode-plugin/` beside it, in every release archive and the VSIX, and
+  `internal/shippedfiles` finds it (`$NIGHTGAUGE_SHIPPED_FILES_DIR`, then the
+  executable's directory, its parent, and a checkout's source path). Moving
+  the JavaScript out of the binary lowers the script-model score a malware
+  scanner gives it (docs/RELEASE_BINARIES.md).
+- **Integrity.** The binary pins `opencodeplugin.TreeSHA256`, the digest of
+  the source tree. The located tree is read into memory once, checked against
+  the pin, and only those bytes are written into the run's plugin directory,
+  so a file found on a lookup path cannot replace the gate.
+- **Failure.** A tree that is missing (the error names every path tried) or
+  does not match the pin fails the dispatch before OpenCode starts, like any
+  other `VerifyInstalled` refusal. No embedded fallback exists.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special

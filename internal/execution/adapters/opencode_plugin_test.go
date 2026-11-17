@@ -145,7 +145,7 @@ func TestInstallNightgaugePluginAddsOnlyThePluginKey(t *testing.T) {
 		t.Error("run.Env[OPENCODE_CONFIG_CONTENT] must be re-patched alongside run.ConfigContent")
 	}
 	if run.Env["OPENCODE_DISABLE_PROJECT_CONFIG"] != "1" {
-		t.Error("OPENCODE_DISABLE_PROJECT_CONFIG must be \"1\": AC2 requires it on every spawn so a target repository's .opencode/plugins/* and plugin[] never load beside the embedded plugin (ADR-022 amendment 2026-09-14)")
+		t.Error("OPENCODE_DISABLE_PROJECT_CONFIG must be \"1\": AC2 requires it on every spawn so a target repository's .opencode/plugins/* and plugin[] never load beside the shipped plugin (ADR-022 amendment 2026-09-14)")
 	}
 	if run.Env[opencodeplugin.EnvPluginPath] != wantEntry {
 		t.Errorf("env[%s] = %q, want %q", opencodeplugin.EnvPluginPath, run.Env[opencodeplugin.EnvPluginPath], wantEntry)

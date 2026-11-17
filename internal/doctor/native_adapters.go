@@ -301,7 +301,7 @@ func installSteps(h AdapterHealth, spec adapterSpec) []string {
 		if err != nil {
 			home = ""
 		}
-		command, pin := adapters.OpenCodeManagedInstall(m, home)
+		command, pin := adapters.OpenCodeManagedInstall(home)
 		return []string{
 			"Install the tested build with `" + command + "`",
 			"Pin it with opencode.binary: " + pin + " in ~/.nightgauge/config.yaml",

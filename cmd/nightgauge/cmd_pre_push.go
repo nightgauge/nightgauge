@@ -14,6 +14,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/shippedfiles"
 	"github.com/spf13/cobra"
 )
 
@@ -162,35 +163,35 @@ func prePushJSONExit(result hooks.PrePushResult) error {
 	return nil
 }
 
-// prePushHookScript is the git pre-push hook `pre-push install` writes. It is
-// the only copy: internal/doctor's TestForeignRepoBinaryNeverExecuted extracts
-// it from this file and executes it, so the binary cascade it runs is the one
-// that ships (#2758, #2764).
-const prePushHookScript = `#!/bin/bash
-# Installed by 'nightgauge pre-push install'
-# Runs pre-push merge validation gate before each push.
+// prePushHookMode is the installed hook's mode: executable, on a fresh
+// install and on a reinstall over an existing file alike.
+const prePushHookMode = 0o755
 
-BRANCH=$(git branch --show-current)
-ISSUE=$(echo "$BRANCH" | sed -n 's|^[^/]*/\([0-9]*\).*|\1|p')
-[ -z "$ISSUE" ] && exit 0  # No issue number — skip (not a pipeline branch)
+// installPrePushHook writes the shipped git pre-push hook
+// (scripts/git-hooks/pre-push, shipped as git-hooks/pre-push beside the
+// binary) to hookPath, mode prePushHookMode. The hook ships as a file, not a
+// string in the binary, so no shell script sits in the binary's bytes
+// (#3383); internal/doctor's TestForeignRepoBinaryNeverExecuted executes that
+// file. The hook is read once and must match prePushHookSHA256; the bytes
+// written are the bytes checked.
+func installPrePushHook(hookPath string) error {
+	hook, err := shippedfiles.LoadVerified(shippedfiles.PrePushHook, shippedfiles.PrePushHookSource, prePushHookSHA256)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(hookPath, hook.File(), prePushHookMode); err != nil {
+		return fmt.Errorf("write pre-push hook: %w", err)
+	}
+	// WriteFile keeps an existing file's mode; a reinstall must be executable.
+	if err := os.Chmod(hookPath, prePushHookMode); err != nil {
+		return fmt.Errorf("make pre-push hook executable: %w", err)
+	}
+	return nil
+}
 
-BINARY=$(command -v nightgauge 2>/dev/null)
-if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
-  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
-    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
-    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
-    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
-    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
-    case "${NG_ORIGIN%.git}" in
-      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
-        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
-    esac
-  done
-fi
-[ -z "$BINARY" ] && exit 0  # No binary — skip gracefully
-
-exec "$BINARY" pre-push validate "$ISSUE"
-`
+// prePushHookSHA256 is the sha256 of scripts/git-hooks/pre-push this binary
+// was built with (TestPrePushHookSHA256MatchesTheSource).
+const prePushHookSHA256 = "588230cf78f388e793e373d8b857741482e9ed0c022aba1f2906f77ba4eb323b"
 
 func prePushInstallCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -209,9 +210,8 @@ func prePushInstallCmd() *cobra.Command {
 			}
 
 			hookPath := filepath.Join(hookDir, "pre-push")
-
-			if err := os.WriteFile(hookPath, []byte(prePushHookScript), 0o755); err != nil {
-				return fmt.Errorf("write pre-push hook: %w", err)
+			if err := installPrePushHook(hookPath); err != nil {
+				return fmt.Errorf("install pre-push hook: %w", err)
 			}
 
 			fmt.Fprintf(os.Stderr, "Installed git pre-push hook: %s\n", hookPath)

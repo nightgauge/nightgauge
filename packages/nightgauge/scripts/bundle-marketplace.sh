@@ -89,17 +89,24 @@ LINK_REF="$(git -C "$REPO_ROOT" describe --tags --exact-match HEAD 2>/dev/null |
 python3 "$REPO_ROOT/scripts/lib/mirror_links.py" --identity --dest "$SKILLS_DIR" --ref "$LINK_REF"
 
 # 4. Bundle the Nightgauge OpenCode plugin (#1635) so OpenCodeSetupService can
-#    install it from the VSIX, never from a network fetch (#1671). Same two
-#    entries install-agent-skills.sh --opencode-only --with-plugin copies.
+#    install it from the VSIX, never from a network fetch (#1671). The whole
+#    tree ships: the binary reads it from dist/opencode-plugin, not from its
+#    own bytes (#3383), and index.js and package.json are what OpenCode loads.
 OPENCODE_PLUGIN_SRC="$REPO_ROOT/internal/execution/opencodeplugin/plugin"
 OPENCODE_PLUGIN_DEST="$DIST/opencode-plugin"
-if [ ! -f "$OPENCODE_PLUGIN_SRC/nightgauge.js" ] || [ ! -d "$OPENCODE_PLUGIN_SRC/nightgauge" ]; then
-  echo "OpenCode plugin source $OPENCODE_PLUGIN_SRC is missing." >&2
-  exit 1
-fi
+for f in index.js package.json nightgauge.js nightgauge; do
+  if [ ! -e "$OPENCODE_PLUGIN_SRC/$f" ]; then
+    echo "OpenCode plugin source $OPENCODE_PLUGIN_SRC/$f is missing." >&2
+    exit 1
+  fi
+done
 rm -rf "$OPENCODE_PLUGIN_DEST"
 mkdir -p "$OPENCODE_PLUGIN_DEST"
-cp "$OPENCODE_PLUGIN_SRC/nightgauge.js" "$OPENCODE_PLUGIN_DEST/nightgauge.js"
-rsync -a --delete "$OPENCODE_PLUGIN_SRC/nightgauge/" "$OPENCODE_PLUGIN_DEST/nightgauge/"
+rsync -a --delete "$OPENCODE_PLUGIN_SRC/" "$OPENCODE_PLUGIN_DEST/"
+
+# 5. Ship the git pre-push hook beside the binary (dist/bin/../git-hooks),
+#    where `nightgauge pre-push install` reads it (#3383).
+mkdir -p "$DIST/git-hooks"
+install -m 0755 "$REPO_ROOT/scripts/git-hooks/pre-push" "$DIST/git-hooks/pre-push"
 
 echo "Marketplace bundled into dist/ ($(find "$DIST/claude-plugins" "$DIST/skills" -type f 2>/dev/null | wc -l | tr -d ' ') files)"
