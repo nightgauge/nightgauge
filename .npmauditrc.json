@@ -3,9 +3,15 @@
   "description": "npm audit allow-list. Entries expire on the given date — expired entries fail CI.",
   "allowlist": [
     {
-      "id": "1243111",
-      "reason": "GHSA-xcx6-jx8p-x3h5 (MSAL Node auth-code flow) reaches us only via @vscode/vsce -> @azure/identity, whose latest (4.14.0) still requires @azure/msal-node ^6; fix is 7.1.0. vsce publishes with a PAT and never runs the auth-code flow. Tracked in #2492.",
-      "expires": "2026-11-22",
+      "id": "1247710",
+      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via repeated extglobs, <=4.0.7): no patched release exists (4.0.7 is latest). Dev-only: reaches us via vitest, vite, @vitest/coverage-v8, tinyglobby, fdir, lint-staged and @vscode/vsce; npm ls picomatch --omit=dev is empty and the VSIX ships none. Tracked in #2492.",
+      "expires": "2026-12-17",
+      "addedBy": "release-maintainer"
+    },
+    {
+      "id": "1244623",
+      "reason": "GHSA-g3hv-75wg-m249 (minimatch globparts DoS, >=7.0.0 <11.0.1): the fix, 11.0.1, is a major above the ^10 that @vscode/vsce and @typescript-eslint/typescript-estree declare; a forced major is not taken before a release. Dev-only: npm ls minimatch --omit=dev shows no affected version and the VSIX ships none. Tracked in #2492.",
+      "expires": "2026-12-17",
       "addedBy": "release-maintainer"
     }
   ]
