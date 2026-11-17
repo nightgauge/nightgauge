@@ -257,12 +257,18 @@ runs the suite. CI still runs it on the pull request.
 **Purpose:** Installs a git pre-push hook into `.git/hooks/pre-push` that calls
 `nightgauge pre-push validate` before each push from a pipeline branch.
 
+The hook is not carried in the binary (#3383): the command copies the
+`git-hooks/pre-push` file that ships beside it in the release archive and the
+VSIX, found in the order `docs/RELEASE_BINARIES.md` documents. A binary built
+with `go install` has nothing beside it; set `NIGHTGAUGE_SHIPPED_FILES_DIR` to
+a nightgauge checkout before running the command.
+
 **Exit codes:**
 
-| Code | Meaning           |
-| ---- | ----------------- |
-| 0    | Hook installed    |
-| 1    | Error (I/O, path) |
+| Code | Meaning                                                                                                                              |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| 0    | Hook installed                                                                                                                       |
+| 1    | Error (I/O, path); the shipped hook not found (the error lists every path tried); or the shipped hook's sha256 is not the pinned one |
 
 ## Optional commands (failure = logged warning, execution continues)
 

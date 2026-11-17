@@ -9,6 +9,10 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- The extension bundles the whole OpenCode plugin tree and the git pre-push hook beside its `nightgauge` binary, which now reads them from there instead of carrying them inside it (#3383).
+
 ## [0.8.6] - 2026-11-17
 
 ### Security

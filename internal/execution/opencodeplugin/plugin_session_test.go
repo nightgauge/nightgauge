@@ -95,7 +95,7 @@ type sessionCallResult struct {
 	Output  json.RawMessage `json:"output"`
 }
 
-// sessionModulePath writes the embedded plugin tree into a fresh temp dir
+// sessionModulePath writes the shipped plugin tree into a fresh temp dir
 // and returns nightgauge/session.js's absolute path within it.
 func sessionModulePath(t *testing.T) string {
 	t.Helper()

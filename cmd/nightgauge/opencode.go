@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +32,45 @@ func opencodeCmd() *cobra.Command {
 	}
 	cmd.AddCommand(opencodeConfigCmd())
 	cmd.AddCommand(opencodeCleanupCmd())
+	cmd.AddCommand(opencodeInstallCmd())
 	return cmd
+}
+
+// The seams opencodeInstallCmd installs through. Tests replace them so the
+// verb runs offline against a local server and never executes an installer.
+var (
+	opencodeInstallManifest = adapters.OpenCodeManifest
+	opencodeInstallClient   *http.Client           // nil: InstallManagedOpenCode's default client
+	opencodeInstallRunner   adapters.InstallRunner // nil: adapters.RunInstaller
+)
+
+// opencodeInstallCmd installs the opencode build Nightgauge was tested
+// against: it downloads the vendor's installer, verifies its pinned sha256
+// in Go and only then runs it (#3300, #3383), then prints the pin.
+func opencodeInstallCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "install",
+		Short:        "Install the tested opencode build through the pinned, verified installer",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			m, err := opencodeInstallManifest()
+			if err != nil {
+				return err
+			}
+			if err := adapters.InstallManagedOpenCode(cmd.Context(), opencodeInstallClient, m, opencodeInstallRunner); err != nil {
+				return err
+			}
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("opencode installed, but the home directory for its pin is unknown: %w", err)
+			}
+			_, pin := adapters.OpenCodeManagedInstall(home)
+			fmt.Fprintf(cmd.OutOrStdout(), "Installed opencode %s. Pin it with opencode.binary: %s in %s\n",
+				m.MaxTested, pin, config.MachineConfigFile())
+			return nil
+		},
+	}
 }
 
 // opencodeConfigCmd prints what an opencode spawn for a stage is given: the

@@ -616,21 +616,26 @@ as not yet enforced. A dispatch to an `anthropic/*` model is refused while
 - OpenCode 2.x CLI installed through its 2.x installer (2.x is not on npm),
   verified against the sha256 the compat manifest pins before it runs, then
   pinned with `opencode.binary` (below). `nightgauge doctor` prints this
-  command; nothing is piped into a shell:
+  command, which downloads the installer, checks its sha256 in Go and only
+  then runs it; nothing is piped into a shell:
 
   ```bash
-  f="$(mktemp)" && curl -fsSL --proto '=https' -o "$f" https://opencode.ai/v2/install \
-    && echo "bbc4584fd6a888bcd14623b8a63afa0f1b4075a2e84a2c3518cd509b446b3135  $f" | shasum -a 256 -c - \
-    && bash "$f" --no-modify-path --version 2.2.7
+  nightgauge opencode install
   ```
 
-  On Linux without `shasum`, `sha256sum -c -` reads the same line. The pin is
-  `install.installer_sha256` in `internal/adaptercompat/manifests/opencode.json`.
+  The pin is `install.installer_sha256` in
+  `internal/adaptercompat/manifests/opencode.json`.
 
 - `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` set in the environment the pipeline
   runs in
 - For a hosted `anthropic/*` model: `ANTHROPIC_API_KEY` set
 - For a self-run model: the server already running and reachable on loopback
+- The OpenCode plugin tree beside the `nightgauge` binary: release archives
+  and the VSIX ship it as `opencode-plugin/`, found in the order
+  [RELEASE_BINARIES.md](RELEASE_BINARIES.md) documents. A CLI built with
+  `go install` has none; set `NIGHTGAUGE_SHIPPED_FILES_DIR` to a nightgauge
+  checkout. A missing tree, or one whose sha256 is not the one the binary
+  pins, fails the dispatch before OpenCode starts.
 
 **Quick Start:**
 

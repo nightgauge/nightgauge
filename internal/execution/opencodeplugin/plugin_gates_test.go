@@ -7,7 +7,7 @@ package opencodeplugin
 // sanitize-prompt gate for command.execute.before has no 2.x attachment point
 // (ctx.command has no hook), so it is not exercised here.
 //
-// Every test here drives the REAL embedded plugin tree through Node,
+// Every test here drives the REAL shipped plugin tree through Node,
 // spawning the REAL built `nightgauge` binary for each gate verb — never a
 // re-implementation of the Go decision in JS — exactly like #1635's
 // TestCarefulGateParity. HOME and XDG_CONFIG_HOME are pointed at a fresh
@@ -32,7 +32,7 @@ import (
 
 // --- shared plumbing ---
 
-// writePluginTreeForGatesTest writes a fresh copy of the embedded plugin
+// writePluginTreeForGatesTest writes a fresh copy of the shipped plugin
 // tree and returns both the entry module OpenCode 2.x loads (EntryFile) and
 // gates.js's own path (for drivers that import it directly, bypassing the
 // entry's hook registration).

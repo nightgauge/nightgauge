@@ -2,7 +2,7 @@
 
 package opencodeplugin
 
-// The cases here drive the embedded plugin through the real OpenCode 2.x
+// The cases here drive the shipped plugin through the real OpenCode 2.x
 // binary's own plugin loader (#3302), not the fake host the rest of this
 // package's tests use: the fake host proves what the plugin does with what
 // it is handed; these prove opencode hands it that, and acts on the result.
@@ -159,7 +159,7 @@ func (r realRunResult) toolUses() []struct {
 }
 
 // runRealOpenCode runs `opencode run --standalone --format json` once
-// against the stub provider, with the embedded plugin written to a per-run
+// against the stub provider, with the shipped plugin written to a per-run
 // directory and named in the config's `plugins` array exactly as
 // adapters.InstallNightgaugePlugin names it, and the handshake and events
 // variables the adapter sets.

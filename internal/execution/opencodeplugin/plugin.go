@@ -1,11 +1,15 @@
-// Package opencodeplugin embeds the Nightgauge OpenCode plugin (#1635): the
+// Package opencodeplugin ships the Nightgauge OpenCode plugin (#1635): the
 // entry module and its gate that give an OpenCode stage the same
 // careful-gate every Claude Code stage runs through hooks.json, since
 // OpenCode never reads Claude Code hooks and its only extension point is an
 // in-process JS plugin (on 2.x, a ctx.tool.hook("execute.before") handler that
 // blocks a tool by throwing, #3302).
 //
-// Write copies the embedded plugin/ tree into the run's per-run OpenCode
+// The plugin is not embedded in the binary (#3383): it ships as the
+// opencode-plugin directory beside it (internal/shippedfiles), from the
+// source tree plugin/.
+//
+// Write copies the shipped plugin tree into the run's per-run OpenCode
 // plugin directory — never installed from npm or Bun — and OpenCode 2.x loads
 // it as a local plugin directory (it loads the directory's index.js), named in
 // the per-run config's `plugins` array
@@ -20,7 +24,6 @@ package opencodeplugin
 
 import (
 	"crypto/rand"
-	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -28,17 +31,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"testing/fstest"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/opencodeallow"
+	"github.com/nightgauge/nightgauge/internal/shippedfiles"
 )
-
-//go:embed plugin
-var pluginFS embed.FS
-
-// pluginRoot is the go:embed directory name, stripped by Files/Write so
-// callers see a tree rooted at the plugin directory itself.
-const pluginRoot = "plugin"
 
 // PluginVersion is the handshake's plugin_version. It MUST match
 // NIGHTGAUGE_PLUGIN_VERSION in plugin/nightgauge.js byte for byte
@@ -68,14 +66,34 @@ var HookNames = []string{
 	"event:subscribe",
 }
 
-// Files returns the embedded plugin tree, rooted at the plugin directory
+// TreeSHA256 is shippedfiles.Digest of the plugin tree this binary was built
+// with. Files refuses a located tree that does not match, so a tree found
+// beside the binary cannot replace the gate (#3383). After editing plugin/,
+// TestTreeSHA256MatchesTheSource prints the new value.
+const TreeSHA256 = "b01bb3c1c30459e807a1b10ba5e1ebffcfbf65a22940fbe3151ca5ac4bd9164c"
+
+// Files returns the shipped plugin tree, rooted at the plugin directory
 // (Files().Open("index.js"), Files().Open("nightgauge.js") and
-// Files().Open("nightgauge/gates.js")).
+// Files().Open("nightgauge/gates.js")). It fails when the tree is not
+// shipped beside the binary (the error names every path tried) or does
+// not match TreeSHA256. The tree is read into memory once and its digest is
+// checked over those bytes, so the files served are the files verified: a
+// file swapped on disk after the check cannot replace the gate.
 func Files() (fs.FS, error) {
-	return fs.Sub(pluginFS, pluginRoot)
+	p, err := shippedfiles.LoadVerified(shippedfiles.OpenCodePlugin, shippedfiles.OpenCodePluginSource, TreeSHA256)
+	if err != nil {
+		return nil, err
+	}
+	// fstest.MapFS is the standard library's in-memory fs.FS; it needs no
+	// testing package. It synthesizes the parent directories of each file.
+	tree := make(fstest.MapFS, len(p.Files))
+	for name, data := range p.Files {
+		tree[name] = &fstest.MapFile{Data: data, Mode: 0o600}
+	}
+	return tree, nil
 }
 
-// Write copies the embedded plugin tree into dir (created 0700; every file
+// Write copies the shipped plugin tree into dir (created 0700; every file
 // 0600) so opencode loads it as a local plugin directory rather than an npm
 // or Bun package. Returns dir itself, cleaned: the value the per-run config's
 // `plugins` array names. OpenCode 2.x refuses a file entry ("configured
