@@ -85,10 +85,11 @@ const openCodeBinaryName = "opencode"
 // and TestOpenCodeAnthropicModelsMatchTheBinary, build tag
 // opencode_integration), then raise this.
 // TestOpenCodeCatalogSnapshotIsTheMaxTestedVersion holds the two together.
-// OpenCode 2.x bundles no catalog to re-read (it fetches models at run time),
-// so the snapshots stay 1.18.30's until they are ported; that test records the
-// gap as pending.
-const openCodeCatalogVersion = "1.18.30"
+// On 2.x both are derived from the pinned models catalog
+// (opencode-models-catalog.json.gz) the version bundles, which every run reads
+// through OPENCODE_MODELS_PATH: re-capture it from the new binary first
+// (testdata/opencode-cli/README.md).
+const openCodeCatalogVersion = "2.2.7"
 
 // openCodeManifest is the opencode compat manifest (#1613), the single source
 // of the floor, the max-tested version and the install package.
@@ -215,7 +216,11 @@ const openCodeDisableProjectConfig = "OPENCODE_DISABLE_PROJECT_CONFIG"
 const openCodeProbePlaceholder = "nightgauge-probe-placeholder"
 
 // OpenCodeProbe is the throwaway directory an opencode probe spawn runs in.
-type OpenCodeProbe struct{ root string }
+type OpenCodeProbe struct {
+	root string
+	// catalog is set once the pinned models catalog is in root.
+	catalog bool
+}
 
 // NewOpenCodeProbe creates a probe directory under the system's temporary
 // directory. Close removes it.
@@ -275,7 +280,9 @@ func OpenCodeStandaloneArgs(args []string) []string {
 // refers to (OpenCodeRunConfig.Files), written into the probe's directory
 // first. The environment is built from nothing: PATH, the probe's HOME,
 // TMPDIR and four XDG directories, the switches every spawn sets
-// (openCodeDisableFlags), OPENCODE_DISABLE_MODELS_FETCH among them, and
+// (openCodeDisableFlags), OPENCODE_DISABLE_MODELS_FETCH among them,
+// OPENCODE_MODELS_PATH at the pinned models catalog, written into the probe's
+// directory on its first use (`--version` reads no catalog and gets none), and
 // OPENCODE_DISABLE_PROJECT_CONFIG (openCodeDisableProjectConfig). No
 // credential and no inherited OPENCODE_* variable reaches it.
 // providerVars, when given, are variables OpenCode's catalog binds to a model
@@ -294,6 +301,7 @@ func OpenCodeStandaloneArgs(args []string) []string {
 // not start, ran past the timeout, was stopped by ctx, or printed more than
 // openCodeProbeMaxOutput. An error ctx caused wraps ctx's error.
 func (p *OpenCodeProbe) Run(ctx context.Context, bin string, args []string, content string, files map[string]string, providerVars ...string) (OpenCodeProbeResult, error) {
+	version := slices.Equal(args, []string{"--version"})
 	args = OpenCodeStandaloneArgs(args)
 	label := "`" + strings.Join(append([]string{openCodeBinaryName}, args...), " ") + "`"
 	if err := ctx.Err(); err != nil {
@@ -307,6 +315,12 @@ func (p *OpenCodeProbe) Run(ctx context.Context, bin string, args []string, cont
 	if err := writeOpenCodeRunFiles(p.root, files); err != nil {
 		return OpenCodeProbeResult{ExitCode: -1}, err
 	}
+	if !version && !p.catalog {
+		if err := writeOpenCodeModelsCatalog(p.root); err != nil {
+			return OpenCodeProbeResult{ExitCode: -1}, fmt.Errorf("%s: %w", label, err)
+		}
+		p.catalog = true
+	}
 	env := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + filepath.Join(p.root, "home"),
@@ -317,6 +331,9 @@ func (p *OpenCodeProbe) Run(ctx context.Context, bin string, args []string, cont
 	}
 	for _, flag := range openCodeDisableFlags {
 		env = append(env, flag+"=1")
+	}
+	if !version {
+		env = append(env, openCodeModelsPathEnv+"="+OpenCodeModelsCatalogPath(p.root))
 	}
 	env = append(env, openCodeDisableProjectConfig+"=1")
 	for _, name := range providerVars {

@@ -206,7 +206,8 @@ func openCodeDispatchProvider(model string) string {
 //     to the processes it starts), OPENCODE_DB redirects the session
 //     database, OPENCODE_CONFIG, OPENCODE_CONFIG_DIR and
 //     OPENCODE_CONFIG_CONTENT inject config, and OPENCODE_MODELS_PATH swaps
-//     the provider catalog. A variable a later version adds goes with them.
+//     the provider catalog (the adapter sets its own, the pinned catalog). A
+//     variable a later version adds goes with them.
 //     The adapter's own OPENCODE_* exports are added after this filter, so
 //     they survive it.
 //   - The provider base-URL variables (openCodeEndpointEnv), whatever the
@@ -410,9 +411,11 @@ func ensureOpenCodeStateDirs(state string, elems ...string) (string, error) {
 // never exists.
 //
 // Every call removes a model catalog cached in cache/opencode/
-// (removeOpenCodeCatalogCache), so each stage loads the catalog bundled in the
-// binary, the one the reserved endpoint ids are captured from (ADR-022
-// § Endpoints, #1708).
+// (removeOpenCodeCatalogCache) and rewrites the pinned models catalog
+// (writeOpenCodeModelsCatalog) at the path OPENCODE_MODELS_PATH names, so
+// each stage loads the catalog the reserved endpoint ids and the credential
+// policy are derived from, whatever an earlier stage left in the root
+// (ADR-022 § Endpoints, #1708, #3315).
 //
 // Every call refreshes the root's modification time, which is what
 // SweepOpenCodeRunRoots ages.
@@ -444,6 +447,9 @@ func EnsureOpenCodeRunRoot(state, home, id string, lookup func(string) (string, 
 	if err := removeOpenCodeCatalogCache(root); err != nil {
 		return "", false, err
 	}
+	if err := writeOpenCodeModelsCatalog(root); err != nil {
+		return "", false, err
+	}
 	now := time.Now()
 	if err := os.Chtimes(root, now, now); err != nil {
 		return "", false, fmt.Errorf("opencode run root: %w", err)
@@ -458,12 +464,14 @@ func EnsureOpenCodeRunRoot(state, home, id string, lookup func(string) (string, 
 var openCodeCatalogCacheFiles = []string{"models.json", "models-*.json"}
 
 // removeOpenCodeCatalogCache deletes every catalog cache file in the run's
-// cache/opencode/. OpenCode loads a cached catalog in preference to the one
+// cache/opencode/. 1.x loads a cached catalog in preference to the one
 // bundled in the binary, and the stages of a run share the cache directory,
 // so a catalog one stage left behind (written by a tool it ran, or by a
 // version that fetches despite OPENCODE_DISABLE_MODELS_FETCH) would be the
-// next stage's. Only the bundled catalog is the one the reserved endpoint ids
-// are captured from (ADR-022 § Endpoints). A cache/opencode that is a symbolic
+// next stage's. On 2.2.7 the pinned catalog OPENCODE_MODELS_PATH names
+// outranks any cache, so this sweep is the second guard behind it: only the
+// pinned catalog is the one the reserved endpoint ids are derived from
+// (ADR-022 § Endpoints). A cache/opencode that is a symbolic
 // link or not a directory is refused, so no catalog is read through a link
 // planted in the root; a link in place of a cache file is removed, never
 // followed.
@@ -707,6 +715,10 @@ type OpenCodeIsolation struct {
 //   - XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_CACHE_HOME and XDG_STATE_HOME at the
 //     root's config/, data/, cache/ and state/;
 //   - every flag in openCodeDisableFlags, set to "1";
+//   - OPENCODE_MODELS_PATH at the pinned models catalog in the root
+//     (openCodeModelsPathEnv), which EnsureOpenCodeRunRoot writes, so a run
+//     reads the catalog its credential policy was derived from and never
+//     fetches one;
 //   - the tools the XDG move would otherwise take from the operator, pinned
 //     back to what they resolve to outside the run: GH_CONFIG_DIR to the
 //     operator's gh config directory (gh keeps its hosts and auth there);
@@ -750,6 +762,7 @@ func OpenCodeIsolationEnv(in OpenCodeIsolation) (map[string]string, error) {
 	for _, flag := range openCodeDisableFlags {
 		env[flag] = "1"
 	}
+	env[openCodeModelsPathEnv] = OpenCodeModelsCatalogPath(in.Root)
 	operatorConfigHome := operatorXDGConfigHome(in.Home, in.Lookup)
 	if v, ok := in.Lookup("GH_CONFIG_DIR"); ok && v != "" {
 		env["GH_CONFIG_DIR"] = v

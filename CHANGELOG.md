@@ -20,6 +20,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- OpenCode runs and probes now read a pinned models catalog instead of whatever one the binary finds (#3315). The catalog is OpenCode 2.2.7's bundled snapshot, embedded in the binary. Each run root and probe directory gets a copy, and `OPENCODE_MODELS_PATH` points at it, beside `OPENCODE_DISABLE_MODELS_FETCH=1`. The credential policy and the anthropic model pin are derived from the same file and now match 2.2.7: 233 providers, and `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5` and `claude-fable-5-2` are dispatchable. The catalog-version pin moves to 2.2.7, and the catalog probes use `opencode models --standalone`.
 - `internal/orchestrator`'s tests now run in parallel, apart from the ones that set the environment, swap a package-level seam, redirect the standard logger or wait on a short wall-clock deadline (#3144). Each serial test says why in a `// Serial:` comment, and a new policy test fails when a parallel test reaches shared state or a test has no reason. The package's plain `go test` drops from 187s to 132s on 30 cores. The gain is limited because Go forks one subprocess at a time per process and these tests spawn git constantly. The unsharded race pass is slower, 241s to 281s, and the gate's 8 sharded orchestrator steps barely change (142s to 133s).
 
 ### Fixed

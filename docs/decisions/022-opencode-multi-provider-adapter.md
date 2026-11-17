@@ -1751,6 +1751,34 @@ the manifest's `install.installer_sha256`, and only then runs it for
 > until its promise settles, which reverses #1810's 1.18.30 finding for 2.x
 > (see [the 2.x plugin amendment](#the-plugin-on-the-2x-definition-and-hook-api-amendment-2026-11-15-3302)).
 
+> **Amendment 2026-11-17 (#3315): the catalog snapshots on 2.2.7.** 2.2.7
+> carries no `id:"<key>",env:[...]` catalog in its code. It loads models from
+> `OPENCODE_MODELS_PATH` when that names a file, else from its cache, else from
+> a snapshot it bundles, and fetches models.dev only when all three are absent.
+> Observed in the binary: `models:{file:OPENCODE_MODELS_PATH,fetch:!OPENCODE_DISABLE_MODELS_FETCH}`.
+> With the fetch off, a run read that bundled snapshot, and nothing pinned it.
+>
+> - **One pinned catalog.** `internal/execution/adapters/opencode-models-catalog.json.gz`
+>   is 2.2.7's bundled snapshot, extracted from the binary
+>   (`testdata/opencode-cli/README.md`). § 8's `openCodeCatalogEnv` and § 17's
+>   `openCodeAnthropicModels` are derived from it, and unit tests hold them
+>   equal to it. A fast-mode entry is `<id>-<mode>` for each of a model's
+>   `experimental.modes`, sent under the base id.
+> - **Every run reads it.** The run root and each probe directory get
+>   `nightgauge-models-catalog.json` (0600, renamed into place, outside the
+>   cache globs), and the spawn sets `OPENCODE_MODELS_PATH` to it, with
+>   `OPENCODE_DISABLE_MODELS_FETCH=1` still set. An inherited
+>   `OPENCODE_MODELS_PATH` is withheld like every other `OPENCODE_*` variable.
+> - **Code bindings join the policy.** Each catalog variable was set alone.
+>   `CLOUDFLARE_API_TOKEN` also loaded `cloudflare-workers-ai`, which the
+>   catalog does not declare, so `openCodeCodeBoundEnv` adds it.
+>   `TestOpenCodeCatalogEnvMatchesTheBinary` repeats that check against the
+>   installed binary.
+> - **Probes are 2.2.7 commands.** Every catalog probe runs
+>   `opencode models --standalone`, with no provider argument and no `--verbose`.
+> - `openCodeCatalogVersion` is `2.2.7`, so it equals max-tested again. The
+>   1.18.30 pending exception is removed.
+
 ### 21. Capability spine
 
 No alpha entry. The public capabilities map (`capabilities.yaml`, and
@@ -1901,6 +1929,9 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
   `testdata/opencode-cli/`, and § 20 re-captures it whenever max-tested rises.
   A run on the max-tested version sees exactly that catalog, on one
   precondition: no catalog cache file is present in the run's cache directory.
+  On 2.2.7 the precondition is gone: every run reads the pinned catalog
+  through `OPENCODE_MODELS_PATH`, which outranks the cache (§ 20's 2026-11-17
+  amendment, #3315).
   1.18.30 loads the catalog from its cache file, `opencode/models.json` under
   `XDG_CACHE_HOME` (`models-<hash>.json` when `OPENCODE_MODELS_URL` names
   another source), and otherwise from the snapshot bundled in the binary (read

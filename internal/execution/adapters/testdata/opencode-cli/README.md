@@ -24,6 +24,42 @@ and update the table below in the same change.
 | Exit code   | 0                                                                           |
 | Redaction   | `capture.sh`; nothing needed redacting                                      |
 
+## Pinned models catalog (#3315)
+
+`../../opencode-models-catalog.json.gz` is the models catalog OpenCode 2.2.7
+bundles: the document it reads when `OPENCODE_MODELS_PATH` names no file and
+nothing is cached, before it would fetch models.dev. Every run and probe hands
+OpenCode a copy through `OPENCODE_MODELS_PATH`, and `openCodeCatalogEnv` and
+`openCodeAnthropicModels` are derived from it.
+
+| Field       | Value                                                                   |
+| ----------- | ----------------------------------------------------------------------- |
+| CLI version | `2.2.7`                                                                 |
+| Captured at | 2026-11-17, on the host above                                           |
+| Source      | `/$bunfs/root/snapshot-czv35j7j.txt` in the binary's Bun module graph   |
+| Content     | 233 providers, each with `env`; UTF-16LE in the binary, stored as UTF-8 |
+| Stored      | `gzip -9 -n` (8,247,427 bytes of JSON, sha256 `3ea43e2d…494aea33`)      |
+
+To re-capture for a new max-tested version:
+
+1. Read the Bun trailer at the end of the binary (`\n---- Bun! ----\n`). The
+   32 bytes before it are the offsets: a `u64` payload size, then the module
+   table as a `u32` offset and length. The payload starts at
+   `trailer - 32 - size`.
+2. Each module table entry is 52 bytes and starts with the name and the
+   contents, each a `u32` offset and length. Find the entry whose name is
+   `/$bunfs/root/snapshot-*.txt`, and decode its contents from UTF-16LE.
+3. Write the JSON as UTF-8, `gzip -9 -n` it over the embedded file, re-derive
+   both maps (the unit tests print the entries to paste), and raise
+   `openCodeCatalogVersion`.
+4. Run the `opencode_integration` tests in `opencode_catalog_integration_test.go`
+   against the new binary. They check that the pinned file lists the same
+   models as the bundled catalog, and that the binary reads the file (a model
+   dropped from a copy disappears). They also check that each catalog
+   variable, set alone, loads only the providers the policy binds it to. That
+   last check found the one code binding 2.2.7 adds, `CLOUDFLARE_API_TOKEN` to
+   `cloudflare-workers-ai` (`openCodeCodeBoundEnv`).
+
 ## OpenCode 2.2.7 stream captures (#3305)
 
 Real `opencode run --standalone --format json` stdout from 2.2.7, captured

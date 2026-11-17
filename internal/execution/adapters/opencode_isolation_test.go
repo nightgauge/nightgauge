@@ -35,9 +35,10 @@ func envLookup(env map[string]string) func(string) (string, bool) {
 
 // TestOpenCodeIsolationEnv pins the environment an opencode spawn runs in
 // (ADR-022 § 8), exactly: the four XDG directories inside the run root, the
-// disable flags, and the tools the XDG move would otherwise take from the
-// operator, each pinned back to what it resolves to outside the run. Exact map
-// equality, so an extra variable fails as surely as a missing one.
+// disable flags, the pinned models catalog in the root, and the tools the XDG
+// move would otherwise take from the operator, each pinned back to what it
+// resolves to outside the run. Exact map equality, so an extra variable fails
+// as surely as a missing one.
 func TestOpenCodeIsolationEnv(t *testing.T) {
 	const root, home = "/runs/r", "/home/op"
 	base := func() map[string]string {
@@ -54,6 +55,7 @@ func TestOpenCodeIsolationEnv(t *testing.T) {
 			"OPENCODE_DISABLE_CLAUDE_CODE_PROMPT": "1",
 			"OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "1",
 			"OPENCODE_DISABLE_EXTERNAL_SKILLS":    "1",
+			"OPENCODE_MODELS_PATH":                root + "/nightgauge-models-catalog.json",
 			"GH_CONFIG_DIR":                       home + "/.config/gh",
 			"NIGHTGAUGE_CONFIG_HOME":              "/machine/tier",
 			"NIGHTGAUGE_STATE_HOME":               home + "/.local/state/nightgauge",
@@ -442,13 +444,13 @@ func TestOpenCodeRedactedEnv(t *testing.T) {
 }
 
 // TestOpenCodeCatalogEnvSnapshot guards the catalog snapshot the credential
-// policy stands on against an edit by hand. It is the bundled catalog of
-// opencode 1.18.30 as read from the binary (TestOpenCodeCatalogEnvMatchesTheBinary
-// re-reads it): 213 provider keys, with the bindings ADR-022 § 8 and the forge
-// exception name.
+// policy stands on against an edit by hand. It is derived from the models
+// catalog pinned for opencode 2.2.7 (TestOpenCodeCatalogEnvMatchesThePinnedCatalog):
+// 233 provider keys, with the bindings ADR-022 § 8 and the forge exception
+// name.
 func TestOpenCodeCatalogEnvSnapshot(t *testing.T) {
-	if n := len(openCodeCatalogEnv); n != 213 {
-		t.Errorf("the catalog snapshot holds %d provider keys; opencode 1.18.30 bundles 213", n)
+	if n := len(openCodeCatalogEnv); n != 233 {
+		t.Errorf("the catalog snapshot holds %d provider keys; the catalog pinned for opencode 2.2.7 lists 233", n)
 	}
 	for provider, want := range map[string][]string{
 		"anthropic":      {"ANTHROPIC_API_KEY"},
@@ -467,7 +469,7 @@ func TestOpenCodeCatalogEnvSnapshot(t *testing.T) {
 	}
 	for _, notInCatalog := range []string{"ollama", "lm-studio", "lmstudio-remote"} {
 		if _, ok := openCodeCatalogEnv[notInCatalog]; ok {
-			t.Errorf("%q is in the catalog snapshot; 1.18.30 bundles no such key", notInCatalog)
+			t.Errorf("%q is in the catalog snapshot; the pinned catalog lists no such key", notInCatalog)
 		}
 	}
 	envName := regexp.MustCompile(`^[A-Z0-9][A-Z0-9_]*$`)

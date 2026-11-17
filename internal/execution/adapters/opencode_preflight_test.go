@@ -333,37 +333,17 @@ func TestOpenCodeRejectsARelativeOrUnrunnablePin(t *testing.T) {
 
 // TestOpenCodeCatalogSnapshotIsTheMaxTestedVersion ties the catalog snapshots
 // credential withholding and output redaction rest on
-// (opencode_catalog_env.go, opencode_catalog_anthropic.go) to the version the
-// adapter is tested against: raising max_tested without re-reading them from
+// (opencode_catalog_env.go, opencode_catalog_anthropic.go, both derived from
+// the pinned opencode-models-catalog.json.gz) to the version the adapter is
+// tested against: raising max_tested without re-capturing the catalog from
 // the new binary turns this red.
-//
-// openCodeCatalogPortPending is the one exception, and it is checked both
-// ways. OpenCode 2.x bundles no catalog to re-read: it binds each provider's
-// variables in code and fetches its models at run time (OPENCODE_MODELS_URL,
-// OPENCODE_MODELS_PATH), so the 1.18.30 snapshots stay labelled 1.18.30 until
-// the credential policy is ported to that source (discovered work
-// dw-f9d499709c0e, recorded by #3300). The entry fails the test once the
-// versions agree.
 func TestOpenCodeCatalogSnapshotIsTheMaxTestedVersion(t *testing.T) {
 	m := openCodeManifestForTest(t)
-	if pending := openCodeCatalogPortPending; pending != "" {
-		if openCodeCatalogVersion == m.MaxTested {
-			t.Fatalf("openCodeCatalogPortPending is %q, but the catalog snapshots are at max_tested %s: remove the entry", pending, m.MaxTested)
-		}
-		if openCodeCatalogVersion != "1.18.30" {
-			t.Fatalf("openCodeCatalogPortPending holds only the 1.18.30 snapshots, and openCodeCatalogVersion is %s", openCodeCatalogVersion)
-		}
-		return
-	}
 	if openCodeCatalogVersion != m.MaxTested {
-		t.Fatalf("the catalog snapshots were read from opencode %s, and the compat manifest's max_tested is %s: re-read openCodeCatalogEnv and openCodeAnthropicModels from %s (build tag opencode_integration), then set openCodeCatalogVersion",
+		t.Fatalf("the catalog snapshots were read from opencode %s, and the compat manifest's max_tested is %s: re-capture opencode-models-catalog.json.gz from %s (testdata/opencode-cli/README.md), re-derive openCodeCatalogEnv and openCodeAnthropicModels, then set openCodeCatalogVersion",
 			openCodeCatalogVersion, m.MaxTested, m.MaxTested)
 	}
 }
-
-// openCodeCatalogPortPending names the pending port of the catalog snapshots
-// to OpenCode 2.x; "" once openCodeCatalogVersion equals max_tested again.
-const openCodeCatalogPortPending = "OpenCode 2.x runtime models catalog (dw-f9d499709c0e, #3300)"
 
 // TestOpenCodeProbeRunsInItsOwnDirectory: a probe spawn gets HOME, TMPDIR and
 // the four XDG directories inside its own directory, the switches every spawn

@@ -1575,18 +1575,16 @@ func TestOpenCodeRedactsQuoteBearingValue(t *testing.T) {
 func TestOpenCodeRedactsCredentialsNotProviderSettings(t *testing.T) {
 	adapter := adapters.NewOpenCodeAdapter()
 	for provider, settings := range map[string][]string{
-		"amazon-bedrock":           {"AWS_REGION"},
-		"google-vertex":            {"GOOGLE_VERTEX_PROJECT", "GOOGLE_VERTEX_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS"},
-		"azure":                    {"AZURE_RESOURCE_NAME"},
-		"azure-cognitive-services": {"AZURE_COGNITIVE_SERVICES_RESOURCE_NAME"},
-		"databricks":               {"DATABRICKS_HOST"},
-		"cloudflare-ai-gateway":    {"CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"},
-		"snowflake-cortex":         {"SNOWFLAKE_ACCOUNT"},
-		"watsonx":                  {"WATSONX_AI_PROJECT_ID"},
-		"privatemode-ai":           {"PRIVATEMODE_ENDPOINT"},
-		"neon":                     {"NEON_AI_GATEWAY_BASE_URL"},
-		"infomaniak":               {"INFOMANIAK_PRODUCT_ID"},
-		"sap-ai-core":              nil,
+		"amazon-bedrock":        {"AWS_REGION"},
+		"google-vertex":         {"GOOGLE_VERTEX_PROJECT", "GOOGLE_VERTEX_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS"},
+		"azure":                 {"AZURE_RESOURCE_NAME"},
+		"databricks":            {"DATABRICKS_HOST"},
+		"cloudflare-ai-gateway": {"CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"},
+		"snowflake-cortex":      {"SNOWFLAKE_ACCOUNT"},
+		"watsonx":               {"WATSONX_AI_PROJECT_ID"},
+		"neon":                  {"NEON_AI_GATEWAY_BASE_URL"},
+		"infomaniak":            {"INFOMANIAK_PRODUCT_ID"},
+		"sap-ai-core":           nil,
 	} {
 		names := adapter.RedactedEnv(adapters.RunOptions{Model: provider + "/fixture-model"})
 		for _, setting := range settings {
