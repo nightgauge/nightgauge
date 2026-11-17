@@ -14,6 +14,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- pr-create's stale-branch merge reports a conflict on a non-ASCII path such as `café.txt` by its real name instead of a C-quoted string, under zsh as well as bash (#3028).
+
+### Removed
+
+- The repository no longer carries `.codex/commands/` and `.codex/prompts/`. Codex reads neither directory — it runs Nightgauge stages as `$<skill-name>` skills — and the prompts README named an install script that no longer exists (#2921).
+
+## [0.8.6] - 2026-11-17
+
 ### Added
 
 - The codex token path is verified against a live codex-cli 0.167.0 capture: the usage envelope has not drifted, and a test drives the capture through the budget enforcer and run history, priced and attributed to `codex` (#119).
@@ -30,12 +40,6 @@ changelog, and the release workflow refuses a tag that does not.
 ### Security
 
 - The lockfile takes `@azure/identity` 4.14.1 and `@azure/msal-node` 7.x, clearing GHSA-xcx6-jx8p-x3h5 and its npm audit allow-list entry. GHSA-fc5q-39xc-vjpf (picomatch, no patched release) and GHSA-g3hv-75wg-m249 (minimatch, the fix is a major its parents do not accept) are waived until 2026-12-17 as dev-only; the audit threshold is unchanged (#2492).
-
-### Removed
-
-- The repository no longer carries `.codex/commands/` and `.codex/prompts/`. Codex reads neither directory — it runs Nightgauge stages as `$<skill-name>` skills — and the prompts README named an install script that no longer exists (#2921).
-
-## [0.8.6] - 2026-11-17
 
 ### Added
 

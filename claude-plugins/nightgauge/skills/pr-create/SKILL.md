@@ -654,10 +654,30 @@ else
 
   else
     # Step 6: Merge failed — detect conflicts and classify outcome
-    CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
+    #
+    # Enumerated with `ls-files -u -z` (#301, #3028): a name-only diff C-quotes
+    # any path with a non-ASCII or control byte, so `café.txt` was reported as
+    # `"caf\303\251.txt"`. `-z` emits raw path bytes; git sorts by path, so
+    # skipping a repeat of the previous path collapses its index stages.
+    # Append with `+=` and join with a loop: zsh arrays are 1-indexed and
+    # `${arr[*]}` with a custom IFS differs between bash and zsh. Control bytes
+    # print as `?` so a hostile path cannot forge log lines; café.txt is kept.
+    CONFLICT_FILES=()
+    CONFLICT_PREV=""
+    while IFS= read -r -d '' CONFLICT_REC; do
+      CONFLICT_PATH="${CONFLICT_REC#*$'\t'}"
+      if [ "$CONFLICT_PATH" != "$CONFLICT_PREV" ]; then
+        CONFLICT_FILES+=("$CONFLICT_PATH")
+        CONFLICT_PREV="$CONFLICT_PATH"
+      fi
+    done < <(git ls-files -u -z 2>/dev/null)
+    CONFLICT_LIST=""
+    for CONFLICT_PATH in "${CONFLICT_FILES[@]}"; do
+      CONFLICT_LIST="${CONFLICT_LIST:+$CONFLICT_LIST, }${CONFLICT_PATH//[[:cntrl:]]/?}"
+    done
     echo "" >&2
     echo "ERROR: Merge conflicts detected." >&2
-    echo "Conflicting files: ${CONFLICT_FILES:-<none detected>}" >&2
+    echo "Conflicting files: ${CONFLICT_LIST:-<none detected>}" >&2
     echo "" >&2
     echo "Outcome: stale-branch-merge-conflict" >&2
     echo "" >&2
