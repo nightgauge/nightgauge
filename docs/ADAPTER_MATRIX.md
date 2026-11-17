@@ -24,17 +24,17 @@ Capability flags such as streaming and token tracking do not imply that an
 adapter can run a coding pipeline. Pipeline dispatch requires an agentic tool
 loop capable of editing files, running commands, and calling `gh`.
 
-| Adapter           | Agentic pipeline eligible | Release status                                    |
-| ----------------- | :-----------------------: | ------------------------------------------------- |
-| claude-headless   |             ✓             | Recommended; primary tested path                  |
-| claude-sdk        |             ✓             | Advanced optional SDK integration                 |
-| codex             |             ✓             | **Beta**; live six-stage matrix pending           |
-| gemini            |             ✓             | **Experimental**; live six-stage matrix pending   |
-| copilot           |             ✓             | **Experimental**; live six-stage matrix pending   |
-| grok              |             ✓             | **Beta**; six-stage run + beta bar met (#528)     |
-| opencode          |             ✓             | **Experimental**; live six-stage evidence pending |
-| gemini-sdk        |             ✗             | Chat-completion-only                              |
-| openai-compatible |             ✗             | Chat-completion-only                              |
+| Adapter           | Agentic pipeline eligible | Release status                                                                  |
+| ----------------- | :-----------------------: | ------------------------------------------------------------------------------- |
+| claude-headless   |             ✓             | Recommended; primary tested path                                                |
+| claude-sdk        |             ✓             | Advanced optional SDK integration                                               |
+| codex             |             ✓             | **Beta**; live token envelope verified on 0.167.0 (#119); six-stage run pending |
+| gemini            |             ✓             | **Experimental**; live six-stage matrix pending                                 |
+| copilot           |             ✓             | **Experimental**; live six-stage matrix pending                                 |
+| grok              |             ✓             | **Beta**; six-stage run + beta bar met (#528)                                   |
+| opencode          |             ✓             | **Experimental**; live six-stage evidence pending                               |
+| gemini-sdk        |             ✗             | Chat-completion-only                                                            |
+| openai-compatible |             ✗             | Chat-completion-only                                                            |
 
 The runtime's `isAgenticAdapter()` check is authoritative. Chat-only adapters
 remain supported for evaluation, judging, and summarization but are rejected at
@@ -332,6 +332,10 @@ Error message: `codex CLI is not authenticated. Run 'codex login' to authenticat
   #1568; unverified on older releases). Only a full-access stage resumes with
   `--dangerously-bypass-approvals-and-sandbox`, which today is every stage: each pipeline
   stage skill grants `Bash`.
+- **Token capture (#119):** a live `codex exec --json` stream on codex-cli 0.167.0
+  (2026-11-17) emits `turn.completed.usage` in the same shape as 0.153.4; its tokens
+  and cost reach `BudgetEnforcer` and `tokens.per_stage` with `adapter: codex`. Usage
+  arrives only at turn end, so mid-stage cost termination cannot fire for codex.
 - **Sandbox scoping from allowed-tools (#4026):** Codex has no per-tool allowlist
   flag, so the skill's `allowed-tools` are mapped onto Codex's sandbox mode +
   approval policy (`resolveCodexSandboxMode` in `codexSandbox.ts` / `codex_sandbox.go`,

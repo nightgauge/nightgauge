@@ -237,8 +237,9 @@ is on both channels and that taking the narrow one loses nothing.
 ## `codex_stream_real_capture.jsonl`
 
 A **real** Codex CLI `exec --json` transcript (#1620), not a hand-authored
-one. Captured 2026-09-13 on `codex-cli 0.153.4`, logged in with the account
-already present on the capturing machine, with:
+one. First captured 2026-09-13 on `codex-cli 0.153.4`; recaptured 2026-11-17 on
+`codex-cli 0.167.0` (#119), logged in with the account already present on the
+capturing machine, with:
 
 ```bash
 codex --ask-for-approval never --sandbox workspace-write exec --json - \
@@ -268,7 +269,7 @@ held against the real output below.
 ### CLI version note
 
 The `codex` manifest's `max_tested` ([codex.json](../../adaptercompat/manifests/codex.json))
-is `0.145.0`. The capturing machine has `0.153.4` installed — newer than
+is `0.145.0`. The current capture is from `0.167.0` (earlier: `0.153.4`) — newer than
 `max_tested`, not older, so the manifest's floor policy is not implicated.
 Only the version number differs; nothing in the NDJSON shape or the
 `turn.completed` usage payload contradicts `ParseCodexStreamLine`, so the
@@ -301,25 +302,34 @@ against real output:
 **Do not replace this file with a synthesized equivalent.** Recapture it if
 the CLI's shape changes.
 
+**0.167.0 recapture (#119): no drift.** Event types, item types and the
+`turn.completed.usage` keys and nesting are identical to the 0.153.4 capture
+and a superset of the SDK fixture `codex-jsonl-success.txt`, whose `usage`
+carries only the three keys the parser reads; only the token counts and
+the agent text changed, so the parser and the SDK fixture are unchanged.
+`TestCodexLiveCaptureReachesBudgetAndHistory`
+(`internal/orchestrator/budget_enforcer_codex_capture_test.go`) drives this
+file through the parser, `BudgetEnforcer` and the history writer.
+
 ### Ground truth encoded in the file
 
 One turn (`turn.completed`), its `usage` object:
 
 | turn      | input_tokens | cached_input_tokens | output_tokens |
 | --------- | -----------: | ------------------: | ------------: |
-| turn 1    |        67553 |               56704 |           124 |
-| **total** |        67553 |               56704 |           124 |
+| turn 1    |        36276 |               28800 |            78 |
+| **total** |        36276 |               28800 |            78 |
 
 `ParseCodexStreamLine` stores `input_tokens - cached_input_tokens` as input
 (the cached subset is disjoint from input, matching the Claude/SDK
 convention) and `cached_input_tokens` as cache-read:
 
-| accumulator field |                 value |
-| ----------------- | --------------------: |
-| `InputTokens`     | 67553 − 56704 = 10849 |
-| `OutputTokens`    |                   124 |
-| `CacheRead`       |                 56704 |
-| `CacheCreated`    |                     0 |
+| accumulator field |                value |
+| ----------------- | -------------------: |
+| `InputTokens`     | 36276 − 28800 = 7476 |
+| `OutputTokens`    |                   78 |
+| `CacheRead`       |                28800 |
+| `CacheCreated`    |                    0 |
 
 ### Redaction
 
