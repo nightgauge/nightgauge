@@ -608,11 +608,13 @@ un-arrowed form now appears only when no run in the cohort carries a size at
 all, leaving nothing to anchor the rescale — the fix for that is `size:*` labels,
 per the root cause below.
 
-Neither form is a substitute for the per-`(stage, model)` table. Once
-`stage-model-calibration.json` in the clone's pipeline state directory
-(`nightgauge layout path pipeline`) has ≥5 samples in a cell the source becomes `stage-model` and the cross-size path stops being consulted; if
-that never happens after many runs, check that the table is being written to
-**this** repo and not a sibling's (#1229 — see
+Both forms are fallbacks. Once 3 completed runs of the issue's size exist, the
+summary reads `Historical p75 (S)` (or `(S, same routing)` once 5 share the
+planned models) and that whole-run p75 is published, even below the static
+figure (#3364). Only without such a cohort does a `stage-model-calibration.json`
+cell with ≥5 samples make the source `stage-model`; if neither ever appears
+after many runs, check that history and the table are being written to **this**
+repo and not a sibling's (#1229 — see
 [SELF_IMPROVEMENT_LOOP.md](SELF_IMPROVEMENT_LOOP.md)).
 
 Root cause of the original outage: `size` is the **join key** for cost

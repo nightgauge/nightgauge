@@ -48,6 +48,7 @@ const ESTIMATOR_STAGES: PipelineStage[] = [
 import { ExecutionHistoryReader } from "./executionHistoryReader";
 import type { NormalizedRunRecord } from "./executionHistoryReader";
 import { p75 } from "./adaptiveBudgetLoader";
+import { computeWholeRunCalibration } from "./wholeRunCalibration";
 import { toModelEnvelope } from "./modeProfiles";
 import { isUsableWorkspaceRoot } from "./cloneLayout";
 
@@ -78,6 +79,11 @@ const MIN_CALIBRATION_SAMPLES = 3;
  * estimate alone.
  */
 export type CalibrationSource =
+  /**
+   * ≥ `MIN_ROUTING_SAMPLES` completed whole runs of the same size AND
+   * routing (wholeRunCalibration.ts, #3364) — the tightest cohort.
+   */
+  | "same-routing"
   /** ≥ `MIN_CALIBRATION_SAMPLES` runs of the SAME size — the cohort we want. */
   | "same-size"
   /**
@@ -322,6 +328,7 @@ type SizeLabel = (typeof SIZE_ORDER)[number];
  * projection an operator can act on.
  */
 function calibrationCohortLabel(source: CalibrationSource, sizeLabel: string): string {
+  if (source === "same-routing") return `${sizeLabel}, same routing`;
   if (source === "same-size") return sizeLabel;
   if (source === "all-sizes-scaled") return `all sizes → ${sizeLabel}`;
   return "all sizes";
@@ -520,19 +527,45 @@ export async function runPreFlightBudgetCheck(
   // historical anchor the projection is noise (#112).
   let calibration: HistoricalCalibration = { costUsd: null, sampleCount: 0, source: "none" };
 
+  // Whole-run cohort first (#3364): p75 of completed WHOLE runs of this size
+  // (same routing when ≥ 5 exist). Summing per-stage p75s overstated the run
+  // ~4x, because each stage's tail is a different run.
+  let wholeRunUsed = false;
   try {
-    const allCosts = await ExecutionHistoryReader.getCostByIssue(
-      historyRoot,
-      100 // get enough data for a meaningful percentile
-    );
-    calibration = computeHistoricalCalibration(
-      allCosts,
-      estimate.complexity,
-      undefined,
-      staticSizeWeighting(selector, snap, skipStages)
-    );
+    const completed = await ExecutionHistoryReader.getCompletedRunCosts(historyRoot);
+    const planned: Record<string, string> = {};
+    for (const s of estimate.stages) {
+      if (!s.skipped && s.model) planned[s.stage] = s.model;
+    }
+    const whole = computeWholeRunCalibration(completed, estimate.complexity, planned);
+    if (whole.costUsd !== null && whole.source !== "none") {
+      calibration = {
+        costUsd: whole.costUsd,
+        sampleCount: whole.sampleCount,
+        source: whole.source,
+      };
+      wholeRunUsed = true;
+    }
   } catch (err) {
-    console.warn("[Nightgauge] pre-flight calibration lookup failed:", err);
+    console.warn("[Nightgauge] pre-flight whole-run calibration failed:", err);
+  }
+
+  // Fallback only when no whole-run cohort qualified.
+  if (!wholeRunUsed) {
+    try {
+      const allCosts = await ExecutionHistoryReader.getCostByIssue(
+        historyRoot,
+        100 // get enough data for a meaningful percentile
+      );
+      calibration = computeHistoricalCalibration(
+        allCosts,
+        estimate.complexity,
+        undefined,
+        staticSizeWeighting(selector, snap, skipStages)
+      );
+    } catch (err) {
+      console.warn("[Nightgauge] pre-flight calibration lookup failed:", err);
+    }
   }
 
   if (calibration.costUsd === null) {
@@ -552,8 +585,11 @@ export async function runPreFlightBudgetCheck(
   // Order, most-specific first:
   //   unpriced      — the provider serves a band the registry cannot price, so
   //                   there is no number to publish at all.
-  //   stage-model   — a (stage, model) cell met its 5-sample threshold; the
-  //                   estimate is already the observed p75 per stage.
+  //   historical-p75 (whole run) — ≥ 3 completed whole runs of this size
+  //                   (#3364); published whether above or below static.
+  //   stage-model   — no whole-run cohort; a (stage, model) cell met its
+  //                   5-sample threshold (a sum of per-stage p75s, which
+  //                   overstates a whole run).
   //   historical-p75 — ≥ 3 comparable runs, and their p75 exceeds the static
   //                   figure. The static table has never over-estimated in this
   //                   corpus, so a p75 BELOW it means the cohort is not
@@ -569,6 +605,11 @@ export async function runPreFlightBudgetCheck(
   if (estimate.unpriced) {
     estimateSource = "unpriced";
     projectedCost = staticEstimatedCost;
+  } else if (wholeRunUsed && calibration.costUsd !== null) {
+    // Published above OR below static: a whole-run cohort of this size is
+    // comparable by construction (#3364).
+    estimateSource = "historical-p75";
+    projectedCost = calibration.costUsd;
   } else if (estimate.calibrationUsed) {
     estimateSource = "stage-model";
     projectedCost = staticEstimatedCost;

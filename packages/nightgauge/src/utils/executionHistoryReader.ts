@@ -25,6 +25,7 @@ import {
   type ExecutionHistoryRunRecordV2,
   type ExecutionHistoryRunRecordV3,
 } from "../schemas/executionHistory";
+import type { CompletedRunCost } from "./wholeRunCalibration";
 import { isOrchestratorCrashRecord } from "./orchestratorCrashRecord";
 
 import { ExecutionHistoryWriter } from "./executionHistoryWriter";
@@ -308,6 +309,43 @@ export class ExecutionHistoryReader {
         .slice(0, limit);
     } catch (err) {
       console.warn("[Nightgauge] getCostByIssue aggregation failed:", err);
+      return [];
+    }
+  }
+
+  /**
+   * One row per COMPLETED run with a priced total (#3364). Unlike
+   * {@link getCostByIssue}, failed attempts are not summed in: the pre-flight
+   * gate projects one whole run, so the cohort is whole runs.
+   *
+   * @returns Most recent `limit` rows, newest first
+   */
+  static async getCompletedRunCosts(
+    workspaceRoot: string,
+    limit: number = 200
+  ): Promise<CompletedRunCost[]> {
+    try {
+      const allRecords = await this.readAll(workspaceRoot);
+      const rows: CompletedRunCost[] = [];
+      for (const r of allRecords) {
+        if (r.record_type !== "run") continue;
+        const run = r as ExecutionHistoryRunRecordV2;
+        const cost = run.tokens?.estimated_cost_usd ?? 0;
+        if (run.outcome !== "complete" || !(cost > 0)) continue;
+        const stageModels: Record<string, string> = {};
+        for (const [stage, usage] of Object.entries(run.tokens.per_stage ?? {})) {
+          if (usage?.model) stageModels[stage] = usage.model;
+        }
+        rows.push({
+          totalCostUsd: cost,
+          sizeLabel: run.size ?? null,
+          stageModels,
+          recordedAt: run.recorded_at,
+        });
+      }
+      return rows.sort((a, b) => b.recordedAt.localeCompare(a.recordedAt)).slice(0, limit);
+    } catch (err) {
+      console.warn("[Nightgauge] getCompletedRunCosts failed:", err);
       return [];
     }
   }
