@@ -430,9 +430,8 @@ Two shared overlays move or ship as part of this amendment:
   paths the render already resolved, and never touching `opencode.json` or
   `.opencode/`.
 
-`preflight skill-overlays` (#80) does not exist yet (Decision 5's status is
-unchanged by this amendment); the namespace this section adds is recorded on
-that issue for when it does.
+`preflight skill-overlays` (#80) gates this namespace: a `hosts/<key>.md`
+fragment must name a known adapter.
 
 ---
 
@@ -481,12 +480,13 @@ gate, authoring the shared overlays, base-skill prose extraction,
 therefore live: overlays resolve, compose, and inject on every path the pipeline
 dispatches.
 
-**Outstanding** — Decisions 5 and 6 are not yet enforced, and the overlay corpus
-is not yet authored: the `preflight skill-overlays` gate including the size
-budget and the `<!-- overlay-exempt -->` marker (#80), the shared overlays
-(#81), base-skill prose extraction (#82), `nightgauge-model-watch` (#83), and
-the overlay-delta evals (#84, #383). Until #80 lands, base-skill purity, key
-validity, and the size budget are review conventions rather than gates.
+The `preflight skill-overlays` gate (#80) enforces key validity, the size
+budget (4608 bytes), registry-fact restatement, and the thinking/effort
+interlock, and honours the `<!-- overlay-exempt -->` marker. Base-skill purity
+is reported warn-only until #82 triages it.
+
+**Outstanding** — base-skill prose extraction and blocking purity (#82) and
+the overlay-delta evals (#84, #383).
 
 The status line above stays `Decided` rather than `Implemented` for that reason.
 Operational guidance for what _is_ live lives in

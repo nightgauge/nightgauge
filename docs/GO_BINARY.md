@@ -982,6 +982,9 @@ nightgauge preflight skill-anti-patterns --root . [--json]
 
 # Fail when a skill embeds a non-portable (VSCode-extension) binary path
 nightgauge preflight skill-portability --root . [--json]
+# ADR 016 overlay gate: rules overlay-key, overlay-budget, overlay-registry-fact,
+# thinking-effort (fail); base-skill-purity, overlay-override (warn). Exit 0/1/2.
+nightgauge preflight skill-overlays --skills-root skills [--json]
 
 # Fail when disabled thinking is paired with an effort the model rejects (#76)
 nightgauge preflight thinking-effort --model opus --effort max [--stage feature-dev] [--json]
@@ -1003,18 +1006,19 @@ nightgauge preflight managed-steering --root . [--fix] [--json]
 
 **Subcommand details:**
 
-| Subcommand            | Wraps                  | Stable JSON schema (v1)                                                                                         |
-| --------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `links`               | `internal/docs.Run`    | `v, root, files_scanned, links_total, links_broken, findings, warnings`                                         |
-| `syntax`              | `internal/preflight`   | `v, workdir, files_scanned, files_invalid, findings[{file, line, format, error}], warnings`                     |
-| `secrets`             | `internal/scan.Run...` | `v, workdir, patterns{generic_kv,...}, total, warnings`                                                         |
-| `skill-includes`      | `internal/preflight`   | `v, root, trees, files_checked, findings[{file, line, target, resolved, directive}], warnings`                  |
-| `skill-bundle`        | `internal/preflight`   | `v, skills_root, source_root, files_checked, renders_checked, findings[{rule, path, detail, render}], warnings` |
-| `skill-no-direct-gh`  | `internal/preflight`   | `v, root, skills_checked, skills_exempted, findings[{skill, file, line, match}], warnings`                      |
-| `skill-anti-patterns` | `internal/preflight`   | `v, root, files_checked, findings[{check, file, line, match}], warnings`                                        |
-| `thinking-effort`     | `internal/preflight`   | `v, thinking_disabled, checked, findings[{source, model, effort, max_allowed, message}], warnings`              |
-| `skill-portability`   | `internal/preflight`   | `v, root, files_checked, findings[{skill_file, line, check, match}], warnings`                                  |
-| `managed-steering`    | `codexprovision`       | `v, root, files_checked, findings[path], fixed[path]`                                                           |
+| Subcommand            | Wraps                  | Stable JSON schema (v1)                                                                                                              |
+| --------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `links`               | `internal/docs.Run`    | `v, root, files_scanned, links_total, links_broken, findings, warnings`                                                              |
+| `syntax`              | `internal/preflight`   | `v, workdir, files_scanned, files_invalid, findings[{file, line, format, error}], warnings`                                          |
+| `secrets`             | `internal/scan.Run...` | `v, workdir, patterns{generic_kv,...}, total, warnings`                                                                              |
+| `skill-includes`      | `internal/preflight`   | `v, root, trees, files_checked, findings[{file, line, target, resolved, directive}], warnings`                                       |
+| `skill-bundle`        | `internal/preflight`   | `v, skills_root, source_root, files_checked, renders_checked, findings[{rule, path, detail, render}], warnings`                      |
+| `skill-no-direct-gh`  | `internal/preflight`   | `v, root, skills_checked, skills_exempted, findings[{skill, file, line, match}], warnings`                                           |
+| `skill-anti-patterns` | `internal/preflight`   | `v, root, files_checked, findings[{check, file, line, match}], warnings`                                                             |
+| `thinking-effort`     | `internal/preflight`   | `v, thinking_disabled, checked, findings[{source, model, effort, max_allowed, message}], warnings`                                   |
+| `skill-portability`   | `internal/preflight`   | `v, root, files_checked, findings[{skill_file, line, check, match}], warnings`                                                       |
+| `skill-overlays`      | `internal/preflight`   | `v, skills_root, files_checked, budget_bytes, findings[{file, line, rule, severity, message, fix}], warnings, exempt[], overrides[]` |
+| `managed-steering`    | `codexprovision`       | `v, root, files_checked, findings[path], fixed[path]`                                                                                |
 
 **`skill-bundle` rule enum:** `dead_include`, `render_failed`, `unresolved_path`,
 `file_set`. It validates a built tree: `release.yml` and `staging.yml` run it on

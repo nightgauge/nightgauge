@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 )
 
@@ -25,7 +26,7 @@ func TestPreflightCmd_RegistersAllSubcommands(t *testing.T) {
 		got = append(got, s.Use)
 	}
 	sort.Strings(got)
-	want := []string{"ac-fingerprint <issue-number>", "ac-reconcile <issue-number>", "dependency-guard", "environment", "links", "managed-steering", "mitigation-rule", "platform-raw-http", "secrets", "skill-anti-patterns", "skill-bundle", "skill-includes", "skill-no-direct-gh", "skill-portability", "skill-shell-state", "syntax", "thinking-effort"}
+	want := []string{"ac-fingerprint <issue-number>", "ac-reconcile <issue-number>", "dependency-guard", "environment", "links", "managed-steering", "mitigation-rule", "platform-raw-http", "secrets", "skill-anti-patterns", "skill-bundle", "skill-includes", "skill-no-direct-gh", "skill-overlays", "skill-portability", "skill-shell-state", "syntax", "thinking-effort"}
 	if len(got) != len(want) {
 		t.Fatalf("subcommand count = %d, want %d (got: %v)", len(got), len(want), got)
 	}
@@ -169,4 +170,32 @@ func TestPreflightACReconcile_NotifyEmpty(t *testing.T) {
 			t.Fatalf("posted = %q, want none", fake.posted)
 		}
 	})
+}
+
+func TestSkillOverlayEfforts(t *testing.T) {
+	if got := skillOverlayEfforts(nil); len(got) != 0 {
+		t.Fatalf("nil cfg: %v", got)
+	}
+	cfg := &config.Config{
+		Pipeline: &config.PipelineConfig{StageModels: map[string]string{
+			"feature-dev": "claude-sonnet-5-5", "pr-create": "claude-haiku-4-5-20251001", "pr-merge": "",
+		}},
+		ModelRouting: &config.ModelRoutingConfig{
+			StageEfforts:  map[string]string{"feature-dev": "max"},
+			DefaultEffort: "medium",
+		},
+	}
+	got := skillOverlayEfforts(cfg)
+	want := map[string]preflight.ModelEffort{
+		"model_routing.stage_efforts.feature-dev":  {Model: "claude-sonnet-5-5", Effort: "max"},
+		"model_routing.default_effort (pr-create)": {Model: "claude-haiku-4-5-20251001", Effort: "medium"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v", got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("%s: got %v want %v", k, got[k], v)
+		}
+	}
 }
