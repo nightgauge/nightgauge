@@ -33,8 +33,9 @@ roots and `env -i`, with `OPENCODE_DISABLE_PROJECT_CONFIG=1` and
 The provider was a loopback OpenAI-compatible stub with a placeholder key.
 Every stream went through `../../../testdata/redact-opencode.jq`: session ids
 became placeholders and scratch paths became `/tmp/nightgauge-fixture`. Only
-stub text remains in the provider messages. `stream_test.go` and
-`opencode_retry_watchdog_test.go` in `internal/execution` parse them.
+stub text remains in the provider messages. `stream_test.go`,
+`opencode_retry_watchdog_test.go` and `opencode_tool_evidence_test.go` in
+`internal/execution`, and `opencode_evidence_test.go` in this package, parse them.
 
 | Fixture                        | Run                                                                                                   | Exit                    |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------- | ----------------------- |

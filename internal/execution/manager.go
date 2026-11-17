@@ -1120,6 +1120,13 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 		}
 		if runOpts.RunRoot != nil && runOpts.RunRoot.Dir != "" {
 			exit.runRoot = runOpts.RunRoot.Dir
+			// The stage's tool call evidence goes into the run root, which a
+			// failed run's preserve copies before the root is deleted (#3305).
+			if err := adapters.AppendOpenCodeToolEvidence(runOpts.RunRoot.Dir,
+				openCode.stream.ToolEvidence, openCode.stream.ToolEvidenceDropped); err != nil {
+				fmt.Fprintf(os.Stderr, "[opencode] %s#%d %s: could not record its tool call evidence: %v\n",
+					opts.Repo, opts.IssueNumber, opts.Stage, err)
+			}
 		}
 		if runOpts.RunRoot != nil {
 			exit.endpoints = runOpts.RunRoot.Endpoints
