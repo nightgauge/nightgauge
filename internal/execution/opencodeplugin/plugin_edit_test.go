@@ -1,6 +1,6 @@
 package opencodeplugin
 
-// plugin_edit_test.go (#1642) drives the REAL embedded plugin tree through
+// plugin_edit_test.go (#1642) drives the REAL shipped plugin tree through
 // Node, spawning either a small recording fake or the REAL built
 // `nightgauge` binary for each row — never a re-implementation of edit.js's
 // own decisions in Go — exactly like plugin_gates_test.go's own harness
@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-// editJSPath writes a fresh copy of the embedded plugin tree and returns
+// editJSPath writes a fresh copy of the shipped plugin tree and returns
 // both the plugin directory and edit.js's own path.
 func editJSPath(t *testing.T) (entry, editPath string) {
 	t.Helper()

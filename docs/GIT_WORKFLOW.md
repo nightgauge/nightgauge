@@ -1703,6 +1703,11 @@ This creates `.git/hooks/pre-push` which calls the validation gate before each
 push. The hook only activates for pipeline branches (branches with issue
 numbers). Non-pipeline branches pass through.
 
+The command copies the hook file that ships beside the binary in the release
+archive and the VSIX (#3383). A CLI built with `go install` has nothing beside
+it, so the command exits 1 naming every path it tried: set
+`NIGHTGAUGE_SHIPPED_FILES_DIR` to a nightgauge checkout first.
+
 In this repository, `npm install` points `core.hooksPath` at a hook directory
 of its own (`scripts/install-publication-push-hook.sh`), so git never runs
 `.git/hooks/pre-push`. The pre-push hook that runs here is the publication

@@ -16,11 +16,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- The codex token path is verified against a live codex-cli 0.167.0 capture: the usage envelope has not drifted, and a test drives the capture through the budget enforcer and run history, priced and attributed to `codex` (#119).
 - The Claude Code plugin ships a square 512 px icon at `.claude-plugin/icon.png`, the location the validator auto-detects, clearing the validator's `ICON_MISSING` warning (#2863).
+
+### Fixed
+
+- The CLI binary no longer carries script payloads that raised malware-scanner verdicts on the Linux build: the OpenCode plugin and the git pre-push hook ship as files beside the binary, and the new `nightgauge opencode install` downloads, verifies and runs the pinned OpenCode installer in Go. `nightgauge doctor` now prints that command. The VS Code extension now bundles the whole OpenCode plugin tree. A `go install`-built CLI has nothing beside it: set `NIGHTGAUGE_SHIPPED_FILES_DIR` to a nightgauge checkout before `nightgauge pre-push install` or an OpenCode stage (#3383).
 
 ### Changed
 
 - The pull-request review comment's footer no longer says it does not block merging. It now states that hold findings (every blocker, and a correctness major on `README*`, `docs/**` or `packages/*/package.json`) stop `pr-merge` from merging, matching the enqueue review gate (#2730), and that other findings do not (#2836).
+
+### Security
+
+- The lockfile takes `@azure/identity` 4.14.1 and `@azure/msal-node` 7.x, clearing GHSA-xcx6-jx8p-x3h5 and its npm audit allow-list entry. GHSA-fc5q-39xc-vjpf (picomatch, no patched release) and GHSA-g3hv-75wg-m249 (minimatch, the fix is a major its parents do not accept) are waived until 2026-12-17 as dev-only; the audit threshold is unchanged (#2492).
 
 ### Removed
 

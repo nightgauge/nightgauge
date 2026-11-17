@@ -173,8 +173,8 @@ For completeness:
 
 The git pre-push hook that `nightgauge pre-push install` writes is not a
 Claude Code hook and does not source `guard.sh`, so it cannot leak into
-subagent transcripts. Its only source is the `prePushHookScript` literal in
-`cmd/nightgauge/cmd_pre_push.go`.
+subagent transcripts. Its only source is `scripts/git-hooks/pre-push`,
+shipped as `git-hooks/pre-push` beside the binary (#3383).
 
 ## 7. Verification Protocol (AC2)
 

@@ -538,13 +538,14 @@ describe("OpenCodeAdapter.validateAuth (#1637)", () => {
       `bash "$f" --no-modify-path --version ${manifest.max_tested}`
     );
     expect(OPENCODE_MANAGED_INSTALL).not.toMatch(/\|\s*(ba)?sh\b/);
+    // The Go CLI carries no shell download (#3383): its remediation names
+    // `nightgauge opencode install`, which does the same steps in Go.
     const goPreflight = readFileSync(
       join(REPO_ROOT, "internal/execution/adapters/opencode_preflight.go"),
       "utf-8"
     );
-    expect(goPreflight, "the Go remediation must word the same steps").toContain(
-      "shasum -a 256 -c -"
-    );
+    expect(goPreflight).toContain('"nightgauge opencode install"');
+    expect(goPreflight).not.toContain("curl -fsSL");
     const err = await new OpenCodeAdapter({ env: {} })
       .validateAuth({ runner: runner("opencode"), cwd: "/tmp" })
       .catch((e: unknown) => e);

@@ -8,9 +8,10 @@
 //
 // This is a standalone leaf package, deliberately not part of
 // internal/execution/adapters: adapters imports
-// internal/execution/opencodeplugin (to embed the OpenCode plugin tree), and
+// internal/execution/opencodeplugin (to write the shipped OpenCode plugin
+// tree), and
 // internal/hooks' own tests import internal/execution/opencodeplugin too (to
-// drive the embedded plugin's gates end to end) — so internal/hooks
+// drive the shipped plugin's gates end to end) — so internal/hooks
 // importing internal/execution/adapters directly would close an import
 // cycle (opencodeplugin -> hooks -> adapters -> opencodeplugin). Neither
 // adapters nor opencodeplugin import this package's own dependencies (only

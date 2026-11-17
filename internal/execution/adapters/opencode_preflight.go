@@ -91,9 +91,10 @@ const openCodeBinaryName = "opencode"
 // (testdata/opencode-cli/README.md).
 const openCodeCatalogVersion = "2.2.7"
 
-// openCodeManifest is the opencode compat manifest (#1613), the single source
-// of the floor, the max-tested version and the install package.
-func openCodeManifest() (adaptercompat.Manifest, error) {
+// OpenCodeManifest is the opencode compat manifest (#1613), the single
+// source of the floor, the max-tested version and the pinned installer;
+// `nightgauge opencode install` reads it.
+func OpenCodeManifest() (adaptercompat.Manifest, error) {
 	if m, ok := adaptercompat.Get(openCodeBinaryName); ok {
 		return m, nil
 	}
@@ -107,25 +108,19 @@ func openCodeManifest() (adaptercompat.Manifest, error) {
 // installer has no prefix option: it always writes $HOME/.opencode/bin.
 const openCodeInstallDir = "~/.opencode/bin"
 
-// OpenCodeManagedInstall returns, for printing and never for running, the
-// command that installs the manifest's max-tested opencode through the
-// vendor's 2.x installer and the path to pin opencode.binary to once it has
-// run. home, when set, makes the pin the absolute path a pin must be.
-//
-// The command is one `&&` chain of three steps: download the installer to a
-// fresh temporary file, verify it against the manifest's pinned sha256, and
-// only then run that file. Nothing is piped into a shell, so a changed or
-// tampered installer stops at the check instead of running. The check uses
-// `shasum -a 256`, which ships with macOS and with Perl on most Linux hosts;
-// a minimal Linux image without it fails at the check, and `sha256sum -c -`
-// reads the same line there (docs/ADAPTER_GUIDE.md).
-//
-// The opencode manifest always names an installer and its pin:
-// TestShippedInstallersCarryTheirPin and manifest validation hold both.
-func OpenCodeManagedInstall(m adaptercompat.Manifest, home string) (command, pin string) {
-	command = `f="$(mktemp)" && curl -fsSL --proto '=https' -o "$f" ` + m.Install.Installer +
-		` && echo "` + m.Install.InstallerSHA256 + `  $f" | shasum -a 256 -c -` +
-		` && bash "$f" --no-modify-path --version ` + m.MaxTested
+// OpenCodeInstallCommand is the verb that installs the manifest's
+// max-tested opencode: InstallManagedOpenCode, which downloads the vendor's
+// 2.x installer, verifies it against the manifest's pinned sha256 in Go, and
+// only then runs it (#3300, #3383).
+const OpenCodeInstallCommand = "nightgauge opencode install"
+
+// OpenCodeManagedInstall returns, for printing, the command that installs
+// the manifest's max-tested opencode (OpenCodeInstallCommand) and the path
+// to pin opencode.binary to once it has run. home, when set, makes the pin
+// the absolute path a pin must be. The download and digest check happen in
+// Go, so no shell download chain is printed or carried in the binary.
+func OpenCodeManagedInstall(home string) (command, pin string) {
+	command = OpenCodeInstallCommand
 	pin = openCodeInstallDir + "/" + openCodeBinaryName
 	if home != "" {
 		pin = filepath.Join(home, ".opencode", "bin", openCodeBinaryName)
@@ -134,8 +129,8 @@ func OpenCodeManagedInstall(m adaptercompat.Manifest, home string) (command, pin
 }
 
 // openCodeInstallRemedy is the remediation that ends every version refusal.
-func openCodeInstallRemedy(m adaptercompat.Manifest, home string) string {
-	command, pin := OpenCodeManagedInstall(m, home)
+func openCodeInstallRemedy(home string) string {
+	command, pin := OpenCodeManagedInstall(home)
 	return fmt.Sprintf("Install the tested build with `%s` and pin it with opencode.binary: %s in %s", command, pin, config.MachineConfigFile())
 }
 
@@ -175,11 +170,7 @@ func ResolveOpenCodeBinary(pin string, lookPath func(string) (string, error)) (O
 	}
 	path, err := lookPath(openCodeBinaryName)
 	if err != nil {
-		m, merr := openCodeManifest()
-		if merr != nil {
-			return OpenCodeBinary{}, fmt.Errorf("opencode is not on PATH: install it and put it on PATH, or pin it with opencode.binary in %s", config.MachineConfigFile())
-		}
-		return OpenCodeBinary{}, fmt.Errorf("opencode is not on PATH. %s", openCodeInstallRemedy(m, ""))
+		return OpenCodeBinary{}, fmt.Errorf("opencode is not on PATH. %s", openCodeInstallRemedy(""))
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -520,7 +511,7 @@ type OpenCodeVersionPolicy struct {
 // *OpenCodeIncompatibleError naming both versions and the managed install.
 // home, when set, makes the remediation's pin absolute.
 func CheckOpenCodeVersion(bin OpenCodeBinary, version string, versionErr error, home string) (OpenCodeVersionPolicy, error) {
-	m, err := openCodeManifest()
+	m, err := OpenCodeManifest()
 	if err != nil {
 		return OpenCodeVersionPolicy{}, &OpenCodeIncompatibleError{
 			Binary: bin.Path, Version: version,
@@ -532,7 +523,7 @@ func CheckOpenCodeVersion(bin OpenCodeBinary, version string, versionErr error, 
 	incompatible := func(reason string) error {
 		return &OpenCodeIncompatibleError{
 			Binary: bin.Path, Version: version, MinVersion: m.MinVersion, MaxTested: m.MaxTested,
-			Reason: reason, Remediation: openCodeInstallRemedy(m, home),
+			Reason: reason, Remediation: openCodeInstallRemedy(home),
 		}
 	}
 	if versionErr != nil || version == "" {

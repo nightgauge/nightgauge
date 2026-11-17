@@ -133,6 +133,9 @@ scan needs no change.
   record, if either flag returns. `TestReleaseBuildsKeepDWARFUncompressed`
   fails if a release target in the Makefile, or the `.goreleaser.yml` ldflags,
   lose `-compressdwarf=false`.
+- `TestReleaseBinaryCarriesNoScriptPayload` in `cmd/release-dwarf-check`
+  builds the CLI with the release flags and fails if its bytes carry a bash
+  shebang, `child_process` or a `curl -fsSL` download (#3383).
 - `cmd/release-dwarf-check` reads the packaged files, not the flags. It opens
   every Go binary in each `.tar.gz` and `.vsix` (or a raw binary) with Go's
   `debug/elf` or `debug/macho` and requires `DWARF()` to yield data, stored
@@ -528,3 +531,43 @@ sent: count the requests already spent today (each report's `requests`), add
 the planned scan's estimate from the rules above, and keep room for any RC or
 release still due that day. Set `VT_MAX_REQUESTS` to that estimate so the scan
 stops instead of spending the rest.
+
+### Script payloads ship beside the binary (#3383)
+
+Measured on `439968af` (#3192), the Linux amd64 CLI was flagged in 3 of 8
+version strings with three script payloads in its bytes and 1 of 8 without
+them. Removing them lowers the measured rate; it is not by itself shown to
+clear it. The control is `439968af` unchanged; the variant is the same commit
+with the three payloads replaced by a placeholder. Both were built with the
+release flags and scanned with `scripts/vt-scan.sh`:
+
+| Version     | Control                     | Variant (no payloads)       |
+| ----------- | --------------------------- | --------------------------- |
+| 0.8.6       | clean `10ed0810a549`        | clean `ec93494ed3fd`        |
+| 0.8.6-rc.47 | Wacatac.C!ml `c03278a56d07` | clean `db3d5a5e179a`        |
+| 0.8.6-rc.48 | clean `47f56da5f26b`        | clean `f868b9e2fcc4`        |
+| 0.8.6-rc.49 | Wacatac.B!ml `30f399242d2f` | clean `a15e3fad9614`        |
+| 0.8.7-rc.1  | clean `9a59d5cea0f5`        | clean `8d70e6d6f153`        |
+| 0.8.7       | Wacatac.C!ml `daa875c98a4a` | clean `c2d1936662be`        |
+| 0.8.8       | clean `7a5261f41d9e`        | Wacatac.B!ml `831d2e5967c2` |
+| 0.9.0       | clean `dcdbffb797c0`        | clean `605a2bdbaad1`        |
+
+Eight strings each are too few to call the difference proven. None of the
+three payloads is in the binary now:
+
+- the OpenCode plugin ships as `opencode-plugin/` beside the binary;
+- the git pre-push hook ships as `git-hooks/pre-push`, which
+  `nightgauge pre-push install` copies;
+- the managed OpenCode install is `nightgauge opencode install`, which
+  downloads the pinned installer, checks its sha256 in Go and only then runs
+  it, so no shell download command is carried or printed.
+
+`internal/shippedfiles` finds an entry `<name>` at, in order:
+`$NIGHTGAUGE_SHIPPED_FILES_DIR/<name>` or the checkout path under it;
+`<exe dir>/<name>` (release archive, Homebrew cask, symlinks resolved);
+`<exe dir>/../<name>` (the VSIX's `dist/`); and `<exe dir>/../<source path>`
+(a checkout's `bin/`). A miss names every path tried. A `go install` binary
+has nothing beside it: set `NIGHTGAUGE_SHIPPED_FILES_DIR` to a checkout.
+`.goreleaser.yml` `archives.files` and `bundle-marketplace.sh` ship both. Each
+located file must match the sha256 the binary pins for it, so a file found on
+any path cannot replace the gate or the hook.

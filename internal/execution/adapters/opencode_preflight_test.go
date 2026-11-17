@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -194,13 +193,13 @@ func TestOpenCodeDispatchBelowMinTestedIsIncompatible(t *testing.T) {
 	if !errors.As(err, &incompatible) || incompatible.Kind() != "adapter_incompatible" {
 		t.Fatalf("PreDispatch = %v, want an adapter_incompatible refusal", err)
 	}
-	command, _ := OpenCodeManagedInstall(m, home)
+	command, _ := OpenCodeManagedInstall(home)
 	for _, want := range []string{"adapter_incompatible", below, m.MinVersion, command, fake.path} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not name %q: %v", want, err)
 		}
 	}
-	assertOpenCodeManagedInstallVerified(t, m, command)
+	assertOpenCodeManagedInstallIsTheVerb(t, m, command)
 	if want := filepath.Join(home, ".opencode", "bin", "opencode"); !strings.Contains(err.Error(), want) {
 		t.Errorf("the refusal does not pin the installer's binary %s: %v", want, err)
 	}
@@ -849,7 +848,7 @@ func TestOpenCodeOneXIsBelowTheTwoXFloor(t *testing.T) {
 	if !errors.As(err, &incompatible) {
 		t.Fatalf("PreDispatch = %v, want an adapter_incompatible refusal for 1.18.30", err)
 	}
-	if !strings.Contains(err.Error(), "opencode.ai/v2/install") || !strings.Contains(err.Error(), filepath.Join(home, ".opencode", "bin", "opencode")) {
+	if !strings.Contains(err.Error(), "nightgauge opencode install") || !strings.Contains(err.Error(), filepath.Join(home, ".opencode", "bin", "opencode")) {
 		t.Errorf("the refusal does not carry the 2.x installer remedy: %v", err)
 	}
 }
@@ -869,45 +868,30 @@ func TestOpenCodeDispatchesThePrefixedTwoXVersion(t *testing.T) {
 	}
 }
 
-// assertOpenCodeManagedInstallVerified: the printed install downloads the
-// manifest's installer, verifies it against the manifest's pinned sha256, and
-// runs the verified file for max_tested. Nothing in it pipes into a shell, so
-// an installer that changed upstream stops at the check (#3300).
-func assertOpenCodeManagedInstallVerified(t *testing.T, m adaptercompat.Manifest, command string) {
+// assertOpenCodeManagedInstallIsTheVerb: the printed install is the
+// `nightgauge opencode install` verb, against the OpenCode 2.x installer
+// pin. The download and digest check it runs are tested in
+// opencode_install_test.go (#3300, #3383).
+func assertOpenCodeManagedInstallIsTheVerb(t *testing.T, m adaptercompat.Manifest, command string) {
 	t.Helper()
 	if m.Install.Installer != "https://opencode.ai/v2/install" {
 		t.Errorf("the manifest installer is %q, want the OpenCode 2.x installer", m.Install.Installer)
 	}
-	for _, want := range []string{
-		"curl -fsSL --proto '=https' -o \"$f\" " + m.Install.Installer,
-		"echo \"" + m.Install.InstallerSHA256 + "  $f\" | shasum -a 256 -c -",
-		"bash \"$f\" --no-modify-path --version " + m.MaxTested,
-	} {
-		if !strings.Contains(command, want) {
-			t.Errorf("the managed install %q does not contain %q", command, want)
-		}
-	}
-	if pipedShell := regexp.MustCompile(`\|\s*(ba)?sh\b`); pipedShell.MatchString(command) {
-		t.Errorf("the managed install %q pipes into a shell; it must download, verify, then run", command)
-	}
-	download := strings.Index(command, "curl ")
-	verify := strings.Index(command, "shasum -a 256 -c -")
-	run := strings.Index(command, `bash "$f"`)
-	if download < 0 || verify < download || run < verify {
-		t.Errorf("the managed install %q does not download, verify, then run, in that order", command)
+	if command != "nightgauge opencode install" {
+		t.Errorf("the managed install is %q, want `nightgauge opencode install`", command)
 	}
 }
 
-// TestOpenCodeManagedInstallVerifiesThePinnedInstaller (#3300): the managed
-// install carries the manifest's pin and never pipes into a shell.
-func TestOpenCodeManagedInstallVerifiesThePinnedInstaller(t *testing.T) {
+// TestOpenCodeManagedInstallNamesTheVerbAndThePin (#3300): the managed
+// install is the Go verb and pins the installer's binary.
+func TestOpenCodeManagedInstallNamesTheVerbAndThePin(t *testing.T) {
 	m := openCodeManifestForTest(t)
-	command, pin := OpenCodeManagedInstall(m, "/home/op")
-	assertOpenCodeManagedInstallVerified(t, m, command)
+	command, pin := OpenCodeManagedInstall("/home/op")
+	assertOpenCodeManagedInstallIsTheVerb(t, m, command)
 	if pin != "/home/op/.opencode/bin/opencode" {
 		t.Errorf("pin = %q, want the installer's binary under home", pin)
 	}
-	if _, pin := OpenCodeManagedInstall(m, ""); pin != "~/.opencode/bin/opencode" {
+	if _, pin := OpenCodeManagedInstall(""); pin != "~/.opencode/bin/opencode" {
 		t.Errorf("pin without a home = %q, want ~/.opencode/bin/opencode", pin)
 	}
 }
