@@ -293,3 +293,33 @@ func TestResolveYAMLTierFoldsMergeKeysAndBoundsAliases(t *testing.T) {
 		t.Fatalf("exponential aliases were not bounded: %v", err)
 	}
 }
+
+// The byte budget refuses a few aliases to a large scalar, which the node
+// budget alone would let through, and a normal config is unaffected.
+func TestResolveYAMLTierBoundsBytes(t *testing.T) {
+	doc := "big: &big " + strings.Repeat("x", 1<<20) + "\ncopies:\n"
+	for i := 0; i < 20; i++ {
+		doc += "  - *big\n"
+	}
+	var n yaml.Node
+	if err := yaml.Unmarshal([]byte(doc), &n); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveYAMLTier(n.Content[0]); !errors.Is(err, errYAMLTooLarge) {
+		t.Fatalf("20 aliases to a 1 MiB scalar were not refused: %v", err)
+	}
+	withMachineConfig(t, "big: &big "+strings.Repeat("x", 1<<20)+"\ncopies: [*big, *big, *big, *big, *big, *big, *big, *big, *big, *big, *big, *big, *big, *big, *big, *big, *big, *big, *big, *big]\n")
+	dir := t.TempDir()
+	writeProjectYAML(t, dir, "schema_version: \"2\"\nowner: o\n")
+	if _, err := LoadMerged(dir); !errors.Is(err, errYAMLTooLarge) {
+		t.Fatalf("LoadMerged did not refuse the oversized expansion: %v", err)
+	}
+
+	var ok yaml.Node
+	if err := yaml.Unmarshal([]byte("owner: o\nx: &x {a: 1}\ny: *x\n"), &ok); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveYAMLTier(ok.Content[0]); err != nil {
+		t.Fatalf("a normal config was refused: %v", err)
+	}
+}

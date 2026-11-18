@@ -694,10 +694,17 @@ func findChildByKey(mapping *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
-// maxResolvedYAMLNodes bounds alias expansion in resolveYAMLTier, so a file
-// whose aliases nest exponentially (a "billion laughs" document) fails to
-// load instead of exhausting memory.
-const maxResolvedYAMLNodes = 1 << 20
+// maxResolvedYAMLNodes and maxResolvedYAMLBytes bound alias expansion in
+// resolveYAMLTier, so a file whose aliases nest exponentially (a "billion
+// laughs" document), or repeat a large scalar, fails to load instead of
+// exhausting memory when the merged tree is re-serialized and parsed.
+const (
+	maxResolvedYAMLNodes = 1 << 20
+	maxResolvedYAMLBytes = 4 << 20
+)
+
+// yamlBudget is what is left of both limits during one tier's resolution.
+type yamlBudget struct{ nodes, bytes int }
 
 // errYAMLTooLarge marks a tier whose aliases expand past maxResolvedYAMLNodes.
 var errYAMLTooLarge = errors.New("config yaml expands past the alias limit")
@@ -709,16 +716,23 @@ var errYAMLTooLarge = errors.New("config yaml expands past the alias limit")
 // no node is shared between tiers: a repository tier's key merged into a
 // mapping can never change another place the machine tier aliased it.
 func resolveYAMLTier(n *yaml.Node) (*yaml.Node, error) {
-	budget := maxResolvedYAMLNodes
+	budget := yamlBudget{nodes: maxResolvedYAMLNodes, bytes: maxResolvedYAMLBytes}
 	return resolveYAMLNode(n, &budget)
 }
 
-func resolveYAMLNode(n *yaml.Node, budget *int) (*yaml.Node, error) {
+func resolveYAMLNode(n *yaml.Node, budget *yamlBudget) (*yaml.Node, error) {
 	if n == nil {
 		return nil, nil
 	}
-	if *budget--; *budget < 0 {
-		return nil, errYAMLTooLarge
+	if n.Kind != yaml.AliasNode {
+		// Every emitted node costs one node and its text (a key is a scalar
+		// node, so key lengths are counted here too). An alias costs what
+		// its expansion emits.
+		budget.nodes--
+		budget.bytes -= len(n.Value)
+		if budget.nodes < 0 || budget.bytes < 0 {
+			return nil, errYAMLTooLarge
+		}
 	}
 	if n.Kind == yaml.AliasNode {
 		return resolveYAMLNode(n.Alias, budget)
