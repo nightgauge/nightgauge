@@ -11,6 +11,7 @@ and this project adheres to
 
 ### Fixed
 
+- After pr-create stops on a secret scan, the retry no longer opens a fallback PR around the stop, even when HEAD moved: the stop is re-judged by the deterministic runner, which keeps it while the flagged commit is in the branch history and clears it only when gitleaks and the diff scan are both clean. A stop that still holds fails pr-create with a `[pr-create-gate-stop] security_scan` error (#3419).
 - A partial-delivery re-run that writes no changes closes its issue as completed when every remaining criterion is met on the earlier PR's merged diff, with the same deterministic verdict as the Go scheduler. Otherwise it waits in Backlog with the unmet list (#3423).
 - The dashboard's Gemini widget shows a key saved in secret storage as configured (#3406).
 - A pre-merge rebase conflict now names non-ASCII files (for example `café.txt`) by their real path instead of git's C-quoted form (#3393).

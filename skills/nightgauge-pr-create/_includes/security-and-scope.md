@@ -55,6 +55,7 @@ fi
 
 ```bash
 SECURITY_CRITICAL=0
+GITLEAKS_CRITICAL=0
 SECURITY_WARNINGS=0
 SECURITY_SCAN_STATUS="passed"
 SECURITY_NOTE=""
@@ -76,6 +77,7 @@ if command -v gitleaks >/dev/null 2>&1; then
 
     # All gitleaks findings are critical (it only fires on confirmed patterns)
     SECURITY_CRITICAL=$((SECURITY_CRITICAL + LEAK_COUNT))
+    GITLEAKS_CRITICAL=$LEAK_COUNT
   else
     echo "gitleaks: no findings"
   fi
@@ -139,10 +141,15 @@ if [ "$SECURITY_CRITICAL" -gt 0 ]; then
   echo "After fixing: git add -p && git commit --amend"
   # Record the stop so the orchestrator does not open a fallback PR (#2677).
   # The runner exports NIGHTGAUGE_BIN without putting it on PATH (#2840).
-  jq -n --arg gate security_scan \
+  # `scanner` names what tripped. The orchestrator's rescan keeps the stop while
+  # head_sha is in the branch history, then re-judges with gitleaks and the diff
+  # scan, and clears it only when both are clean (#3419).
+  SECURITY_SCANNER="diff-secrets"
+  [ "${GITLEAKS_CRITICAL:-0}" -gt 0 ] && SECURITY_SCANNER="gitleaks"
+  jq -n --arg gate security_scan --arg scanner "$SECURITY_SCANNER" \
     --arg reason "$SECURITY_CRITICAL critical secret finding(s) in the changed files" \
     --arg head_sha "$(git rev-parse HEAD)" --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{gate: $gate, reason: $reason, head_sha: $head_sha, created_at: $created_at}' \
+    '{gate: $gate, scanner: $scanner, reason: $reason, head_sha: $head_sha, created_at: $created_at}' \
     | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "pr-create-gate-stop-${ISSUE_NUMBER}.json" >/dev/null \
     || echo "ERROR: could not record the security_scan gate stop" >&2
   exit 1
@@ -162,6 +169,21 @@ elif [ "$SECURITY_WARNINGS" -gt 0 ]; then
 else
   SECURITY_SCAN_STATUS="passed"
   echo "Security re-scan: passed (no findings)"
+fi
+
+# A passing scan retires an earlier security_scan stop, so a stale record
+# cannot block this run's PR after the secret was fixed (#3419). Same rule as
+# the orchestrator's rescan: gitleaks must have judged the history, and the
+# recorded commit must no longer be in it; otherwise the stop is kept.
+if [ "$SECURITY_CRITICAL" -eq 0 ] && command -v gitleaks >/dev/null 2>&1; then
+  STOP_FILE="$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline "pr-create-gate-stop-${ISSUE_NUMBER}.json" 2>/dev/null)"
+  if [ -n "$STOP_FILE" ] && [ "$(jq -r '.gate // empty' "$STOP_FILE" 2>/dev/null)" = "security_scan" ]; then
+    STOP_SHA="$(jq -r '.head_sha // empty' "$STOP_FILE" 2>/dev/null)"
+    if [ -n "$STOP_SHA" ]; then
+      git merge-base --is-ancestor "$STOP_SHA" HEAD 2>/dev/null
+      [ "$?" -eq 1 ] && rm -f "$STOP_FILE"
+    fi
+  fi
 fi
 ```
 

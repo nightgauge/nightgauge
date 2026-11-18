@@ -599,6 +599,9 @@ ran. The Go runtime is the sole history producer: native Go paths call
 > - **rate-limited** → **DEFER**: never run the LLM into an exhausted GitHub
 >   bucket (#3976); trip the rate-limit breaker and fail the stage with a
 >   `[github-quota-low]` marker that routes to the transient cooldown path.
+> - **refused** (pr-merge) / **blocked** (pr-create, #3419) → fail the stage
+>   with no LLM fallthrough; `blocked` means a recorded `security_scan` gate
+>   stop still holds after the rescan (see PR_CREATE_STAGE.md).
 >
 > Fails **open**: any binary-resolution / parse / subprocess error returns the
 > `llm` outcome so the pipeline degrades to the pre-#300 behavior. The CLI verb

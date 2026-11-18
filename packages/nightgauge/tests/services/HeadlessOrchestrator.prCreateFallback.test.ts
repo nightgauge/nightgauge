@@ -475,8 +475,38 @@ describe("post-create verification honours a pr-create gate stop (#2677)", () =>
     expect(fs.existsSync(path.join(stateDir.value, recordName))).toBe(false);
   });
 
-  it("discards a stale record from another HEAD and runs the fallback", async () => {
+  it("keeps a stale security_scan record and opens no PR — the Go rescan owns it (#3419)", async () => {
     writeState(recordName, { gate: "security_scan", reason: "secret", head_sha: "old999" });
+    const { verify } = makeOrchestratorForRecovery();
+
+    const err = await verify(42);
+
+    expect(err?.message).toContain("[pr-create-gate-stop] security_scan: secret");
+    expect(countCalls(isPush)).toBe(0);
+    expect(countCalls(isCreate)).toBe(0);
+    expect(fs.existsSync(path.join(stateDir.value, recordName))).toBe(true);
+  });
+
+  it("keeps a security_scan record recorded at HEAD (#3419)", async () => {
+    writeState(recordName, { gate: "security_scan", reason: "secret", head_sha: "abc123" });
+    const { verify } = makeOrchestratorForRecovery();
+
+    expect((await verify(42))?.message).toContain("[pr-create-gate-stop] security_scan");
+    expect(countCalls(isCreate)).toBe(0);
+    expect(fs.existsSync(path.join(stateDir.value, recordName))).toBe(true);
+  });
+
+  it("removes an unparseable record and runs the fallback", async () => {
+    fs.writeFileSync(path.join(stateDir.value, recordName), "{not json");
+    const { verify } = makeOrchestratorForRecovery();
+
+    expect(await verify(42)).toBeNull();
+    expect(countCalls(isCreate)).toBe(1);
+    expect(fs.existsSync(path.join(stateDir.value, recordName))).toBe(false);
+  });
+
+  it("discards a stale record from another HEAD and runs the fallback", async () => {
+    writeState(recordName, { gate: "scope_drift", reason: "drift", head_sha: "old999" });
     const { verify } = makeOrchestratorForRecovery();
 
     const err = await verify(42);

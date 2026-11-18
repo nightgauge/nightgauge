@@ -4527,6 +4527,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * HEAD; a record from another HEAD is stale (the branch moved since, e.g. a
    * fix was committed) and is discarded. The record is removed either way so a
    * later retry is judged on its own run.
+   *
+   * A `security_scan` record is the exception (#3419): the Go pr-create runner
+   * owns it: on the retry it keeps the stop while the recorded commit is in
+   * the branch history, then clears it only when gitleaks over <base>..HEAD and
+   * the diff scan are both clean (docs/PR_CREATE_STAGE.md). So it is kept on
+   * disk and honoured even when HEAD moved —
+   * this fallback must not open a PR around a secret stop nobody rescanned.
    */
   private async consumePrCreateGateStop(
     issueNumber: number,
@@ -4539,15 +4546,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     } catch {
       return null;
     }
-    try {
-      fs.rmSync(recordPath, { force: true });
-    } catch (err) {
-      this.logger.warn("Could not remove pr-create gate-stop record", { issueNumber, error: err });
-    }
     let record: { gate?: unknown; reason?: unknown; head_sha?: unknown };
     try {
       record = JSON.parse(raw);
     } catch (err) {
+      this.removePrCreateGateStop(recordPath, issueNumber);
       this.logger.warn("Ignoring unparseable pr-create gate-stop record", {
         issueNumber,
         error: err,
@@ -4557,6 +4560,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     const gate = typeof record.gate === "string" && record.gate ? record.gate : "unknown_gate";
     const reason =
       typeof record.reason === "string" && record.reason ? record.reason : "gate blocked the PR";
+    if (gate === "security_scan") {
+      return { gate, reason };
+    }
+    this.removePrCreateGateStop(recordPath, issueNumber);
     const recordedHead = typeof record.head_sha === "string" ? record.head_sha.trim() : "";
     let head: string;
     try {
@@ -4579,6 +4586,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       return null;
     }
     return { gate, reason };
+  }
+
+  private removePrCreateGateStop(recordPath: string, issueNumber: number): void {
+    try {
+      fs.rmSync(recordPath, { force: true });
+    } catch (err) {
+      this.logger.warn("Could not remove pr-create gate-stop record", { issueNumber, error: err });
+    }
   }
 
   /**
@@ -5255,14 +5270,27 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
     }
 
-    if (parsed.path === "refused") {
-      const refuseErr = new Error(`deterministic ${stage} refused: ${reason}`);
+    if (parsed.path === "refused" || parsed.path === "blocked") {
+      // "blocked" (#3419): the Go runner rescanned a recorded security_scan
+      // gate stop and the secret is still there, or the rescan could not run.
+      // Terminal — re-rendering the LLM path would only stop on the same gate.
+      const refuseErr =
+        parsed.path === "blocked"
+          ? new Error(
+              `[pr-create-gate-stop] security_scan: ${parsed.terminal_detail || reason} — rescan did not clear the gate`
+            )
+          : new Error(`deterministic ${stage} refused: ${reason}`);
       this.stageExecutionPaths.set(stage, { path: "deterministic", puntReason: reason });
-      this.logger.warn("Deterministic pr-stage refused — failing the stage (no LLM fallback)", {
-        stage,
-        issueNumber,
-        reason,
-      });
+      this.logger.warn(
+        `Deterministic pr-stage ${parsed.path} — failing the stage (no LLM fallback)`,
+        {
+          stage,
+          issueNumber,
+          path: parsed.path,
+          reason,
+          detail: parsed.terminal_detail,
+        }
+      );
       if (this.stateService) {
         try {
           await this.stateService.failStage(stage, refuseErr.message);

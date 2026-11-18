@@ -424,6 +424,9 @@ func newTestRunner(snap PRCreateSnapshot, prc prCreateClient, git gitClient) *De
 	r.git = git
 	r.readContext = func(_ context.Context, _ string, _ int) (PRCreateSnapshot, error) { return snap, nil }
 	r.writeContext = func(_ string, _ prContextPayload) error { return nil }
+	// Most fixtures run on a fake workdir; the scanner-config test restores
+	// the git-backed default.
+	r.scannerConfigChanges = func(context.Context, string, string) ([]string, error) { return nil, nil }
 	return r
 }
 
