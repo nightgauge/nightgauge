@@ -1438,6 +1438,8 @@ func TestVerifyACAgainstDiff_RemovalCriterion(t *testing.T) {
 	gitOut(t, dir, "merge", "-q", "main")
 	gitOut(t, dir, "rm", "-q", "parity_test.go")
 	writeFile(t, dir, "half_test.go", "package w\n\nfunc TestHalf_Keep(t *testing.T) {}\n")
+	// A string literal holding the definition text is not a definition.
+	writeFile(t, dir, "lit_test.go", "package w\n\nvar src = \"func TestCheckParity_Foo(t *testing.T) {}\"\n")
 	d := collect(t, dir)
 	failed := ACTestState{Source: "feature-validate unit tests"}
 
@@ -1559,6 +1561,10 @@ func TestVerifyACAgainstDiff_NegativeContent(t *testing.T) {
 	if !ok || got.Status != ACMet {
 		t.Errorf("grep absent: got %+v ok=%v, want met", got, ok)
 	}
+	// A test asserting an absence asks for the test, not for the absence.
+	if got, ok = VerifyACAgainstDiff("`TestRedact` in `src.go` asserts the log does not contain `fooMarker`.", nil, d, none); ok && got.Status != "" {
+		t.Errorf("test asserting absence: got %+v, want the judge", got)
+	}
 	// A positive criterion still goes to the token rule.
 	got, ok = VerifyACAgainstDiff("`docs/X.md` contains `--name-only`.", nil, d, none)
 	if !ok || got.Status != ACMet || strings.Contains(got.Evidence, "absent") {
@@ -1592,6 +1598,8 @@ func TestACGitGrepPattern(t *testing.T) {
 		"git grep -e foo src/":       "",
 		"git grep -nF foo docs/x.md": "",
 		"git grep -i FOO":            "",
+		"git grep -n os.Exit":        "",
+		"git grep -nF os.Exit":       "os.Exit",
 		"git grep -w foo":            "",
 		"git grep -E fo+":            "",
 		"git grep 'two words'":       "",

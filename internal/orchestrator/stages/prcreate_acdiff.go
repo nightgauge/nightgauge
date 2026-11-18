@@ -803,6 +803,11 @@ func verifyACClause(c acClause, inherited []string, d *ACDiff, tests ACTestState
 		}
 	}
 	if acNegContentRE.MatchString(c.Prose) && len(c.Tokens) > 0 {
+		if _, _, isTest := acTestName(c); isTest || acNegCoverRE.MatchString(c.Prose) {
+			// "`TestX` asserts the log does not contain `Y`" asks for a
+			// test, not for an absence; the judge decides it.
+			return acResult{}
+		}
 		// A positive rule would answer a negative criterion inverted, so
 		// one acAbsent cannot decide goes to the judge.
 		return acAbsent(c, d)
@@ -1476,7 +1481,9 @@ func acRemovalTarget(c acClause) (string, *regexp.Regexp, bool) {
 		if prefix {
 			tail = `[A-Za-z0-9_]*\(`
 		}
-		return regexp.MustCompile(`func (\([^)]*\) )?` + regexp.QuoteMeta(name) + tail)
+		// Anchored: gofmt puts top-level funcs at column 0, so a string
+		// literal or comment holding the text is not a definition.
+		return regexp.MustCompile(`^func (\([^)]*\) )?` + regexp.QuoteMeta(name) + tail)
 	}
 	if loc := acGoTestRE.FindStringIndex(span); loc != nil {
 		name := span[loc[0]:loc[1]]
@@ -1488,7 +1495,7 @@ func acRemovalTarget(c acClause) (string, *regexp.Regexp, bool) {
 		return shown, goDef(name, prefix), true
 	}
 	if m := acPyTestRE.FindString(span); m != "" {
-		return m, regexp.MustCompile(`def ` + m + `\(`), true
+		return m, regexp.MustCompile(`^[[:space:]]*def ` + m + `\(`), true
 	}
 	if len(c.Paths) > 0 || len(c.Headings) > 0 {
 		// A path or section names where the removal happens; the
@@ -1537,6 +1544,8 @@ func acRemoved(name string, re *regexp.Regexp, d *ACDiff) acResult {
 var (
 	acNegContentRE = regexp.MustCompile(`(?i)\bno longer (?:contains?|includes?|mentions?|references?|has)\b|\bdoes(?: not|n't) (?:contain|include|mention|reference)\b|\bcontains no\b|\b(?:returns?|finds?|has|have) no (?:match(?:es)?|occurrences?|hits?|results?)\b`)
 	acGitGrepRE    = regexp.MustCompile(`^git\s+grep\b`)
+	acNegCoverRE   = regexp.MustCompile(`(?i)\b(?:covers?|asserts?|verif(?:y|ies)|exercises?|checks?|tests?)\b`)
+	acBREMetaRE    = regexp.MustCompile(`[.*\[\]^$\\]`)
 )
 
 // acAbsent answers a negative-content criterion. With named paths each token
@@ -1615,6 +1624,7 @@ func acGitGrepPattern(tok string) string {
 	}
 	fields := strings.Fields(tok)[2:]
 	pat := ""
+	fixed := false
 	for i := 0; i < len(fields); i++ {
 		f := fields[i]
 		switch {
@@ -1632,6 +1642,9 @@ func acGitGrepPattern(tok string) string {
 				// -i, -w, -E, -P and friends change what matches.
 				return ""
 			}
+			if f == "--fixed-strings" || (!strings.HasPrefix(f, "--") && strings.Contains(f, "F")) {
+				fixed = true
+			}
 		case pat == "":
 			pat = f
 		default:
@@ -1639,11 +1652,17 @@ func acGitGrepPattern(tok string) string {
 			return ""
 		}
 	}
+	if !fixed && acBREMetaRE.MatchString(pat) {
+		// Plain git grep reads the pattern as a basic regex; a fixed-string
+		// grep for it would answer a different question.
+		return ""
+	}
 	return pat
 }
 
-// acGrepPlainFlagRE lists the flags that leave a fixed-string, case-sensitive,
-// whole-tree grep's answer unchanged.
+// acGrepPlainFlagRE lists the flags that leave a case-sensitive whole-tree
+// grep's answer unchanged. The pattern is grepped with -F, so a pattern
+// holding a regex metacharacter needs -F in the span (acGitGrepPattern).
 var acGrepPlainFlagRE = regexp.MustCompile(`^-(?:[nFIh]+|-(?:untracked|line-number|fixed-strings|no-color|color))$`)
 
 func acUniq(in []string) []string {
