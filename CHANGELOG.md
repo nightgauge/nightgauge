@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- GitLab merge requests now report their creation time (`PullRequest.CreatedAt`), normalised to RFC 3339 UTC like GitHub's, on every read path (#3266).
 - pr-create's stale-branch merge reports a conflict on a non-ASCII path such as `café.txt` by its real name instead of a C-quoted string, under zsh as well as bash (#3028).
 
 ### Removed

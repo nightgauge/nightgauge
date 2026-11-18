@@ -235,15 +235,10 @@ func (p *DependabotStaleRemediation) Evaluate(ctx context.Context, in Input) ([]
 // order so a sweep's forge traffic and its observation list are reproducible.
 //
 // THE WAIT IS MEASURED FROM THE ADVISORY'S first-seen TIMESTAMP, not from the
-// pull request's creation date, and that is a constraint of the forge
-// abstraction rather than a preference. `forgetypes.PullRequest.CreatedAt` is
-// populated by the GitHub adapter only: the GitLab adapter never sets it at
-// all (internal/gitlab/mrs.go's toForgePR), so a producer keyed
-// on it would silently measure zero on GitLab and card every remediation PR
-// the instant it appeared. The alert's
-// FirstSeenAt is required of every adapter, costs no extra request, and
-// survives a process that was not running when the alert appeared — the same
-// argument DependabotAlertGrace already makes one file over.
+// pull request's creation date. The alert's FirstSeenAt is required of every
+// adapter, costs no extra request, and survives a process that was not
+// running when the alert appeared — the same argument DependabotAlertGrace
+// already makes one file over.
 //
 // What it measures is therefore "this advisory has been open this long and its
 // fix is still unmerged", which the forge opens within minutes of raising the
