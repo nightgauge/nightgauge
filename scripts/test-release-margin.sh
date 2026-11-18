@@ -56,8 +56,11 @@ mkdir -p "$STUBS"
 cat >"$STUBS/make" <<'EOF'
 #!/usr/bin/env bash
 # Stub make: write placeholder binaries where the real targets would.
-TARGET="" VERSION="" BIN_DIR=""
+TARGET="" VERSION="" BIN_DIR="" DIR=""
+PREV=""
 for a in "$@"; do
+  [ "$PREV" = -C ] && DIR="$a"
+  PREV="$a"
   case "$a" in
     VERSION=*) VERSION="${a#VERSION=}" ;;
     BIN_DIR=*) BIN_DIR="${a#BIN_DIR=}" ;;
@@ -65,6 +68,15 @@ for a in "$@"; do
   esac
 done
 mkdir -p "$BIN_DIR"
+# #3398: the build must run in a checkout of the source's commit whose HEAD
+# carries exactly the tag v$VERSION, so Go stamps the release's version.
+if [ "$TARGET" = build-release-targets ]; then
+  tags="$(git -C "$DIR" tag --points-at HEAD | tr '\n' ' ')"
+  [ "$tags" = "v$VERSION " ] || { echo "stub make: HEAD tags '$tags', want v$VERSION" >&2; exit 1; }
+  [ "$(git -C "$DIR" rev-parse HEAD)" = "$STUB_SOURCE_HEAD" ] ||
+    { echo "stub make: $DIR is not at the source commit" >&2; exit 1; }
+  [ "$DIR" != "$MARGIN_REPO" ] || { echo "stub make: built in the source checkout" >&2; exit 1; }
+fi
 case "$TARGET" in
   build-release-targets)
     for t in darwin-arm64 darwin-amd64 linux-amd64; do
@@ -78,6 +90,18 @@ EOF
 # shellcheck disable=SC2016 # the stub expands $1 when it runs
 printf '#!/usr/bin/env bash\necho "signed $1" >>"$(dirname "$1")/signed.log"\n' >"$STUBS/sign.sh"
 chmod +x "$STUBS/make" "$STUBS/sign.sh"
+
+# A source checkout already tagged as the RC, as staging.yml checks out.
+SRCREPO="$TMP/src"
+if ! { git init -q "$SRCREPO" && echo a >"$SRCREPO/f" && git -C "$SRCREPO" add f &&
+  git -C "$SRCREPO" -c user.name=t -c user.email=t@invalid -c commit.gpgSign=false commit -qm init &&
+  git -C "$SRCREPO" -c tag.gpgSign=false tag v0.8.6-rc.3; }; then
+  echo "HARNESS ERROR: could not create the source repository."
+  exit 2
+fi
+export MARGIN_REPO="$SRCREPO"
+STUB_SOURCE_HEAD="$(git -C "$SRCREPO" rev-parse HEAD)"
+export STUB_SOURCE_HEAD
 
 OUT="$TMP/margin-ok"
 MAKE="$STUBS/make" MARGIN_SIGN_SCRIPT="$STUBS/sign.sh" bash "$BUILDS" 0.8.6-rc.3 "$OUT" >"$TMP/ok.log" 2>&1
@@ -95,6 +119,20 @@ check "the universal file is the universal build of its version" \
 check "manifest records each file's own sha256" "ok" \
   "$(bad="$(cd "$OUT" && while read -r v f s; do [ "$(shasum -a 256 "$f" | cut -d' ' -f1)" = "$s" ] || echo "bad $v $f"; done <margin-manifest.txt)"; [ -n "$bad" ] && echo bad || echo ok)"
 check "every universal file was signed" "3" "$(cat "$OUT"/build/*/signed.log 2>/dev/null | wc -l | tr -d ' ')"
+check "each build ran in a clone tagged v<version> at the source commit (#3398)" "0" \
+  "$(grep -c 'stub make:' "$TMP/ok.log")"
+check "the source checkout gains no tag" "v0.8.6-rc.3" "$(git -C "$SRCREPO" tag | tr '\n' ' ' | sed 's/ $//')"
+
+echo b >>"$SRCREPO/f"
+MAKE="$STUBS/make" MARGIN_SIGN_SCRIPT="$STUBS/sign.sh" bash "$BUILDS" 0.8.6-rc.3 "$TMP/margin-dirty" >"$TMP/dirty.log" 2>&1
+check "a source with uncommitted tracked changes fails" "1" "$?"
+check "the dirty-source failure says so" "1" "$(grep -c 'uncommitted tracked changes' "$TMP/dirty.log")"
+check "a dirty source builds nothing" "0" "$(find "$TMP/margin-dirty" -name 'nightgauge-margin_*' 2>/dev/null | wc -l | tr -d ' ')"
+git -C "$SRCREPO" checkout -q -- f
+
+MARGIN_REPO="$TMP/not-a-repo" MAKE="$STUBS/make" MARGIN_SIGN_SCRIPT="$STUBS/sign.sh" \
+  bash "$BUILDS" 0.8.6-rc.3 "$TMP/margin-norepo" >/dev/null 2>&1
+check "a MARGIN_REPO that is not a git checkout is a HARNESS ERROR" "2" "$?"
 
 OUT="$TMP/margin-short"
 STUB_SKIP_LINUX=0.8.6-rc.4 MAKE="$STUBS/make" MARGIN_SIGN_SCRIPT="$STUBS/sign.sh" \

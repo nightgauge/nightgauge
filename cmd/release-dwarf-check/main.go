@@ -16,6 +16,12 @@
 // embedded SQLite engine linked in, and dropped both; this bound catches
 // either, or anything of their size, coming back.
 //
+// A raw file named nightgauge-margin_<v>_<target> is a margin scan input
+// (scripts/release-margin-builds.sh). It must carry the stamp a release at <v>
+// would: debug/buildinfo Main.Path github.com/nightgauge/nightgauge and
+// Main.Version v<v>. Built in the RC's checkout the X.Y.Z margin binary carried
+// vX.Y.Z-rc.N and was not the bytes the release ships (#3398).
+//
 //	release-dwarf-check PATH...
 //
 // Each PATH is a .tar.gz/.tgz archive, a .vsix/.zip archive, or a raw binary.
@@ -29,7 +35,8 @@
 //
 //	0  every Go binary found carries uncompressed DWARF
 //	1  at least one Go binary lacks DWARF or carries it compressed, or a Linux
-//	   amd64 binary exceeds the stripped-size limit
+//	   amd64 binary exceeds the stripped-size limit, or a margin binary
+//	   carries another module path or version stamp
 //	2  nothing was asserted: no arguments, an unreadable path, a path that is
 //	   not a Go binary, or an archive holding no Go binary (a HARNESS ERROR line
 //	   says which)
@@ -48,10 +55,18 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 )
 
 const record = "docs/RELEASE_BINARIES.md"
+
+// modulePath is the main module a margin binary must be built from.
+const modulePath = "github.com/nightgauge/nightgauge"
+
+// marginName matches a margin scan input, capturing its version string.
+var marginName = regexp.MustCompile(`^nightgauge-margin_([^_]+)_[a-z0-9_]+$`)
 
 // strippedSizeLimit bounds a Linux amd64 binary's stripped size, in bytes. A
 // variable so tests can exercise the verdict with a small fixture.
@@ -69,6 +84,7 @@ const (
 	verdictMissing
 	verdictCompressed
 	verdictOversize
+	verdictStamp
 	verdictHarness
 )
 
@@ -89,7 +105,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch worst {
 	case verdictOK:
 		return 0
-	case verdictMissing, verdictCompressed, verdictOversize:
+	case verdictMissing, verdictCompressed, verdictOversize, verdictStamp:
 		return 1
 	default:
 		return 2
@@ -115,7 +131,7 @@ func checkRaw(path string, stdout, stderr io.Writer) verdict {
 		return verdictHarness
 	}
 	defer f.Close()
-	found, v := checkEntry(path, f, stdout, stderr)
+	found, v := checkEntry(path, f, true, stdout, stderr)
 	if !found {
 		fmt.Fprintf(stderr, "HARNESS ERROR: %s is not a Go ELF or Mach-O binary\n", path)
 		return verdictHarness
@@ -150,7 +166,7 @@ func checkTarGz(path string, stdout, stderr io.Writer) verdict {
 		if hdr.Typeflag != tar.TypeReg {
 			continue
 		}
-		found, v := checkEntry(path+"!"+hdr.Name, tr, stdout, stderr)
+		found, v := checkEntry(path+"!"+hdr.Name, tr, false, stdout, stderr)
 		if found {
 			binaries++
 		}
@@ -179,7 +195,7 @@ func checkZip(path string, stdout, stderr io.Writer) verdict {
 			worst = verdictHarness
 			continue
 		}
-		found, v := checkEntry(path+"!"+zf.Name, rc, stdout, stderr)
+		found, v := checkEntry(path+"!"+zf.Name, rc, false, stdout, stderr)
 		rc.Close()
 		if found {
 			binaries++
@@ -200,8 +216,9 @@ func archiveVerdict(path string, binaries int, worst verdict, stderr io.Writer) 
 }
 
 // checkEntry reports whether r is a Go executable and, if so, whether it
-// carries DWARF. Non-binary content returns found=false with verdictOK.
-func checkEntry(label string, r io.Reader, stdout, stderr io.Writer) (bool, verdict) {
+// carries DWARF. Non-binary content returns found=false with verdictOK. raw is
+// true for a file given directly, false for an archive entry.
+func checkEntry(label string, r io.Reader, raw bool, stdout, stderr io.Writer) (bool, verdict) {
 	head := make([]byte, 4)
 	n, err := io.ReadFull(r, head)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
@@ -230,8 +247,14 @@ func checkEntry(label string, r io.Reader, stdout, stderr io.Writer) (bool, verd
 	}
 	// Only Go binaries are in scope. buildinfo survives -s -w, so a stripped
 	// Go binary is still recognised as one.
-	if _, err := buildinfo.ReadFile(tmp.Name()); err != nil {
+	bi, err := buildinfo.ReadFile(tmp.Name())
+	if err != nil {
 		return false, verdictOK
+	}
+	if raw {
+		if v := checkMarginStamp(label, bi, stdout); v != verdictOK {
+			return true, v
+		}
 	}
 	ok, err := hasDWARF(kind, tmp.Name())
 	if err != nil {
@@ -269,6 +292,25 @@ func checkEntry(label string, r io.Reader, stdout, stderr io.Writer) (bool, verd
 	}
 	fmt.Fprintf(stdout, "ok   %s\n", label)
 	return true, verdictOK
+}
+
+// checkMarginStamp requires a margin binary, named by its file name, to carry
+// the module path and the v<version> stamp of a release at its version. Other
+// binaries pass. Only raw files are margin inputs, so archive entries are not
+// checked.
+func checkMarginStamp(label string, bi *buildinfo.BuildInfo, stdout io.Writer) verdict {
+	m := marginName.FindStringSubmatch(filepath.Base(label))
+	if m == nil {
+		return verdictOK
+	}
+	want := "v" + m[1]
+	if bi.Main.Path != modulePath || bi.Main.Version != want {
+		fmt.Fprintf(stdout, "::error::%s is stamped %s %s, want %s %s: "+
+			"a margin binary must carry the stamp a release at %s does (see %s)\n",
+			label, bi.Main.Path, bi.Main.Version, modulePath, want, m[1], record)
+		return verdictStamp
+	}
+	return verdictOK
 }
 
 // linuxAMD64StrippedSize returns the size the ELF file at path would have
