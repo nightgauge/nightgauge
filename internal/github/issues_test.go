@@ -1268,10 +1268,12 @@ func TestIssueService_SearchIssues_HappyPath(t *testing.T) {
 	searchResp := `{"data":{"search":{"issueCount":2,"nodes":[
 		{"__typename":"Issue","id":"I_10","number":10,"title":"Migrate CLI","state":"OPEN",
 		 "url":"https://github.com/o/r/issues/10",
+		 "author":{"__typename":"User","login":"alice"},
 		 "repository":{"nameWithOwner":"o/r"},
 		 "labels":{"nodes":[{"name":"type:refactor"}]}},
 		{"__typename":"Issue","id":"I_20","number":20,"title":"CLI migration part 2","state":"OPEN",
 		 "url":"https://github.com/o/r/issues/20",
+		 "author":{"__typename":"Bot","login":"nightgauge"},
 		 "repository":{"nameWithOwner":"o/r"},
 		 "labels":{"nodes":[]}}
 	]}}}`
@@ -1298,6 +1300,9 @@ func TestIssueService_SearchIssues_HappyPath(t *testing.T) {
 	}
 	if issues[1].Number != 20 {
 		t.Errorf("expected issue #20, got #%d", issues[1].Number)
+	}
+	if issues[0].AuthorLogin != "alice" || issues[1].AuthorLogin != "nightgauge[bot]" {
+		t.Errorf("authors = %q, %q; want alice, nightgauge[bot]", issues[0].AuthorLogin, issues[1].AuthorLogin)
 	}
 }
 

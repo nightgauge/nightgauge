@@ -21,7 +21,11 @@ type strandedFake struct {
 	filed    []forgetypes.Issue
 	boarded  []int
 	boardErr error
+	planted  []forgetypes.Issue // open issues someone else filed
+	selfErr  error
 }
+
+const strandedSelf = "nightgauge[bot]"
 
 func (f *strandedFake) producer() *StrandedFollowUpPRs {
 	return &StrandedFollowUpPRs{
@@ -35,19 +39,27 @@ func (f *strandedFake) producer() *StrandedFollowUpPRs {
 			}
 			return out, nil
 		},
-		// Like the real search: open issues only, matched on title — search
-		// results carry no body.
-		FindTracking: func(_ context.Context, _ Input, title string) (*forgetypes.Issue, error) {
-			for i := range f.filed {
-				if f.filed[i].Title == title && f.issues[f.filed[i].Number] != "CLOSED" {
-					return &forgetypes.Issue{Number: f.filed[i].Number, Title: title, State: "OPEN"}, nil
+		// Like the real search: every open issue with the title, planted or
+		// filed, with its body and author.
+		SearchTracking: func(_ context.Context, _ Input, title string) ([]forgetypes.Issue, error) {
+			var out []forgetypes.Issue
+			for _, is := range append(append([]forgetypes.Issue{}, f.planted...), f.filed...) {
+				if is.Title == title && f.issues[is.Number] != "CLOSED" {
+					is.State = "OPEN"
+					out = append(out, is)
 				}
 			}
-			return nil, nil
+			return out, nil
+		},
+		Self: func(context.Context, Input) (string, error) {
+			if f.selfErr != nil {
+				return "", f.selfErr
+			}
+			return strandedSelf, nil
 		},
 		// Like the real CreateIssue: the returned issue reports no state.
 		FileTracking: func(_ context.Context, _ Input, title, body string) (*forgetypes.Issue, error) {
-			is := forgetypes.Issue{Number: 9000 + len(f.filed), Title: title, Body: body}
+			is := forgetypes.Issue{Number: 9000 + len(f.filed), Title: title, Body: body, AuthorLogin: strandedSelf}
 			f.filed = append(f.filed, is)
 			if f.issues == nil {
 				f.issues = map[int]string{}
@@ -278,6 +290,7 @@ func TestStrandedFollowUpPRs_FilesThroughSharedReadsWrap(t *testing.T) {
 		}
 		p := f.producer()
 		p.FileTracking = nil // the real path: repository id, labels, CreateIssue
+		p.SearchTracking = func(context.Context, Input, string) ([]forgetypes.Issue, error) { return nil, nil }
 		return p
 	}
 	compositions := map[string]func(forge.ForgeClient) forge.ForgeClient{
@@ -319,5 +332,90 @@ func TestStrandedFollowUpPRs_FilesThroughSharedReadsWrap(t *testing.T) {
 				t.Fatalf("filed %v with no GraphQL surface", inner.issues.createdIn)
 			}
 		})
+	}
+}
+
+// TestStrandedFollowUpPRs_IgnoresPlantedTrackingIssue: an open issue with the
+// exact title and marker, filed by someone else, is not the tracking issue
+// (#2688). The producer files and boards its own.
+func TestStrandedFollowUpPRs_IgnoresPlantedTrackingIssue(t *testing.T) {
+	in := Input{Repo: "o/r", Owner: "o", Name: "r"}
+	pr := strandedPR(2662, "feat/2655-pr-create", "")
+	title, body := strandedTrackingIssue(pr, 2655)
+	f := &strandedFake{
+		prs:     []forge.OpenPRSummary{pr},
+		issues:  map[int]string{2655: "CLOSED", 666: "OPEN"},
+		planted: []forgetypes.Issue{{Number: 666, Title: title, Body: body, AuthorLogin: "mallory"}},
+	}
+	reqs, err := f.producer().Evaluate(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.filed) != 1 {
+		t.Fatalf("filed %d tracking issues, want 1", len(f.filed))
+	}
+	if len(reqs) != 1 || reqs[0].Context.Issue != 9000 || strings.Contains(reqs[0].Body, "#666") {
+		t.Fatalf("card must name the filed issue, not the planted one: %+v", reqs)
+	}
+	if len(f.boarded) != 1 || f.boarded[0] != 9000 {
+		t.Errorf("boarded = %v, want [9000]", f.boarded)
+	}
+}
+
+// TestStrandedFollowUpPRs_IdentityErrorFailsClosed: with no known identity
+// nothing is filed or linked.
+func TestStrandedFollowUpPRs_IdentityErrorFailsClosed(t *testing.T) {
+	in := Input{Repo: "o/r", Owner: "o", Name: "r"}
+	f := &strandedFake{
+		prs:     []forge.OpenPRSummary{strandedPR(2662, "feat/2655-pr-create", "")},
+		issues:  map[int]string{2655: "CLOSED"},
+		selfErr: errors.New("whoami failed"),
+	}
+	if _, err := f.producer().Evaluate(context.Background(), in); err == nil {
+		t.Fatal("an identity failure must be an error")
+	}
+	if len(f.filed) != 0 || len(f.boarded) != 0 {
+		t.Fatalf("filed = %v, boarded = %v; want nothing", f.filed, f.boarded)
+	}
+}
+
+// TestStrandedFollowUpPRs_AppDescriptionIdentityFailsClosed: a GitHub App with
+// no slug reports a description, not a login; the pass must error rather than
+// file a duplicate tracking issue on every run.
+func TestStrandedFollowUpPRs_AppDescriptionIdentityFailsClosed(t *testing.T) {
+	in := Input{Repo: "o/r", Owner: "o", Name: "r"}
+	f := &strandedFake{
+		prs:    []forge.OpenPRSummary{strandedPR(2662, "feat/2655-pr-create", "")},
+		issues: map[int]string{2655: "CLOSED"},
+	}
+	p := f.producer()
+	p.Self = func(context.Context, Input) (string, error) { return "github-app 1 (installation 2)", nil }
+	if _, err := p.Evaluate(context.Background(), in); err == nil {
+		t.Fatal("a non-login identity must be an error")
+	}
+	if len(f.filed) != 0 || len(f.boarded) != 0 {
+		t.Fatalf("filed = %v, boarded = %v; want nothing", f.filed, f.boarded)
+	}
+}
+
+func TestPickTracking(t *testing.T) {
+	const title, marker = "t", "<!-- m -->"
+	ok := forgetypes.Issue{Number: 1, Title: title, Body: "x " + marker, AuthorLogin: "Nightgauge[bot]"}
+	cases := map[string]struct {
+		hit  forgetypes.Issue
+		self string
+		want bool
+	}{
+		"own issue":      {ok, strandedSelf, true},
+		"other author":   {func() forgetypes.Issue { h := ok; h.AuthorLogin = "mallory"; return h }(), strandedSelf, false},
+		"unknown author": {func() forgetypes.Issue { h := ok; h.AuthorLogin = ""; return h }(), strandedSelf, false},
+		"no marker":      {func() forgetypes.Issue { h := ok; h.Body = "x"; return h }(), strandedSelf, false},
+		"other title":    {func() forgetypes.Issue { h := ok; h.Title = "t2"; return h }(), strandedSelf, false},
+		"unknown self":   {ok, "", false},
+	}
+	for name, c := range cases {
+		if got := pickTracking([]forgetypes.Issue{c.hit}, title, marker, c.self) != nil; got != c.want {
+			t.Errorf("%s: picked = %v, want %v", name, got, c.want)
+		}
 	}
 }

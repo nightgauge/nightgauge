@@ -771,9 +771,12 @@ type searchIssueNode struct {
 		// Body lets a caller confirm a marker the search matched (the
 		// follow-up idempotency marker, #3278); without it FindByMarker
 		// compared against an empty string and never found a filed issue.
-		Body       graphql.String
-		State      graphql.String
-		URL        graphql.String
+		Body  graphql.String
+		State graphql.String
+		URL   graphql.String
+		// Author lets a caller trust only issues it filed itself (the
+		// stranded-follow-up tracking issue, #2688).
+		Author     *trustActor
 		Repository struct {
 			NameWithOwner graphql.String
 		}

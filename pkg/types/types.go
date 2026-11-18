@@ -143,6 +143,9 @@ type Issue struct {
 	Title  string `json:"title"`
 	Body   string `json:"body"`
 	State  string `json:"state"`
+	// AuthorLogin is the issue author's login; a bot's ends in "[bot]". Empty
+	// means the read did not report one, which a caller must treat as unknown.
+	AuthorLogin string `json:"authorLogin,omitempty"`
 	// StateReason is GitHub's issue close reason: "COMPLETED", "NOT_PLANNED",
 	// or "REOPENED" (empty for OPEN issues). The post-merge reconciler uses it
 	// to distinguish an epic closed as completed (its orphaned open sub-issues
