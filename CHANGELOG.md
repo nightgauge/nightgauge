@@ -20,6 +20,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `nightgauge review quality` now names the reviewer unit, the JSON parse error and its byte offset when a findings file is invalid JSON (for example a claim containing `\303`), instead of a generic schema message, and tells reviewers to write a literal backslash as `\\` (#3397).
 - The VirusTotal gate judges a file it uploaded whose first report carries only Microsoft `!ml` findings on one reanalysis after `VT_ML_RECHECK_DELAY` (default one hour), instead of failing on a first-sight verdict later analyses clear; a finding that persists, or any other finding, still fails, and the report names every file judged this way (#3398).
 - The release-string margin build is now stamped `vX.Y.Z` like the release binary, built in a scratch clone with a local tag, and `release-dwarf-check` fails a margin binary carrying any other stamp (#3398).
 - The extension's pre-merge guard lists rebase-conflict paths with `git diff -z`, so a file such as `café.txt` appears by its real name in the `[pre-merge-conflict]` error instead of git's C-quoted `"caf\303\251.txt"` (#3393).

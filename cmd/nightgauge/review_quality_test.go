@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -327,5 +328,52 @@ func TestFeatureDevPhase5RunsOneReviewPerPath(t *testing.T) {
 				t.Errorf("%s %s: review quality ran %d times, want %d", include, tc.path, got, tc.want)
 			}
 		}
+	}
+}
+
+func TestQualityReviewReportStaysValidJSONWithBackslashClaims(t *testing.T) {
+	q, _ := qualityFixture(t)
+	q.Runner = fakeReviewer{agentic: true}
+	q.Stderr = &bytes.Buffer{}
+	q.Spawn = func(_ context.Context, _ adapters.SkillRunner, o adapters.RunOptions, _ string) error {
+		m := findingsPath.FindStringSubmatch(o.Prompt)
+		if m == nil {
+			t.Errorf("prompt names no findings file: %s", o.Prompt)
+			return nil
+		}
+		body := `{"unit":"` + m[2] + `","result":"passed","findings":[]}`
+		switch m[2] {
+		case "test":
+			body = `{"unit":"test","result":"passed","findings":[{"severity":"warning","file":"a","line":1,"claim":"path \\303"}]}`
+		case "security":
+			body = `{"unit":"security","result":"passed","findings":[{"severity":"warning","file":"a","line":1,"claim":"path \303"}]}`
+		}
+		return os.WriteFile(m[1], []byte(body), 0o600)
+	}
+	r := runQualityReview(context.Background(), q)
+	out, err := json.MarshalIndent(r, "", "  ")
+	if err != nil || !json.Valid(out) {
+		t.Fatalf("report is not valid JSON: %v\n%s", err, out)
+	}
+	var back qualityreview.Report
+	if err := json.Unmarshal(out, &back); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, u := range back.Units {
+		seen[u.ID] = true
+		switch u.ID {
+		case "test":
+			if len(u.Findings) != 1 || u.Findings[0].Claim != `path \303` {
+				t.Errorf("escaped claim = %+v", u)
+			}
+		case "security":
+			if u.Status != qualityreview.StatusUnfinished || !strings.Contains(u.Reason, `"security"`) {
+				t.Errorf("invalid unit = %+v", u)
+			}
+		}
+	}
+	if !seen["test"] || !seen["security"] {
+		t.Fatalf("units missing from report: %v", seen)
 	}
 }

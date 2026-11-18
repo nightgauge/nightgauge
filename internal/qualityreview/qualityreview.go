@@ -278,7 +278,9 @@ Severity is "blocking" (must be fixed before the change can ship) or "warning".
 Write ONLY %s, once, when the review is finished:
 {"unit":"%s","result":"passed|failed","findings":[{"severity":"blocking|warning","file":"...","line":0,"claim":"..."}]}
 result is "failed" exactly when a finding is blocking. At most %d findings; an
-empty array when you find nothing. Do not edit anything else.
+empty array when you find nothing. The file must be valid JSON: write a literal
+backslash in a claim as \\ and use no escapes other than JSON's. Do not edit
+anything else.
 `, u.ID, brief, b.DiffPath(u.ID), b.FilesPath(u.ID), root, b.FindingsPath(u.ID), u.ID, maxFindings)
 }
 
@@ -313,8 +315,12 @@ func ReadUnit(b Bundle, id string) UnitResult {
 		Unit     string     `json:"unit"`
 		Findings *[]Finding `json:"findings"`
 	}
-	if err := json.Unmarshal(data, &doc); err != nil || doc.Findings == nil {
-		r.Reason = "findings file is not the required schema"
+	if err := json.Unmarshal(data, &doc); err != nil {
+		r.Reason = decodeReason(id, err)
+		return r
+	}
+	if doc.Findings == nil {
+		r.Reason = fmt.Sprintf("unit %q findings file has no findings array", id)
 		return r
 	}
 	if doc.Unit != id {
@@ -336,6 +342,21 @@ func ReadUnit(b Bundle, id string) UnitResult {
 	}
 	r.Findings = *doc.Findings
 	return r
+}
+
+// decodeReason names the unit, the decode error and, when encoding/json
+// reports one, the byte offset: a syntax error is invalid JSON, a type error
+// is valid JSON with a field of the wrong type.
+func decodeReason(id string, err error) string {
+	var syn *json.SyntaxError
+	var typ *json.UnmarshalTypeError
+	switch {
+	case errors.As(err, &syn):
+		return fmt.Sprintf("unit %q findings file is not valid JSON at offset %d: %v", id, syn.Offset, err)
+	case errors.As(err, &typ):
+		return fmt.Sprintf("unit %q findings file has a field of the wrong type at offset %d: %v", id, typ.Offset, err)
+	}
+	return fmt.Sprintf("unit %q findings file is not valid JSON: %v", id, err)
 }
 
 // Report is quality-review-{N}.json.
