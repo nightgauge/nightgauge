@@ -21,6 +21,7 @@ const sampleMRJSON = `{
   "source_branch": "feat/x",
   "target_branch": "main",
   "web_url": "https://gitlab.example.com/o/r/-/merge_requests/7",
+  "created_at": "2026-01-15T10:20:30.123Z",
   "labels": ["enhancement"],
   "draft": true,
   "work_in_progress": false,
@@ -30,6 +31,9 @@ const sampleMRJSON = `{
   "approvals_before_merge": 2,
   "assignees": [{"id":3,"username":"bob"}]
 }`
+
+// sampleMRCreatedAt is sampleMRJSON's created_at normalised to RFC 3339 UTC.
+const sampleMRCreatedAt = "2026-01-15T10:20:30Z"
 
 func TestGetPR_HappyPath(t *testing.T) {
 	srv := newStubServer(t)
@@ -58,6 +62,51 @@ func TestGetPR_HappyPath(t *testing.T) {
 	}
 	if got.Mergeable != "MERGEABLE" {
 		t.Errorf("Mergeable = %q", got.Mergeable)
+	}
+	if got.CreatedAt != sampleMRCreatedAt {
+		t.Errorf("CreatedAt = %q, want %q", got.CreatedAt, sampleMRCreatedAt)
+	}
+}
+
+func TestNormaliseGitLabTime(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"2026-01-15T10:20:30.123Z", "2026-01-15T10:20:30Z"},
+		{"2026-01-15T12:20:30.000+02:00", "2026-01-15T10:20:30Z"},
+		{"2026-01-15T10:20:30Z", "2026-01-15T10:20:30Z"},
+		{"", ""},
+		{"not-a-time", ""},
+	}
+	for _, c := range cases {
+		if got := normaliseGitLabTime(c.in); got != c.want {
+			t.Errorf("normaliseGitLabTime(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestRawGitLabMR_DecodesCreatedAt(t *testing.T) {
+	cases := []struct{ body, want string }{
+		{`{"iid":1,"created_at":"2026-03-01T08:00:00.5-05:00"}`, "2026-03-01T13:00:00Z"},
+		{`{"iid":1,"created_at":null}`, ""},
+		{`{"iid":1}`, ""},
+	}
+	for _, c := range cases {
+		var raw rawGitLabMR
+		if err := json.Unmarshal([]byte(c.body), &raw); err != nil {
+			t.Fatalf("unmarshal %s: %v", c.body, err)
+		}
+		if got := raw.toForgePR("o", "r").CreatedAt; got != c.want {
+			t.Errorf("%s: CreatedAt = %q, want %q", c.body, got, c.want)
+		}
+	}
+}
+
+func TestDecodeMRPage_SetsCreatedAt(t *testing.T) {
+	got, err := decodeMRPage([]byte("["+sampleMRJSON+"]"), "o", "r")
+	if err != nil {
+		t.Fatalf("decodeMRPage: %v", err)
+	}
+	if len(got) != 1 || got[0].CreatedAt != sampleMRCreatedAt {
+		t.Fatalf("got %+v, want one PR with CreatedAt %q", got, sampleMRCreatedAt)
 	}
 }
 
@@ -258,6 +307,9 @@ func TestListPRs_FiltersStateAndHeadRef(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Fatalf("len = %d", len(got))
+	}
+	if got[0].CreatedAt != sampleMRCreatedAt {
+		t.Errorf("CreatedAt = %q, want %q", got[0].CreatedAt, sampleMRCreatedAt)
 	}
 	q := srv.lastReq.URL.RawQuery
 	if !strings.Contains(q, "state=open") || !strings.Contains(q, "source_branch=feat") {
