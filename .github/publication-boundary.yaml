@@ -112,6 +112,9 @@ allow:
   - path: ".github/**"
     class: PUBLIC
     rationale: "CI workflows, issue templates, and this manifest."
+  - path: ".semgrep/**"
+    class: PUBLIC
+    rationale: "semgrep rules, their fixtures and the reviewed allow-list (ADR-023)."
   - path: ".husky/**"
     class: PUBLIC
     rationale: "Git hooks."
