@@ -22,6 +22,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- pr-create now stops, recording a `security_scan` gate stop, when its secret scan cannot run, instead of letting the orchestrator open a fallback PR with no secret scan (#3421).
 - pr-create's changed-file secret scan no longer drops every hit in a file whose path contains an exclude word (`test`, `mock`, `example`, `fake`, …): the false-positive filter now reads only the matching line, so a real secret under `test/` or `mocks/` is reported (#3420).
 - The dashboard's Gemini adapter widget reports a key stored in the editor's secret storage as configured; it read only the environment, where that key is never placed (#3406).
 - The stranded follow-up PR sweep links a card only to a tracking issue that has its exact title and hidden marker and was filed by the pipeline's own identity; a look-alike issue anyone else opened is ignored, and an unknown identity fails the pass instead of trusting every author (#2688).
