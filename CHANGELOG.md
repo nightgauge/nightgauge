@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- pr-create's changed-file secret scan now runs as `nightgauge scan diff-secrets --base <ref>`, a deterministic verb that reads the HEAD commit and has JSON output and a gating exit code (2 when it cannot run), so the same check can be re-run after a fix without rendering the skill. Its counts are matching lines per pattern, not one per pattern as before (#2702).
 - The plugin manifest now names its icon through the `icon` field (`./.claude-plugin/icon.png`), so tools that read the manifest find it without relying on auto-detection (#2863).
 - The tested Claude Code version is now 2.1.316, the version the install-docs gate was proven on: the `claude-headless` `max_tested` pin, its flag-contract `--help` capture, the install-docs gate and the clean-install image all use it (#3047).
 

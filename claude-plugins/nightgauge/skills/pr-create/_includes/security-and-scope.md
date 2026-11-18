@@ -83,48 +83,28 @@ if command -v gitleaks >/dev/null 2>&1; then
 fi
 ```
 
-### Step 2.5.3: Grep fallback (always runs as supplemental check)
+### Step 2.5.3: Binary secret scan (always runs as supplemental check)
+
+`nightgauge scan diff-secrets` scans the files changed since the base for four
+critical and five warning secret patterns. It exits 1 on a critical finding
+and 2 when it cannot run. The orchestrator can re-run the same verb after a fix.
 
 ```bash
-# Pattern categories by severity
-CRITICAL_PATTERNS=(
-  "-----BEGIN (RSA |DSA |EC |OPENSSH )?PRIVATE KEY"
-  "aws_secret_access_key\s*[=:]\s*['\"][A-Za-z0-9/+=]{20,}['\"]"
-  "aws_access_key_id\s*[=:]\s*['\"]AKIA[0-9A-Z]{16}['\"]"
-  "(jdbc|postgresql|mysql|mongodb):\/\/[^:]+:[^@]+@"
-)
-
-WARNING_PATTERNS=(
-  "(api[_-]?key|apikey)\s*[=:]\s*['\"][^'\"]{16,}['\"]"
-  "secret\s*[=:]\s*['\"][^'\"]{10,}['\"]"
-  "password\s*[=:]\s*['\"][^'\"]{6,}['\"]"
-  "token\s*[=:]\s*['\"][^'\"]{20,}['\"]"
-  "authorization\s*[=:]\s*['\"]Bearer [^'\"]{20,}['\"]"
-)
-
-# Exclusion filter (common false positives)
-EXCLUDE_PATTERN="example|placeholder|YOUR_|xxx|test|mock|REDACTED|\*\*\*|TODO|fake|dummy|sample|changeme|<.*>"
-
-# Scan changed files only (not full repo); use array to prevent shell injection
-for pattern in "${CRITICAL_PATTERNS[@]}"; do
-  hits=$(grep -rniE "$pattern" "${CHANGED_FILES_ARRAY[@]}" 2>/dev/null | \
-    grep -viE "$EXCLUDE_PATTERN" | head -5 || true)
-  if [ -n "$hits" ]; then
-    echo "CRITICAL: $pattern"
-    echo "$hits"
-    SECURITY_CRITICAL=$((SECURITY_CRITICAL + 1))
-  fi
-done
-
-for pattern in "${WARNING_PATTERNS[@]}"; do
-  hits=$(grep -rniE "$pattern" "${CHANGED_FILES_ARRAY[@]}" 2>/dev/null | \
-    grep -viE "$EXCLUDE_PATTERN" | head -5 || true)
-  if [ -n "$hits" ]; then
-    echo "WARNING: $pattern"
-    echo "$hits"
-    SECURITY_WARNINGS=$((SECURITY_WARNINGS + 1))
-  fi
-done
+SCAN_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" scan diff-secrets --base "$BASE_BRANCH" --json)
+SCAN_EXIT=$?
+# Exit 0/1 must carry a v1 result whose verdict matches the exit; anything else
+# (an older binary rejecting the verb, empty stdout) means the scan did not run.
+if { [ "$SCAN_EXIT" -ne 0 ] && [ "$SCAN_EXIT" -ne 1 ]; } || \
+  ! printf '%s\n' "$SCAN_JSON" | jq -e --argjson x "$SCAN_EXIT" '.v == 1
+    and (.critical|type=="number") and (.warnings|type=="number")
+    and ((.critical > 0) == ($x == 1))' >/dev/null 2>&1; then
+  echo "ERROR: nightgauge scan diff-secrets could not run (exit $SCAN_EXIT)" >&2
+  exit 1
+fi
+printf '%s\n' "$SCAN_JSON" | jq -r '.files[] | select(.critical > 0 or .warnings > 0)
+  | "  \(.path): critical=\(.critical) warnings=\(.warnings)"'
+SECURITY_CRITICAL=$((SECURITY_CRITICAL + $(printf '%s\n' "$SCAN_JSON" | jq -r '.critical')))
+SECURITY_WARNINGS=$((SECURITY_WARNINGS + $(printf '%s\n' "$SCAN_JSON" | jq -r '.warnings')))
 ```
 
 ### Step 2.5.4: Evaluate findings and set status

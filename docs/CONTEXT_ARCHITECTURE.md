@@ -783,7 +783,7 @@ issue #1608)
 | `preflight_results.json_validation`         | string | Yes      | JSON context file validation: `passed`, `failed`, `skipped`                                                                                       |
 | `preflight_results.yaml_validation`         | string | Yes      | YAML config validation: `passed`, `failed`, `skipped`                                                                                             |
 | `preflight_results.version_consistency`     | string | Yes      | Package version consistency check: `passed`, `failed`, `skipped`                                                                                  |
-| `preflight_results.security_scan`           | string | Yes      | Secret detection scan (gitleaks + grep fallback): `passed`, `failed`, `skipped`                                                                   |
+| `preflight_results.security_scan`           | string | Yes      | Secret detection scan (gitleaks + `nightgauge scan diff-secrets`): `passed`, `failed`, `skipped`                                                  |
 | `preflight_results.coverage_check`          | string | Yes      | Test coverage threshold check: `passed`, `failed`, `skipped`                                                                                      |
 | `ci_monitoring`                             | object | Yes      | CI check monitoring results from Phase 3.5 (v1.2+)                                                                                                |
 | `ci_monitoring.monitored`                   | bool   | Yes      | Whether CI monitoring ran (false when PR number unavailable)                                                                                      |
