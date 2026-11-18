@@ -48,8 +48,12 @@ if [[ "$TARGET" == *.vsix ]]; then
   # vendored copy would silently fall back to escaped-HTML rendering, and the
   # temptation next time is to "fix" it with a remote <script src>, which is
   # what got the Marketplace publisher blocked.
-  grep -qx "extension/dist/vendor/marked.umd.js" <<<"$CONTENTS" \
-    || { echo "ERROR: $TARGET is missing extension/dist/vendor/marked.umd.js" >&2; exit 1; }
+  # The output window renders Markdown only when the sanitizer is present too;
+  # without it the text is shown escaped.
+  for asset in marked.umd.js purify.min.js; do
+    grep -qx "extension/dist/vendor/$asset" <<<"$CONTENTS" \
+      || { echo "ERROR: $TARGET is missing extension/dist/vendor/$asset" >&2; exit 1; }
+  done
   # No shipped file may carry a fetch-piped-to-shell or decode-and-run shape
   # (#2320, #2321), whichever package it was bundled from.
   bash "$(dirname "${BASH_SOURCE[0]}")/check-shipped-code.sh" "$TARGET"
@@ -77,7 +81,9 @@ test -x "$TARGET/bin/nightgauge" \
   || { echo "ERROR: executable Go binary missing: $TARGET/bin/nightgauge" >&2; exit 1; }
 test -f "$TARGET/sdk-cli.cjs" \
   || { echo "ERROR: packaged SDK CLI missing: $TARGET/sdk-cli.cjs" >&2; exit 1; }
-test -f "$TARGET/vendor/marked.umd.js" \
-  || { echo "ERROR: vendored webview asset missing: $TARGET/vendor/marked.umd.js (run scripts/vendor-webview-assets.mjs)" >&2; exit 1; }
+for asset in marked.umd.js purify.min.js; do
+  test -f "$TARGET/vendor/$asset" \
+    || { echo "ERROR: vendored webview asset missing: $TARGET/vendor/$asset (run scripts/vendor-webview-assets.mjs)" >&2; exit 1; }
+done
 bash "$(dirname "${BASH_SOURCE[0]}")/check-shipped-code.sh" "$TARGET"
 echo "Runtime assets verified in $TARGET"

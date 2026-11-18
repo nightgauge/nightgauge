@@ -18,6 +18,7 @@
  * progress and outcomes in `aria-live="polite"` regions.
  */
 
+import { buildWebviewCsp } from "../../utils/webviewCsp";
 import type {
   DoctorAdapterHealth,
   DoctorFinding,
@@ -502,11 +503,7 @@ function script(): string {
 /** Render the whole Doctor panel. Pure: identical input, identical output. */
 export function renderDoctorHtml(state: DoctorViewState, security: DoctorHtmlSecurity): string {
   const nonce = esc(security.nonce);
-  const csp = [
-    "default-src 'none'",
-    `style-src ${security.cspSource} 'nonce-${nonce}'`,
-    `script-src 'nonce-${nonce}'`,
-  ].join("; ");
+  const csp = buildWebviewCsp(nonce, security.cspSource, { styleSource: true });
   return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>

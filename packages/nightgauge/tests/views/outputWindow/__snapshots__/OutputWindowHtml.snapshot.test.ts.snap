@@ -6,7 +6,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > empty state — no entrie
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' test-csp;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-NONCE'; style-src test-csp 'unsafe-inline'; form-action 'none'; base-uri 'none'">
   <title>Nightgauge Output</title>
   
   <style>
@@ -1214,6 +1214,10 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > empty state — no entrie
       color: var(--vscode-descriptionForeground);
     }
 
+    .collapsible-code.collapsed .code-details {
+      display: none;
+    }
+
     .code-details pre {
       margin: 0;
       padding: var(--spacing-sm);
@@ -2009,8 +2013,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > empty state — no entrie
         if (codeToggle) {
           const container = codeToggle.closest('.collapsible-code');
           if (container) {
-            console.log('[OutputWindow] Code toggle clicked:', container.dataset.codeId);
-            toggleCodeBlock(container.dataset.codeId);
+            toggleCodeBlock(container);
           }
           return;
         }
@@ -3079,7 +3082,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > empty state — no entrie
         if (summary) {
           const count = details.querySelectorAll('.output-entry, .tool-indicator, .tool-summary').length;
           summary.innerHTML = '<span class="stage-group-icon">' + icon + '</span> ' +
-            '<span class="stage-group-name">' + stageName + '</span>' +
+            '<span class="stage-group-name">' + escapeHtml(stageName) + '</span>' +
             '<span class="stage-group-count">' + count + ' entr' + (count === 1 ? 'y' : 'ies') + '</span>';
         }
       }
@@ -3112,7 +3115,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > empty state — no entrie
           '<span class="entry-time">' + timestamp + '</span>' +
           '<span class="entry-badge ' + getLevelClass(entry.level) + '">' + getLevelBadge(entry.level) + '</span>';
         if (entry.stage) {
-          html += '<span class="entry-stage">[' + formatStageName(entry.stage) + ']</span>';
+          html += '<span class="entry-stage">[' + escapeHtml(formatStageName(entry.stage)) + ']</span>';
         }
         html += '</div>';
 
@@ -3220,10 +3223,14 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > empty state — no entrie
         return labels[stage] || stage;
       }
 
+      // Escapes text for an element body or a quoted attribute value.
       function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        return String(text == null ? '' : text)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
       }
 
       // Tool indicator functions
@@ -3344,12 +3351,52 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > empty state — no entrie
         return iconMap[tool] || '\\uD83D\\uDEE0';
       }
 
-      // Configure marked.js for safe rendering
-      if (typeof marked !== 'undefined') {
+      // Markdown rendering (Issue #846, #3401). Agent output is untrusted, so
+      // it renders in two layers: marked's renderer shows raw HTML in the
+      // source as literal text and escapes every attribute it writes, and
+      // DOMPurify then keeps only the formatting elements and attributes below.
+      // Without both libraries the text is shown escaped.
+      var MARKDOWN_ALLOWED_TAGS = [
+        'a', 'b', 'blockquote', 'br', 'code', 'del', 'div', 'em', 'h1', 'h2',
+        'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'li', 'ol', 'p', 'pre', 's', 'span',
+        'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul'
+      ];
+      var MARKDOWN_ALLOWED_ATTR = ['href', 'title', 'class', 'start', 'align'];
+      // Only the classes the code renderer below emits survive sanitizing, so
+      // rendered output can never carry a class a click handler listens for.
+      var MARKDOWN_CLASS_PATTERN =
+        /^(collapsible-code|collapsed|code-toggle|toggle-icon|code-summary|code-details|language-[A-Za-z0-9_+#.-]+)$/;
+      var markdownReady = typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined';
+
+      // A fenced-code info string becomes a class name, so keep only its
+      // leading identifier characters.
+      function safeCodeLanguage(lang) {
+        var match = /^[A-Za-z0-9_+#.-]{1,32}/.exec(String(lang || ''));
+        return match ? match[0] : '';
+      }
+
+      function sanitizeMarkdownHtml(html) {
+        return DOMPurify.sanitize(html, {
+          ALLOWED_TAGS: MARKDOWN_ALLOWED_TAGS,
+          ALLOWED_ATTR: MARKDOWN_ALLOWED_ATTR,
+          ALLOW_DATA_ATTR: false,
+          ALLOW_ARIA_ATTR: false
+        });
+      }
+
+      if (markdownReady) {
+        DOMPurify.addHook('uponSanitizeAttribute', function(_node, data) {
+          if (data.attrName === 'class') {
+            data.attrValue = data.attrValue
+              .split(/\\s+/)
+              .filter(function(c) { return MARKDOWN_CLASS_PATTERN.test(c); })
+              .join(' ');
+          }
+        });
+
         marked.setOptions({
           breaks: false, // Was: true — caused double-spacing (Issue #846)
-          gfm: true,     // GitHub Flavored Markdown
-          sanitize: false // We trust our own content
+          gfm: true      // GitHub Flavored Markdown
         });
 
         // Custom renderer for fenced code blocks (Issue #846)
@@ -3358,48 +3405,50 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > empty state — no entrie
         renderer.code = function(code, language) {
           // Handle marked v5+ object argument format
           var text = typeof code === 'object' ? code.text : code;
-          var lang = typeof code === 'object' ? code.lang : language;
+          var lang = safeCodeLanguage(typeof code === 'object' ? code.lang : language);
           var lines = text.split('\\n');
           var lineCount = lines.length;
           var langLabel = lang ? ', ' + lang : '';
+          var codeClass = 'language-' + (lang || 'text');
 
           if (lineCount > 8) {
             // Collapse long fenced code blocks
-            var id = 'code-' + Math.random().toString(36).slice(2, 11);
-            return '<div class="collapsible-code collapsed" data-code-id="' + id + '">' +
+            return '<div class="collapsible-code collapsed">' +
               '<div class="code-toggle">' +
               '<span class="toggle-icon">\\u25B6</span> ' +
-              '<span class="code-summary">Code block (' + lineCount + ' lines' + langLabel + ')</span>' +
+              '<span class="code-summary">Code block (' + lineCount + ' lines' + escapeHtml(langLabel) + ')</span>' +
               '</div>' +
-              '<div class="code-details" style="display: none;">' +
-              '<pre><code class="language-' + (lang || 'text') + '">' +
+              '<div class="code-details">' +
+              '<pre><code class="' + escapeHtml(codeClass) + '">' +
               escapeHtml(text) + '</code></pre>' +
               '</div></div>';
           }
 
           // Short code blocks render normally
-          return '<pre><code class="language-' + (lang || 'text') + '">' +
+          return '<pre><code class="' + escapeHtml(codeClass) + '">' +
             escapeHtml(text) + '</code></pre>';
+        };
+        // Raw HTML in the Markdown source is shown as the characters it is.
+        renderer.html = function(token) {
+          var raw = typeof token === 'object' ? (token.text || token.raw || '') : token;
+          return escapeHtml(raw);
+        };
+        // Task-list checkboxes render as characters, not form controls.
+        renderer.checkbox = function(token) {
+          var checked = typeof token === 'object' ? token.checked : token;
+          return checked ? '\\u2611 ' : '\\u2610 ';
         };
 
         marked.use({ renderer: renderer });
       }
 
       // Toggle collapsible fenced code blocks (Issue #846)
-      function toggleCodeBlock(codeId) {
-        var container = document.querySelector('[data-code-id="' + codeId + '"]');
-        if (!container) return;
-        var details = container.querySelector('.code-details');
+      // Collapsed state is the container's \`collapsed\` class; CSS hides the
+      // details, so the sanitized markup needs no inline style.
+      function toggleCodeBlock(container) {
         var icon = container.querySelector('.toggle-icon');
-        if (details.style.display === 'none') {
-          details.style.display = 'block';
-          icon.textContent = '\\u25BC';
-          container.classList.remove('collapsed');
-        } else {
-          details.style.display = 'none';
-          icon.textContent = '\\u25B6';
-          container.classList.add('collapsed');
-        }
+        var collapsed = container.classList.toggle('collapsed');
+        if (icon) icon.textContent = collapsed ? '\\u25B6' : '\\u25BC';
       }
 
       // ===== Content Formatting Functions (Issue #428) =====
@@ -3636,10 +3685,11 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > empty state — no entrie
         // fence as code, breaking the output.
         processed = balanceFencedCodeBlocks(processed);
 
-        // Use marked.js if available, otherwise escape HTML
-        if (typeof marked !== 'undefined' && marked.parse) {
+        // Render only when both marked and the sanitizer loaded; otherwise
+        // escape HTML (fail closed).
+        if (markdownReady) {
           try {
-            return marked.parse(processed);
+            return sanitizeMarkdownHtml(marked.parse(processed));
           } catch (e) {
             console.error('Markdown parsing error:', e);
             return escapeHtml(processed).replace(/\\n/g, '<br>');
@@ -4059,7 +4109,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > overview dashboard with 3
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' test-csp;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-NONCE'; style-src test-csp 'unsafe-inline'; form-action 'none'; base-uri 'none'">
   <title>Nightgauge Output — #101 — Complete feature · nightgauge/nightgauge</title>
   
   <style>
@@ -5267,6 +5317,10 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > overview dashboard with 3
       color: var(--vscode-descriptionForeground);
     }
 
+    .collapsible-code.collapsed .code-details {
+      display: none;
+    }
+
     .code-details pre {
       margin: 0;
       padding: var(--spacing-sm);
@@ -6118,8 +6172,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > overview dashboard with 3
         if (codeToggle) {
           const container = codeToggle.closest('.collapsible-code');
           if (container) {
-            console.log('[OutputWindow] Code toggle clicked:', container.dataset.codeId);
-            toggleCodeBlock(container.dataset.codeId);
+            toggleCodeBlock(container);
           }
           return;
         }
@@ -7188,7 +7241,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > overview dashboard with 3
         if (summary) {
           const count = details.querySelectorAll('.output-entry, .tool-indicator, .tool-summary').length;
           summary.innerHTML = '<span class="stage-group-icon">' + icon + '</span> ' +
-            '<span class="stage-group-name">' + stageName + '</span>' +
+            '<span class="stage-group-name">' + escapeHtml(stageName) + '</span>' +
             '<span class="stage-group-count">' + count + ' entr' + (count === 1 ? 'y' : 'ies') + '</span>';
         }
       }
@@ -7221,7 +7274,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > overview dashboard with 3
           '<span class="entry-time">' + timestamp + '</span>' +
           '<span class="entry-badge ' + getLevelClass(entry.level) + '">' + getLevelBadge(entry.level) + '</span>';
         if (entry.stage) {
-          html += '<span class="entry-stage">[' + formatStageName(entry.stage) + ']</span>';
+          html += '<span class="entry-stage">[' + escapeHtml(formatStageName(entry.stage)) + ']</span>';
         }
         html += '</div>';
 
@@ -7329,10 +7382,14 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > overview dashboard with 3
         return labels[stage] || stage;
       }
 
+      // Escapes text for an element body or a quoted attribute value.
       function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        return String(text == null ? '' : text)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
       }
 
       // Tool indicator functions
@@ -7453,12 +7510,52 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > overview dashboard with 3
         return iconMap[tool] || '\\uD83D\\uDEE0';
       }
 
-      // Configure marked.js for safe rendering
-      if (typeof marked !== 'undefined') {
+      // Markdown rendering (Issue #846, #3401). Agent output is untrusted, so
+      // it renders in two layers: marked's renderer shows raw HTML in the
+      // source as literal text and escapes every attribute it writes, and
+      // DOMPurify then keeps only the formatting elements and attributes below.
+      // Without both libraries the text is shown escaped.
+      var MARKDOWN_ALLOWED_TAGS = [
+        'a', 'b', 'blockquote', 'br', 'code', 'del', 'div', 'em', 'h1', 'h2',
+        'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'li', 'ol', 'p', 'pre', 's', 'span',
+        'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul'
+      ];
+      var MARKDOWN_ALLOWED_ATTR = ['href', 'title', 'class', 'start', 'align'];
+      // Only the classes the code renderer below emits survive sanitizing, so
+      // rendered output can never carry a class a click handler listens for.
+      var MARKDOWN_CLASS_PATTERN =
+        /^(collapsible-code|collapsed|code-toggle|toggle-icon|code-summary|code-details|language-[A-Za-z0-9_+#.-]+)$/;
+      var markdownReady = typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined';
+
+      // A fenced-code info string becomes a class name, so keep only its
+      // leading identifier characters.
+      function safeCodeLanguage(lang) {
+        var match = /^[A-Za-z0-9_+#.-]{1,32}/.exec(String(lang || ''));
+        return match ? match[0] : '';
+      }
+
+      function sanitizeMarkdownHtml(html) {
+        return DOMPurify.sanitize(html, {
+          ALLOWED_TAGS: MARKDOWN_ALLOWED_TAGS,
+          ALLOWED_ATTR: MARKDOWN_ALLOWED_ATTR,
+          ALLOW_DATA_ATTR: false,
+          ALLOW_ARIA_ATTR: false
+        });
+      }
+
+      if (markdownReady) {
+        DOMPurify.addHook('uponSanitizeAttribute', function(_node, data) {
+          if (data.attrName === 'class') {
+            data.attrValue = data.attrValue
+              .split(/\\s+/)
+              .filter(function(c) { return MARKDOWN_CLASS_PATTERN.test(c); })
+              .join(' ');
+          }
+        });
+
         marked.setOptions({
           breaks: false, // Was: true — caused double-spacing (Issue #846)
-          gfm: true,     // GitHub Flavored Markdown
-          sanitize: false // We trust our own content
+          gfm: true      // GitHub Flavored Markdown
         });
 
         // Custom renderer for fenced code blocks (Issue #846)
@@ -7467,48 +7564,50 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > overview dashboard with 3
         renderer.code = function(code, language) {
           // Handle marked v5+ object argument format
           var text = typeof code === 'object' ? code.text : code;
-          var lang = typeof code === 'object' ? code.lang : language;
+          var lang = safeCodeLanguage(typeof code === 'object' ? code.lang : language);
           var lines = text.split('\\n');
           var lineCount = lines.length;
           var langLabel = lang ? ', ' + lang : '';
+          var codeClass = 'language-' + (lang || 'text');
 
           if (lineCount > 8) {
             // Collapse long fenced code blocks
-            var id = 'code-' + Math.random().toString(36).slice(2, 11);
-            return '<div class="collapsible-code collapsed" data-code-id="' + id + '">' +
+            return '<div class="collapsible-code collapsed">' +
               '<div class="code-toggle">' +
               '<span class="toggle-icon">\\u25B6</span> ' +
-              '<span class="code-summary">Code block (' + lineCount + ' lines' + langLabel + ')</span>' +
+              '<span class="code-summary">Code block (' + lineCount + ' lines' + escapeHtml(langLabel) + ')</span>' +
               '</div>' +
-              '<div class="code-details" style="display: none;">' +
-              '<pre><code class="language-' + (lang || 'text') + '">' +
+              '<div class="code-details">' +
+              '<pre><code class="' + escapeHtml(codeClass) + '">' +
               escapeHtml(text) + '</code></pre>' +
               '</div></div>';
           }
 
           // Short code blocks render normally
-          return '<pre><code class="language-' + (lang || 'text') + '">' +
+          return '<pre><code class="' + escapeHtml(codeClass) + '">' +
             escapeHtml(text) + '</code></pre>';
+        };
+        // Raw HTML in the Markdown source is shown as the characters it is.
+        renderer.html = function(token) {
+          var raw = typeof token === 'object' ? (token.text || token.raw || '') : token;
+          return escapeHtml(raw);
+        };
+        // Task-list checkboxes render as characters, not form controls.
+        renderer.checkbox = function(token) {
+          var checked = typeof token === 'object' ? token.checked : token;
+          return checked ? '\\u2611 ' : '\\u2610 ';
         };
 
         marked.use({ renderer: renderer });
       }
 
       // Toggle collapsible fenced code blocks (Issue #846)
-      function toggleCodeBlock(codeId) {
-        var container = document.querySelector('[data-code-id="' + codeId + '"]');
-        if (!container) return;
-        var details = container.querySelector('.code-details');
+      // Collapsed state is the container's \`collapsed\` class; CSS hides the
+      // details, so the sanitized markup needs no inline style.
+      function toggleCodeBlock(container) {
         var icon = container.querySelector('.toggle-icon');
-        if (details.style.display === 'none') {
-          details.style.display = 'block';
-          icon.textContent = '\\u25BC';
-          container.classList.remove('collapsed');
-        } else {
-          details.style.display = 'none';
-          icon.textContent = '\\u25B6';
-          container.classList.add('collapsed');
-        }
+        var collapsed = container.classList.toggle('collapsed');
+        if (icon) icon.textContent = collapsed ? '\\u25B6' : '\\u25BC';
       }
 
       // ===== Content Formatting Functions (Issue #428) =====
@@ -7745,10 +7844,11 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > overview dashboard with 3
         // fence as code, breaking the output.
         processed = balanceFencedCodeBlocks(processed);
 
-        // Use marked.js if available, otherwise escape HTML
-        if (typeof marked !== 'undefined' && marked.parse) {
+        // Render only when both marked and the sanitizer loaded; otherwise
+        // escape HTML (fail closed).
+        if (markdownReady) {
           try {
-            return marked.parse(processed);
+            return sanitizeMarkdownHtml(marked.parse(processed));
           } catch (e) {
             console.error('Markdown parsing error:', e);
             return escapeHtml(processed).replace(/\\n/g, '<br>');
@@ -8168,7 +8268,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with output content — m
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' test-csp;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-NONCE'; style-src test-csp 'unsafe-inline'; form-action 'none'; base-uri 'none'">
   <title>Nightgauge Output - Issue #42</title>
   
   <style>
@@ -9376,6 +9476,10 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with output content — m
       color: var(--vscode-descriptionForeground);
     }
 
+    .collapsible-code.collapsed .code-details {
+      display: none;
+    }
+
     .code-details pre {
       margin: 0;
       padding: var(--spacing-sm);
@@ -10207,8 +10311,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with output content — m
         if (codeToggle) {
           const container = codeToggle.closest('.collapsible-code');
           if (container) {
-            console.log('[OutputWindow] Code toggle clicked:', container.dataset.codeId);
-            toggleCodeBlock(container.dataset.codeId);
+            toggleCodeBlock(container);
           }
           return;
         }
@@ -11277,7 +11380,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with output content — m
         if (summary) {
           const count = details.querySelectorAll('.output-entry, .tool-indicator, .tool-summary').length;
           summary.innerHTML = '<span class="stage-group-icon">' + icon + '</span> ' +
-            '<span class="stage-group-name">' + stageName + '</span>' +
+            '<span class="stage-group-name">' + escapeHtml(stageName) + '</span>' +
             '<span class="stage-group-count">' + count + ' entr' + (count === 1 ? 'y' : 'ies') + '</span>';
         }
       }
@@ -11310,7 +11413,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with output content — m
           '<span class="entry-time">' + timestamp + '</span>' +
           '<span class="entry-badge ' + getLevelClass(entry.level) + '">' + getLevelBadge(entry.level) + '</span>';
         if (entry.stage) {
-          html += '<span class="entry-stage">[' + formatStageName(entry.stage) + ']</span>';
+          html += '<span class="entry-stage">[' + escapeHtml(formatStageName(entry.stage)) + ']</span>';
         }
         html += '</div>';
 
@@ -11418,10 +11521,14 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with output content — m
         return labels[stage] || stage;
       }
 
+      // Escapes text for an element body or a quoted attribute value.
       function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        return String(text == null ? '' : text)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
       }
 
       // Tool indicator functions
@@ -11542,12 +11649,52 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with output content — m
         return iconMap[tool] || '\\uD83D\\uDEE0';
       }
 
-      // Configure marked.js for safe rendering
-      if (typeof marked !== 'undefined') {
+      // Markdown rendering (Issue #846, #3401). Agent output is untrusted, so
+      // it renders in two layers: marked's renderer shows raw HTML in the
+      // source as literal text and escapes every attribute it writes, and
+      // DOMPurify then keeps only the formatting elements and attributes below.
+      // Without both libraries the text is shown escaped.
+      var MARKDOWN_ALLOWED_TAGS = [
+        'a', 'b', 'blockquote', 'br', 'code', 'del', 'div', 'em', 'h1', 'h2',
+        'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'li', 'ol', 'p', 'pre', 's', 'span',
+        'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul'
+      ];
+      var MARKDOWN_ALLOWED_ATTR = ['href', 'title', 'class', 'start', 'align'];
+      // Only the classes the code renderer below emits survive sanitizing, so
+      // rendered output can never carry a class a click handler listens for.
+      var MARKDOWN_CLASS_PATTERN =
+        /^(collapsible-code|collapsed|code-toggle|toggle-icon|code-summary|code-details|language-[A-Za-z0-9_+#.-]+)$/;
+      var markdownReady = typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined';
+
+      // A fenced-code info string becomes a class name, so keep only its
+      // leading identifier characters.
+      function safeCodeLanguage(lang) {
+        var match = /^[A-Za-z0-9_+#.-]{1,32}/.exec(String(lang || ''));
+        return match ? match[0] : '';
+      }
+
+      function sanitizeMarkdownHtml(html) {
+        return DOMPurify.sanitize(html, {
+          ALLOWED_TAGS: MARKDOWN_ALLOWED_TAGS,
+          ALLOWED_ATTR: MARKDOWN_ALLOWED_ATTR,
+          ALLOW_DATA_ATTR: false,
+          ALLOW_ARIA_ATTR: false
+        });
+      }
+
+      if (markdownReady) {
+        DOMPurify.addHook('uponSanitizeAttribute', function(_node, data) {
+          if (data.attrName === 'class') {
+            data.attrValue = data.attrValue
+              .split(/\\s+/)
+              .filter(function(c) { return MARKDOWN_CLASS_PATTERN.test(c); })
+              .join(' ');
+          }
+        });
+
         marked.setOptions({
           breaks: false, // Was: true — caused double-spacing (Issue #846)
-          gfm: true,     // GitHub Flavored Markdown
-          sanitize: false // We trust our own content
+          gfm: true      // GitHub Flavored Markdown
         });
 
         // Custom renderer for fenced code blocks (Issue #846)
@@ -11556,48 +11703,50 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with output content — m
         renderer.code = function(code, language) {
           // Handle marked v5+ object argument format
           var text = typeof code === 'object' ? code.text : code;
-          var lang = typeof code === 'object' ? code.lang : language;
+          var lang = safeCodeLanguage(typeof code === 'object' ? code.lang : language);
           var lines = text.split('\\n');
           var lineCount = lines.length;
           var langLabel = lang ? ', ' + lang : '';
+          var codeClass = 'language-' + (lang || 'text');
 
           if (lineCount > 8) {
             // Collapse long fenced code blocks
-            var id = 'code-' + Math.random().toString(36).slice(2, 11);
-            return '<div class="collapsible-code collapsed" data-code-id="' + id + '">' +
+            return '<div class="collapsible-code collapsed">' +
               '<div class="code-toggle">' +
               '<span class="toggle-icon">\\u25B6</span> ' +
-              '<span class="code-summary">Code block (' + lineCount + ' lines' + langLabel + ')</span>' +
+              '<span class="code-summary">Code block (' + lineCount + ' lines' + escapeHtml(langLabel) + ')</span>' +
               '</div>' +
-              '<div class="code-details" style="display: none;">' +
-              '<pre><code class="language-' + (lang || 'text') + '">' +
+              '<div class="code-details">' +
+              '<pre><code class="' + escapeHtml(codeClass) + '">' +
               escapeHtml(text) + '</code></pre>' +
               '</div></div>';
           }
 
           // Short code blocks render normally
-          return '<pre><code class="language-' + (lang || 'text') + '">' +
+          return '<pre><code class="' + escapeHtml(codeClass) + '">' +
             escapeHtml(text) + '</code></pre>';
+        };
+        // Raw HTML in the Markdown source is shown as the characters it is.
+        renderer.html = function(token) {
+          var raw = typeof token === 'object' ? (token.text || token.raw || '') : token;
+          return escapeHtml(raw);
+        };
+        // Task-list checkboxes render as characters, not form controls.
+        renderer.checkbox = function(token) {
+          var checked = typeof token === 'object' ? token.checked : token;
+          return checked ? '\\u2611 ' : '\\u2610 ';
         };
 
         marked.use({ renderer: renderer });
       }
 
       // Toggle collapsible fenced code blocks (Issue #846)
-      function toggleCodeBlock(codeId) {
-        var container = document.querySelector('[data-code-id="' + codeId + '"]');
-        if (!container) return;
-        var details = container.querySelector('.code-details');
+      // Collapsed state is the container's \`collapsed\` class; CSS hides the
+      // details, so the sanitized markup needs no inline style.
+      function toggleCodeBlock(container) {
         var icon = container.querySelector('.toggle-icon');
-        if (details.style.display === 'none') {
-          details.style.display = 'block';
-          icon.textContent = '\\u25BC';
-          container.classList.remove('collapsed');
-        } else {
-          details.style.display = 'none';
-          icon.textContent = '\\u25B6';
-          container.classList.add('collapsed');
-        }
+        var collapsed = container.classList.toggle('collapsed');
+        if (icon) icon.textContent = collapsed ? '\\u25B6' : '\\u25BC';
       }
 
       // ===== Content Formatting Functions (Issue #428) =====
@@ -11834,10 +11983,11 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with output content — m
         // fence as code, breaking the output.
         processed = balanceFencedCodeBlocks(processed);
 
-        // Use marked.js if available, otherwise escape HTML
-        if (typeof marked !== 'undefined' && marked.parse) {
+        // Render only when both marked and the sanitizer loaded; otherwise
+        // escape HTML (fail closed).
+        if (markdownReady) {
           try {
-            return marked.parse(processed);
+            return sanitizeMarkdownHtml(marked.parse(processed));
           } catch (e) {
             console.error('Markdown parsing error:', e);
             return escapeHtml(processed).replace(/\\n/g, '<br>');
@@ -12257,7 +12407,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with question prompt acti
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' test-csp;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-NONCE'; style-src test-csp 'unsafe-inline'; form-action 'none'; base-uri 'none'">
   <title>Nightgauge Output - Issue #99</title>
   
   <style>
@@ -13465,6 +13615,10 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with question prompt acti
       color: var(--vscode-descriptionForeground);
     }
 
+    .collapsible-code.collapsed .code-details {
+      display: none;
+    }
+
     .code-details pre {
       margin: 0;
       padding: var(--spacing-sm);
@@ -14285,8 +14439,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with question prompt acti
         if (codeToggle) {
           const container = codeToggle.closest('.collapsible-code');
           if (container) {
-            console.log('[OutputWindow] Code toggle clicked:', container.dataset.codeId);
-            toggleCodeBlock(container.dataset.codeId);
+            toggleCodeBlock(container);
           }
           return;
         }
@@ -15355,7 +15508,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with question prompt acti
         if (summary) {
           const count = details.querySelectorAll('.output-entry, .tool-indicator, .tool-summary').length;
           summary.innerHTML = '<span class="stage-group-icon">' + icon + '</span> ' +
-            '<span class="stage-group-name">' + stageName + '</span>' +
+            '<span class="stage-group-name">' + escapeHtml(stageName) + '</span>' +
             '<span class="stage-group-count">' + count + ' entr' + (count === 1 ? 'y' : 'ies') + '</span>';
         }
       }
@@ -15388,7 +15541,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with question prompt acti
           '<span class="entry-time">' + timestamp + '</span>' +
           '<span class="entry-badge ' + getLevelClass(entry.level) + '">' + getLevelBadge(entry.level) + '</span>';
         if (entry.stage) {
-          html += '<span class="entry-stage">[' + formatStageName(entry.stage) + ']</span>';
+          html += '<span class="entry-stage">[' + escapeHtml(formatStageName(entry.stage)) + ']</span>';
         }
         html += '</div>';
 
@@ -15496,10 +15649,14 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with question prompt acti
         return labels[stage] || stage;
       }
 
+      // Escapes text for an element body or a quoted attribute value.
       function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        return String(text == null ? '' : text)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
       }
 
       // Tool indicator functions
@@ -15620,12 +15777,52 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with question prompt acti
         return iconMap[tool] || '\\uD83D\\uDEE0';
       }
 
-      // Configure marked.js for safe rendering
-      if (typeof marked !== 'undefined') {
+      // Markdown rendering (Issue #846, #3401). Agent output is untrusted, so
+      // it renders in two layers: marked's renderer shows raw HTML in the
+      // source as literal text and escapes every attribute it writes, and
+      // DOMPurify then keeps only the formatting elements and attributes below.
+      // Without both libraries the text is shown escaped.
+      var MARKDOWN_ALLOWED_TAGS = [
+        'a', 'b', 'blockquote', 'br', 'code', 'del', 'div', 'em', 'h1', 'h2',
+        'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'li', 'ol', 'p', 'pre', 's', 'span',
+        'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul'
+      ];
+      var MARKDOWN_ALLOWED_ATTR = ['href', 'title', 'class', 'start', 'align'];
+      // Only the classes the code renderer below emits survive sanitizing, so
+      // rendered output can never carry a class a click handler listens for.
+      var MARKDOWN_CLASS_PATTERN =
+        /^(collapsible-code|collapsed|code-toggle|toggle-icon|code-summary|code-details|language-[A-Za-z0-9_+#.-]+)$/;
+      var markdownReady = typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined';
+
+      // A fenced-code info string becomes a class name, so keep only its
+      // leading identifier characters.
+      function safeCodeLanguage(lang) {
+        var match = /^[A-Za-z0-9_+#.-]{1,32}/.exec(String(lang || ''));
+        return match ? match[0] : '';
+      }
+
+      function sanitizeMarkdownHtml(html) {
+        return DOMPurify.sanitize(html, {
+          ALLOWED_TAGS: MARKDOWN_ALLOWED_TAGS,
+          ALLOWED_ATTR: MARKDOWN_ALLOWED_ATTR,
+          ALLOW_DATA_ATTR: false,
+          ALLOW_ARIA_ATTR: false
+        });
+      }
+
+      if (markdownReady) {
+        DOMPurify.addHook('uponSanitizeAttribute', function(_node, data) {
+          if (data.attrName === 'class') {
+            data.attrValue = data.attrValue
+              .split(/\\s+/)
+              .filter(function(c) { return MARKDOWN_CLASS_PATTERN.test(c); })
+              .join(' ');
+          }
+        });
+
         marked.setOptions({
           breaks: false, // Was: true — caused double-spacing (Issue #846)
-          gfm: true,     // GitHub Flavored Markdown
-          sanitize: false // We trust our own content
+          gfm: true      // GitHub Flavored Markdown
         });
 
         // Custom renderer for fenced code blocks (Issue #846)
@@ -15634,48 +15831,50 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with question prompt acti
         renderer.code = function(code, language) {
           // Handle marked v5+ object argument format
           var text = typeof code === 'object' ? code.text : code;
-          var lang = typeof code === 'object' ? code.lang : language;
+          var lang = safeCodeLanguage(typeof code === 'object' ? code.lang : language);
           var lines = text.split('\\n');
           var lineCount = lines.length;
           var langLabel = lang ? ', ' + lang : '';
+          var codeClass = 'language-' + (lang || 'text');
 
           if (lineCount > 8) {
             // Collapse long fenced code blocks
-            var id = 'code-' + Math.random().toString(36).slice(2, 11);
-            return '<div class="collapsible-code collapsed" data-code-id="' + id + '">' +
+            return '<div class="collapsible-code collapsed">' +
               '<div class="code-toggle">' +
               '<span class="toggle-icon">\\u25B6</span> ' +
-              '<span class="code-summary">Code block (' + lineCount + ' lines' + langLabel + ')</span>' +
+              '<span class="code-summary">Code block (' + lineCount + ' lines' + escapeHtml(langLabel) + ')</span>' +
               '</div>' +
-              '<div class="code-details" style="display: none;">' +
-              '<pre><code class="language-' + (lang || 'text') + '">' +
+              '<div class="code-details">' +
+              '<pre><code class="' + escapeHtml(codeClass) + '">' +
               escapeHtml(text) + '</code></pre>' +
               '</div></div>';
           }
 
           // Short code blocks render normally
-          return '<pre><code class="language-' + (lang || 'text') + '">' +
+          return '<pre><code class="' + escapeHtml(codeClass) + '">' +
             escapeHtml(text) + '</code></pre>';
+        };
+        // Raw HTML in the Markdown source is shown as the characters it is.
+        renderer.html = function(token) {
+          var raw = typeof token === 'object' ? (token.text || token.raw || '') : token;
+          return escapeHtml(raw);
+        };
+        // Task-list checkboxes render as characters, not form controls.
+        renderer.checkbox = function(token) {
+          var checked = typeof token === 'object' ? token.checked : token;
+          return checked ? '\\u2611 ' : '\\u2610 ';
         };
 
         marked.use({ renderer: renderer });
       }
 
       // Toggle collapsible fenced code blocks (Issue #846)
-      function toggleCodeBlock(codeId) {
-        var container = document.querySelector('[data-code-id="' + codeId + '"]');
-        if (!container) return;
-        var details = container.querySelector('.code-details');
+      // Collapsed state is the container's \`collapsed\` class; CSS hides the
+      // details, so the sanitized markup needs no inline style.
+      function toggleCodeBlock(container) {
         var icon = container.querySelector('.toggle-icon');
-        if (details.style.display === 'none') {
-          details.style.display = 'block';
-          icon.textContent = '\\u25BC';
-          container.classList.remove('collapsed');
-        } else {
-          details.style.display = 'none';
-          icon.textContent = '\\u25B6';
-          container.classList.add('collapsed');
-        }
+        var collapsed = container.classList.toggle('collapsed');
+        if (icon) icon.textContent = collapsed ? '\\u25B6' : '\\u25BC';
       }
 
       // ===== Content Formatting Functions (Issue #428) =====
@@ -15912,10 +16111,11 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with question prompt acti
         // fence as code, breaking the output.
         processed = balanceFencedCodeBlocks(processed);
 
-        // Use marked.js if available, otherwise escape HTML
-        if (typeof marked !== 'undefined' && marked.parse) {
+        // Render only when both marked and the sanitizer loaded; otherwise
+        // escape HTML (fail closed).
+        if (markdownReady) {
           try {
-            return marked.parse(processed);
+            return sanitizeMarkdownHtml(marked.parse(processed));
           } catch (e) {
             console.error('Markdown parsing error:', e);
             return escapeHtml(processed).replace(/\\n/g, '<br>');
@@ -16335,7 +16535,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with search bar visible �
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' test-csp;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-NONCE'; style-src test-csp 'unsafe-inline'; form-action 'none'; base-uri 'none'">
   <title>Nightgauge Output - Issue #7</title>
   
   <style>
@@ -17543,6 +17743,10 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with search bar visible �
       color: var(--vscode-descriptionForeground);
     }
 
+    .collapsible-code.collapsed .code-details {
+      display: none;
+    }
+
     .code-details pre {
       margin: 0;
       padding: var(--spacing-sm);
@@ -18356,8 +18560,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with search bar visible �
         if (codeToggle) {
           const container = codeToggle.closest('.collapsible-code');
           if (container) {
-            console.log('[OutputWindow] Code toggle clicked:', container.dataset.codeId);
-            toggleCodeBlock(container.dataset.codeId);
+            toggleCodeBlock(container);
           }
           return;
         }
@@ -19426,7 +19629,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with search bar visible �
         if (summary) {
           const count = details.querySelectorAll('.output-entry, .tool-indicator, .tool-summary').length;
           summary.innerHTML = '<span class="stage-group-icon">' + icon + '</span> ' +
-            '<span class="stage-group-name">' + stageName + '</span>' +
+            '<span class="stage-group-name">' + escapeHtml(stageName) + '</span>' +
             '<span class="stage-group-count">' + count + ' entr' + (count === 1 ? 'y' : 'ies') + '</span>';
         }
       }
@@ -19459,7 +19662,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with search bar visible �
           '<span class="entry-time">' + timestamp + '</span>' +
           '<span class="entry-badge ' + getLevelClass(entry.level) + '">' + getLevelBadge(entry.level) + '</span>';
         if (entry.stage) {
-          html += '<span class="entry-stage">[' + formatStageName(entry.stage) + ']</span>';
+          html += '<span class="entry-stage">[' + escapeHtml(formatStageName(entry.stage)) + ']</span>';
         }
         html += '</div>';
 
@@ -19567,10 +19770,14 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with search bar visible �
         return labels[stage] || stage;
       }
 
+      // Escapes text for an element body or a quoted attribute value.
       function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        return String(text == null ? '' : text)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
       }
 
       // Tool indicator functions
@@ -19691,12 +19898,52 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with search bar visible �
         return iconMap[tool] || '\\uD83D\\uDEE0';
       }
 
-      // Configure marked.js for safe rendering
-      if (typeof marked !== 'undefined') {
+      // Markdown rendering (Issue #846, #3401). Agent output is untrusted, so
+      // it renders in two layers: marked's renderer shows raw HTML in the
+      // source as literal text and escapes every attribute it writes, and
+      // DOMPurify then keeps only the formatting elements and attributes below.
+      // Without both libraries the text is shown escaped.
+      var MARKDOWN_ALLOWED_TAGS = [
+        'a', 'b', 'blockquote', 'br', 'code', 'del', 'div', 'em', 'h1', 'h2',
+        'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'li', 'ol', 'p', 'pre', 's', 'span',
+        'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul'
+      ];
+      var MARKDOWN_ALLOWED_ATTR = ['href', 'title', 'class', 'start', 'align'];
+      // Only the classes the code renderer below emits survive sanitizing, so
+      // rendered output can never carry a class a click handler listens for.
+      var MARKDOWN_CLASS_PATTERN =
+        /^(collapsible-code|collapsed|code-toggle|toggle-icon|code-summary|code-details|language-[A-Za-z0-9_+#.-]+)$/;
+      var markdownReady = typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined';
+
+      // A fenced-code info string becomes a class name, so keep only its
+      // leading identifier characters.
+      function safeCodeLanguage(lang) {
+        var match = /^[A-Za-z0-9_+#.-]{1,32}/.exec(String(lang || ''));
+        return match ? match[0] : '';
+      }
+
+      function sanitizeMarkdownHtml(html) {
+        return DOMPurify.sanitize(html, {
+          ALLOWED_TAGS: MARKDOWN_ALLOWED_TAGS,
+          ALLOWED_ATTR: MARKDOWN_ALLOWED_ATTR,
+          ALLOW_DATA_ATTR: false,
+          ALLOW_ARIA_ATTR: false
+        });
+      }
+
+      if (markdownReady) {
+        DOMPurify.addHook('uponSanitizeAttribute', function(_node, data) {
+          if (data.attrName === 'class') {
+            data.attrValue = data.attrValue
+              .split(/\\s+/)
+              .filter(function(c) { return MARKDOWN_CLASS_PATTERN.test(c); })
+              .join(' ');
+          }
+        });
+
         marked.setOptions({
           breaks: false, // Was: true — caused double-spacing (Issue #846)
-          gfm: true,     // GitHub Flavored Markdown
-          sanitize: false // We trust our own content
+          gfm: true      // GitHub Flavored Markdown
         });
 
         // Custom renderer for fenced code blocks (Issue #846)
@@ -19705,48 +19952,50 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with search bar visible �
         renderer.code = function(code, language) {
           // Handle marked v5+ object argument format
           var text = typeof code === 'object' ? code.text : code;
-          var lang = typeof code === 'object' ? code.lang : language;
+          var lang = safeCodeLanguage(typeof code === 'object' ? code.lang : language);
           var lines = text.split('\\n');
           var lineCount = lines.length;
           var langLabel = lang ? ', ' + lang : '';
+          var codeClass = 'language-' + (lang || 'text');
 
           if (lineCount > 8) {
             // Collapse long fenced code blocks
-            var id = 'code-' + Math.random().toString(36).slice(2, 11);
-            return '<div class="collapsible-code collapsed" data-code-id="' + id + '">' +
+            return '<div class="collapsible-code collapsed">' +
               '<div class="code-toggle">' +
               '<span class="toggle-icon">\\u25B6</span> ' +
-              '<span class="code-summary">Code block (' + lineCount + ' lines' + langLabel + ')</span>' +
+              '<span class="code-summary">Code block (' + lineCount + ' lines' + escapeHtml(langLabel) + ')</span>' +
               '</div>' +
-              '<div class="code-details" style="display: none;">' +
-              '<pre><code class="language-' + (lang || 'text') + '">' +
+              '<div class="code-details">' +
+              '<pre><code class="' + escapeHtml(codeClass) + '">' +
               escapeHtml(text) + '</code></pre>' +
               '</div></div>';
           }
 
           // Short code blocks render normally
-          return '<pre><code class="language-' + (lang || 'text') + '">' +
+          return '<pre><code class="' + escapeHtml(codeClass) + '">' +
             escapeHtml(text) + '</code></pre>';
+        };
+        // Raw HTML in the Markdown source is shown as the characters it is.
+        renderer.html = function(token) {
+          var raw = typeof token === 'object' ? (token.text || token.raw || '') : token;
+          return escapeHtml(raw);
+        };
+        // Task-list checkboxes render as characters, not form controls.
+        renderer.checkbox = function(token) {
+          var checked = typeof token === 'object' ? token.checked : token;
+          return checked ? '\\u2611 ' : '\\u2610 ';
         };
 
         marked.use({ renderer: renderer });
       }
 
       // Toggle collapsible fenced code blocks (Issue #846)
-      function toggleCodeBlock(codeId) {
-        var container = document.querySelector('[data-code-id="' + codeId + '"]');
-        if (!container) return;
-        var details = container.querySelector('.code-details');
+      // Collapsed state is the container's \`collapsed\` class; CSS hides the
+      // details, so the sanitized markup needs no inline style.
+      function toggleCodeBlock(container) {
         var icon = container.querySelector('.toggle-icon');
-        if (details.style.display === 'none') {
-          details.style.display = 'block';
-          icon.textContent = '\\u25BC';
-          container.classList.remove('collapsed');
-        } else {
-          details.style.display = 'none';
-          icon.textContent = '\\u25B6';
-          container.classList.add('collapsed');
-        }
+        var collapsed = container.classList.toggle('collapsed');
+        if (icon) icon.textContent = collapsed ? '\\u25B6' : '\\u25BC';
       }
 
       // ===== Content Formatting Functions (Issue #428) =====
@@ -19983,10 +20232,11 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with search bar visible �
         // fence as code, breaking the output.
         processed = balanceFencedCodeBlocks(processed);
 
-        // Use marked.js if available, otherwise escape HTML
-        if (typeof marked !== 'undefined' && marked.parse) {
+        // Render only when both marked and the sanitizer loaded; otherwise
+        // escape HTML (fail closed).
+        if (markdownReady) {
           try {
-            return marked.parse(processed);
+            return sanitizeMarkdownHtml(marked.parse(processed));
           } catch (e) {
             console.error('Markdown parsing error:', e);
             return escapeHtml(processed).replace(/\\n/g, '<br>');
@@ -20406,7 +20656,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with slot info including 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' test-csp;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-NONCE'; style-src test-csp 'unsafe-inline'; form-action 'none'; base-uri 'none'">
   <title>Nightgauge Output — #42 — Fix truncation bug · nightgauge/nightgauge</title>
   
   <style>
@@ -21614,6 +21864,10 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with slot info including 
       color: var(--vscode-descriptionForeground);
     }
 
+    .collapsible-code.collapsed .code-details {
+      display: none;
+    }
+
     .code-details pre {
       margin: 0;
       padding: var(--spacing-sm);
@@ -22425,8 +22679,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with slot info including 
         if (codeToggle) {
           const container = codeToggle.closest('.collapsible-code');
           if (container) {
-            console.log('[OutputWindow] Code toggle clicked:', container.dataset.codeId);
-            toggleCodeBlock(container.dataset.codeId);
+            toggleCodeBlock(container);
           }
           return;
         }
@@ -23495,7 +23748,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with slot info including 
         if (summary) {
           const count = details.querySelectorAll('.output-entry, .tool-indicator, .tool-summary').length;
           summary.innerHTML = '<span class="stage-group-icon">' + icon + '</span> ' +
-            '<span class="stage-group-name">' + stageName + '</span>' +
+            '<span class="stage-group-name">' + escapeHtml(stageName) + '</span>' +
             '<span class="stage-group-count">' + count + ' entr' + (count === 1 ? 'y' : 'ies') + '</span>';
         }
       }
@@ -23528,7 +23781,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with slot info including 
           '<span class="entry-time">' + timestamp + '</span>' +
           '<span class="entry-badge ' + getLevelClass(entry.level) + '">' + getLevelBadge(entry.level) + '</span>';
         if (entry.stage) {
-          html += '<span class="entry-stage">[' + formatStageName(entry.stage) + ']</span>';
+          html += '<span class="entry-stage">[' + escapeHtml(formatStageName(entry.stage)) + ']</span>';
         }
         html += '</div>';
 
@@ -23636,10 +23889,14 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with slot info including 
         return labels[stage] || stage;
       }
 
+      // Escapes text for an element body or a quoted attribute value.
       function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        return String(text == null ? '' : text)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
       }
 
       // Tool indicator functions
@@ -23760,12 +24017,52 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with slot info including 
         return iconMap[tool] || '\\uD83D\\uDEE0';
       }
 
-      // Configure marked.js for safe rendering
-      if (typeof marked !== 'undefined') {
+      // Markdown rendering (Issue #846, #3401). Agent output is untrusted, so
+      // it renders in two layers: marked's renderer shows raw HTML in the
+      // source as literal text and escapes every attribute it writes, and
+      // DOMPurify then keeps only the formatting elements and attributes below.
+      // Without both libraries the text is shown escaped.
+      var MARKDOWN_ALLOWED_TAGS = [
+        'a', 'b', 'blockquote', 'br', 'code', 'del', 'div', 'em', 'h1', 'h2',
+        'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'li', 'ol', 'p', 'pre', 's', 'span',
+        'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul'
+      ];
+      var MARKDOWN_ALLOWED_ATTR = ['href', 'title', 'class', 'start', 'align'];
+      // Only the classes the code renderer below emits survive sanitizing, so
+      // rendered output can never carry a class a click handler listens for.
+      var MARKDOWN_CLASS_PATTERN =
+        /^(collapsible-code|collapsed|code-toggle|toggle-icon|code-summary|code-details|language-[A-Za-z0-9_+#.-]+)$/;
+      var markdownReady = typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined';
+
+      // A fenced-code info string becomes a class name, so keep only its
+      // leading identifier characters.
+      function safeCodeLanguage(lang) {
+        var match = /^[A-Za-z0-9_+#.-]{1,32}/.exec(String(lang || ''));
+        return match ? match[0] : '';
+      }
+
+      function sanitizeMarkdownHtml(html) {
+        return DOMPurify.sanitize(html, {
+          ALLOWED_TAGS: MARKDOWN_ALLOWED_TAGS,
+          ALLOWED_ATTR: MARKDOWN_ALLOWED_ATTR,
+          ALLOW_DATA_ATTR: false,
+          ALLOW_ARIA_ATTR: false
+        });
+      }
+
+      if (markdownReady) {
+        DOMPurify.addHook('uponSanitizeAttribute', function(_node, data) {
+          if (data.attrName === 'class') {
+            data.attrValue = data.attrValue
+              .split(/\\s+/)
+              .filter(function(c) { return MARKDOWN_CLASS_PATTERN.test(c); })
+              .join(' ');
+          }
+        });
+
         marked.setOptions({
           breaks: false, // Was: true — caused double-spacing (Issue #846)
-          gfm: true,     // GitHub Flavored Markdown
-          sanitize: false // We trust our own content
+          gfm: true      // GitHub Flavored Markdown
         });
 
         // Custom renderer for fenced code blocks (Issue #846)
@@ -23774,48 +24071,50 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with slot info including 
         renderer.code = function(code, language) {
           // Handle marked v5+ object argument format
           var text = typeof code === 'object' ? code.text : code;
-          var lang = typeof code === 'object' ? code.lang : language;
+          var lang = safeCodeLanguage(typeof code === 'object' ? code.lang : language);
           var lines = text.split('\\n');
           var lineCount = lines.length;
           var langLabel = lang ? ', ' + lang : '';
+          var codeClass = 'language-' + (lang || 'text');
 
           if (lineCount > 8) {
             // Collapse long fenced code blocks
-            var id = 'code-' + Math.random().toString(36).slice(2, 11);
-            return '<div class="collapsible-code collapsed" data-code-id="' + id + '">' +
+            return '<div class="collapsible-code collapsed">' +
               '<div class="code-toggle">' +
               '<span class="toggle-icon">\\u25B6</span> ' +
-              '<span class="code-summary">Code block (' + lineCount + ' lines' + langLabel + ')</span>' +
+              '<span class="code-summary">Code block (' + lineCount + ' lines' + escapeHtml(langLabel) + ')</span>' +
               '</div>' +
-              '<div class="code-details" style="display: none;">' +
-              '<pre><code class="language-' + (lang || 'text') + '">' +
+              '<div class="code-details">' +
+              '<pre><code class="' + escapeHtml(codeClass) + '">' +
               escapeHtml(text) + '</code></pre>' +
               '</div></div>';
           }
 
           // Short code blocks render normally
-          return '<pre><code class="language-' + (lang || 'text') + '">' +
+          return '<pre><code class="' + escapeHtml(codeClass) + '">' +
             escapeHtml(text) + '</code></pre>';
+        };
+        // Raw HTML in the Markdown source is shown as the characters it is.
+        renderer.html = function(token) {
+          var raw = typeof token === 'object' ? (token.text || token.raw || '') : token;
+          return escapeHtml(raw);
+        };
+        // Task-list checkboxes render as characters, not form controls.
+        renderer.checkbox = function(token) {
+          var checked = typeof token === 'object' ? token.checked : token;
+          return checked ? '\\u2611 ' : '\\u2610 ';
         };
 
         marked.use({ renderer: renderer });
       }
 
       // Toggle collapsible fenced code blocks (Issue #846)
-      function toggleCodeBlock(codeId) {
-        var container = document.querySelector('[data-code-id="' + codeId + '"]');
-        if (!container) return;
-        var details = container.querySelector('.code-details');
+      // Collapsed state is the container's \`collapsed\` class; CSS hides the
+      // details, so the sanitized markup needs no inline style.
+      function toggleCodeBlock(container) {
         var icon = container.querySelector('.toggle-icon');
-        if (details.style.display === 'none') {
-          details.style.display = 'block';
-          icon.textContent = '\\u25BC';
-          container.classList.remove('collapsed');
-        } else {
-          details.style.display = 'none';
-          icon.textContent = '\\u25B6';
-          container.classList.add('collapsed');
-        }
+        var collapsed = container.classList.toggle('collapsed');
+        if (icon) icon.textContent = collapsed ? '\\u25B6' : '\\u25BC';
       }
 
       // ===== Content Formatting Functions (Issue #428) =====
@@ -24052,10 +24351,11 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with slot info including 
         // fence as code, breaking the output.
         processed = balanceFencedCodeBlocks(processed);
 
-        // Use marked.js if available, otherwise escape HTML
-        if (typeof marked !== 'undefined' && marked.parse) {
+        // Render only when both marked and the sanitizer loaded; otherwise
+        // escape HTML (fail closed).
+        if (markdownReady) {
           try {
-            return marked.parse(processed);
+            return sanitizeMarkdownHtml(marked.parse(processed));
           } catch (e) {
             console.error('Markdown parsing error:', e);
             return escapeHtml(processed).replace(/\\n/g, '<br>');

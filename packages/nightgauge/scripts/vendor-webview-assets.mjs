@@ -8,8 +8,9 @@
  * OutputWindowHtml load it through `webview.asWebviewUri`, so the CSP stays
  * `script-src 'nonce-...'` with no remote origin at all.
  *
- * `marked` is a pinned dependency of this package, so the vendored copy moves
- * only when the lockfile does.
+ * `marked` renders agent output as Markdown and `dompurify` sanitizes what it
+ * renders before the output window inserts it. Both are pinned dependencies of
+ * this package, so the vendored copies move only when the lockfile does.
  */
 import { copyFileSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -22,10 +23,15 @@ const vendorDir = join(pkgDir, "dist", "vendor");
 
 // marked's `exports` map does not expose ./lib/, so resolve via package.json.
 const markedRoot = dirname(require.resolve("marked/package.json"));
+// dompurify's `exports` map exposes the browser build but not package.json.
+const purifyMin = require.resolve("dompurify/dist/purify.min.js");
+const purifyRoot = dirname(dirname(purifyMin));
 
 const assets = [
   [join(markedRoot, "lib", "marked.umd.js"), "marked.umd.js"],
   [join(markedRoot, "LICENSE"), "marked.LICENSE"],
+  [purifyMin, "purify.min.js"],
+  [join(purifyRoot, "LICENSE"), "purify.LICENSE"],
 ];
 
 mkdirSync(vendorDir, { recursive: true });

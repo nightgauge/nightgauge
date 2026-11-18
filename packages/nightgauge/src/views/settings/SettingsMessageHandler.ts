@@ -16,6 +16,8 @@ import type {
   ConfigSourceMap,
   TierMetadata,
 } from "./types";
+import { isConfigSchemaPath } from "./configPathGuard";
+import { isDocLinkPath } from "./docLinkGuard";
 
 /**
  * Messages sent from extension to WebView
@@ -121,18 +123,24 @@ export class SettingsMessageHandler {
       case "change":
         if (this.isValidChangeMessage(msg)) {
           this.callbacks.onChange?.(msg.path, msg.value, msg.targetTier);
+        } else {
+          this.reject(msg);
         }
         break;
 
       case "list-add":
         if (this.isValidListAddMessage(msg)) {
           this.callbacks.onListAdd?.(msg.path, msg.value, msg.targetTier);
+        } else {
+          this.reject(msg);
         }
         break;
 
       case "list-remove":
         if (this.isValidListRemoveMessage(msg)) {
           this.callbacks.onListRemove?.(msg.path, msg.index, msg.targetTier);
+        } else {
+          this.reject(msg);
         }
         break;
 
@@ -149,6 +157,8 @@ export class SettingsMessageHandler {
       case "reset-setting":
         if (this.isValidResetSettingMessage(msg)) {
           this.callbacks.onResetSetting?.(msg.path, msg.toTier);
+        } else {
+          this.reject(msg);
         }
         break;
 
@@ -167,6 +177,8 @@ export class SettingsMessageHandler {
       case "open-doc":
         if (this.isValidOpenDocMessage(msg)) {
           this.callbacks.onOpenDoc?.(msg.path);
+        } else {
+          this.reject(msg);
         }
         break;
 
@@ -221,6 +233,11 @@ export class SettingsMessageHandler {
     }
   };
 
+  /** Drop a message whose fields failed validation, naming only its type. */
+  private reject(msg: { type: string }): void {
+    console.warn(`Dropped invalid "${msg.type}" message from settings WebView`);
+  }
+
   /**
    * Type guard for valid message structure
    */
@@ -239,13 +256,7 @@ export class SettingsMessageHandler {
   private isValidChangeMessage(
     msg: WebViewToExtensionMessage
   ): msg is { type: "change"; path: string; value: unknown } {
-    return (
-      msg.type === "change" &&
-      "path" in msg &&
-      typeof msg.path === "string" &&
-      msg.path.length > 0 &&
-      "value" in msg
-    );
+    return msg.type === "change" && "path" in msg && isConfigSchemaPath(msg.path) && "value" in msg;
   }
 
   /**
@@ -257,7 +268,7 @@ export class SettingsMessageHandler {
     return (
       msg.type === "list-add" &&
       "path" in msg &&
-      typeof msg.path === "string" &&
+      isConfigSchemaPath(msg.path) &&
       "value" in msg &&
       typeof msg.value === "string"
     );
@@ -272,9 +283,10 @@ export class SettingsMessageHandler {
     return (
       msg.type === "list-remove" &&
       "path" in msg &&
-      typeof msg.path === "string" &&
+      isConfigSchemaPath(msg.path) &&
       "index" in msg &&
-      typeof msg.index === "number"
+      Number.isInteger(msg.index) &&
+      msg.index >= 0
     );
   }
 
@@ -284,7 +296,7 @@ export class SettingsMessageHandler {
   private isValidOpenDocMessage(
     msg: WebViewToExtensionMessage
   ): msg is { type: "open-doc"; path: string } {
-    return msg.type === "open-doc" && "path" in msg && typeof msg.path === "string";
+    return msg.type === "open-doc" && "path" in msg && isDocLinkPath(msg.path);
   }
 
   private isValidActionMessage(
@@ -322,7 +334,7 @@ export class SettingsMessageHandler {
     return (
       msg.type === "reset-setting" &&
       "path" in msg &&
-      typeof msg.path === "string" &&
+      isConfigSchemaPath(msg.path) &&
       "toTier" in msg &&
       typeof msg.toTier === "string"
     );

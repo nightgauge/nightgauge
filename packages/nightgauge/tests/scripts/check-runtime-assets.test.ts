@@ -29,6 +29,7 @@ function makePackage(): string {
   write(path.join(pkg, "dist", "sdk-cli.cjs"), "");
   write(path.join(pkg, "dist", "extension.cjs"), "");
   write(path.join(pkg, "dist", "vendor", "marked.umd.js"), "");
+  write(path.join(pkg, "dist", "vendor", "purify.min.js"), "");
   write(path.join(pkg, "resources", "icon.svg"), "<svg/>\n");
   return pkg;
 }
@@ -54,6 +55,17 @@ describe("check-runtime-assets.sh resource references (#2762)", () => {
     const pkg = makePackage();
     expect(check(path.join(pkg, "dist")).status).toBe(0);
   });
+
+  it.each(["marked.umd.js", "purify.min.js"])(
+    "fails a package without the vendored webview asset %s",
+    (asset) => {
+      const pkg = makePackage();
+      fs.rmSync(path.join(pkg, "dist", "vendor", asset));
+      const res = check(path.join(pkg, "dist"));
+      expect(res.status).toBe(1);
+      expect(res.stderr).toContain(asset);
+    }
+  );
 
   it("fails a resource that names a script the VSIX does not ship", () => {
     const pkg = makePackage();

@@ -10,6 +10,7 @@
  */
 
 import { getNonce } from "../../utils/webviewNonce";
+import { buildWebviewCsp } from "../../utils/webviewCsp";
 import * as vscode from "vscode";
 import { TIER_BANDS, type TierBand } from "@nightgauge/sdk";
 import type { NightgaugeConfig, ViewTier, TierViewState } from "./types";
@@ -4070,7 +4071,7 @@ export function getSettingsHtml(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; font-src ${webview.cspSource};">
+  <meta http-equiv="Content-Security-Policy" content="${buildWebviewCsp(nonce, webview.cspSource, { inlineStyles: true, fontSource: true })}">
   <title>Nightgauge Settings</title>
   <style>
     ${getStyles()}

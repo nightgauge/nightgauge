@@ -115,11 +115,13 @@ import type {
 import { getDefaultRunsPagination } from "./DashboardState";
 import { classifyPlatformError, type PlatformFailure } from "../../services/platformResult";
 import { isDemoMode } from "../../services/DemoModeController";
+import { DASHBOARD_EXECUTABLE_COMMANDS, checkDashboardMessage } from "./dashboardMessageGuard";
 
 /**
- * Message from WebView to extension
+ * Message from WebView to extension. Every message is validated by
+ * `checkDashboardMessage` (dashboardMessageGuard.ts) before it is handled.
  */
-type WebViewMessage =
+export type WebViewMessage =
   | { type: "refresh" }
   | { type: "export"; format: "json" | "csv"; target: "current" | HistoricalRunTarget }
   | ({ type: "selectRun"; issueNumber: number } & HistoricalRunIdentity)
@@ -1578,7 +1580,7 @@ export class Dashboard implements vscode.Disposable {
 
     // Handle messages from the WebView
     this.panel.webview.onDidReceiveMessage(
-      (message: WebViewMessage) => this.handleMessage(message),
+      (message: unknown) => this.handleMessage(message),
       undefined,
       this.panelDisposables
     );
@@ -1920,7 +1922,15 @@ export class Dashboard implements vscode.Disposable {
   /**
    * Handle messages from the WebView
    */
-  private async handleMessage(message: WebViewMessage): Promise<void> {
+  private async handleMessage(raw: unknown): Promise<void> {
+    // The webview is an untrusted boundary: validate the fields of each
+    // message type before acting, and drop anything that fails.
+    const check = checkDashboardMessage(raw);
+    if (!check.ok) {
+      this.logger.warn("dashboard:message-dropped", { reason: check.reason, type: check.type });
+      return;
+    }
+    const message = check.message;
     switch (message.type) {
       case "refresh":
         // Reset pagination on refresh (Issue #983)
@@ -2029,10 +2039,22 @@ export class Dashboard implements vscode.Disposable {
       case "applyRecommendation":
         // Apply a recommendation config patch (Issue #787)
         if (this.recommendationApplier) {
+          // Apply only a config patch the host is currently showing, with the
+          // host's own suggested value; the webview names which one.
+          const recommendation = this.healthWidgetData?.recommendations.find(
+            (r) =>
+              r.category === message.category &&
+              r.action?.type === "config-patch" &&
+              r.action.configPath === message.configPath
+          );
+          if (!recommendation?.action) {
+            this.logger.warn("dashboard:recommendation-refused", { category: message.category });
+            break;
+          }
           const applyResult = await this.recommendationApplier.apply(
-            message.category,
-            message.configPath,
-            message.value
+            recommendation.category,
+            recommendation.action.configPath,
+            recommendation.action.suggestedValue
           );
           if (applyResult.success) {
             await this.state.addAppliedRecommendation(message.category);
@@ -2065,8 +2087,8 @@ export class Dashboard implements vscode.Disposable {
         break;
 
       case "executeCommand":
-        // Only allow nightgauge commands from webview
-        if (message.command.startsWith("nightgauge.")) {
+        // Only the exact commands the Dashboard renders a button for.
+        if (DASHBOARD_EXECUTABLE_COMMANDS.includes(message.command)) {
           vscode.commands.executeCommand(message.command);
         }
         break;
@@ -2253,7 +2275,7 @@ export class Dashboard implements vscode.Disposable {
         break;
 
       case "mergeDependabotPR":
-        this.mergeDependabotPR(message.owner, message.repo, message.prNodeId).catch(() => {});
+        this.mergeDependabotPR(message.prNodeId).catch(() => {});
         break;
 
       case "signInWithPlatform":
@@ -2271,6 +2293,14 @@ export class Dashboard implements vscode.Disposable {
         if (Number.isFinite(message.scrollY) && message.scrollY >= 0) {
           this.savedScrollY = message.scrollY;
         }
+        break;
+
+      default:
+        // checkDashboardMessage only passes known types; a type that reaches
+        // here has a validator but no handler, so it is logged and dropped.
+        this.logger.warn("dashboard:message-unhandled", {
+          type: (message as { type: string }).type,
+        });
         break;
     }
   }
@@ -3536,7 +3566,13 @@ export class Dashboard implements vscode.Disposable {
     try {
       const artifact = await this.platformComplianceService.downloadReport(reportId);
       if (artifact.url) {
-        await vscode.env.openExternal(vscode.Uri.parse(artifact.url));
+        // A report download is a signed https URL; refuse any other scheme.
+        const uri = vscode.Uri.parse(artifact.url);
+        if (uri.scheme !== "https") {
+          vscode.window.showErrorMessage("The compliance report link is not an https URL.");
+          return;
+        }
+        await vscode.env.openExternal(uri);
         return;
       }
       if (artifact.data !== undefined) {
@@ -3697,7 +3733,30 @@ export class Dashboard implements vscode.Disposable {
     this.updatePanel("dependabotRefresh");
   }
 
-  private async mergeDependabotPR(owner: string, repo: string, prNodeId: string): Promise<void> {
+  /**
+   * Merge one Dependabot PR. Only a PR in the list the host fetched can be
+   * merged, its owner and repository come from that list rather than from the
+   * webview, and the operator confirms in a modal dialog first.
+   */
+  private async mergeDependabotPR(prNodeId: string): Promise<void> {
+    const pr = this.dependabotData?.data.prs.find((p) => p.nodeId === prNodeId);
+    const [owner, repo] = pr?.repo.split("/") ?? [];
+    if (!pr || !owner || !repo) {
+      this.logger.warn("dashboard:dependabot-merge-refused", { reason: "not-in-fetched-list" });
+      this.updatePanel("dependabotMerge-refused");
+      return;
+    }
+    const confirm = "Merge";
+    const choice = await vscode.window.showWarningMessage(
+      `Merge Dependabot PR #${pr.number} in ${pr.repo}?`,
+      { modal: true, detail: pr.title },
+      confirm
+    );
+    if (choice !== confirm) {
+      // Re-render so the webview's disabled "Merging…" button is restored.
+      this.updatePanel("dependabotMerge-cancelled");
+      return;
+    }
     const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
     try {
       await ipc.prMerge(owner, repo, prNodeId);

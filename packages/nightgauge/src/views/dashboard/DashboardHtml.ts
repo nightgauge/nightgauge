@@ -9,6 +9,7 @@
  */
 
 import * as vscode from "vscode";
+import { buildWebviewCsp } from "../../utils/webviewCsp";
 import type {
   PipelineRunSummary,
   DashboardAggregates,
@@ -1032,7 +1033,7 @@ export function getDashboardHtml(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="${buildWebviewCsp(nonce, webview.cspSource, { inlineStyles: true })}">
   <title>Nightgauge Dashboard</title>
   <style>
     ${getStyles()}

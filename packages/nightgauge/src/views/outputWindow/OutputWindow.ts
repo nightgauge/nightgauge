@@ -1745,8 +1745,9 @@ export class OutputWindow implements vscode.Disposable {
       slotStages.set(slot.slotIndex, this.state.getSlotStageProgress(slot.slotIndex));
     }
 
-    this.panel.webview.html = getOutputWindowHtml(
-      this.panel.webview,
+    const webview = this.panel.webview;
+    webview.html = getOutputWindowHtml(
+      webview,
       this.state.getEntries(),
       this.state.getAllStageProgress(),
       this.state.getAutoScroll(),
@@ -1758,7 +1759,10 @@ export class OutputWindow implements vscode.Disposable {
       this.state.getActiveSlotIndex(),
       slotEntries,
       slotStages,
-      this.extensionUri
+      (name) =>
+        webview
+          .asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "vendor", name))
+          .toString()
     );
   }
 

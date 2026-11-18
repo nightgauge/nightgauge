@@ -28,6 +28,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 - The repository no longer carries `.codex/commands/` and `.codex/prompts/`. Codex reads neither directory — it runs Nightgauge stages as `$<skill-name>` skills — and the prompts README named an install script that no longer exists (#2921).
 
+### Security
+
+- The output window renders agent Markdown through a vendored DOMPurify sanitizer with a fixed formatting allowlist, shows raw HTML in the source as text, and escapes the issue title in the document title and header and the code-block language. Without the sanitizer it shows the text escaped (#3401).
+- Every webview builds its Content-Security-Policy from one shared builder: `default-src 'none'`, a nonce-only `script-src`, `form-action 'none'` and `base-uri 'none'`. The Notifier and Telemetry settings panels now have a policy and an empty `localResourceRoots`, the output window's `script-src` no longer lists the webview resource origin, and a test fails when a webview panel renders without the policy (#3405).
+- The Dashboard and Settings webviews can ask the extension for less: the Dashboard runs only the three commands it has buttons for and validates every message, merges a Dependabot PR only from the fetched list after a confirmation dialog, and applies only a recommendation it is showing. Settings accepts only paths in the configuration schema and opens only files inside `docs/` (#3403).
+
 ## [0.8.6] - 2026-11-17
 
 ### Added

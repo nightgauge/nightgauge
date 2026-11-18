@@ -10,6 +10,8 @@
  */
 
 import * as vscode from "vscode";
+import { getNonce } from "../../utils/webviewNonce";
+import { buildWebviewCsp, type WebviewHtmlSecurity } from "../../utils/webviewCsp";
 import type { ConfigBridge } from "../../services/ConfigBridge";
 import { NightgaugeYamlService } from "../settings/NightgaugeYamlService";
 import { SecretStorageService, SECRET_KEYS } from "../../services/SecretStorageService";
@@ -104,10 +106,10 @@ export class NotifierSettingsPanel implements vscode.Disposable {
       "nightgaugeNotifierSettings",
       "Nightgauge: Notifier Settings",
       vscode.ViewColumn.One,
-      { enableScripts: true, retainContextWhenHidden: true }
+      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] }
     );
 
-    this.panel.webview.html = this.renderHtml();
+    this.panel.webview.html = this.renderHtml(this.panel.webview);
     this.panel.webview.onDidReceiveMessage(
       this.messageHandler.handleMessage,
       undefined,
@@ -315,14 +317,88 @@ export class NotifierSettingsPanel implements vscode.Disposable {
 
   // ─── HTML rendering ───────────────────────────────────────────────────────────
 
-  private renderHtml(): string {
-    return /* html */ `<!DOCTYPE html>
+  private renderHtml(webview: vscode.Webview): string {
+    return renderNotifierSettingsHtml({ nonce: getNonce(), cspSource: webview.cspSource });
+  }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function computeStatus(status: NotifierStatus | undefined): NotifierInstanceRow["status"] {
+  if (!status) return "unknown";
+  if (status.lastSuccessAt && Date.now() - status.lastSuccessAt.getTime() < CONNECTED_WINDOW_MS) {
+    return "connected";
+  }
+  if (status.lastErrorAt) return "errored";
+  return "unknown";
+}
+
+function redactWebhookUrl(url: string): string {
+  if (url.length <= 8) return "••••••••";
+  return "••••" + url.slice(-8);
+}
+
+/**
+ * Send a provider-appropriate test notification.
+ *
+ * Discord and Mattermost POST to a webhook URL. Slack posts through
+ * chat.postMessage with a bearer token and a channel — and reports API failures
+ * in a 200 body, so its result is read from the body rather than the status. A
+ * status-only check would report "sent" for a bad token.
+ */
+async function sendTestNotification(
+  type: string,
+  credential: string,
+  channel?: string
+): Promise<{ ok: boolean; error?: string }> {
+  const TEXT = "🔔 Nightgauge: Test notification";
+
+  if (type === "slack") {
+    const res = await fetch(`${SLACK_API_BASE}/chat.postMessage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        Authorization: `Bearer ${credential}`,
+      },
+      body: JSON.stringify({ channel, text: TEXT }),
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const api = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+    return api.ok ? { ok: true } : { ok: false, error: api.error ?? "unknown_error" };
+  }
+
+  const body =
+    type === "discord" ? JSON.stringify({ content: TEXT }) : JSON.stringify({ text: TEXT });
+
+  const res = await fetch(credential, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    return {
+      ok: false,
+      error: redactSecrets(`HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ""}`),
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Render the Notifier settings webview document. Pure, so a test can render it
+ * without a VS Code host; the CSP comes from the shared builder.
+ */
+export function renderNotifierSettingsHtml(security: WebviewHtmlSecurity): string {
+  return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="${buildWebviewCsp(security.nonce, security.cspSource)}" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Notifier Settings</title>
-  <style>
+  <style nonce="${security.nonce}">
     body {
       font-family: var(--vscode-font-family);
       color: var(--vscode-foreground);
@@ -420,7 +496,7 @@ export class NotifierSettingsPanel implements vscode.Disposable {
     </tbody>
   </table>
 
-  <script>
+  <script nonce="${security.nonce}">
     const vscode = acquireVsCodeApi();
 
     // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -525,69 +601,4 @@ export class NotifierSettingsPanel implements vscode.Disposable {
   </script>
 </body>
 </html>`;
-  }
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function computeStatus(status: NotifierStatus | undefined): NotifierInstanceRow["status"] {
-  if (!status) return "unknown";
-  if (status.lastSuccessAt && Date.now() - status.lastSuccessAt.getTime() < CONNECTED_WINDOW_MS) {
-    return "connected";
-  }
-  if (status.lastErrorAt) return "errored";
-  return "unknown";
-}
-
-function redactWebhookUrl(url: string): string {
-  if (url.length <= 8) return "••••••••";
-  return "••••" + url.slice(-8);
-}
-
-/**
- * Send a provider-appropriate test notification.
- *
- * Discord and Mattermost POST to a webhook URL. Slack posts through
- * chat.postMessage with a bearer token and a channel — and reports API failures
- * in a 200 body, so its result is read from the body rather than the status. A
- * status-only check would report "sent" for a bad token.
- */
-async function sendTestNotification(
-  type: string,
-  credential: string,
-  channel?: string
-): Promise<{ ok: boolean; error?: string }> {
-  const TEXT = "🔔 Nightgauge: Test notification";
-
-  if (type === "slack") {
-    const res = await fetch(`${SLACK_API_BASE}/chat.postMessage`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json; charset=utf-8",
-        Authorization: `Bearer ${credential}`,
-      },
-      body: JSON.stringify({ channel, text: TEXT }),
-    });
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
-    const api = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
-    return api.ok ? { ok: true } : { ok: false, error: api.error ?? "unknown_error" };
-  }
-
-  const body =
-    type === "discord" ? JSON.stringify({ content: TEXT }) : JSON.stringify({ text: TEXT });
-
-  const res = await fetch(credential, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body,
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    return {
-      ok: false,
-      error: redactSecrets(`HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ""}`),
-    };
-  }
-  return { ok: true };
 }
