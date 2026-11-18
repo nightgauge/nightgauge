@@ -427,11 +427,19 @@ func mergeYAMLDocuments(tiers ...[]byte) (*yaml.Node, error) {
 		if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 			continue
 		}
-		root := doc.Content[0]
+		// Tier 0 is the machine tier; the rest are repository-controlled and
+		// may not carry a merge key (checked before resolution folds it away).
+		if i > 0 && repoTierUnsafeStructure(&doc) {
+			return nil, fmt.Errorf("%w: a project or local config tier", ErrRepoTierMergeKey)
+		}
+		// Each tier is resolved on its own, so no node is shared across tiers.
+		root, err := resolveYAMLTier(doc.Content[0])
+		if err != nil {
+			return nil, err
+		}
 		if root.Kind != yaml.MappingNode {
 			continue
 		}
-		// Tier 0 is the machine tier; the rest are repository-controlled.
 		if err := mergeMappingInto(merged, root, i > 0); err != nil {
 			return nil, err
 		}
@@ -684,4 +692,95 @@ func findChildByKey(mapping *yaml.Node, key string) *yaml.Node {
 		}
 	}
 	return nil
+}
+
+// maxResolvedYAMLNodes bounds alias expansion in resolveYAMLTier, so a file
+// whose aliases nest exponentially (a "billion laughs" document) fails to
+// load instead of exhausting memory.
+const maxResolvedYAMLNodes = 1 << 20
+
+// errYAMLTooLarge marks a tier whose aliases expand past maxResolvedYAMLNodes.
+var errYAMLTooLarge = errors.New("config yaml expands past the alias limit")
+
+// resolveYAMLTier returns a deep copy of n with every alias replaced by a
+// copy of its target, every `<<` merge key folded into its mapping (explicit
+// keys win, then the merged mappings in order, the first winning), and every
+// anchor dropped. Tiers are resolved one at a time before they are merged, so
+// no node is shared between tiers: a repository tier's key merged into a
+// mapping can never change another place the machine tier aliased it.
+func resolveYAMLTier(n *yaml.Node) (*yaml.Node, error) {
+	budget := maxResolvedYAMLNodes
+	return resolveYAMLNode(n, &budget)
+}
+
+func resolveYAMLNode(n *yaml.Node, budget *int) (*yaml.Node, error) {
+	if n == nil {
+		return nil, nil
+	}
+	if *budget--; *budget < 0 {
+		return nil, errYAMLTooLarge
+	}
+	if n.Kind == yaml.AliasNode {
+		return resolveYAMLNode(n.Alias, budget)
+	}
+	out := *n
+	out.Anchor = ""
+	out.Alias = nil
+	out.Content = nil
+	if n.Kind != yaml.MappingNode {
+		for _, c := range n.Content {
+			rc, err := resolveYAMLNode(c, budget)
+			if err != nil {
+				return nil, err
+			}
+			out.Content = append(out.Content, rc)
+		}
+		return &out, nil
+	}
+	seen := map[string]bool{}
+	var merges []*yaml.Node
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, v := n.Content[i], n.Content[i+1]
+		if yamlMergeKey(k) {
+			merges = append(merges, v)
+			continue
+		}
+		rk, err := resolveYAMLNode(k, budget)
+		if err != nil {
+			return nil, err
+		}
+		rv, err := resolveYAMLNode(v, budget)
+		if err != nil {
+			return nil, err
+		}
+		seen[rk.Value] = true
+		out.Content = append(out.Content, rk, rv)
+	}
+	for _, m := range merges {
+		rm, err := resolveYAMLNode(m, budget)
+		if err != nil {
+			return nil, err
+		}
+		var sources []*yaml.Node
+		switch rm.Kind {
+		case yaml.MappingNode:
+			sources = []*yaml.Node{rm}
+		case yaml.SequenceNode:
+			sources = rm.Content
+		default:
+			return nil, fmt.Errorf("parse tier yaml: a << merge key must name a mapping or a sequence of mappings (line %d)", m.Line)
+		}
+		for _, src := range sources {
+			if src.Kind != yaml.MappingNode {
+				return nil, fmt.Errorf("parse tier yaml: a << merge key must name a mapping or a sequence of mappings (line %d)", m.Line)
+			}
+			for j := 0; j+1 < len(src.Content); j += 2 {
+				if key := src.Content[j].Value; !seen[key] {
+					seen[key] = true
+					out.Content = append(out.Content, src.Content[j], src.Content[j+1])
+				}
+			}
+		}
+	}
+	return &out, nil
 }

@@ -2,8 +2,11 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	yaml "gopkg.in/yaml.v3"
 )
 
 // A repository tier declares a forge's kind and auth method, never where its
@@ -227,5 +230,66 @@ func TestValidateForgeConfigRequiresHTTPS(t *testing.T) {
 		if err := ValidateForgeConfig(map[string]*ForgeConfigEntry{"x": &ok}, nil); err != nil {
 			t.Errorf("%+v rejected: %v", ok, err)
 		}
+	}
+}
+
+// Tiers are resolved one at a time before they are merged, so a repository
+// tier writing to a key the machine tier anchored cannot change the value the
+// machine tier aliased under a protected key.
+func TestRepoTierCannotRewriteMachineTierAnchor(t *testing.T) {
+	withMachineConfig(t, `
+x-shared: &m
+  kind: gitlab
+  base_url: https://gitlab.corp.example
+  token_env: CORP_TOKEN
+forges:
+  corp: *m
+`)
+	dir := t.TempDir()
+	writeProjectYAML(t, dir, `
+schema_version: "2"
+owner: o
+x-shared:
+  base_url: http://repo-chosen.example
+  token_env: GITHUB_TOKEN
+`)
+	cfg, err := LoadMerged(dir)
+	if err != nil {
+		t.Fatalf("LoadMerged: %v", err)
+	}
+	c := cfg.Forges["corp"]
+	if c == nil || c.BaseURL != "https://gitlab.corp.example" || c.TokenEnv != "CORP_TOKEN" {
+		t.Fatalf("a repository-tier key rewrote the machine tier's aliased forge: %+v", c)
+	}
+}
+
+func TestResolveYAMLTierFoldsMergeKeysAndBoundsAliases(t *testing.T) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte("a: &a {x: 1, y: 2}\nb:\n  <<: *a\n  y: 3\n"), &doc); err != nil {
+		t.Fatal(err)
+	}
+	root, err := resolveYAMLTier(doc.Content[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]map[string]int
+	if err := root.Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got["b"]["x"] != 1 || got["b"]["y"] != 3 || hasYAMLMergeKey(root) {
+		t.Fatalf("merge key not folded with explicit keys winning: %v", got)
+	}
+	laughs := "a: &a [x, x, x, x, x, x, x, x, x, x]\n"
+	prev := "a"
+	for _, n := range []string{"b", "c", "d", "e", "f", "g", "h"} {
+		laughs += fmt.Sprintf("%s: &%s [*%s, *%s, *%s, *%s, *%s, *%s, *%s, *%s, *%s, *%s]\n", n, n, prev, prev, prev, prev, prev, prev, prev, prev, prev, prev)
+		prev = n
+	}
+	var bomb yaml.Node
+	if err := yaml.Unmarshal([]byte(laughs), &bomb); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveYAMLTier(bomb.Content[0]); !errors.Is(err, errYAMLTooLarge) {
+		t.Fatalf("exponential aliases were not bounded: %v", err)
 	}
 }

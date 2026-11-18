@@ -23,7 +23,7 @@ var parentEnv = map[string]string{
 	// Never a stage's.
 	"NIGHTGAUGE_LICENSE_KEY": "x", "NIGHTGAUGE_JIRA_TOKEN": "x",
 	"SLACK_BOT_TOKEN": "x", "DISCORD_WEBHOOK_URL": "x", "NIGHTGAUGE_SHIP_NOTIFY_WEBHOOK": "x",
-	"STRIPE_SECRET_KEY": "x", "DB_PASSWORD": "x", "NPM_TOKEN": "x",
+	"STRIPE_SECRET_KEY": "x", "DB_PASSWORD": "x", "NPM_TOKEN": "x", "IB_VERIFY_PASSWORD": "x",
 	// Provider credentials: only the declaring harness.
 	"ANTHROPIC_API_KEY": "x", "CLAUDE_CODE_OAUTH_TOKEN": "x",
 	"OPENAI_API_KEY": "x", "GEMINI_API_KEY": "x", "GOOGLE_API_KEY": "x",
@@ -76,11 +76,15 @@ func TestStageWithholdsCredentialEnvPerAdapter(t *testing.T) {
 
 func TestStageEnvAllowAddsOperatorNames(t *testing.T) {
 	t.Parallel()
-	if !StageWithholdsCredentialEnv("claude", "NPM_TOKEN", nil) {
-		t.Fatal("NPM_TOKEN reached a stage the operator did not allow it to")
-	}
-	if StageWithholdsCredentialEnv("claude", "NPM_TOKEN", []string{"NPM_TOKEN"}) {
-		t.Fatal("NPM_TOKEN was withheld although the operator allowed it")
+	// The verify-ui flow's test-account password reaches a stage only when
+	// the operator opts in.
+	for _, name := range []string{"NPM_TOKEN", "IB_VERIFY_PASSWORD"} {
+		if !StageWithholdsCredentialEnv("claude", name, nil) {
+			t.Fatalf("%s reached a stage the operator did not allow it to", name)
+		}
+		if StageWithholdsCredentialEnv("claude", name, []string{name}) {
+			t.Fatalf("%s was withheld although the operator allowed it", name)
+		}
 	}
 }
 

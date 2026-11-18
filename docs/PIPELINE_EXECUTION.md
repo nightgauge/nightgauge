@@ -596,15 +596,15 @@ withholds every variable whose **name** marks it as a credential (a final
 `_TOKEN`, `_KEY`, `_SECRET`, `_PASSWORD`, `_PAT` or `_DSN`, or a `SECRET`,
 `PASSWORD` or `WEBHOOK` segment) unless it is in one of these sets:
 
-| Set                    | Names                                                                                                                                                                                                             |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Every stage            | `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITLAB_TOKEN`, the cloud platform families OpenCode keeps (AWS, Google Cloud, ...), and the verify-ui skill's `IB_VERIFY_PASSWORD` |
-| `claude`, `claude-sdk` | `ANTHROPIC_*`, `CLAUDE_CODE_OAUTH_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`                                                                                                                                              |
-| `codex`                | `OPENAI_*`, `CODEX_*`                                                                                                                                                                                             |
-| `gemini`, `gemini-sdk` | `GEMINI_*`, `GOOGLE_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`                                                                                                                                                      |
-| `copilot`              | `COPILOT_*`                                                                                                                                                                                                       |
-| `grok`                 | `XAI_*`, `GROK_*`                                                                                                                                                                                                 |
-| `opencode`             | its own per-dispatch rule (ADR-022 § 8) decides every model-service key                                                                                                                                           |
+| Set                    | Names                                                                                                                                                             |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Every stage            | `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITLAB_TOKEN`, the cloud platform families OpenCode keeps (AWS, Google Cloud, ...) |
+| `claude`, `claude-sdk` | `ANTHROPIC_*`, `CLAUDE_CODE_OAUTH_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`                                                                                              |
+| `codex`                | `OPENAI_*`, `CODEX_*`                                                                                                                                             |
+| `gemini`, `gemini-sdk` | `GEMINI_*`, `GOOGLE_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`                                                                                                      |
+| `copilot`              | `COPILOT_*`                                                                                                                                                       |
+| `grok`                 | `XAI_*`, `GROK_*`                                                                                                                                                 |
+| `opencode`             | its own per-dispatch rule (ADR-022 § 8) decides every model-service key                                                                                           |
 
 Every model service's key in the OpenCode catalog is also withheld from a
 harness that does not declare it, whatever its name looks like. So a Claude
