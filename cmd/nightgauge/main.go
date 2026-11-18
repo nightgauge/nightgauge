@@ -13477,6 +13477,7 @@ func scanCmd() *cobra.Command {
 	cmd.AddCommand(scanEcosystemCmd())
 	cmd.AddCommand(scanTestCmdCmd())
 	cmd.AddCommand(scanSecretsCmd())
+	cmd.AddCommand(scanDiffSecretsCmd())
 	cmd.AddCommand(scanDebtCmd())
 	cmd.AddCommand(scanTestsCmd())
 	cmd.AddCommand(scanToolingCmd())
@@ -13747,6 +13748,69 @@ func printScanTestCmdHuman(r *scan.TestCommandResult) {
 	for _, w := range r.Warnings {
 		fmt.Printf("  ! %s\n", w)
 	}
+}
+
+func scanDiffSecretsCmd() *cobra.Command {
+	var (
+		jsonOutput bool
+		workdir    string
+		base       string
+	)
+	cmd := &cobra.Command{
+		Use:   "diff-secrets",
+		Short: "Scan the files changed since --base for secret patterns (gating)",
+		Long: `Scan the files in 'git diff --name-only <base>...HEAD' for the four
+critical and five warning secret patterns of pr-create Step 2.5.3, which
+calls this verb. The orchestrator can re-run the same check after a fix.
+
+Paths under .nightgauge/ or dist/, or inside any node_modules/ directory, are
+skipped, as are deleted files and binaries. Contents are read from the HEAD
+commit, never the working tree. Patterns are case-insensitive. A
+hit is dropped when its 'path:line:content' matches the false-positive filter,
+so a file whose path contains test, mock, example or sample is effectively
+unscanned. A changed file that cannot be read is a hard error. Counts are matching
+lines per pattern. Output is deterministic and never contains file content.
+
+Schema version 1: v, base, head_sha, files_scanned, critical, warnings,
+files[] {path, critical, warnings, findings[] {severity, pattern, count, lines}}.
+
+Exit codes:
+  0  no critical finding (warnings may be present)
+  1  one or more critical findings (JSON still printed)
+  2  hard error (not a git repository, base ref does not resolve)`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := scan.RunDiffSecretsScan(cmd.Context(), scan.DiffSecretsOptions{
+				Workdir: workdir,
+				Base:    base,
+			})
+			if err != nil {
+				return err
+			}
+			if jsonOutput {
+				if err := printJSON(result); err != nil {
+					return fmt.Errorf("encode JSON: %w", err)
+				}
+			} else {
+				fmt.Printf("diff-secrets: %d file(s) vs %s — critical=%d warnings=%d\n",
+					result.FilesScanned, result.Base, result.Critical, result.Warnings)
+				for _, f := range result.Files {
+					for _, fd := range f.Findings {
+						fmt.Printf("  %s %s lines=%v: %s\n", strings.ToUpper(fd.Severity), f.Path, fd.Lines, fd.Pattern)
+					}
+				}
+			}
+			if result.Critical > 0 {
+				return verdictExit{code: 1}
+			}
+			return nil
+		},
+	}
+	markCouldNotRunExit(cmd)
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON (parsed by skills)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Repository to scan (default: current working directory)")
+	cmd.Flags().StringVar(&base, "base", "", "Base ref; the scanned set is <base>...HEAD (required)")
+	return cmd
 }
 
 func scanSecretsCmd() *cobra.Command {
