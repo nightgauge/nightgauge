@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * npm-audit-check.js
- * Runs `npm audit --json`, filters allow-listed advisories, enforces expiry,
- * and exits non-zero if any unallowed high/critical vulnerabilities remain.
+ * Runs `npm audit --json` twice, filters allow-listed advisories, enforces
+ * expiry, and exits non-zero if an unallowed advisory remains: moderate or
+ * worse in a runtime dependency (`--omit=dev`), high or worse anywhere.
  *
  * Usage: node scripts/npm-audit-check.js
  * Exit codes: 0 = clean, 1 = violations found, 2 = config error
@@ -10,12 +11,13 @@
 
 "use strict";
 
-const { execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-// NPM_AUDIT_CHECK_ALLOWLIST / NPM_AUDIT_CHECK_INPUT substitute fixtures for the
-// allow-list and the `npm audit --json` output (scripts/test-npm-audit-check.sh).
+// NPM_AUDIT_CHECK_ALLOWLIST, NPM_AUDIT_CHECK_INPUT (the whole tree) and
+// NPM_AUDIT_CHECK_RUNTIME_INPUT (`--omit=dev`) substitute fixtures for the
+// allow-list and the `npm audit --json` outputs (scripts/test-npm-audit-check.sh).
 const ALLOWLIST_FILE =
   process.env.NPM_AUDIT_CHECK_ALLOWLIST || path.resolve(__dirname, "../.npmauditrc.json");
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -45,66 +47,91 @@ if (expired.length > 0) {
 
 const allowedIds = new Set(allowlist.map((e) => e.id));
 
-// Run npm audit
-let auditOutput;
-if (process.env.NPM_AUDIT_CHECK_INPUT) {
-  auditOutput = fs.readFileSync(process.env.NPM_AUDIT_CHECK_INPUT, "utf8");
-} else {
+// Two audits, two thresholds (ADR-023 Decision 8): what ships to users
+// (`--omit=dev`) gates at moderate, and the whole tree, dev tooling included,
+// gates at high. A waiver is a dated allow-list entry, never a lower bar.
+const TIERS = [
+  {
+    label: "runtime (--omit=dev)",
+    args: ["--omit=dev"],
+    input: process.env.NPM_AUDIT_CHECK_RUNTIME_INPUT,
+    severities: ["moderate", "high", "critical"],
+  },
+  {
+    label: "all dependencies",
+    args: [],
+    input: process.env.NPM_AUDIT_CHECK_INPUT,
+    severities: ["high", "critical"],
+  },
+];
+// Fixture mode: a suite that substitutes one input gets an empty report for
+// the other, so it never reaches the live advisory database.
+const FIXTURE_MODE = Boolean(
+  process.env.NPM_AUDIT_CHECK_INPUT || process.env.NPM_AUDIT_CHECK_RUNTIME_INPUT
+);
+
+function readAudit(tier) {
+  let output;
+  if (tier.input) {
+    output = fs.readFileSync(tier.input, "utf8");
+  } else if (FIXTURE_MODE) {
+    output = '{"vulnerabilities":{}}';
+  } else {
+    try {
+      output = execFileSync("npm", ["audit", ...tier.args, "--json"], {
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (err) {
+      // npm audit exits non-zero when vulnerabilities are found — capture output
+      output = err.stdout || "{}";
+    }
+  }
   try {
-    auditOutput = execSync("npm audit --audit-level=high --json", {
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-  } catch (err) {
-    // npm audit exits non-zero when vulnerabilities are found — capture output
-    auditOutput = err.stdout || "{}";
+    return JSON.parse(output);
+  } catch {
+    console.error(`ERROR: Failed to parse npm audit output (${tier.label}) as JSON`);
+    console.error(output.slice(0, 500));
+    process.exit(2);
   }
 }
-
-let auditData;
-try {
-  auditData = JSON.parse(auditOutput);
-} catch {
-  console.error("ERROR: Failed to parse npm audit output as JSON");
-  console.error(auditOutput.slice(0, 500));
-  process.exit(2);
-}
-
-// Extract high/critical vulnerabilities not in allow-list
-const vulnerabilities = auditData.vulnerabilities || {};
-const violations = [];
 
 // A `via` entry is either an advisory object or the name of another vulnerable
 // package (a dependent of a vulnerable package is flagged too). Resolve names to
 // the advisories they carry, so allow-listing an advisory also covers every
 // package that is flagged only because it depends on the vulnerable one.
-function advisoryIds(pkg, seen = new Set()) {
+function advisoryIds(vulnerabilities, pkg, seen = new Set()) {
   if (seen.has(pkg)) return [];
   seen.add(pkg);
   return (vulnerabilities[pkg]?.via || []).flatMap((v) =>
-    typeof v === "object" ? [v.source || v.url || "unknown"] : advisoryIds(v, seen)
+    typeof v === "object" ? [v.source || v.url || "unknown"] : advisoryIds(vulnerabilities, v, seen)
   );
 }
 
-for (const [pkg, vuln] of Object.entries(vulnerabilities)) {
-  if (!["high", "critical"].includes(vuln.severity)) continue;
-  const viaIds = [...new Set(advisoryIds(pkg))];
-
-  const unallowed = viaIds.filter((id) => !allowedIds.has(String(id)));
-  if (unallowed.length > 0 || viaIds.length === 0) {
-    violations.push({ pkg, severity: vuln.severity, via: viaIds });
+const violations = [];
+const covered = [];
+for (const tier of TIERS) {
+  const vulnerabilities = readAudit(tier).vulnerabilities || {};
+  for (const [pkg, vuln] of Object.entries(vulnerabilities)) {
+    if (!tier.severities.includes(vuln.severity)) continue;
+    const viaIds = [...new Set(advisoryIds(vulnerabilities, pkg))];
+    const unallowed = viaIds.filter((id) => !allowedIds.has(String(id)));
+    if (unallowed.length > 0 || viaIds.length === 0) {
+      violations.push({ tier: tier.label, pkg, severity: vuln.severity, via: viaIds });
+    } else {
+      covered.push(pkg);
+    }
   }
 }
 
 if (violations.length > 0) {
-  console.error(
-    `\nNPM AUDIT: ${violations.length} unallowed high/critical vulnerability(ies) found:\n`
-  );
-  violations.forEach(({ pkg, severity, via }) => {
-    console.error(`  [${severity.toUpperCase()}] ${pkg}`);
+  console.error(`\nNPM AUDIT: ${violations.length} unallowed vulnerability(ies) found:\n`);
+  violations.forEach(({ tier, pkg, severity, via }) => {
+    console.error(`  [${severity.toUpperCase()}] ${pkg} — ${tier}`);
     if (via.length > 0) console.error(`    Advisory IDs: ${via.join(", ")}`);
   });
-  console.error("\nTo resolve:");
+  console.error("\nThresholds: runtime dependencies fail at moderate, dev dependencies at high.");
+  console.error("To resolve:");
   console.error("  1. Run `npm audit` locally to see full details");
   console.error("  2. Update the vulnerable package if a fix is available");
   console.error(
@@ -114,12 +141,8 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
-const totalHigh = Object.values(vulnerabilities).filter(
-  (v) => v.severity === "high" || v.severity === "critical"
-).length;
-
-if (totalHigh > 0) {
-  console.log(`npm audit: ${totalHigh} high/critical vuln(s) found — all covered by allow-list. ✓`);
+if (covered.length > 0) {
+  console.log(`npm audit: ${covered.length} gated vuln(s) found — all covered by allow-list. ✓`);
 } else {
-  console.log("npm audit: No high/critical vulnerabilities found. ✓");
+  console.log("npm audit: no moderate+ runtime and no high+ dev vulnerabilities found. ✓");
 }

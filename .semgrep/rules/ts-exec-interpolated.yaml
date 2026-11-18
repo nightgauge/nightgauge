@@ -1,0 +1,115 @@
+# ADR-023 Decision 8 (static analysis) for command injection: exec runs its
+# string through a shell, so an interpolated value is shell syntax.
+#
+# Syntactic, not taint mode: taint analysis gives up silently on a large
+# function, and a gate must give the same answer on every run. Each
+# alternative below is one call shape times one way of building the command.
+rules:
+  - id: ts-exec-interpolated
+    message:
+      A shell command string built from a runtime value reaches $EXEC. Use execFile/execFileAsync/spawn
+      with an argument array, and pass bodies on stdin or with --body-file. A reviewed exception goes in
+      .semgrep/allowlist.yaml with a reason.
+    languages:
+      - typescript
+      - javascript
+    severity: ERROR
+    pattern-either:
+      - patterns:
+          - pattern: $EXEC($CMD, ...)
+          - metavariable-regex:
+              metavariable: $EXEC
+              regex: ^(exec|execSync|execAsync|execPromise|execP)$
+          - metavariable-pattern:
+              metavariable: $CMD
+              patterns:
+                - pattern-either:
+                    - pattern: "`...${$X}...`"
+                    - pattern: $A + $B
+                    - pattern: $ARR.join(...)
+                    - pattern: "$C ? `...${$X}...` : $D"
+                    - pattern: "$C ? $D : `...${$X}...`"
+                - pattern-not: '"..." + "..."'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: "const $CMD = $BUILD;
+
+                  ...
+
+                  "
+              - pattern-inside: "let $CMD = $BUILD;
+
+                  ...
+
+                  "
+              - pattern-inside: "$CMD = $BUILD;
+
+                  ...
+
+                  "
+          - pattern: $EXEC($CMD, ...)
+          - metavariable-regex:
+              metavariable: $EXEC
+              regex: ^(exec|execSync|execAsync|execPromise|execP)$
+          - metavariable-pattern:
+              metavariable: $BUILD
+              patterns:
+                - pattern-either:
+                    - pattern: "`...${$X}...`"
+                    - pattern: $A + $B
+                    - pattern: $ARR.join(...)
+                    - pattern: "$C ? `...${$X}...` : $D"
+                    - pattern: "$C ? $D : `...${$X}...`"
+                - pattern-not: '"..." + "..."'
+      - patterns:
+          - pattern: $CP.$EXEC($CMD, ...)
+          - metavariable-regex:
+              metavariable: $CP
+              regex: ^(child_process|childProcess|cp)$
+          - metavariable-regex:
+              metavariable: $EXEC
+              regex: ^(exec|execSync|execAsync|execPromise|execP)$
+          - metavariable-pattern:
+              metavariable: $CMD
+              patterns:
+                - pattern-either:
+                    - pattern: "`...${$X}...`"
+                    - pattern: $A + $B
+                    - pattern: $ARR.join(...)
+                    - pattern: "$C ? `...${$X}...` : $D"
+                    - pattern: "$C ? $D : `...${$X}...`"
+                - pattern-not: '"..." + "..."'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: "const $CMD = $BUILD;
+
+                  ...
+
+                  "
+              - pattern-inside: "let $CMD = $BUILD;
+
+                  ...
+
+                  "
+              - pattern-inside: "$CMD = $BUILD;
+
+                  ...
+
+                  "
+          - pattern: $CP.$EXEC($CMD, ...)
+          - metavariable-regex:
+              metavariable: $CP
+              regex: ^(child_process|childProcess|cp)$
+          - metavariable-regex:
+              metavariable: $EXEC
+              regex: ^(exec|execSync|execAsync|execPromise|execP)$
+          - metavariable-pattern:
+              metavariable: $BUILD
+              patterns:
+                - pattern-either:
+                    - pattern: "`...${$X}...`"
+                    - pattern: $A + $B
+                    - pattern: $ARR.join(...)
+                    - pattern: "$C ? `...${$X}...` : $D"
+                    - pattern: "$C ? $D : `...${$X}...`"
+                - pattern-not: '"..." + "..."'

@@ -332,6 +332,19 @@ func LoadMerged(workspaceRoot string) (*Config, error) {
 			localData = removeTopLevelYAMLKey(localData, k.root)
 		}
 	}
+	// Forge endpoints, token variables and TLS settings are machine-owned
+	// too: a repository tier may declare a forge's kind and auth method, never
+	// where its credential goes (repoTierForgeMachineFields).
+	if hasProject {
+		var removed []string
+		projectData, removed = stripRepoTierForgeEndpoints(projectData)
+		warnStrippedForgeFields(removed, "project", ProjectConfigPath(workspaceRoot))
+	}
+	if hasLocal {
+		var removed []string
+		localData, removed = stripRepoTierForgeEndpoints(localData)
+		warnStrippedForgeFields(removed, "local", LocalConfigPath(workspaceRoot))
+	}
 
 	// No tier present at all — return defaults.
 	if !hasMachine && !hasProject && !hasLocal {

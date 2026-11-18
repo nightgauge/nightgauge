@@ -1,0 +1,27 @@
+rules:
+  - id: go-shell-nonconstant
+    # ADR-023 Decision 8 (static analysis) for command injection: a shell
+    # given a non-constant script interprets whatever the value holds. Run
+    # the program directly with exec.Command(name, args...) instead.
+    message: >-
+      A shell is given a non-constant script. Run the program directly with
+      exec.Command(name, args...), or pass values as positional parameters
+      ("$1") after a constant script. A reviewed exception goes in
+      .semgrep/allowlist.yaml with a reason.
+    languages: [go]
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: exec.Command($SH, $FLAG, $SCRIPT, ...)
+          - pattern: exec.CommandContext($CTX, $SH, $FLAG, $SCRIPT, ...)
+      - metavariable-regex:
+          metavariable: $SH
+          regex: ^"(/bin/|/usr/bin/)?(sh|bash|zsh|dash)"$
+      - metavariable-regex:
+          metavariable: $FLAG
+          regex: ^"-[a-z]*c"$
+      - metavariable-pattern:
+          metavariable: $SCRIPT
+          patterns:
+            - pattern-not: |
+                "..."

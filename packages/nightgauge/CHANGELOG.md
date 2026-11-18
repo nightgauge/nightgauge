@@ -18,6 +18,8 @@ and this project adheres to
 - The output window sanitizes rendered agent Markdown and escapes the issue title, so output can only show as text and formatting (#3401).
 - Every webview panel, including Notifier and Telemetry settings, now carries the same strict Content-Security-Policy (#3405).
 - Dashboard and Settings webview actions are limited to what each panel shows: an exact command list, a confirmation before merging a Dependabot PR, settings paths from the schema, and doc links inside `docs/` (#3403).
+- The Configure Forge Instance wizard saves the forge's URL and CA bundle to your machine config (`~/.nightgauge/config.yaml`) instead of the repository's `.nightgauge/config.yaml`, accepts only `https://` URLs, and tests the connection without writing anything first. A forge URL or token variable in a repository's config is now ignored (#3404).
+- The Gemini API key from SecretStorage is no longer copied into the extension's environment, where every process it started inherited it; only Gemini stages receive it (#3406).
 
 ## [0.8.6] - 2026-11-17
 

@@ -115,7 +115,15 @@ func spawnReview(ctx context.Context, runner adapters.SkillRunner, opts adapters
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = opts.WorktreeDir
 	cmd.Stdout, cmd.Stderr = log, log
-	cmd.Env = os.Environ()
+	// The reviewer is an agent harness like a stage: it gets only the
+	// credentials its adapter declares (ADR-023 Decision 7).
+	withhold := adapters.StageEnvWithhold(runner, opts)
+	cmd.Env = []string{} // never nil: a nil Env inherits everything
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); !withhold(k) {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}

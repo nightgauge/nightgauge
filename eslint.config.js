@@ -62,6 +62,8 @@ export default [
       "**/out/**",
       "**/*.generated.ts",
       ".nightgauge/**",
+      // semgrep rule fixtures: deliberately unsafe code (.semgrep/rules/*.ts).
+      ".semgrep/**",
       // Clean-install gate run directories: seeded fixture copies and logs.
       ".clean-install-e2e/**",
       // Per-issue pipeline worktrees — linting happens inside each worktree's

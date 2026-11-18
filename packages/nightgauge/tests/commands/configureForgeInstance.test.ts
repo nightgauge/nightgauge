@@ -94,6 +94,7 @@ vi.mock("../../src/services/IpcClient", () => ({
 const mockYamlInstance = {
   read: vi.fn().mockResolvedValue({ config: {}, success: true }),
   write: vi.fn().mockResolvedValue({ success: true }),
+  writeGlobal: vi.fn().mockResolvedValue({ success: true }),
   dispose: vi.fn(),
 };
 
@@ -142,6 +143,7 @@ describe("registerConfigureForgeInstanceCommand", () => {
     mockSecretSvc.getForgeSecret.mockResolvedValue(undefined);
     mockYamlInstance.read.mockResolvedValue({ config: {}, success: true });
     mockYamlInstance.write.mockResolvedValue({ success: true });
+    mockYamlInstance.writeGlobal.mockResolvedValue({ success: true });
     mockIpcInstance.forgeConnectionTest.mockResolvedValue({
       ok: true,
       latency_ms: 45,
@@ -174,13 +176,21 @@ describe("registerConfigureForgeInstanceCommand", () => {
         expect.stringMatching(/^\d{4}-\d{2}-\d{2}/)
       );
 
-      // config.yaml written with forge metadata
-      expect(mockYamlInstance.write).toHaveBeenCalled();
-      const writtenCfg = mockYamlInstance.write.mock.calls.at(-1)![0];
+      // Forge metadata goes to the machine tier, never the committed file.
+      expect(mockYamlInstance.write).not.toHaveBeenCalled();
+      expect(mockYamlInstance.writeGlobal).toHaveBeenCalledTimes(1);
+      const writtenCfg = mockYamlInstance.writeGlobal.mock.calls.at(-1)![0];
       expect(writtenCfg.forges?.["my-github"]).toMatchObject({
         kind: "github",
         auth_method: "pat",
       });
+      // The connection test is given the unsaved endpoint and credential.
+      expect(mockIpcInstance.forgeConnectionTest).toHaveBeenCalledWith(
+        "my-github",
+        "ghp_test_token",
+        "github",
+        undefined
+      );
 
       expect(mockShowInformationMessage).toHaveBeenCalledWith(
         expect.stringContaining("added successfully")
@@ -223,6 +233,7 @@ describe("registerConfigureForgeInstanceCommand", () => {
       // Should not reach save step
       expect(mockSecretSvc.setForgeSecret).not.toHaveBeenCalled();
       expect(mockYamlInstance.write).not.toHaveBeenCalled();
+      expect(mockYamlInstance.writeGlobal).not.toHaveBeenCalled();
     });
   });
 
@@ -263,6 +274,24 @@ describe("registerConfigureForgeInstanceCommand", () => {
       await handler();
 
       expect(mockSecretSvc.setForgeSecret).not.toHaveBeenCalled();
+      // Nothing was written to test the connection, so nothing is left behind.
+      expect(mockYamlInstance.write).not.toHaveBeenCalled();
+      expect(mockYamlInstance.writeGlobal).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("endpoint validation", () => {
+    it("refuses a plain http:// forge URL", async () => {
+      registerConfigureForgeInstanceCommand();
+      mockShowInputBox.mockResolvedValueOnce("plain-forge");
+      mockShowInputBox.mockResolvedValueOnce(undefined); // dismissed after validation
+      const handler = getLastCommandHandler();
+      await handler();
+      const urlStep = mockShowInputBox.mock.calls[1][0] as {
+        validateInput: (v: string) => string | null;
+      };
+      expect(urlStep.validateInput("http://gitlab.example.com")).toBe("Must be an https:// URL");
+      expect(urlStep.validateInput("https://gitlab.example.com")).toBeNull();
     });
   });
 

@@ -585,6 +585,37 @@ they arrive whatever their name. Another deliberate `CLAUDE_*` setting must be
 added to both twins with its reason. Variables outside the `CLAUDE` namespace
 (`ANTHROPIC_*`, `PATH`, ...) are inherited unchanged.
 
+**Credentials: an allowlist per adapter (ADR-023 Decision 7).** A stage reads
+issue text and repository files, so whatever its environment holds is
+reachable by a prompt it did not write. The Go path (`StageEnvWithhold` in
+`internal/execution/adapters/stage_env.go`, used by every stage spawn and by
+`nightgauge review`) keeps the host's toolchain variables (`PATH`, `HOME`,
+`GOPATH`, `JAVA_HOME`, `SSH_AUTH_SOCK`, proxy and TLS trust variables such as
+`HTTPS_PROXY`, `NO_PROXY`, `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS`) and
+withholds every variable whose **name** marks it as a credential (a final
+`_TOKEN`, `_KEY`, `_SECRET`, `_PASSWORD`, `_PAT` or `_DSN`, or a `SECRET`,
+`PASSWORD` or `WEBHOOK` segment) unless it is in one of these sets:
+
+| Set                    | Names                                                                                                                                                                 |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Every stage            | `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITLAB_TOKEN`, and the cloud platform families OpenCode keeps (AWS, Google Cloud, ...) |
+| `claude`, `claude-sdk` | `ANTHROPIC_*`, `CLAUDE_CODE_OAUTH_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`                                                                                                  |
+| `codex`                | `OPENAI_*`, `CODEX_*`                                                                                                                                                 |
+| `gemini`, `gemini-sdk` | `GEMINI_*`, `GOOGLE_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`                                                                                                          |
+| `copilot`              | `COPILOT_*`                                                                                                                                                           |
+| `grok`                 | `XAI_*`, `GROK_*`                                                                                                                                                     |
+| `opencode`             | its own per-dispatch rule (ADR-022 § 8) decides every model-service key                                                                                               |
+
+Every model service's key in the OpenCode catalog is also withheld from a
+harness that does not declare it, whatever its name looks like. So a Claude
+stage holds no OpenAI key, and no stage holds `NIGHTGAUGE_LICENSE_KEY`, a Slack
+token or a notification webhook. A stage tool that needs another credential
+(a private registry's `NPM_TOKEN`, say) is named by the operator in
+`NIGHTGAUGE_STAGE_ENV_ALLOW`, a comma-separated list read from the daemon's own
+environment; a repository cannot set it. The extension no longer copies the
+Gemini key from SecretStorage into its own environment: it hands the key to
+the daemon and to a Gemini stage it spawns itself.
+
 Both dispatch paths export the stage's identity on top of that inheritance:
 `NIGHTGAUGE_STAGE` and `NIGHTGAUGE_DISPATCH_MODEL`, the concrete model the
 stage launched with, for every adapter. `nightgauge knowledge stamp --stage`

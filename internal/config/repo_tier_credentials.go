@@ -187,6 +187,8 @@ func ValidateLegacyJSONCredentials(cfg *Config, path string) error {
 	cfg.PlatformEnabled = nil
 	// users is hard-stripped too (#2510): a repository cannot grant an identity.
 	cfg.Users = nil
+	// Forge endpoints, token variables and TLS settings are machine-owned.
+	clearLegacyForgeEndpoints(cfg.Forges)
 	return nil
 }
 

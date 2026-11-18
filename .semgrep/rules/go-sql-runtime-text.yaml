@@ -1,0 +1,146 @@
+# ADR-023 Decision 1: no SQL text is built from a runtime value. Pass values
+# as placeholders (?, $1) and let the driver bind them.
+#
+# Syntactic, not taint mode: taint analysis gives up silently on a large
+# function, and a gate must give the same answer on every run. Each
+# alternative below is one call shape times one way of building the text.
+rules:
+  - id: go-sql-runtime-text
+    message:
+      SQL text built with fmt.Sprintf, string concatenation, strings.Join or a builder reaches $M.
+      Use placeholders and pass the values as arguments. A compile-time-constant exception goes in .semgrep/allowlist.yaml
+      with a reason.
+    languages:
+      - go
+    severity: ERROR
+    pattern-either:
+      - patterns:
+          - pattern: $DB.$M($Q, ...)
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(Exec|Query|QueryRow|Prepare)$
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?!procgroup$)
+          - metavariable-pattern:
+              metavariable: $Q
+              patterns:
+                - pattern-either:
+                    - pattern: fmt.Sprintf(...)
+                    - pattern: fmt.Sprint(...)
+                    - pattern: strings.Join(...)
+                    - pattern: $SB.String()
+                    - pattern: $A + $B
+                - pattern-not: '"..." + "..."'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: "$Q := $BUILD
+
+                  ...
+
+                  "
+              - pattern-inside: "$Q = $BUILD
+
+                  ...
+
+                  "
+              - pattern-inside: "var $Q = $BUILD
+
+                  ...
+
+                  "
+          - pattern: $DB.$M($Q, ...)
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(Exec|Query|QueryRow|Prepare)$
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?!procgroup$)
+          - metavariable-pattern:
+              metavariable: $BUILD
+              patterns:
+                - pattern-either:
+                    - pattern: fmt.Sprintf(...)
+                    - pattern: fmt.Sprint(...)
+                    - pattern: strings.Join(...)
+                    - pattern: $SB.String()
+                    - pattern: $A + $B
+                - pattern-not: '"..." + "..."'
+      - patterns:
+          - pattern-inside: "$Q += $MORE
+
+              ...
+
+              "
+          - pattern: $DB.$M($Q, ...)
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(Exec|Query|QueryRow|Prepare)$
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?!procgroup$)
+      - patterns:
+          - pattern: $DB.$M($CTX, $Q, ...)
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(ExecContext|QueryContext|QueryRowContext|PrepareContext)$
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?!procgroup$)
+          - metavariable-pattern:
+              metavariable: $Q
+              patterns:
+                - pattern-either:
+                    - pattern: fmt.Sprintf(...)
+                    - pattern: fmt.Sprint(...)
+                    - pattern: strings.Join(...)
+                    - pattern: $SB.String()
+                    - pattern: $A + $B
+                - pattern-not: '"..." + "..."'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: "$Q := $BUILD
+
+                  ...
+
+                  "
+              - pattern-inside: "$Q = $BUILD
+
+                  ...
+
+                  "
+              - pattern-inside: "var $Q = $BUILD
+
+                  ...
+
+                  "
+          - pattern: $DB.$M($CTX, $Q, ...)
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(ExecContext|QueryContext|QueryRowContext|PrepareContext)$
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?!procgroup$)
+          - metavariable-pattern:
+              metavariable: $BUILD
+              patterns:
+                - pattern-either:
+                    - pattern: fmt.Sprintf(...)
+                    - pattern: fmt.Sprint(...)
+                    - pattern: strings.Join(...)
+                    - pattern: $SB.String()
+                    - pattern: $A + $B
+                - pattern-not: '"..." + "..."'
+      - patterns:
+          - pattern-inside: "$Q += $MORE
+
+              ...
+
+              "
+          - pattern: $DB.$M($CTX, $Q, ...)
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(ExecContext|QueryContext|QueryRowContext|PrepareContext)$
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?!procgroup$)

@@ -1,0 +1,6 @@
+# The semgrep the `Semgrep` CI job and scripts/semgrep-check.sh run (ADR-023
+# Decisions 1 and 8). Kept apart from requirements-ci.txt so the workflows that
+# only need PyYAML do not install it. Pinned so Dependabot (pip ecosystem)
+# tracks it and a rule's answer never changes under an unreviewed upgrade.
+semgrep==1.186.0
+PyYAML==6.0.3
