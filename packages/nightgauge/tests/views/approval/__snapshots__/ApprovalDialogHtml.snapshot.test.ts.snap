@@ -6,7 +6,7 @@ exports[`getApprovalDialogHtml snapshots (Issue #1242) > auto-accept state â€” p
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-NONCE'; style-src test-csp 'unsafe-inline'; form-action 'none'; base-uri 'none'">
   <title>Review Plan #1337</title>
   <style>
     
@@ -389,7 +389,7 @@ exports[`getApprovalDialogHtml snapshots (Issue #1242) > plan content rendered â
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-NONCE'; style-src test-csp 'unsafe-inline'; form-action 'none'; base-uri 'none'">
   <title>Review Plan #99</title>
   <style>
     
@@ -803,7 +803,7 @@ exports[`getApprovalDialogHtml snapshots (Issue #1242) > plan content rendered â
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-NONCE'; style-src test-csp 'unsafe-inline'; form-action 'none'; base-uri 'none'">
   <title>Review Plan #42</title>
   <style>
     

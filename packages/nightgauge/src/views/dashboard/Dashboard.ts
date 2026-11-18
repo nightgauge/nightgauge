@@ -3567,12 +3567,11 @@ export class Dashboard implements vscode.Disposable {
       const artifact = await this.platformComplianceService.downloadReport(reportId);
       if (artifact.url) {
         // A report download is a signed https URL; refuse any other scheme.
-        const uri = vscode.Uri.parse(artifact.url);
-        if (uri.scheme !== "https") {
+        if (!isHttpsUrl(artifact.url)) {
           vscode.window.showErrorMessage("The compliance report link is not an https URL.");
           return;
         }
-        await vscode.env.openExternal(uri);
+        await vscode.env.openExternal(vscode.Uri.parse(artifact.url));
         return;
       }
       if (artifact.data !== undefined) {
@@ -4271,5 +4270,14 @@ export class Dashboard implements vscode.Disposable {
   /** Get the set of triggers that use incremental updates (for testing) */
   static getIncrementalTriggers(): ReadonlySet<string> {
     return Dashboard.INCREMENTAL_TRIGGERS;
+  }
+}
+
+/** True when `value` parses as an absolute `https:` URL. */
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
   }
 }

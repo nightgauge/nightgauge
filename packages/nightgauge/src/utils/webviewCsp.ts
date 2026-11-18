@@ -62,7 +62,10 @@ export function buildWebviewCsp(
   cspSource = cspSource ?? "";
   // A source expression never contains a directive separator or a quote that
   // could close the surrounding attribute.
-  assertCspToken("cspSource", cspSource, /^[^;"'<>]*$/);
+  // VS Code's value is a source list such as "'self' https://*.vscode-cdn.net",
+  // so quoted keywords are allowed; a directive separator, an attribute quote
+  // or markup is not.
+  assertCspToken("cspSource", cspSource, /^[^;"<>\r\n]*$/);
   const origin = cspSource.trim();
 
   const styleSources: string[] = [];

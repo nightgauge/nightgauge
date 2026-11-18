@@ -27,6 +27,13 @@ describe("buildWebviewCsp (#3405)", () => {
     );
   });
 
+  it("accepts VS Code's real source list, quoted keyword included", () => {
+    const source = "'self' https://*.vscode-cdn.net";
+    expect(buildWebviewCsp("n0nce", source, { inlineStyles: true })).toContain(
+      `style-src ${source} 'unsafe-inline'`
+    );
+  });
+
   it("omits an empty resource origin", () => {
     expect(buildWebviewCsp("n0nce", "", { inlineStyles: true, fontSource: true })).toBe(
       "default-src 'none'; script-src 'nonce-n0nce'; style-src 'unsafe-inline'; " +
@@ -39,7 +46,7 @@ describe("buildWebviewCsp (#3405)", () => {
     ["nonce", "", "o"],
     ["nonce", "a b", "o"],
     ["cspSource", "n0nce", "o; script-src *"],
-    ["cspSource", "n0nce", "'unsafe-inline'"],
+    ["cspSource", "n0nce", "o\nscript-src *"],
     ["cspSource", "n0nce", 'o"><script>'],
   ])("rejects an invalid %s", (_name, nonce, source) => {
     expect(() => buildWebviewCsp(nonce, source)).toThrow(/invalid/);

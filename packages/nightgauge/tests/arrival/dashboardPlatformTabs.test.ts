@@ -497,6 +497,20 @@ describe("arrival: every platform tab acknowledges refresh before awaiting", () 
       expect(vs.window.showInformationMessage).not.toHaveBeenCalled();
     });
 
+    it("refuses a report link that is not https (#3403)", async () => {
+      ipcStub.platformAuditDownloadReport.mockResolvedValue({
+        url: "http://storage.example.test/signed",
+        expiresIn: 3600,
+        pending: false,
+      });
+      const panel = await loadedPanel();
+
+      await panel.dispatchMessage({ type: "complianceDownloadReport", reportId: "rpt-1" });
+
+      await vi.waitFor(() => expect(vs.window.showErrorMessage).toHaveBeenCalled());
+      expect(vs.env.openExternal).not.toHaveBeenCalled();
+    });
+
     it("opens the inline JSON payload as a document when there is no artifact URL", async () => {
       ipcStub.platformAuditDownloadReport.mockResolvedValue({
         data: { controls: 12 },
