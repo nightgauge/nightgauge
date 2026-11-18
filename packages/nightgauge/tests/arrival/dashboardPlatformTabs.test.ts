@@ -466,6 +466,7 @@ describe("arrival: every platform tab acknowledges refresh before awaiting", () 
       env: { openExternal: Mock };
       window: {
         showInformationMessage: Mock;
+        showErrorMessage: Mock;
         showTextDocument: Mock;
       };
       workspace: { openTextDocument: Mock };
