@@ -172,9 +172,9 @@ jobs:
           cp bin/nightgauge-darwin-universal bin/nightgauge-darwin-amd64
           cp bin/nightgauge-darwin-universal bin/nightgauge-darwin-arm64
 
-      # The margin scan (#3192). The Linux amd64 binary sits at the threshold
-      # of Microsoft's model and its verdict flips with the version string, so
-      # one clean scan at the RC's string proves nothing. Build the shipped
+      # The margin scan (#3192). Microsoft's model flags many never-seen Go
+      # binaries on first sight, and each version string is a different file
+      # (#3398), so one clean scan at the RC's string proves nothing. Build the shipped
       # binaries (Linux amd64 and the signed universal darwin file) at X.Y.Z,
       # X.Y.Z-rc.(N+1) and X.Y.(Z+1)-rc.1 with the RC's own Makefile targets;
       # rc-scan scans them with the RC's files and fails on any finding. They
@@ -510,8 +510,10 @@ jobs:
     runs-on: ubuntu-latest
     # 100: the RC's own files take about 60 requests and the six raw margin
     # binaries (#3192) about 24 more, about 21 minutes at the free key's 4
-    # requests/min, plus backed-off polls of slow analyses.
-    timeout-minutes: 100
+    # requests/min, plus backed-off polls of slow analyses, plus one
+    # VT_ML_RECHECK_DELAY (60 minutes) when a file uploaded in this run carries
+    # only a first-sight Microsoft !ml finding and is re-checked (#3398).
+    timeout-minutes: 160
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -538,7 +540,9 @@ jobs:
           # The RC scan's budget (docs/RELEASE_BINARIES.md#the-rc-scan-request-budget):
           # about 52 for the RC's files, about 58 more when the text files'
           # 14-day window has run out (the rc.3 replay: 111 against 52), 24 for
-          # the margin binaries, and about 16 for slow polls. Past it the scan
+          # the margin binaries, and the remaining 26 for slow polls and the
+          # first-sight !ml re-checks (#3398): a reanalysis plus about four
+          # backed-off polls each. Past it the scan
           # is a HARNESS ERROR; the day's 500 keep room for a second RC and a
           # release (#3202).
           VT_MAX_REQUESTS: "160"

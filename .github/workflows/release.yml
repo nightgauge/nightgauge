@@ -128,7 +128,9 @@ jobs:
     # files (v0.8.0: 11 assets, 6 binaries, 7 JS bundles, 17 exec-bit scripts
     # inside the VSIXs and tarballs), roughly 3 requests each, at the free
     # key's 4 requests/min. That is about 130 of the 500 requests a day.
-    timeout-minutes: 120
+    # Plus one 60-minute VT_ML_RECHECK_DELAY when a first-sight Microsoft !ml
+    # finding is re-checked (#3398).
+    timeout-minutes: 180
     environment: production
 
     permissions:
@@ -169,8 +171,8 @@ jobs:
           # and changelog generation.
           fetch-depth: 0
 
-      # #3192: the Linux amd64 binary sits at the threshold of Microsoft's
-      # model, and its verdict flips with the version string. An RC on this
+      # #3192: Microsoft's model flags many never-seen Go binaries on first
+      # sight, and each version string is a different file (#3398). An RC on this
       # commit must have passed rc-scan with its margin builds, one of them at
       # this release's own string, or nothing is built. No override: an
       # expired record means a new RC (docs/RELEASE_BINARIES.md).
@@ -746,12 +748,17 @@ jobs:
       # through a config on stdin. A re-run reuses the draft.
       - name: VirusTotal scan of the draft; publish only when clean
         # ~40 unique files x ~3 requests = ~130 requests at 4/min, about 33
-        # minutes (see the job's timeout note); 80 leaves room for slow analyses.
-        timeout-minutes: 80
+        # minutes (see the job's timeout note); 80 leaves room for slow analyses,
+        # and 60 more cover one VT_ML_RECHECK_DELAY re-check (#3398).
+        timeout-minutes: 140
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VT_API_KEY: ${{ secrets.VT_API_KEY }}
           TAG: ${{ steps.version.outputs.tag }}
+          # ~130 for the files plus 50 for first-sight !ml re-checks (#3398),
+          # five requests each, room for ten. Two 160-request RC scans and this
+          # one fit in the key's 500 a day (docs/RELEASE_BINARIES.md).
+          VT_MAX_REQUESTS: "180"
         run: |
           bash scripts/release-scan-gate.sh scan "$TAG" \
             --report "$RUNNER_TEMP/vt-scan-report.json"

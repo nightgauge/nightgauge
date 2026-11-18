@@ -532,19 +532,19 @@ scan -- "$CLEAN" "$MAL"
 first="$(sed -n 1p "$STATE/requests.log")"
 [ "$first" = "GET /api/v3/users/<key>/overall_quotas key=ok" ] &&
   [ "$(grep -c '/overall_quotas' "$STATE/requests.log")" = 1 ] &&
-  jq -e '.quota_remaining == 500 and .quota_estimate == 7 and .requests_by_class.quota == 1' "$REPORT" >/dev/null &&
-  grep -qF "daily quota: 500 requests left today, this scan may need 7" <<<"$OUT" &&
-  ok "quota fits: read once, first, with the key in the path; report records 500 left, estimate 7" ||
+  jq -e '.quota_remaining == 500 and .quota_estimate == 17 and .requests_by_class.quota == 1' "$REPORT" >/dev/null &&
+  grep -qF "daily quota: 500 requests left today, this scan may need 17" <<<"$OUT" &&
+  ok "quota fits: read once, first, with the key in the path; report records 500 left, estimate 17" ||
   bad "quota fits: first request '$first', report $(jq -c '{quota_remaining, quota_estimate, requests_by_class}' "$REPORT" 2>/dev/null)"
-printf '6\n' >"$STATE/quota-remaining"
+printf '16\n' >"$STATE/quota-remaining"
 scan -- "$CLEAN" "$MAL"
 rm -f "$STATE/quota-remaining"
-expect "quota does not fit -> exit 2 naming both numbers" 2 "HARNESS ERROR: daily quota too small: VirusTotal reports 6 requests left today, this scan may need 7"
+expect "quota does not fit -> exit 2 naming both numbers" 2 "HARNESS ERROR: daily quota too small: VirusTotal reports 16 requests left today, this scan may need 17"
 [ "$(wc -l <"$STATE/requests.log" | tr -d ' ')" = "1" ] && ! grep -q '^GET /api/v3/files/' "$STATE/requests.log" &&
-  jq -e '.status == "error" and .quota_remaining == 6 and .quota_estimate == 7' "$REPORT" >/dev/null &&
+  jq -e '.status == "error" and .quota_remaining == 16 and .quota_estimate == 17' "$REPORT" >/dev/null &&
   ok "quota does not fit: only the quota read was sent, no lookup" ||
   bad "quota does not fit: requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(jq -c '{status, quota_remaining, quota_estimate}' "$REPORT" 2>/dev/null)"
-printf '7\n' >"$STATE/quota-remaining"
+printf '17\n' >"$STATE/quota-remaining"
 scan -- "$CLEAN" "$MAL"
 rm -f "$STATE/quota-remaining"
 expect "quota exactly fits -> the scan runs (exit 1 on the finding)" 1 "engine StubEngineA: malicious"
@@ -594,6 +594,53 @@ expect "analysis 404 and no newer file report -> exit 2 on the timeout" 2 "HARNE
 grep -qF "did not complete within 5s" <<<"$OUT" && [ "$(grep -c '^GET /api/v3/analyses/' "$STATE/requests.log")" = 1 ] &&
   ok "after the 404 only the file is polled, until VT_ANALYSIS_TIMEOUT" ||
   bad "404 timeout: requests $(tr '\n' ' ' <"$STATE/requests.log")"
+
+# 19-ml. First-sight Microsoft !ml findings (#3398): an uploaded file whose
+# first report carries only such findings is judged on one reanalysis.
+MLFIRST="$(art ml-first.bin 'payload VT-STUB-MS-ML-FIRST')"
+MLFIRST_SHA="$(shasum -a 256 "$MLFIRST" | cut -d' ' -f1)"
+scan VT_ML_RECHECK_DELAY=0 -- "$MLFIRST"
+expect "first-sight !ml, clean on reanalysis -> exit 0" 0 "every file clean"
+grep -qF "judged on a reanalysis after a first-sight Microsoft !ml finding: $MLFIRST ($MLFIRST_SHA)" <<<"$OUT" &&
+  [ "$(wc -l <"$STATE/analyses.log" | tr -d ' ')" = 1 ] &&
+  jq -e --arg f "$MLFIRST" '.status == "clean" and .files[0].source == "reanalysed-after-ml"
+    and .requests_by_class.reanalysis == 1
+    and (.judged_on_reanalysis | length) == 1 and .judged_on_reanalysis[0].file == $f
+    and (.judged_on_reanalysis[0].first_sight_findings[0] | contains("Microsoft"))' "$REPORT" >/dev/null &&
+  ok "first-sight !ml: one reanalysis, report and summary name the file" ||
+  bad "first-sight !ml: out $OUT, report $(jq -c '{status, requests_by_class, judged_on_reanalysis, sources}' "$REPORT" 2>/dev/null)"
+MLKEEP="$(art ml-keep.bin 'payload VT-STUB-MS-ML')"
+scan VT_ML_RECHECK_DELAY=0 -- "$MLKEEP"
+expect "persisting !ml -> exit 1 after one re-check" 1 "engine Microsoft: malicious Trojan:Script/Wacatac.B!ml"
+[ "$(wc -l <"$STATE/analyses.log" | tr -d ' ')" = 1 ] && [ "$(report_status)" = "findings" ] &&
+  jq -e '.files[0].source == "reanalysed-after-ml"' "$REPORT" >/dev/null &&
+  grep -qF "judged on a reanalysis after a first-sight Microsoft !ml finding: $MLKEEP" <<<"$OUT" &&
+  jq -e '(.judged_on_reanalysis | length) == 1' "$REPORT" >/dev/null &&
+  ok "persisting !ml: exactly one re-check, judged by the full rules, named in the summary" ||
+  bad "persisting !ml: analyses $(cat "$STATE/analyses.log" 2>/dev/null), report $(jq -c '.files' "$REPORT" 2>/dev/null)"
+scan VT_ML_RECHECK_DELAY=0 -- "$MLFIRST" "$MLKEEP"
+expect "two first-sight !ml files -> one batch, the persisting one fails" 1 "2 file(s) with a first-sight Microsoft !ml finding"
+[ "$(wc -l <"$STATE/analyses.log" | tr -d ' ')" = 2 ] &&
+  jq -e '[.files[].source] == ["reanalysed-after-ml", "reanalysed-after-ml"] and (.judged_on_reanalysis | length) == 2' "$REPORT" >/dev/null &&
+  ok "two first-sight !ml files: each re-checked once, both named" ||
+  bad "two first-sight !ml files: analyses $(cat "$STATE/analyses.log" 2>/dev/null), report $(jq -c '.files' "$REPORT" 2>/dev/null)"
+for combo in "VT-STUB-MALICIOUS" "VT-STUB-YARA" "VT-STUB-AI-SUSP"; do
+  MLMIX="$(art "ml-mix-$combo.bin" "payload VT-STUB-MS-ML-FIRST $combo")"
+  scan VT_ML_RECHECK_DELAY=0 -- "$MLMIX"
+  expect "first-sight !ml with $combo -> exit 1" 1 "engine Microsoft: malicious Trojan:Script/Wacatac.B!ml"
+  [ ! -s "$STATE/analyses.log" ] && jq -e '.files[0].source == "uploaded" and .judged_on_reanalysis == []' "$REPORT" >/dev/null &&
+    ok "first-sight !ml with $combo: judged at once, no re-check" ||
+    bad "first-sight !ml with $combo: analyses $(cat "$STATE/analyses.log" 2>/dev/null)"
+done
+scan VT_ML_RECHECK_DELAY=0 -- "$MLKEEP"
+KEEP_VT=1 scan VT_ML_RECHECK_DELAY=0 VT_REUSE_MAX_AGE=0 -- "$MLKEEP"
+expect "a known file with !ml -> exit 1, no re-check" 1 "engine Microsoft: malicious Trojan:Script/Wacatac.B!ml"
+[ "$(wc -l <"$STATE/analyses.log" | tr -d ' ')" = 1 ] &&
+  jq -e '.files[0].source == "reanalysed" and .judged_on_reanalysis == []' "$REPORT" >/dev/null &&
+  ok "known file with !ml: its reanalysis is judged, never a second" ||
+  bad "known file with !ml: analyses $(cat "$STATE/analyses.log" 2>/dev/null), report $(jq -c '.files' "$REPORT" 2>/dev/null)"
+scan VT_ML_RECHECK_DELAY=1h -- "$CLEAN"
+expect "VT_ML_RECHECK_DELAY not in seconds -> exit 2" 2 "HARNESS ERROR: VT_ML_RECHECK_DELAY"
 
 # 20. The request budget stops the run before it sends past VT_MAX_REQUESTS.
 scan VT_MAX_REQUESTS=2 -- "$CLEAN"

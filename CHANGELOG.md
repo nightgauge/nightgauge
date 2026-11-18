@@ -20,6 +20,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The VirusTotal gate judges a file it uploaded whose first report carries only Microsoft `!ml` findings on one reanalysis after `VT_ML_RECHECK_DELAY` (default one hour), instead of failing on a first-sight verdict later analyses clear; a finding that persists, or any other finding, still fails, and the report names every file judged this way (#3398).
+- The release-string margin build is now stamped `vX.Y.Z` like the release binary, built in a scratch clone with a local tag, and `release-dwarf-check` fails a margin binary carrying any other stamp (#3398).
 - The extension's pre-merge guard lists rebase-conflict paths with `git diff -z`, so a file such as `café.txt` appears by its real name in the `[pre-merge-conflict]` error instead of git's C-quoted `"caf\303\251.txt"` (#3393).
 - GitLab merge requests now report their creation time (`PullRequest.CreatedAt`), normalised to RFC 3339 UTC like GitHub's, on every read path (#3266).
 - pr-create's stale-branch merge reports a conflict on a non-ASCII path such as `café.txt` by its real name instead of a C-quoted string, under zsh as well as bash (#3028).

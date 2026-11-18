@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // fixture is one cross-compiled Go binary built for the tests.
@@ -802,5 +804,59 @@ func TestStrippedSizeDiscountsOnlyWhatStripRemoves(t *testing.T) {
 	}
 	if got := strippedSize(2000, sections); got != 2000-300-20-100-50 {
 		t.Errorf("strippedSize = %d, want %d", got, 2000-300-20-100-50)
+	}
+}
+
+// --- Margin stamp (#3398): a margin binary carries the release's version stamp. ---
+
+// buildStamped builds a tiny Linux amd64 program from module mod in a fresh git
+// repository whose HEAD carries only tag, the way release-margin-builds.sh's
+// scratch clone does, and returns the binary's path.
+func buildStamped(t *testing.T, mod, tag, name string) string {
+	t.Helper()
+	src := t.TempDir()
+	files := map[string]string{
+		"go.mod":  "module " + mod + "\n\ngo 1.21\n",
+		"main.go": "package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"stamp\") }\n",
+	}
+	for f, body := range files {
+		if err := os.WriteFile(filepath.Join(src, f), []byte(body), 0o644); err != nil {
+			t.Fatalf("HARNESS ERROR: %v", err)
+		}
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"commit", "-qm", "init"}, {"tag", tag}} {
+		gittest.Run(t, src, args...)
+	}
+	out := filepath.Join(t.TempDir(), name)
+	cmd := exec.Command("go", "build", "-trimpath", "-buildvcs=true", "-ldflags=-compressdwarf=false", "-o", out, ".")
+	cmd.Dir = src
+	cmd.Env = append(gittest.Env(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64", "GOFLAGS=", "GOWORK=off")
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("HARNESS ERROR: go build: %v\n%s", err, b)
+	}
+	return out
+}
+
+func TestMarginStamp(t *testing.T) {
+	cases := []struct {
+		name, mod, tag, file string
+		want                 int
+		says                 string
+	}{
+		{"release stamp", modulePath, "v1.2.3", "nightgauge-margin_1.2.3_linux_amd64", 0, "ok"},
+		{"rc stamp on the release string", modulePath, "v1.2.3-rc.4", "nightgauge-margin_1.2.3_linux_amd64", 1,
+			"stamped " + modulePath + " v1.2.3-rc.4, want " + modulePath + " v1.2.3"},
+		{"rc string with its own stamp", modulePath, "v1.2.3-rc.5", "nightgauge-margin_1.2.3-rc.5_linux_amd64", 0, "ok"},
+		{"wrong module path", "example.com/other", "v1.2.3", "nightgauge-margin_1.2.3_linux_amd64", 1,
+			"stamped example.com/other v1.2.3"},
+		{"not a margin binary", modulePath, "v1.2.3-rc.4", "nightgauge-linux-amd64", 0, "ok"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, out := runCheck(t, buildStamped(t, tc.mod, tc.tag, tc.file))
+			if code != tc.want || !strings.Contains(out, tc.says) {
+				t.Fatalf("exit %d, want %d with %q; output:\n%s", code, tc.want, tc.says, out)
+			}
+		})
 	}
 }
