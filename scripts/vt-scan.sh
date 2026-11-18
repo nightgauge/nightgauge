@@ -49,7 +49,8 @@
 #     /files/{sha256}/analyse re-analyses it without a re-upload. 3 requests:
 #     lookup, reanalysis, and at least one poll.
 #   - VirusTotal does not know it (404): it is uploaded. 3 requests, or 4 over
-#     32 MB.
+#     32 MB. Two more (a reanalysis and at least one poll) when its first
+#     report carries only Microsoft !ml findings (below).
 #
 # A submitted file is polled with GET /files/{sha256} until its
 # last_analysis_date is later than the one the lookup saw. That one answer
@@ -118,6 +119,26 @@
 #     `yara_allowlisted` and named in the summary line, not counted;
 #   - a Code insights verdict is present and is not `benign`.
 #
+# FIRST-SIGHT MICROSOFT !ml FINDINGS (#3398)
+#
+# Microsoft's cloud ML engine flags many fresh Go binaries on the first
+# analysis VirusTotal ever runs of them (Trojan:Script/Wacatac.B!ml, .C!ml) and
+# clears the same bytes on a reanalysis: five such binaries, among them v0.8.6
+# Linux 1d07e758c382... and rc.49's two margin builds, were clean when
+# reanalysed 1 to 3 hours later; the shortest measured gap that cleared was
+# about 1 hour (#3192). So when a file was uploaded in this run (VirusTotal
+# answered 404 on its lookup) and its first report's only findings are named
+# Microsoft results ending in !ml, with no YARA match, no non-benign Code
+# insights verdict and no unnamed engine count, that report is not judged. After
+# the poll pass the scan waits VT_ML_RECHECK_DELAY once for the batch, asks for
+# one reanalysis of each such file (POST .../analyse, counted as a reanalysis,
+# then polls) and judges that report by every rule above: a finding that
+# persists is exit 1. There is never a second re-check. Any other finding, a
+# Microsoft !ml finding beside any other, and any finding on a file VirusTotal
+# already knew are judged at once, as before. The report's
+# judged_on_reanalysis lists each re-checked file with its first-sight findings
+# and dates, its source is reanalysed-after-ml, and the closing summary names it.
+#
 # VirusTotal does not produce Code insights for every file type (ELF binaries
 # among them). An absent field is recorded as "not-produced" and is not a
 # verdict. A field present in a shape this script does not know is exit 2.
@@ -163,6 +184,9 @@
 #                          no finding. Default 1209600 (14 days). 0 turns the
 #                          long window off; otherwise at least VT_REUSE_MAX_AGE.
 #   VT_MIN_ENGINES         Fewest engines a judged report may list. Default 40.
+#   VT_ML_RECHECK_DELAY    Seconds to wait before re-checking first-sight
+#                          Microsoft !ml findings. Default 3600, the shortest
+#                          measured gap after which such a finding cleared.
 #
 # Exit: 0 every file clean; 1 any finding; 2 HARNESS ERROR.
 #
@@ -179,6 +203,7 @@ MAX_REQUESTS="${VT_MAX_REQUESTS:-150}"
 REUSE_MAX_AGE="${VT_REUSE_MAX_AGE:-86400}"
 REUSE_MAX_AGE_TEXT="${VT_REUSE_MAX_AGE_TEXT:-1209600}"
 MIN_ENGINES="${VT_MIN_ENGINES:-40}"
+ML_RECHECK_DELAY="${VT_ML_RECHECK_DELAY:-3600}"
 LARGE_FILE_BYTES=33554432 # 32 MB: above this, POST /files refuses the upload.
 # VirusTotal answers GET /files/upload_url with a URL on this host. It is the
 # only origin besides the API's own that may receive the key.
@@ -215,6 +240,14 @@ print_summary() {
   echo "vt-scan: $REQUESTS requests (quota $REQ_QUOTA, lookups $REQ_LOOKUP, uploads $REQ_UPLOAD, reanalyses $REQ_REANALYSIS, polls $REQ_POLL)"
 }
 
+# print_reanalysis_notes — one line per file judged on the re-check of a
+# first-sight Microsoft !ml finding, so no such file passes unnamed.
+print_reanalysis_notes() {
+  jq -r '.[] | select(.source == "reanalysed-after-ml")
+    | "vt-scan: judged on a reanalysis after a first-sight Microsoft !ml finding: \(.file) (\(.sha256)): first analysed \(.first_sight.analysed_at) (\(.first_sight.findings | join("; "))), reanalysed \(.analysed_at): \(if (.findings | length) == 0 then "clean" else "\(.findings | length) finding(s)" end)"' \
+    <<<"$ENTRIES"
+}
+
 write_report() {
   [ -n "$REPORT" ] || return 0
   jq -n \
@@ -235,6 +268,9 @@ write_report() {
       requests_by_class: {quota: $quota, lookup: $lookup, upload: $upload, reanalysis: $reanalysis, poll: $poll},
       quota_remaining: $remaining, quota_estimate: $estimate,
       reuse_max_age: $reuse, reuse_max_age_text: $reuse_text,
+      judged_on_reanalysis: [$files[] | select(.source == "reanalysed-after-ml")
+        | {file, sha256, first_sight_findings: .first_sight.findings,
+           first_sight_at: .first_sight.analysed_at, reanalysed_at: .analysed_at}],
       sources: ($files | group_by(.source) | map({key: .[0].source, value: length}) | from_entries),
       files: $files}' \
     >"$REPORT" 2>/dev/null || echo "WARNING: could not write $REPORT" >&2
@@ -284,6 +320,7 @@ done
 [[ "$REUSE_MAX_AGE_TEXT" =~ ^[0-9]{1,8}$ ]] || harness "VT_REUSE_MAX_AGE_TEXT must be a whole number of seconds"
 [ "$REUSE_MAX_AGE_TEXT" -eq 0 ] || [ "$REUSE_MAX_AGE_TEXT" -ge "$REUSE_MAX_AGE" ] ||
   harness "VT_REUSE_MAX_AGE_TEXT ($REUSE_MAX_AGE_TEXT) is below VT_REUSE_MAX_AGE ($REUSE_MAX_AGE); set it to 0 to turn the text window off"
+[[ "$ML_RECHECK_DELAY" =~ ^[0-9]{1,6}$ ]] || harness "VT_ML_RECHECK_DELAY must be a whole number of seconds"
 [[ "$MIN_ENGINES" =~ ^[0-9]{1,3}$ ]] && [ "$MIN_ENGINES" -gt 0 ] ||
   harness "VT_MIN_ENGINES must be a whole number above 0"
 # A cap below the floor would poll faster than the 4/min spacing allows.
@@ -434,10 +471,15 @@ echo "vt-scan: ${#FILES[@]} file(s), $(printf '%s\n' "$UNIQUE" | wc -l | tr -d '
 
 # --- 0. Will the scan fit in today's quota? -----------------------------------
 # The estimate assumes VirusTotal knows none of the files: one lookup, one
-# upload (two over 32 MB) and one poll each, plus this quota read, capped at
+# upload (two over 32 MB) and one poll each, plus RECHECK_REQUESTS per file for
+# the first-sight ML re-check (any kind: the !ml findings seen include
+# Trojan:Script labels on text files), plus this quota read, capped at
 # VT_MAX_REQUESTS because the run never sends more.
-QUOTA_ESTIMATE="$(awk -F'\t' -v big="$LARGE_FILE_BYTES" -v max="$MAX_REQUESTS" '
-  !seen[$1]++ { n += ($2 > big) ? 4 : 3 }
+# One re-check is a reanalysis plus the backed-off polls of await_report, which
+# alternate file and analysis-object reads at 15, 30, 60, 120 s: about four.
+RECHECK_REQUESTS=5
+QUOTA_ESTIMATE="$(awk -F'\t' -v big="$LARGE_FILE_BYTES" -v max="$MAX_REQUESTS" -v rc="$RECHECK_REQUESTS" '
+  !seen[$1]++ { n += (($2 > big) ? 4 : 3) + rc }
   END { n += 1; print (n < max) ? n : max }' "$INDEX")"
 REQ_CLASS=quota
 SOFT_FAIL=1
@@ -509,6 +551,18 @@ upload() {
   vt_request POST "$target" -F "file=@\"$path\""
   expect_analysis "POST /files for $path"
 }
+
+# ML_ONLY — jq predicate over a verdict_of entry: every finding is a named
+# Microsoft engine result ending in !ml, with no YARA match, no non-benign Code
+# insights verdict and no unnamed engine count. Only such a report on a file
+# VirusTotal first saw in this run waits for one re-check.
+ML_ONLY='(.findings | length) > 0
+  and (.findings | length) == (.engines | length)
+  and (.malicious + .suspicious) == (.engines | length)
+  and (.yara | length) == 0
+  and all(.engines[]; .engine == "Microsoft" and ((.result // "") | endswith("!ml")))'
+ML_PENDING="$WORK/ml-pending.tsv"
+: >"$ML_PENDING"
 
 ALLOW_JSON="$(printf '%s\n' "${YARA_ALLOWLIST[@]}" | jq -R . | jq -sc .)"
 FINDINGS=0
@@ -690,7 +744,14 @@ LAG_FILE_POLLS=3
 # The first poll reads the file. If its date has not moved, the analysis object
 # is polled alone until it completes (VirusTotal can complete an analysis
 # without moving the file's date), then the file again: one request per poll.
-while IFS=$'\t' read -r sha before source aid; do
+# await_report SHA BEFORE SOURCE AID [EXTRA_JSON] — poll SHA until its report
+# is newer than BEFORE and inside its window, then judge it as SOURCE. The
+# first pass and the first-sight ML re-check share it. An uploaded file whose
+# first report carries only Microsoft !ml findings is not judged here: it is
+# listed in $ML_PENDING for one re-check (FIRST-SIGHT MICROSOFT !ml FINDINGS).
+await_report() {
+  local sha="$1" before="$2" source="$3" aid="$4" extra="${5:-"{}"}"
+  local path deadline gap next analysis_newer analysis_gone lag_polls facts pdate status adate first
   path="$(awk -F'\t' -v s="$sha" '$1 == s { print $3; exit }' "$INDEX")"
   deadline=$(($(date +%s) + ANALYSIS_TIMEOUT))
   gap="$MIN_INTERVAL"
@@ -719,7 +780,15 @@ while IFS=$'\t' read -r sha before source aid; do
         pdate="${facts%%$'\t'*}"
         if [ "$pdate" -gt "$before" ]; then
           if [ $(($(date +%s) - pdate)) -le "$(reanalysis_window "$sha")" ]; then
-            judge "$sha" "$source"
+            if [ "$source" = uploaded ]; then
+              first="$(verdict_of "$sha" "$source")" || exit 2
+              if jq -e "$ML_ONLY" <<<"$first" >/dev/null; then
+                printf '%s\t%s\t%s\n' "$sha" "$pdate" "$(jq -c '{analysed_at, findings}' <<<"$first")" >>"$ML_PENDING"
+                echo "  pending $path ($sha): first-sight Microsoft !ml finding(s) ($(jq -r '.findings | join("; ")' <<<"$first")); re-checked on a reanalysis after ${ML_RECHECK_DELAY}s"
+                break
+              fi
+            fi
+            judge "$sha" "$source" "" "$extra"
             break
           fi
           echo "  $path ($sha): its report dated $(utc "$pdate") is newer than the lookup's but outside its window; still polling"
@@ -768,17 +837,39 @@ while IFS=$'\t' read -r sha before source aid; do
     [ "$(date +%s)" -lt "$deadline" ] ||
       harness "analysis of $path ($sha) did not complete within ${ANALYSIS_TIMEOUT}s"
   done
+}
+
+while IFS=$'\t' read -r sha before source aid; do
+  await_report "$sha" "$before" "$source" "$aid"
 done <"$SUBMITTED"
+
+# --- 3. One re-check of each first-sight Microsoft !ml finding ---------------
+# One delay for the whole batch, measured from the end of the poll pass, then
+# one reanalysis per pending file, judged by the full rules. Never a second.
+if [ -s "$ML_PENDING" ]; then
+  echo "vt-scan: $(wc -l <"$ML_PENDING" | tr -d ' ') file(s) with a first-sight Microsoft !ml finding; reanalysing after ${ML_RECHECK_DELAY}s"
+  sleep "$ML_RECHECK_DELAY"
+  while IFS=$'\t' read -r sha before first; do
+    path="$(awk -F'\t' -v s="$sha" '$1 == s { print $3; exit }' "$INDEX")"
+    REQ_CLASS=reanalysis
+    vt_request POST "$API_BASE/files/$sha/analyse"
+    expect_analysis "POST /files/$sha/analyse for $path"
+    echo "  reanalysing $path ($sha): first analysed $(utc "$before") with only Microsoft !ml findings"
+    await_report "$sha" "$before" reanalysed-after-ml "$ANALYSIS_ID" "$(jq -c '{first_sight: .}' <<<"$first")"
+  done <"$ML_PENDING"
+fi
 
 if [ "$FINDINGS" -gt 0 ]; then
   REPORT_STATUS="findings"
   write_report
+  print_reanalysis_notes
   print_summary
   echo "vt-scan: $FINDINGS finding(s). Nothing may publish until the owner decides." >&2
   exit 1
 fi
 REPORT_STATUS="clean"
 write_report
+print_reanalysis_notes
 print_summary
 echo "vt-scan: every file clean"
 exit 0

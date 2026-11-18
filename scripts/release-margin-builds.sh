@@ -3,9 +3,9 @@
 # release-margin-builds.sh — build the margin scan inputs for a release
 # candidate (#3192).
 #
-# The Linux amd64 binary sits at the threshold of Microsoft's model, and its
-# verdict flips with the version string alone: a clean scan at one string is
-# not evidence that the build is clean. So the staging run dispatched on the RC
+# Microsoft's model flags many fresh Go binaries on first sight, and a clean
+# scan of the RC's bytes says nothing about the bytes the release ships at
+# another version string. So the staging run dispatched on the RC
 # chosen for release (#3213) also builds the shipped binaries at three
 # neighbouring version strings, and rc-scan scans them with the RC's own files.
 # A finding at any of them fails the RC.
@@ -14,7 +14,17 @@
 #   release-margin-builds.sh --print-versions X.Y.Z-rc.N
 #
 # The three strings are X.Y.Z (the release this RC is promoted to),
-# X.Y.Z-rc.(N+1) and X.Y.(Z+1)-rc.1. For each one it runs the Makefile's
+# X.Y.Z-rc.(N+1) and X.Y.(Z+1)-rc.1. Each one is built in a scratch clone of
+# this checkout made with --no-tags, at the same commit, carrying one local tag
+# v<version> (never pushed; the clone is deleted on exit). Go stamps the main
+# module's version from the tag on HEAD, so the X.Y.Z build carries
+# `mod github.com/nightgauge/nightgauge vX.Y.Z` exactly as release.yml's build
+# from tag vX.Y.Z does. Built in the RC's own checkout it carried vX.Y.Z-rc.N
+# and differed from the release by ~860 KB (#3398). release-dwarf-check
+# enforces the stamp on every nightgauge-margin_<v>_* file. The checkout must
+# have no uncommitted tracked changes: the release builds a clean tag.
+#
+# For each string it runs the Makefile's
 # `build-release-targets` and `darwin-universal` targets, so the flags are the
 # RC's own, signs the universal file with scripts/sign-macos-binaries.sh (a
 # loud no-op without the Apple secrets, exactly as for the RC), and copies
@@ -32,17 +42,20 @@
 # never reach rc-artifacts-* or a GitHub Release. See docs/RELEASE_BINARIES.md.
 #
 # Environment (for tests): MAKE (default make), MARGIN_SIGN_SCRIPT (default
-# scripts/sign-macos-binaries.sh).
+# scripts/sign-macos-binaries.sh), MARGIN_REPO (the checkout to build, default
+# this repository).
 #
 # Exit:
 #   0  six binaries and the manifest were written
-#   1  a build, signature or copy failed, or other than six binaries exist
+#   1  a build, signature or copy failed, other than six binaries exist, or
+#      the checkout has uncommitted tracked changes
 #   2  HARNESS ERROR: bad arguments; nothing was built
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAKE_CMD="${MAKE:-make}"
 SIGN_SCRIPT="${MARGIN_SIGN_SCRIPT:-$ROOT/scripts/sign-macos-binaries.sh}"
+REPO="${MARGIN_REPO:-$ROOT}"
 EXPECTED_BINARIES=6
 
 harness() { echo "HARNESS ERROR: release-margin-builds: $*" >&2; exit 2; }
@@ -88,16 +101,34 @@ place() {
   chmod +x "$2"
 }
 
+HEAD_SHA="$(git -C "$REPO" rev-parse --verify HEAD 2>/dev/null)" ||
+  harness "$REPO is not a git checkout with a commit"
+DIRTY="$(git -C "$REPO" status --porcelain --untracked-files=no)" ||
+  harness "git status failed in $REPO"
+[ -z "$DIRTY" ] ||
+  fail "$REPO has uncommitted tracked changes; a margin build must be the committed tree the release tag builds"
+
 mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"
+SCRATCH="$(mktemp -d)" || harness "mktemp failed"
+trap 'rm -rf "$SCRATCH"' EXIT
 MANIFEST="$OUT/margin-manifest.txt"
 : >"$MANIFEST"
 
 for V in $VERSIONS; do
   BIN="$OUT/build/$V"
-  echo "== margin build $V =="
-  "$MAKE_CMD" -C "$ROOT" build-release-targets VERSION="$V" BIN_DIR="$BIN" ||
+  SRC_DIR="$SCRATCH/$V"
+  echo "== margin build $V (v$V on $HEAD_SHA) =="
+  # --no-tags: v$V is the only tag on HEAD, so Go stamps exactly v$V.
+  git clone --quiet --no-tags "$REPO" "$SRC_DIR" ||
+    fail "cloning $REPO for $V failed"
+  git -C "$SRC_DIR" checkout --quiet --detach "$HEAD_SHA" ||
+    fail "checking out $HEAD_SHA for $V failed"
+  # A lightweight tag, unsigned whatever the host's git config says.
+  git -C "$SRC_DIR" -c tag.gpgSign=false tag "v$V" || fail "tagging v$V in the scratch clone failed"
+  "$MAKE_CMD" -C "$SRC_DIR" build-release-targets VERSION="$V" BIN_DIR="$BIN" ||
     fail "make build-release-targets failed for $V"
-  "$MAKE_CMD" -C "$ROOT" darwin-universal BIN_DIR="$BIN" ||
+  "$MAKE_CMD" -C "$SRC_DIR" darwin-universal BIN_DIR="$BIN" ||
     fail "make darwin-universal failed for $V"
   bash "$SIGN_SCRIPT" "$BIN/nightgauge-darwin-universal" ||
     fail "signing the universal binary failed for $V"

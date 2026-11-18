@@ -171,6 +171,50 @@ still flagged, the cause is something else. Find it and fix it there. Never repo
 false positive, never allowlist it, and never publish on the grounds that it
 is one.
 
+## First-sight findings (#3398)
+
+Microsoft's cloud ML engine flags many Go binaries the first time VirusTotal
+analyses them, and clears the same bytes on a later analysis. Measured
+2026-11-17/18 (#3192), every scan with `scripts/vt-scan.sh`, Microsoft the only
+engine reporting anything (1 of 74):
+
+| File                              | sha256         | First sight                  | Reanalysed     | Reanalysis |
+| --------------------------------- | -------------- | ---------------------------- | -------------- | ---------- |
+| v0.8.6 Linux amd64 release binary | `1d07e758c382` | `Trojan:Script/Wacatac.C!ml` | 1 to 3 h later | clean      |
+| rc.47 Linux amd64                 | `c03278a56d07` | `Wacatac` `!ml`              | 1 to 3 h later | clean      |
+| rc.50 set, `0.8.6-rc.51` build    | `2ef6d047f696` | `Wacatac` `!ml`              | 1 to 3 h later | clean      |
+| rc.49 margin build                | `6011e2a5350c` | `Wacatac` `!ml`              | 1 to 3 h later | clean      |
+| rc.49 margin build                | `670ff344274d` | `Wacatac` `!ml`              | 1 to 3 h later | clean      |
+| v0.7.2 Linux amd64 (published)    | `684835d5deef` | clean                        | forced, 00:28Z | clean      |
+| v0.8.5 Linux amd64 (published)    | `cdfc327a8c6d` | clean                        | forced, 00:28Z | clean      |
+| rc.9 Linux amd64                  | `3b5952cb5fb0` | clean                        | forced, 00:28Z | clean      |
+| rc.49 Linux amd64                 | `1b70cdb19bc2` | clean                        | forced, 00:28Z | clean      |
+
+v0.8.6 shipped from rc.49 after its rc-scan was re-dispatched on the same tag:
+every reused report was clean, and `release.yml`'s own scan was clean. The flag
+tracks no build feature found: removing a 430 KB embedded catalog left the
+verdict per string unchanged. What this record previously called "the
+verdict flips with the version string" is this: a different version string moves about
+860 KB of layout, so each build is a never-seen file, judged on its first
+sight. The build changes recorded below stand on their own measurements; the
+first-sight effect is why one scan of one fresh file was never evidence.
+
+**The re-check.** When `scripts/vt-scan.sh` uploaded a file in this run
+(VirusTotal answered 404 on its lookup) and that file's first report carries
+only Microsoft findings ending in `!ml` (no other engine, no unnamed count, no
+YARA match, no non-benign Code insights verdict), the report is not judged.
+After the poll pass the scan waits `VT_ML_RECHECK_DELAY` once for the batch
+(default 3600 seconds, the shortest gap measured above after which such a
+finding cleared), asks for one reanalysis of each such file, and judges it by
+every rule. A finding that persists fails the scan. There is never a second
+re-check. A Microsoft `!ml` finding beside any other finding, and any finding
+on a file VirusTotal already knew, fail at once as before. The report lists
+each re-checked file under `judged_on_reanalysis` (first-sight findings and
+both dates), its `source` is `reanalysed-after-ml`, and the summary names it.
+rc-scan and release.yml's scan step carry 60 more minutes of timeout for the
+delay. Nothing is called a false positive, nothing is submitted to a vendor,
+and nothing is allowlisted.
+
 ## Dependencies that move the Microsoft model's score
 
 v0.8.4's unstripped Linux binary was flagged too (`Trojan:Script/Wacatac.B!ml`,
@@ -186,7 +230,8 @@ amd64, scanned with `scripts/vt-scan.sh`:
 | `modernc.org/sqlite` 1.61.1, `libc` 1.79.0, `go-humanize` 1.1.0, `oapi-codegen/runtime` 1.8.0 | 0.8.2 to 0.8.5                        | 12     | 6                    |
 | As above, with `oapi-codegen/runtime` 1.7.0                                                   | 0.8.4                                 | 1      | 1                    |
 
-On the newer set the verdict flips with the version string alone, and no
+On the newer set builds that differ only in the version string got opposite
+first-sight verdicts (see [First-sight findings](#first-sight-findings-3398)), and no
 script-like string differs between the two sets. The newer `libc` and
 `sqlite`, a C-to-Go translation of SQLite, add about 3,000 unique strings of
 translated C and symbol data. That shifts the statistical profile the model
@@ -308,8 +353,9 @@ The four variants the cause turns on are recorded per build in
 other variants' per-build sha256 and verdicts are on #3192.
 
 **Cause.** No change between rc.2 and rc.3 caused it. Each suspected change,
-reverted alone, was still flagged. The verdict flips with the version string in
-every variant: rc.3's tree was flagged at `0.8.6-rc.3`, `0.8.6` and `0.8.7`,
+reverted alone, was still flagged. First-sight verdicts differ by version string in
+every variant (each string is a never-seen file; see
+[First-sight findings](#first-sight-findings-3398)): rc.3's tree was flagged at `0.8.6-rc.3`, `0.8.6` and `0.8.7`,
 and clean at `0.8.6-rc.4`, `0.8.6-rc.5` and `0.8.7-rc.1`. The Linux ELF as a
 whole sits at this model's threshold, at least since v0.8.5. rc.1 and rc.2 were
 each clean at one string, and that was read as a fix. It was not.
@@ -336,7 +382,17 @@ the vendor as a false positive and never allowlisted.
 builds the Linux amd64 binary and the signed universal darwin file at `X.Y.Z`
 (the release string), `X.Y.Z-rc.(N+1)` and `X.Y.(Z+1)-rc.1`. It uses the
 Makefile's `build-release-targets` and `darwin-universal` targets, so the flags
-are the RC's own, and writes six raw, executable `nightgauge-margin_<v>_<target>`
+are the RC's own. Each string is built in a scratch clone of the RC checkout
+made with `--no-tags`, at the same commit, carrying one local, never-pushed tag
+`v<v>`, so Go stamps `mod github.com/nightgauge/nightgauge v<v>`. The `X.Y.Z`
+build therefore carries the stamp `release.yml`'s build from tag `vX.Y.Z` does.
+Built in the RC's own checkout it carried `vX.Y.Z-rc.N` and differed from the
+release binary by about 860 KB (#3398). A checkout with uncommitted tracked
+changes fails the step. `release-dwarf-check` fails any
+`nightgauge-margin_<v>_*` file whose build info is not that module at `v<v>`
+(`TestMarginStamp`). `-trimpath`, `CGO_ENABLED=0` and the same toolchain make
+the build reproducible; the stamp is pinned, a cross-host hash is not. It
+writes six raw, executable `nightgauge-margin_<v>_<target>`
 binaries and a `margin-manifest.txt` (`<version> <file> <sha256>` per line).
 They are not archived: the scan gate scans an archive and then the binary
 inside it, so an archive cost each build two uploads (#3202). They are built
@@ -463,8 +519,8 @@ is flagged, so nothing between rc.2 and rc.3 is the cause.
 | `0.8.6-rc.4` | `97d6db8db647c3235cbd37d7f3c393efc74c13ce55342582b6cb58aff1c6857c` | `Trojan:Script/Wacatac.B!ml` |
 | `0.8.6`      | `739449b1d4beb6725e53ccc69d2ae28181a4c2ee2f0718cba7498451e1ec16fd` | `Trojan:Script/Wacatac.B!ml` |
 
-In all four, builds that differ only in the version string get opposite
-verdicts. That is the measured cause stated under **Cause.** above.
+In all four, builds that differ only in the version string got opposite
+first-sight verdicts; see [First-sight findings](#first-sight-findings-3398).
 
 ### The RC scan request budget
 
@@ -478,7 +534,9 @@ the chosen RC (#3213), not on every RC tag push.
 Before its first lookup, every `vt-scan.sh` run reads the key's remaining
 daily quota (one request, `GET /users/{key}/overall_quotas`). It estimates its
 own cost as if VirusTotal knew none of its files: one lookup, one upload (two
-over 32 MB) and one poll per unique file, plus the quota read, capped at
+over 32 MB) and one poll per unique file, five more per unique file of any
+kind for a first-sight `!ml` re-check (a reanalysis and about four backed-off
+polls), plus the quota read, capped at
 `VT_MAX_REQUESTS`. When fewer requests remain today, the scan stops with a
 HARNESS ERROR naming both numbers, before it spends anything else. An answer
 it cannot read is logged and the scan continues; a 429 on it is a HARNESS
@@ -502,7 +560,15 @@ ERROR. The report records `quota_remaining` and `quota_estimate`.
   polls, not one each. Their new reports then carry the next 14 days.
 - **The six margin binaries: about 24.** Each is new to VirusTotal: a lookup,
   `upload_url` (they are over 32 MB), the upload and a poll.
-- **Headroom: about 16** for polls of slow analyses. A report counts as
+- **Headroom: about 26**, shared by first-sight `!ml` re-checks (#3398) and
+  polls of slow analyses. A re-check is a reanalysis plus about four backed-off
+  polls, so the headroom holds about five when the text window has run out;
+  more re-checks than that end the scan at the budget with a HARNESS ERROR.
+  The budget stays at 160 so two RC scans and a release fit in the day's 500:
+  the release scan's own budget is 180 (`VT_MAX_REQUESTS: "180"` on
+  `release.yml`'s scan step), about 130 for its files and 50 for ten
+  re-checks.
+  On slow analyses: a report counts as
   reanalysed only when its date is later than the lookup's and within the
   file's window: 24 hours for a binary, VSIX, archive or any report with a
   finding, the long window only for a clean text file. A file poll that shows no
