@@ -20,6 +20,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `nightgauge review quality` now names the reviewer unit, the JSON parse error and its byte offset when a findings file is invalid JSON (for example a claim containing `\303`), instead of a generic schema message, and tells reviewers to write a literal backslash as `\\` (#3397).
 - The extension's pre-merge guard lists rebase-conflict paths with `git diff -z`, so a file such as `café.txt` appears by its real name in the `[pre-merge-conflict]` error instead of git's C-quoted `"caf\303\251.txt"` (#3393).
 - GitLab merge requests now report their creation time (`PullRequest.CreatedAt`), normalised to RFC 3339 UTC like GitHub's, on every read path (#3266).
 - pr-create's stale-branch merge reports a conflict on a non-ASCII path such as `café.txt` by its real name instead of a C-quoted string, under zsh as well as bash (#3028).

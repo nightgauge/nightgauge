@@ -2,6 +2,7 @@ package qualityreview
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -264,5 +265,58 @@ func TestUnitsAreIsolated(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(b.FilesPath("a")); string(data) != "a.go\n" {
 		t.Errorf("files.txt = %q", data)
+	}
+}
+
+func TestReadUnitInvalidEscapeIsUnfinishedWithParseDetail(t *testing.T) {
+	b := Bundle{Dir: t.TempDir()}
+	write(t, b, "security", `{"unit":"security","result":"failed","findings":[{"severity":"warning","file":"a","line":1,"claim":"path \303 here"}]}`)
+	r := ReadUnit(b, "security")
+	if r.Status != StatusUnfinished {
+		t.Fatalf("status = %s, want unfinished", r.Status)
+	}
+	for _, want := range []string{`"security"`, "invalid escape", "offset"} {
+		if !strings.Contains(r.Reason, want) {
+			t.Errorf("reason %q lacks %q", r.Reason, want)
+		}
+	}
+}
+
+func TestReadUnitSchemaFailuresNameTheCase(t *testing.T) {
+	b := Bundle{Dir: t.TempDir()}
+	write(t, b, "old", `{"unit":"old"}`)
+	if r := ReadUnit(b, "old"); r.Status != StatusUnfinished || !strings.Contains(r.Reason, "no findings array") {
+		t.Errorf("missing findings = %+v", r)
+	}
+	write(t, b, "typ", `{"unit":"typ","findings":[{"severity":"warning","line":"1"}]}`)
+	r := ReadUnit(b, "typ")
+	for _, want := range []string{`"typ"`, "wrong type", "offset"} {
+		if r.Status != StatusUnfinished || !strings.Contains(r.Reason, want) {
+			t.Errorf("type mismatch = %+v, want reason with %q", r, want)
+		}
+	}
+}
+
+func TestPromptTeachesBackslashEscape(t *testing.T) {
+	if p := Prompt("/root", Bundle{Dir: "/b"}, Unit{ID: "test"}); !strings.Contains(p, `literal
+backslash in a claim as \\ and`) {
+		t.Errorf("prompt lacks escape rule:\n%s", p)
+	}
+}
+
+func TestReadUnitEscapedBackslashPassesThrough(t *testing.T) {
+	b := Bundle{Dir: t.TempDir()}
+	write(t, b, "test", `{"unit":"test","result":"passed","findings":[{"severity":"warning","file":"a","line":1,"claim":"path \\303 here"}]}`)
+	r := ReadUnit(b, "test")
+	if r.Status != ResultPassed || len(r.Findings) != 1 || r.Findings[0].Claim != `path \303 here` {
+		t.Fatalf("unit = %+v", r)
+	}
+	out, err := json.Marshal(Merge(Spec{Judge: Judge{Mode: "merge", Quorum: 1}}, "a", []UnitResult{r}))
+	if err != nil || !json.Valid(out) {
+		t.Fatalf("report invalid: %v %s", err, out)
+	}
+	var back Report
+	if err := json.Unmarshal(out, &back); err != nil || back.Units[0].Findings[0].Claim != `path \303 here` {
+		t.Fatalf("round trip = %+v %v", back, err)
 	}
 }
