@@ -741,6 +741,15 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		return finish(*refused, nil)
 	}
 
+	// Check-named criteria (#3424): the CI wait is over, so a criterion the
+	// PR left open because it names a check is judged by that check's
+	// conclusion, and the body promoted to Closes when nothing then remains.
+	// Before both merge paths, and before the closed-issue gate, which must
+	// see the promoted body. A PR the backstop demoted stays Refs.
+	if !partial {
+		r.judgeCheckCriteria(ctx, gh, workdir, issueNumber, prNumber, snap)
+	}
+
 	// The issue may have closed during the waits above (#3151). Checked
 	// immediately before both the direct merge and the enqueue.
 	if refused := r.refuseClosedIssue(ctx, gh, workdir, issueNumber, prNumber, snap); refused != nil {
@@ -1202,14 +1211,7 @@ func (r *DeterministicRunner) acBackstop(ctx context.Context, gh ghClient, workd
 		log.Printf("pr-merge: AC backstop skipped for #%d: read issue body: %v", issueNumber, err)
 		return false
 	}
-	var rec *preflight.ACReconcileResult
-	if data, readErr := readFile(pipelineContextPath(workdir, fmt.Sprintf("ac-reconcile-%d.json", issueNumber))); readErr == nil {
-		var parsed preflight.ACReconcileResult
-		if json.Unmarshal(data, &parsed) == nil {
-			rec = &parsed
-		}
-	}
-	uncovered := preflight.UncoveredACs(issueBody, rec)
+	uncovered := preflight.UncoveredACs(issueBody, readACReconcile(workdir, issueNumber))
 	if len(uncovered) == 0 {
 		return false
 	}
@@ -1224,15 +1226,16 @@ func (r *DeterministicRunner) acBackstop(ctx context.Context, gh ghClient, workd
 	}
 	log.Printf("pr-merge: #%d has %d acceptance criteria this run never reconciled — PR #%d now says Refs #%d",
 		issueNumber, len(uncovered), prNumber, issueNumber)
-	if err := markPRContextPartial(workdir, issueNumber); err != nil {
+	if err := setPRContextCloses(workdir, issueNumber, false); err != nil {
 		log.Printf("pr-merge: could not record closes_issue:false for #%d: %v", issueNumber, err)
 	}
 	return true
 }
 
-// markPRContextPartial sets closes_issue:false in pr-{N}.json, keeping every
-// other field as written.
-func markPRContextPartial(workdir string, issueNumber int) error {
+// setPRContextCloses sets closes_issue in pr-{N}.json, keeping every other
+// field as written: false when the AC backstop demotes the PR (#2623), true
+// when the check-criteria judge promotes it (#3424).
+func setPRContextCloses(workdir string, issueNumber int, closes bool) error {
 	p := pipelineContextPath(workdir, fmt.Sprintf("pr-%d.json", issueNumber))
 	data, err := readFile(p)
 	if err != nil {
@@ -1242,7 +1245,7 @@ func markPRContextPartial(workdir string, issueNumber int) error {
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return err
 	}
-	doc["closes_issue"] = false
+	doc["closes_issue"] = closes
 	out, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return err

@@ -117,6 +117,9 @@ type ACDiff struct {
 
 	content map[string]acContent
 	yaml    map[string]*yaml.Node
+	gofiles map[string]*acGoFile
+	// gofields memoises goFieldValue by path and span (#3424).
+	gofields map[string]acGoFieldMatch
 }
 
 // acContent is one file's working-tree lines; ok=false means the file could
@@ -2004,7 +2007,8 @@ func acTokens(c acClause, named, inherited []string, d *ACDiff) acResult {
 			added++
 		} else {
 			missing = append(missing, tok)
-			skipped = skipped || unread
+			skipped = skipped || unread ||
+				acGoFieldUndecided(tok, scope, d) || acGoFieldUndecided(tok, wide, d)
 		}
 	}
 	// A prose #NNN ref is context the criterion names, never text the diff
@@ -2314,8 +2318,24 @@ func acAddedToken(tok string, scope []string, d *ACDiff) (string, bool) {
 				}
 			}
 		}
+		// A Go field span set by a keyed or positional literal (#3424).
+		if g, _ := d.goFieldValue(tok, p); len(g.added) > 0 {
+			return fmt.Sprintf("%s:%d", p, g.added[0]), true
+		}
 	}
 	return "", false
+}
+
+// acGoFieldUndecided reports that a Go field span may be set positionally
+// in a scope file whose struct field order cannot be resolved (#3424): its
+// absence is then not evidence, so the clause is not verifiable, never unmet.
+func acGoFieldUndecided(tok string, scope []string, d *ACDiff) bool {
+	for _, p := range scope {
+		if g, ok := d.goFieldValue(tok, p); ok && g.undecided {
+			return true
+		}
+	}
+	return false
 }
 
 // acYAMLKeyRE parses a YAML key-path span `a: b`: `:` only, so `a=b` stays

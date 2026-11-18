@@ -336,3 +336,12 @@ func NormaliseCriterion(s string) string { return normaliseCriterion(s) }
 func RecordedCriterionMatches(criterion, recorded string) bool {
 	return tickMatches(criterion, recorded)
 }
+
+// RemainingCriteria is the criteria a merge of a PR with prBody would leave
+// open on an issue with issueBody, under the rule the post-merge hook applies
+// (#3424): pr-merge promotes `Refs` to `Closes` only when it is empty, so the
+// two never disagree. found=false when neither body names any criterion.
+func RemainingCriteria(issueBody, prBody string) (remaining []string, found bool) {
+	plan := computeRemainder(issueBody, prBody, nil)
+	return plan.Remaining, plan.Found
+}
