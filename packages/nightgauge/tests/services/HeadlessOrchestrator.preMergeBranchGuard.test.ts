@@ -45,6 +45,7 @@ const {
   pushShouldFail,
   ghPrViewShouldFail,
   gitCalls,
+  conflictDiffStdout,
 } = vi.hoisted(() => ({
   mergeStateStatus: { value: "CLEAN" },
   fetchShouldFail: { value: false },
@@ -52,6 +53,7 @@ const {
   pushShouldFail: { value: false },
   ghPrViewShouldFail: { value: false },
   gitCalls: { value: [] as string[][] },
+  conflictDiffStdout: { value: "foo.go\0" },
 }));
 
 vi.mock("child_process", async () => {
@@ -139,7 +141,23 @@ vi.mock("child_process", async () => {
 
     // git diff --name-only --diff-filter=U (conflict file list)
     if (cmd === "git" && args?.[0] === "diff" && args?.includes("--diff-filter=U")) {
-      return Promise.resolve({ stdout: "foo.go\n", stderr: "" });
+      // Only the -z form yields raw paths; the plain form C-quotes like git does,
+      // so a regression to the non-NUL call fails the tests (#3393).
+      if (args.includes("-z")) {
+        return Promise.resolve({ stdout: conflictDiffStdout.value, stderr: "" });
+      }
+      const quoted = conflictDiffStdout.value
+        .split("\0")
+        .filter(Boolean)
+        .map((p) =>
+          /[^\x20-\x7e]/.test(p)
+            ? `"${Array.from(Buffer.from(p, "utf-8"))
+                .map((b) => (b < 0x80 ? String.fromCharCode(b) : `\\${b.toString(8)}`))
+                .join("")}"`
+            : p
+        )
+        .join("\n");
+      return Promise.resolve({ stdout: `${quoted}\n`, stderr: "" });
     }
 
     // git push
@@ -265,6 +283,7 @@ describe("HeadlessOrchestrator pre-merge branch-behind guard (Issue #3782)", () 
     pushShouldFail.value = false;
     ghPrViewShouldFail.value = false;
     gitCalls.value = [];
+    conflictDiffStdout.value = "foo.go\0";
     mockLogger = {
       info: vi.fn(),
       warn: vi.fn(),
@@ -375,6 +394,37 @@ describe("HeadlessOrchestrator pre-merge branch-behind guard (Issue #3782)", () 
       (a) => typeof a[0] === "string" && a[0].includes("[pre-merge guard] rebase conflict detected")
     );
     expect(conflictWarn, "conflict warn log should be present").toBeDefined();
+    expect((conflictWarn?.[1] as { conflictFiles?: string[] })?.conflictFiles).toEqual(["foo.go"]);
+  });
+
+  it("behind-conflict: non-ASCII conflict paths are reported verbatim, not C-quoted", async () => {
+    mergeStateStatus.value = "BEHIND";
+    rebaseShouldFail.value = true;
+    conflictDiffStdout.value = "café.txt\0dir/naïve file.go\0";
+
+    const runPromise = runPrMergeStageOnly();
+    await drainTimers();
+    const result = await runPromise;
+
+    expect(result.success).toBe(false);
+    const message = result.error?.message ?? "";
+    expect(message).toContain("[pre-merge-conflict]");
+    expect(message).toContain("café.txt");
+    expect(message).not.toContain("\\303");
+
+    const abortCall = gitCalls.value.find((a) => a[0] === "rebase" && a[1] === "--abort");
+    expect(abortCall, "git rebase --abort should have run").toBeDefined();
+
+    const conflictWarn = vi
+      .mocked(mockLogger.warn)
+      .mock.calls.find(
+        (a) =>
+          typeof a[0] === "string" && a[0].includes("[pre-merge guard] rebase conflict detected")
+      );
+    expect((conflictWarn?.[1] as { conflictFiles?: string[] })?.conflictFiles).toEqual([
+      "café.txt",
+      "dir/naïve file.go",
+    ]);
   });
 
   it.skip("up-to-date: no git operations; skill runs normally (quarantined: async-isolation bleed on CI)", async () => {
