@@ -120,10 +120,18 @@ func TestScanDiffFile_ExcludeFilter(t *testing.T) {
 	if f.Warnings != 1 || f.Findings[0].Lines[0] != 4 {
 		t.Fatalf("want only line 4, got %+v", f)
 	}
-	// The filter sees "path:n:content", so a path containing "test" hides all hits.
-	f, ok, _ = scanDiffFile(p, "pkg/test_conf.txt")
-	if !ok || f.Warnings != 0 {
-		t.Fatalf("path filter not applied: %+v", f)
+	// The filter sees the line content only: an exclude word in the path
+	// must not hide a real secret (#3420).
+	for _, rel := range []string{"test/fixtures/creds.go", "pkg/test_conf.txt",
+		"mocks/conf.go", "examples/conf.go", "samples/conf.go", "fake/conf.go",
+		"dummy/conf.go", "xxx/conf.go"} {
+		f, ok, err = scanDiffFile(p, rel)
+		if err != nil || !ok {
+			t.Fatalf("%s skipped: %v", rel, err)
+		}
+		if f.Warnings != 1 || f.Findings[0].Lines[0] != 4 {
+			t.Fatalf("%s: want only line 4, got %+v", rel, f)
+		}
 	}
 }
 
@@ -178,6 +186,8 @@ func TestRunDiffSecretsScan_Repo(t *testing.T) {
 	write("b/crit.go", "-----BEGIN PRIV"+"ATE KEY-----\n")
 	write("a/warn.go", `password = "hunter22"`+"\n")
 	write("clean.go", "package x\n")
+	// An exclude word in the path does not hide a real secret (#3420).
+	write("test/fixtures/creds.go", `password = "hunter22"`+"\n")
 	write(".nightgauge/x.txt", "-----BEGIN PRIV"+"ATE KEY-----\n")
 	write("node_modules/x.js", "-----BEGIN PRIV"+"ATE KEY-----\n")
 	write("pkg/node_modules/x.js", "-----BEGIN PRIV"+"ATE KEY-----\n")
@@ -202,14 +212,17 @@ func TestRunDiffSecretsScan_Repo(t *testing.T) {
 	for _, f := range res.Files {
 		paths = append(paths, f.Path)
 	}
-	if len(paths) != 3003 {
-		t.Fatalf("scanned %d files, want 3003", len(paths))
+	if len(paths) != 3004 {
+		t.Fatalf("scanned %d files, want 3004", len(paths))
+	}
+	if last := paths[len(paths)-1]; last != "test/fixtures/creds.go" {
+		t.Fatalf("last path = %s", last)
 	}
 	paths = paths[:3]
 	if want := []string{"a/warn.go", "b/crit.go", "clean.go"}; !reflect.DeepEqual(paths, want) {
 		t.Fatalf("paths = %v, want %v", paths, want)
 	}
-	if res.Critical != 1 || res.Warnings != 1 || res.FilesScanned != 3003 || res.V != 1 {
+	if res.Critical != 1 || res.Warnings != 2 || res.FilesScanned != 3004 || res.V != 1 {
 		t.Fatalf("totals: %+v", res)
 	}
 	if res.HeadSHA != gittest.Run(t, repo, "rev-parse", "HEAD") {
