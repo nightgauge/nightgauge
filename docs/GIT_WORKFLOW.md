@@ -1378,7 +1378,19 @@ Every push that fails CI wastes time and pollutes the PR with fix-up commits.
 and exits before the first step. The plugin install docs gate also needs
 network access to install `@anthropic-ai/claude-code@<max_tested>`, the version
 `internal/adaptercompat/manifests/claude-headless.json` pins, unless that
-version of `claude` is on `PATH`.
+version of `claude` is on `PATH`. The semgrep step runs when `semgrep` is on
+`PATH` (`pip install -r .github/requirements-semgrep.txt`, a venv works) and is
+otherwise skipped by name, with the pull request's `Semgrep` job running it.
+
+**Semgrep (ADR-023 Decisions 1 and 8).** `scripts/semgrep-check.sh` runs the
+repository's rules in `.semgrep/rules/`: no SQL text built from a runtime value
+reaching `Exec`, `Query`, `QueryRow` or `Prepare` (and their `Context` forms), no
+shell given a non-constant script, and no `exec` with an interpolated or
+concatenated command string. Each rule's fixture beside it proves it fires.
+A finding fails the job unless `.semgrep/allowlist.yaml` lists it with a
+reason, and an entry that no longer matches a finding fails it too, so the
+list shrinks as call sites are fixed. Fix the call site rather than adding an
+entry; an entry is reviewed like code.
 
 > **Pre-commit hook**: The repository's pre-commit hook automatically validates
 > generated files on every `git commit`. If you see a hook error, run the

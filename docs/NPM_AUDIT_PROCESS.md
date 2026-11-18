@@ -7,12 +7,16 @@ This document describes how to triage `npm audit` findings surfaced by CI.
 CI runs `node scripts/npm-audit-check.js` after `npm ci`. The script:
 
 1. Checks `.npmauditrc.json` for expired allow-list entries (fails CI if any)
-2. Runs `npm audit --audit-level=high --json`
-3. Filters out high/critical advisories covered by the allow-list
-4. Fails CI with actionable output if unallowed high/critical vulns remain
+2. Runs `npm audit --omit=dev --json` (what ships to users) and
+   `npm audit --json` (the whole tree, dev tooling included)
+3. Filters out advisories covered by the allow-list
+4. Fails CI with actionable output if an unallowed advisory remains at
+   **moderate or worse in a runtime dependency**, or **high or worse anywhere**
 
-Moderate and low severity findings are visible in audit output but do not fail
-the build.
+Low findings, and moderate ones in dev-only dependencies, are visible in audit
+output but do not fail the build. A waiver is a dated allow-list entry with a
+tracking issue, never a lower threshold. `scripts/test-npm-audit-check.sh`
+proves both thresholds against fixtures.
 
 ---
 

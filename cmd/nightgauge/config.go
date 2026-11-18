@@ -317,6 +317,9 @@ Exits non-zero when validation errors are found.`,
 			if verr := config.ValidateRepoTierSecrets(data, configPath); verr != nil {
 				return verr
 			}
+			if verr := config.ValidateRepoTierStructure(data, configPath); verr != nil {
+				return verr
+			}
 
 			var repos map[string]*config.RepositoryConfig
 			if cfg.Autonomous != nil {

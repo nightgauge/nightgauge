@@ -783,8 +783,8 @@ export class IpcClientGenerated extends IpcClientBase {
     return this.call<ForgeListResult>('forge.list');
   }
 
-  async forgeConnectionTest(instance_id: string, token?: string): Promise<ForgeConnectionTestResult> {
-    return this.call<ForgeConnectionTestResult>('forge.connectionTest', { instance_id, token });
+  async forgeConnectionTest(instance_id: string, token?: string, kind?: string, base_url?: string): Promise<ForgeConnectionTestResult> {
+    return this.call<ForgeConnectionTestResult>('forge.connectionTest', { instance_id, token, kind, base_url });
   }
 
 

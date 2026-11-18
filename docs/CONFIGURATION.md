@@ -289,6 +289,25 @@ On a CI host (`CI=true` or `CI=1`) Nightgauge never writes a credential to disk,
 neither to the keychain nor to the machine-tier file; give the job the
 credential in its environment.
 
+#### Credentials an agent stage receives: `NIGHTGAUGE_STAGE_ENV_ALLOW`
+
+An agent stage inherits the host's toolchain, proxy and TLS variables, the
+forge tokens and the cloud platform credentials, and only the provider
+credentials its adapter declares. Any other variable named like a credential
+(`*_TOKEN`, `*_KEY`, `*_SECRET`, `*_PASSWORD`, a webhook, ...) is withheld; the
+full rule is in
+[PIPELINE_EXECUTION.md § Spawn Environment Inheritance](PIPELINE_EXECUTION.md#spawn-environment-inheritance-issue-91).
+To pass one to every stage, name it in `NIGHTGAUGE_STAGE_ENV_ALLOW`, a
+comma-separated list read from the environment of the process that runs the
+stages (the daemon, or the CLI). It is not a config key, so no repository can
+set it:
+
+```bash
+# The verify-ui skill's dashboard-auth flow signs in a test account with
+# IB_VERIFY_EMAIL and IB_VERIFY_PASSWORD; a private npm registry needs NPM_TOKEN.
+export NIGHTGAUGE_STAGE_ENV_ALLOW=IB_VERIFY_PASSWORD,NPM_TOKEN
+```
+
 #### The license key: `nightgauge auth license`
 
 The key is stored in the OS keychain under service `nightgauge`, account

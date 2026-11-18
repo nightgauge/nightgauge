@@ -2,8 +2,9 @@
  * configureForgeInstance - Multi-step wizard for adding or editing a forge instance.
  *
  * Stores credentials in VSCode SecretStorage (OS keychain). Writes forge metadata
- * (kind, base_url, auth_method, ca_bundle) to .nightgauge/config.yaml via
- * NightgaugeYamlService. Supports GitHub and GitLab forge kinds with PAT, OAuth2,
+ * (kind, base_url, auth_method, ca_bundle) to the machine-tier
+ * ~/.nightgauge/config.yaml via NightgaugeYamlService: the daemon ignores a
+ * forge endpoint in a repository's config. Supports GitHub and GitLab forge kinds with PAT, OAuth2,
  * CI job token, and deploy token auth methods.
  *
  * @see Issue #3364 - VSCode extension settings UI for managing forge instances
@@ -15,9 +16,10 @@ import { SecretStorageService } from "../services/SecretStorageService";
 import { IpcClient } from "../services/IpcClient";
 import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
 import { validatePemFile } from "../utils/pemValidator";
+import type { ForgeConfig } from "../config/schema";
 
 const INSTANCE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
-const HTTPS_URL_PATTERN = /^https?:\/\/.+/;
+const HTTPS_URL_PATTERN = /^https:\/\/.+/;
 
 function getWorkspaceRoot(): string | undefined {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -251,32 +253,14 @@ export function registerConfigureForgeInstanceCommand(): vscode.Disposable {
         },
         async () => {
           try {
-            // Build temp config so the test can run before saving
-            const yamlService = new NightgaugeYamlService(workspaceRoot);
-            const { config: currentCfg } = await yamlService.read();
-            const tempCfg = currentCfg ?? {};
-            if (!tempCfg.forges) tempCfg.forges = {};
-            (tempCfg.forges as Record<string, unknown>)[instanceId] = {
-              kind,
-              base_url: baseUrl || undefined,
-              auth_method: authMethod,
-              ca_bundle: caBundle,
-            };
-            await yamlService.write(tempCfg, "project");
-
+            // Test the endpoint as typed, before anything is saved. The
+            // daemon sends only this credential, and only over https.
             const result = await IpcClient.getInstance().forgeConnectionTest(
               instanceId,
-              credential ?? ""
+              credential ?? "",
+              kind,
+              baseUrl || undefined
             );
-
-            // Revert temp config write if connection failed to avoid leaving partial state
-            if (!result.ok) {
-              const { config: origCfg } = await yamlService.read();
-              if (origCfg?.forges) {
-                delete (origCfg.forges as Record<string, unknown>)[instanceId];
-                await yamlService.write(origCfg, "project");
-              }
-            }
             return result;
           } catch (err) {
             return {
@@ -311,22 +295,22 @@ export function registerConfigureForgeInstanceCommand(): vscode.Disposable {
           await secretSvc.setForgeLastTested(instanceId, new Date().toISOString());
         }
 
-        // Write forge metadata to config.yaml
+        // Write forge metadata to the machine tier (~/.nightgauge/config.yaml).
+        // A forge's endpoint and CA bundle decide where its credential goes,
+        // so the daemon reads them from the machine tier only and ignores
+        // them in a repository's config.
         const yamlService = new NightgaugeYamlService(workspaceRoot);
-        const { config: currentCfg } = await yamlService.read();
-        const cfg = currentCfg ?? {};
-        if (!cfg.forges) cfg.forges = {};
-
-        const forgeEntry: Record<string, unknown> = {
+        const forgeEntry = {
           kind,
           auth_method: authMethod,
-        };
-        if (baseUrl) forgeEntry.base_url = baseUrl;
-        if (caBundle)
-          forgeEntry.ca_bundle = path.relative(path.join(workspaceRoot, ".nightgauge"), caBundle);
+          ...(baseUrl ? { base_url: baseUrl } : {}),
+          ...(caBundle ? { ca_bundle: path.resolve(caBundle) } : {}),
+        } as ForgeConfig;
 
-        (cfg.forges as Record<string, unknown>)[instanceId] = forgeEntry;
-        await yamlService.write(cfg, "project");
+        const written = await yamlService.writeGlobal({ forges: { [instanceId]: forgeEntry } });
+        if (!written.success) {
+          throw new Error(written.error ?? "could not write the machine config");
+        }
 
         vscode.window.showInformationMessage(
           `Forge instance "${instanceId}" ${isEdit ? "updated" : "added"} successfully.`

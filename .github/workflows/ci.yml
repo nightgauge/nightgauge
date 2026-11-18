@@ -688,20 +688,21 @@ jobs:
         # novel malicious behaviour -- pair it with GitHub's Dependabot alerts,
         # which cover this repository already.
         #
-        # Gated at `high` so a release is not blocked by a low-severity
-        # advisory in a devDependency; moderate and below are reported. The
-        # gate is scripts/npm-audit-check.js, the allow-list-aware check
-        # ci-local runs, so a reviewed .npmauditrc.json exception (expiry and
-        # tracking issue required) is honoured here too, not just locally.
+        # Two thresholds (ADR-023 Decision 8): an advisory in a runtime
+        # dependency (`npm audit --omit=dev`, what ships to users) fails at
+        # moderate; one anywhere in the tree, dev tooling included, fails at
+        # high. The gate is scripts/npm-audit-check.js, the allow-list-aware
+        # check ci-local runs, so a reviewed .npmauditrc.json exception (expiry
+        # and tracking issue required) is honoured here too, not just locally.
         run: |
           set -uo pipefail
           node scripts/npm-audit-check.js || AUDIT_RC=$?
           npm audit --audit-level=moderate --json > npm-audit.json 2>/dev/null || true
           if [ "${AUDIT_RC:-0}" -ne 0 ]; then
-            echo "::error::npm audit found a high or critical advisory"
+            echo "::error::npm audit found a moderate+ runtime or high+ dev advisory"
             exit 1
           fi
-          echo "OK: no high/critical npm advisories"
+          echo "OK: no moderate+ runtime and no high+ dev npm advisories"
       - name: Upload npm audit report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -731,3 +732,28 @@ jobs:
           npx license-checker@25.0.1 --production --excludePrivatePackages --start packages/nightgauge --failOn "$DENY"
       - name: License-header guard (source + build output)
         run: bash scripts/check-license-headers.sh
+
+  # Semgrep (ADR-023 Decisions 1 and 8): the repository's own rules against SQL
+  # text built from a runtime value and shell strings built from one. The rule
+  # fixtures run first (`semgrep --test`), so a rule that stops firing fails
+  # here; then the scan fails on any finding not in .semgrep/allowlist.yaml and
+  # on any allow-list entry that no longer matches. Not change-class gated for
+  # the same reason as the security job above. Semgrep OSS only: no login, no
+  # metrics, nothing uploaded.
+  semgrep:
+    name: Semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned semgrep
+        run: |
+          set -euo pipefail
+          python3 --version
+          # A venv, so the runner image's externally managed Python is untouched.
+          python3 -m venv "$RUNNER_TEMP/semgrep"
+          "$RUNNER_TEMP/semgrep/bin/python" -m pip install --disable-pip-version-check \
+            -r .github/requirements-semgrep.txt
+          echo "$RUNNER_TEMP/semgrep/bin" >> "$GITHUB_PATH"
+      - name: Semgrep rules, fixtures and allow-list
+        run: bash scripts/semgrep-check.sh

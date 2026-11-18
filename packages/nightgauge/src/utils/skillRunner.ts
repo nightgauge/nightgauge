@@ -254,6 +254,7 @@ import {
 } from "./resolvers/adapterResolver";
 import { resolveMainRepoRoot } from "./adaptiveBudgetLoader";
 import { withoutLaunchingSessionEnv } from "./launchingSessionEnv";
+import { geminiApiKeyEnv } from "../services/geminiApiKey";
 
 // Re-export for consumers
 export type { ParsedTokenUsage, RateLimitEventData } from "./tokenParser";
@@ -5409,7 +5410,8 @@ function runStageSkillHeadlessImpl(
   }
 
   // Gemini configuration env vars (Issue #1056)
-  // API key flows via process.env.GEMINI_API_KEY (set at extension activation from SecretStorage).
+  // The SecretStorage API key is added for a Gemini stage only; it is never
+  // in process.env, which every other stage inherits.
   // Model is resolved from config and passed explicitly.
   // Every dispatched registry band is translated to the provider id before
   // spawn (#387). The same registry mapping backs the Maximum-mode path
@@ -5417,6 +5419,7 @@ function runStageSkillHeadlessImpl(
   // configured model instead of leaking the alias to the CLI.
   const geminiEnv: Record<string, string> = {};
   if (adapter === "gemini" || adapter === "gemini-sdk") {
+    Object.assign(geminiEnv, geminiApiKeyEnv());
     const bandMapping = requestedBand ? getAdapterModelForBand(requestedBand, adapter) : undefined;
     let geminiModel: string;
     let modelSourceLabel = "";

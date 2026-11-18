@@ -1924,6 +1924,11 @@ type ForgeConnectionTestParams struct {
 	InstanceID string `json:"instance_id"`
 	// Token is the credential to use for the test when not yet saved to config.
 	Token string `json:"token,omitempty"`
+	// Kind and BaseURL test an endpoint the operator has typed but not yet
+	// saved. When either is set the config entry is not read: only Token is
+	// sent, and BaseURL must pass config.ValidateForgeEndpointURL.
+	Kind    string `json:"kind,omitempty"`
+	BaseURL string `json:"base_url,omitempty"`
 }
 
 // ForgeConnectionTestResult is the result of forge.connectionTest.

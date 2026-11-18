@@ -47,5 +47,38 @@ else
   grep -q 'expired' "$WORK/out" && ok "an expired entry fails" || bad "expired entry not reported"
 fi
 
+# Thresholds (ADR-023 Decision 8): a moderate advisory fails in a runtime
+# dependency and passes in a dev-only one; high fails in either.
+cat >"$WORK/moderate.json" <<'JSON'
+{"vulnerabilities":{"leftpad":{"severity":"moderate","via":[{"source":4242,"url":"https://example.invalid/a"}]}}}
+JSON
+printf '%s' '{"vulnerabilities":{}}' >"$WORK/empty.json"
+tiers() { # $1 = whole-tree fixture, $2 = runtime fixture
+  printf '%s' '{"allowlist":[]}' >"$WORK/allow.json"
+  NPM_AUDIT_CHECK_INPUT="$1" NPM_AUDIT_CHECK_RUNTIME_INPUT="$2" \
+    NPM_AUDIT_CHECK_ALLOWLIST="$WORK/allow.json" \
+    node "$ROOT/scripts/npm-audit-check.js" >"$WORK/out" 2>&1
+}
+
+if tiers "$WORK/moderate.json" "$WORK/moderate.json"; then
+  bad "a moderate runtime advisory passed"
+else
+  grep -q 'leftpad' "$WORK/out" && grep -q 'runtime' "$WORK/out" &&
+    ok "a moderate runtime advisory fails, naming the runtime tier" ||
+    bad "moderate runtime failure output did not name the package and tier"
+fi
+
+if tiers "$WORK/moderate.json" "$WORK/empty.json"; then
+  ok "a moderate dev-only advisory passes"
+else
+  bad "a moderate dev-only advisory failed"; cat "$WORK/out" >&2
+fi
+
+if tiers "$WORK/audit.json" "$WORK/empty.json"; then
+  bad "a high dev-only advisory passed"
+else
+  ok "a high dev-only advisory fails"
+fi
+
 echo "npm-audit-check suite: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

@@ -63,6 +63,7 @@ generated IPC client in sync
 terminal-kind table consumers in sync
 platform operation registry in sync
 npm audit allow-list
+semgrep (ADR-023 rules)
 SKILL.md metadata gate regression suite
 SKILL.md metadata
 publication boundary

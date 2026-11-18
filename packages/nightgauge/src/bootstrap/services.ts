@@ -162,6 +162,7 @@ import {
   vscodeLicenseKeychainBridge,
 } from "../services/licenseKeychainBridge";
 import { migrateLegacyGeminiApiKey } from "../commands/migrateConfig";
+import { loadGeminiApiKey } from "../services/geminiApiKey";
 import { NotifierStatusTracker } from "../services/notifications/NotifierStatusTracker";
 import { OAuthDeviceFlowService } from "../services/OAuthDeviceFlowService";
 import { GitHubAuthService } from "../services/GitHubAuthService";
@@ -527,18 +528,17 @@ export async function initializeServices(
     ?.migrateFromLegacy()
     .catch((err) => logger.warn("Legacy token migration failed", { error: err }));
 
-  // Pre-load Gemini API key from SecretStorage into process.env for child processes
+  // Load the Gemini API key from SecretStorage for the processes that run
+  // Gemini. It is never copied into process.env, which every child inherits.
   const secretService = SecretStorageService.getInstance();
   if (secretService) {
     // The historical contribution was an ordinary plaintext settings.json
     // value despite claiming SecretStorage. Migrate it once, then erase every
     // configuration scope before loading the key for child processes.
     await migrateLegacyGeminiApiKey(secretService);
-    secretService.getApiKey("gemini").then((key) => {
-      if (key && !process.env.GEMINI_API_KEY) {
-        process.env.GEMINI_API_KEY = key;
-      }
-    });
+    void loadGeminiApiKey(secretService).catch((err) =>
+      logger.warn("Gemini API key load failed", { error: err })
+    );
   }
 
   // ── License key — startup resolution (#3519, #3997) ────────────────────

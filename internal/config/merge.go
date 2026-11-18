@@ -292,6 +292,18 @@ func LoadMerged(workspaceRoot string) (*Config, error) {
 			return nil, err
 		}
 	}
+	// A merge key could bring a stripped block back after the strip below,
+	// so a repository tier may not use one at all.
+	if hasProject {
+		if err := ValidateRepoTierStructure(projectData, ProjectConfigPath(workspaceRoot)); err != nil {
+			return nil, err
+		}
+	}
+	if hasLocal {
+		if err := ValidateRepoTierStructure(localData, LocalConfigPath(workspaceRoot)); err != nil {
+			return nil, err
+		}
+	}
 
 	// Surface shadow warnings only when both machine and project YAML define
 	// the same key (actual conflict), not just when the project has the key.
@@ -332,6 +344,19 @@ func LoadMerged(workspaceRoot string) (*Config, error) {
 			localData = removeTopLevelYAMLKey(localData, k.root)
 		}
 	}
+	// Forge endpoints, token variables and TLS settings are machine-owned
+	// too: a repository tier may declare a forge's kind and auth method, never
+	// where its credential goes (repoTierForgeMachineFields).
+	if hasProject {
+		var removed []string
+		projectData, removed = stripRepoTierForgeEndpoints(projectData)
+		warnStrippedForgeFields(removed, "project", ProjectConfigPath(workspaceRoot))
+	}
+	if hasLocal {
+		var removed []string
+		localData, removed = stripRepoTierForgeEndpoints(localData)
+		warnStrippedForgeFields(removed, "local", LocalConfigPath(workspaceRoot))
+	}
 
 	// No tier present at all — return defaults.
 	if !hasMachine && !hasProject && !hasLocal {
@@ -360,6 +385,11 @@ func removeTopLevelYAMLKey(data []byte, key string) []byte {
 	if err := yaml.Unmarshal(data, &doc); err != nil || doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 		return data
 	}
+	// LoadMerged refuses these first (ValidateRepoTierStructure); a strip
+	// that meets one anyway drops the whole tier rather than guess.
+	if repoTierUnsafeStructure(&doc) {
+		return []byte{}
+	}
 	root := doc.Content[0]
 	if root.Kind != yaml.MappingNode {
 		return data
@@ -371,7 +401,8 @@ func removeTopLevelYAMLKey(data []byte, key string) []byte {
 			if err == nil {
 				return out
 			}
-			return data
+			// Never fall back to the unstripped bytes: drop the tier.
+			return []byte{}
 		}
 	}
 	return data
@@ -385,7 +416,7 @@ func removeTopLevelYAMLKey(data []byte, key string) []byte {
 func mergeYAMLDocuments(tiers ...[]byte) (*yaml.Node, error) {
 	merged := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 
-	for _, data := range tiers {
+	for i, data := range tiers {
 		if len(data) == 0 {
 			continue
 		}
@@ -396,11 +427,22 @@ func mergeYAMLDocuments(tiers ...[]byte) (*yaml.Node, error) {
 		if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 			continue
 		}
-		root := doc.Content[0]
+		// Tier 0 is the machine tier; the rest are repository-controlled and
+		// may not carry a merge key (checked before resolution folds it away).
+		if i > 0 && repoTierUnsafeStructure(&doc) {
+			return nil, fmt.Errorf("%w: a project or local config tier", ErrRepoTierMergeKey)
+		}
+		// Each tier is resolved on its own, so no node is shared across tiers.
+		root, err := resolveYAMLTier(doc.Content[0])
+		if err != nil {
+			return nil, err
+		}
 		if root.Kind != yaml.MappingNode {
 			continue
 		}
-		mergeMappingInto(merged, root)
+		if err := mergeMappingInto(merged, root, i > 0); err != nil {
+			return nil, err
+		}
 	}
 
 	return merged, nil
@@ -415,7 +457,15 @@ func mergeYAMLDocuments(tiers ...[]byte) (*yaml.Node, error) {
 // wants the union of machine and project lists must spell that out
 // explicitly — implicit list concatenation produces non-obvious results
 // for things like enabled_repos (where duplicates would surprise).
-func mergeMappingInto(dst, src *yaml.Node) {
+//
+// repoTier marks src as a repository-controlled tier (project or local). Such
+// a tier may not carry a YAML merge key anywhere: the merged document is
+// re-parsed, which would resolve it, and could reintroduce a block the loader
+// stripped by name. The machine tier may.
+func mergeMappingInto(dst, src *yaml.Node, repoTier bool) error {
+	if repoTier && hasYAMLMergeKey(src) {
+		return fmt.Errorf("%w: a project or local config tier", ErrRepoTierMergeKey)
+	}
 	for i := 0; i+1 < len(src.Content); i += 2 {
 		srcKey := src.Content[i]
 		srcVal := src.Content[i+1]
@@ -435,11 +485,13 @@ func mergeMappingInto(dst, src *yaml.Node) {
 
 		dstVal := dst.Content[existingIdx+1]
 		if dstVal.Kind == yaml.MappingNode && srcVal.Kind == yaml.MappingNode {
-			mergeMappingInto(dstVal, srcVal)
+			// src was checked whole above; the subtree needs no second walk.
+			_ = mergeMappingInto(dstVal, srcVal, false)
 		} else {
 			dst.Content[existingIdx+1] = cloneNode(srcVal)
 		}
 	}
+	return nil
 }
 
 // cloneNode returns a deep copy of a yaml.Node. yaml.v3 does not provide
@@ -640,4 +692,109 @@ func findChildByKey(mapping *yaml.Node, key string) *yaml.Node {
 		}
 	}
 	return nil
+}
+
+// maxResolvedYAMLNodes and maxResolvedYAMLBytes bound alias expansion in
+// resolveYAMLTier, so a file whose aliases nest exponentially (a "billion
+// laughs" document), or repeat a large scalar, fails to load instead of
+// exhausting memory when the merged tree is re-serialized and parsed.
+const (
+	maxResolvedYAMLNodes = 1 << 20
+	maxResolvedYAMLBytes = 4 << 20
+)
+
+// yamlBudget is what is left of both limits during one tier's resolution.
+type yamlBudget struct{ nodes, bytes int }
+
+// errYAMLTooLarge marks a tier whose aliases expand past maxResolvedYAMLNodes.
+var errYAMLTooLarge = errors.New("config yaml expands past the alias limit")
+
+// resolveYAMLTier returns a deep copy of n with every alias replaced by a
+// copy of its target, every `<<` merge key folded into its mapping (explicit
+// keys win, then the merged mappings in order, the first winning), and every
+// anchor dropped. Tiers are resolved one at a time before they are merged, so
+// no node is shared between tiers: a repository tier's key merged into a
+// mapping can never change another place the machine tier aliased it.
+func resolveYAMLTier(n *yaml.Node) (*yaml.Node, error) {
+	budget := yamlBudget{nodes: maxResolvedYAMLNodes, bytes: maxResolvedYAMLBytes}
+	return resolveYAMLNode(n, &budget)
+}
+
+func resolveYAMLNode(n *yaml.Node, budget *yamlBudget) (*yaml.Node, error) {
+	if n == nil {
+		return nil, nil
+	}
+	if n.Kind != yaml.AliasNode {
+		// Every emitted node costs one node and its text (a key is a scalar
+		// node, so key lengths are counted here too). An alias costs what
+		// its expansion emits.
+		budget.nodes--
+		budget.bytes -= len(n.Value)
+		if budget.nodes < 0 || budget.bytes < 0 {
+			return nil, errYAMLTooLarge
+		}
+	}
+	if n.Kind == yaml.AliasNode {
+		return resolveYAMLNode(n.Alias, budget)
+	}
+	out := *n
+	out.Anchor = ""
+	out.Alias = nil
+	out.Content = nil
+	if n.Kind != yaml.MappingNode {
+		for _, c := range n.Content {
+			rc, err := resolveYAMLNode(c, budget)
+			if err != nil {
+				return nil, err
+			}
+			out.Content = append(out.Content, rc)
+		}
+		return &out, nil
+	}
+	seen := map[string]bool{}
+	var merges []*yaml.Node
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, v := n.Content[i], n.Content[i+1]
+		if yamlMergeKey(k) {
+			merges = append(merges, v)
+			continue
+		}
+		rk, err := resolveYAMLNode(k, budget)
+		if err != nil {
+			return nil, err
+		}
+		rv, err := resolveYAMLNode(v, budget)
+		if err != nil {
+			return nil, err
+		}
+		seen[rk.Value] = true
+		out.Content = append(out.Content, rk, rv)
+	}
+	for _, m := range merges {
+		rm, err := resolveYAMLNode(m, budget)
+		if err != nil {
+			return nil, err
+		}
+		var sources []*yaml.Node
+		switch rm.Kind {
+		case yaml.MappingNode:
+			sources = []*yaml.Node{rm}
+		case yaml.SequenceNode:
+			sources = rm.Content
+		default:
+			return nil, fmt.Errorf("parse tier yaml: a << merge key must name a mapping or a sequence of mappings (line %d)", m.Line)
+		}
+		for _, src := range sources {
+			if src.Kind != yaml.MappingNode {
+				return nil, fmt.Errorf("parse tier yaml: a << merge key must name a mapping or a sequence of mappings (line %d)", m.Line)
+			}
+			for j := 0; j+1 < len(src.Content); j += 2 {
+				if key := src.Content[j].Value; !seen[key] {
+					seen[key] = true
+					out.Content = append(out.Content, src.Content[j], src.Content[j+1])
+				}
+			}
+		}
+	}
+	return &out, nil
 }

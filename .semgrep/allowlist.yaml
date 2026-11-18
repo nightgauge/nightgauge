@@ -1,0 +1,98 @@
+# Reviewed exceptions to the repository's semgrep rules (.semgrep/rules/,
+# ADR-023 Decisions 1 and 8). scripts/semgrep-check.sh fails on any finding
+# not listed here, and on any entry that no longer matches a finding, so the
+# list shrinks as call sites are fixed.
+#
+# An entry names the rule, the file, a substring of the flagged code (`match`,
+# so an unrelated edit above it does not invalidate the entry), and why the
+# input is constant or why the site is accepted for now. Review an addition
+# like code.
+#
+# Hand-escaped exec strings: each interpolates a value it quotes itself, or one
+# the extension computed. They are accepted until they move to
+# execFile/execFileAsync with an argument array.
+entries:
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge-sdk/scripts/postinstall.js
+    match: go build -o
+    reason: Build-time script; BINARY_PATH is the package's own output path.
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge-sdk/src/analysis/health/FindingToIssueEngine.ts
+    match: gh issue list --search
+    reason: Hand-escaped with escapeShell; to move to execFile.
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge-sdk/src/analysis/health/FindingToIssueEngine.ts
+    match: gh issue create --title
+    reason: Hand-escaped with escapeShell; to move to execFile.
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge-sdk/src/analysis/health/FindingToIssueEngine.ts
+    match: "${addToProject}"
+    reason: Script path and issue number computed by the engine; to move to execFile.
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge-sdk/src/analysis/health/FindingToIssueEngine.ts
+    match: "${script}"
+    reason: Hand-escaped with escapeShell; to move to execFile.
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge-sdk/src/analysis/health/RecommendationTracker.ts
+    match: gh issue view
+    reason: The issue number is numeric, read from the tracker's own record; to move to execFile.
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge-sdk/src/analysis/product-audit/dimensions/dimension-8-cicd.ts
+    match: gh api repos/
+    reason: Owner, repository and branch come from the audited checkout's remote; to move to execFile.
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge/src/services/BinaryResolver.ts
+    match: execAsync(cmd
+    reason: The binary name is a fixed internal value; to move to execFile.
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge/src/services/ConcurrentPipelineManager.ts
+    match: git ls-remote --heads origin
+    reason: The epic number is numeric; the pipe needs a shell until it moves to execFile.
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge/src/services/PostPipelineAnalyzer.ts
+    match: gh pr view
+    reason: The PR number is numeric; to move to execFile.
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge/src/services/PostPipelineAnalyzer.ts
+    match: --name-only --format
+    reason: Workspace path is quoted and the day count is numeric; to move to execFile.
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge/src/services/WorkspaceManager.ts
+    match: workspace repos-from-project
+    reason: The project number is numeric; to move to execFile.
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge/src/utils/WorktreeManager.ts
+    match: git worktree remove
+    reason: The worktree path is one the manager created, quoted; to move to execFile.
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge/src/utils/WorktreeManager.ts
+    match: pub get
+    reason: flutterCmd is one of two constants ("flutter", "fvm flutter").
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge/src/utils/WorktreeManager.ts
+    match: pub run build_runner
+    reason: flutterCmd is one of two constants ("flutter", "fvm flutter").
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge/src/utils/failureComment.ts
+    match: execAsync(cmd
+    reason: The body is single-quote escaped; to move to execFile with --body-file.
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge/src/utils/prDetection.ts
+    match: gh pr list
+    reason: The issue number is numeric and the repository flag is a validated slug; to move to execFile.
+  - rule: ts-exec-interpolated
+    path: packages/nightgauge/src/utils/projectFieldWriter.ts
+    match: gh api graphql --input
+    reason: The payload is single-quote escaped and read on stdin; to move to execFile with stdin.
+  - rule: ts-exec-interpolated
+    path: scripts/backfill-complexity-model.ts
+    match: gh pr list --search
+    reason: Maintainer-run backfill script; inputs are its own constants and numbers.
+  - rule: ts-exec-interpolated
+    path: scripts/backfill-complexity-model.ts
+    match: gh api graphql -f query=
+    reason: Maintainer-run backfill script; inputs are its own constants and numbers.
+  - rule: ts-exec-interpolated
+    path: scripts/backfill-complexity-model.ts
+    match: gh issue view
+    reason: Maintainer-run backfill script; the issue number is numeric.

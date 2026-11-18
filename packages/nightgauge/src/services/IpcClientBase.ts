@@ -34,6 +34,7 @@ import type { SanitizationMode } from "../config/schema";
 import { logDiagnosticMirror } from "../utils/logger";
 import { getGlobalConfigPath } from "../utils/globalConfigResolver";
 import { withoutLaunchingSessionEnv } from "../utils/launchingSessionEnv";
+import { geminiApiKeyEnv } from "./geminiApiKey";
 import {
   readPlatformUrlOverride,
   PLATFORM_URL_ENV_VAR,
@@ -2163,6 +2164,9 @@ export abstract class IpcClientBase implements vscode.Disposable {
     if (this.resolvedGitHubToken) {
       env.GITHUB_TOKEN = this.resolvedGitHubToken;
     }
+    // The stored Gemini key, for the daemon's Gemini stages only: the daemon
+    // gives a stage only the credentials its adapter declares.
+    Object.assign(env, geminiApiKeyEnv());
 
     // Only the platform URL setting is forwarded (#1474). Stored and
     // config-file platform values are the daemon's to read (#2398).

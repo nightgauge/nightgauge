@@ -1580,6 +1580,9 @@ func (s *Server) registerMethods() {
 		default:
 			return nil, fmt.Errorf("kind must be \"github\" or \"gitlab\", got %q", p.Kind)
 		}
+		if err := config.ValidateForgeHost(p.Host); err != nil {
+			return nil, fmt.Errorf("host %w", err)
+		}
 		s.forgeRegistryMu.Lock()
 		s.forgeRegistry[p.Owner+"/"+p.Repo] = ForgeInstanceConfig{
 			Kind:  p.Kind,
@@ -1903,17 +1906,27 @@ func (s *Server) registerMethods() {
 		if p.InstanceID == "" {
 			return nil, fmt.Errorf("instance_id is required")
 		}
-		root := s.workspaceRootPath()
-		if root == "" {
-			return nil, fmt.Errorf("no workspace root configured")
-		}
-		cfg, err := config.Load(root)
-		if err != nil {
-			return nil, fmt.Errorf("load config: %w", err)
-		}
-		entry, ok := cfg.Forges[p.InstanceID]
-		if !ok || entry == nil {
-			return nil, fmt.Errorf("forge instance %q not found in config", p.InstanceID)
+		// An unsaved endpoint from the configure wizard is tested as given,
+		// with the given token only. Otherwise the saved entry is used; its
+		// base_url and token_env come from the machine tier alone
+		// (config.repoTierForgeMachineFields).
+		var entry *config.ForgeConfigEntry
+		if p.Kind != "" || p.BaseURL != "" {
+			entry = &config.ForgeConfigEntry{Kind: p.Kind, BaseURL: p.BaseURL}
+		} else {
+			root := s.workspaceRootPath()
+			if root == "" {
+				return nil, fmt.Errorf("no workspace root configured")
+			}
+			cfg, err := config.Load(root)
+			if err != nil {
+				return nil, fmt.Errorf("load config: %w", err)
+			}
+			e, ok := cfg.Forges[p.InstanceID]
+			if !ok || e == nil {
+				return nil, fmt.Errorf("forge instance %q not found in config", p.InstanceID)
+			}
+			entry = e
 		}
 
 		// Resolve credential: prefer param token, then env var from config
@@ -1932,6 +1945,9 @@ func (s *Server) registerMethods() {
 			baseURL := entry.BaseURL
 			if baseURL == "" {
 				baseURL = "https://gitlab.com"
+			}
+			if err := config.ValidateForgeEndpointURL(baseURL); err != nil {
+				return nil, fmt.Errorf("forges.%s: base_url %w", p.InstanceID, err)
 			}
 			httpClient := &http.Client{Timeout: 10 * time.Second}
 			req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/api/v4/version", nil)
@@ -1959,6 +1975,9 @@ func (s *Server) registerMethods() {
 			baseURL := entry.BaseURL
 			if baseURL == "" {
 				baseURL = "https://api.github.com"
+			}
+			if err := config.ValidateForgeEndpointURL(baseURL); err != nil {
+				return nil, fmt.Errorf("forges.%s: base_url %w", p.InstanceID, err)
 			}
 			httpClient := &http.Client{Timeout: 10 * time.Second}
 			req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/user", nil)

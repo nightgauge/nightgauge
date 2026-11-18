@@ -5,6 +5,7 @@ import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
 import { getExecutionAdapter, type ExecutionAdapter } from "../utils/nightgaugeConfig";
 import { ConfigBridge } from "../services/ConfigBridge";
 import { isOpenCodeSwitchOn, openCodeGateMessage } from "../utils/openCodeExperimentalGate";
+import { hasGeminiApiKey } from "../services/geminiApiKey";
 
 interface AdapterOption extends vscode.QuickPickItem {
   value: ExecutionAdapter;
@@ -103,8 +104,7 @@ export function registerSwitchAdapterCommand(logger: Logger): vscode.Disposable 
     }
 
     if (adapterSelection.value === "gemini") {
-      const hasApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-      if (!hasApiKey) {
+      if (!hasGeminiApiKey()) {
         // Non-blocking warning — still proceed with save
         vscode.window.showWarningMessage(
           "Gemini: No GEMINI_API_KEY or GOOGLE_API_KEY found. " +

@@ -2717,6 +2717,21 @@ func ValidateForgeConfig(forges map[string]*ForgeConfigEntry, repos map[string]*
 		if entry.Kind == "gitlab" && entry.BaseURL == "" {
 			errs = append(errs, fmt.Errorf("forges.%s: base_url is required for kind=gitlab", id))
 		}
+		// A credential is sent to these, so they must be https (loopback
+		// http is accepted for local test servers).
+		if entry.BaseURL != "" {
+			if err := ValidateForgeEndpointURL(entry.BaseURL); err != nil {
+				errs = append(errs, fmt.Errorf("forges.%s: base_url %w", id, err))
+			}
+		}
+		if entry.GraphQLURL != "" {
+			if err := ValidateForgeEndpointURL(entry.GraphQLURL); err != nil {
+				errs = append(errs, fmt.Errorf("forges.%s: graphql_url %w", id, err))
+			}
+		}
+		if err := ValidateForgeHost(entry.Host); err != nil {
+			errs = append(errs, fmt.Errorf("forges.%s: host %w", id, err))
+		}
 		// Warn when InsecureSkipTLS is enabled — this disables certificate verification.
 		if entry.InsecureSkipTLS && entry.Kind == "gitlab" {
 			fmt.Fprintf(os.Stderr, "WARNING: forges.%s: insecure_skip_tls=true disables TLS certificate verification; use ca_bundle instead when possible\n", id)

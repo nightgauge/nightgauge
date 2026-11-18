@@ -595,6 +595,9 @@ REQUIRED_FILES=(
   scripts/platform-smoke.sh
   scripts/test-ci-change-class.sh
   scripts/npm-audit-check.js
+  scripts/semgrep-check.sh
+  scripts/semgrep-allowlist.py
+  .semgrep/allowlist.yaml
   scripts/validate-skill-metadata.sh
   scripts/test-validate-skill-metadata.sh
   scripts/publication-boundary-check.py
@@ -2286,6 +2289,18 @@ run_step "platform operation registry in sync" make check-platform-operations
 
 # 3. npm audit allow-list
 run_step "npm audit allow-list" node scripts/npm-audit-check.js
+
+# 3a. semgrep (ADR-023 Decisions 1 and 8): the repository's SQL and shell rules,
+#     their fixtures, and the allow-list. semgrep is a Python tool this gate does
+#     not bootstrap, so a machine without it skips the step by name and the
+#     pull request's `Semgrep` job runs it. Install the pinned version with
+#     `pip install -r .github/requirements-semgrep.txt`.
+if command -v "${SEMGREP:-semgrep}" >/dev/null 2>&1 || [ "$LIST_STEPS" -eq 1 ]; then
+  run_step "semgrep (ADR-023 rules)" bash scripts/semgrep-check.sh
+else
+  skip_step "semgrep (ADR-023 rules)" \
+    "semgrep is not installed; pip install -r .github/requirements-semgrep.txt"
+fi
 
 # 4. SKILL.md metadata validation. Self-test first, same reasoning as 11 and 5b:
 #    the validator reported `missing required field: metadata.source` once, on a
