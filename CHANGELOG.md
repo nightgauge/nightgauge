@@ -14,6 +14,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- The tested Claude Code version is now 2.1.316, the version the install-docs gate was proven on: the `claude-headless` `max_tested` pin, its flag-contract `--help` capture, the install-docs gate and the clean-install image all use it (#3047).
+
 ### Fixed
 
 - The extension's pre-merge guard lists rebase-conflict paths with `git diff -z`, so a file such as `café.txt` appears by its real name in the `[pre-merge-conflict]` error instead of git's C-quoted `"caf\303\251.txt"` (#3393).

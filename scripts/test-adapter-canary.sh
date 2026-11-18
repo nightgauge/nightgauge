@@ -34,6 +34,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/adapter-canary.sh"
 CLI_HELP="$REPO_ROOT/internal/execution/adapters/testdata/cli-help"
+CLAUDE_MAX_TESTED="$(jq -r .max_tested "$REPO_ROOT/internal/adaptercompat/manifests/claude-headless.json")"
 # The opencode capture is named for the manifest's max_tested.
 OPENCODE_V="$(jq -r '.max_tested' "$REPO_ROOT/internal/adaptercompat/manifests/opencode.json")"
 OPENCODE_HELP="opencode-run-$OPENCODE_V.txt"
@@ -320,7 +321,7 @@ check "capture-help writes codex's exec capture" \
 check "capture-help writes codex's top-level capture" \
   [ "$(head -n 1 "$FRESH/codex-0.145.0.txt")" = "# adapter=codex version=0.145.0 command=codex --help" ]
 check "capture-help writes claude-headless's committed .hidden sidecar at its own version" \
-  [ -f "$FRESH/claude-headless-2.1.258.txt.hidden" ]
+  [ -f "$FRESH/claude-headless-${CLAUDE_MAX_TESTED}.txt.hidden" ]
 check "capture-help writes grok's committed .hidden sidecar at its own version" \
   [ -f "$FRESH/grok-1.0.4.txt.hidden" ]
 OUT="$(bash "$SCRIPT" flag-contract "$FRESH" 2>&1)"
@@ -401,7 +402,7 @@ check "claude-headless, grok and codex are not mis-attributed the opencode failu
 MIXED="$TMP/mixed-failures"
 mkdir -p "$MIXED"
 cp "$CLI_HELP"/*.txt "$CLI_HELP"/*.txt.hidden "$MIXED/" 2>/dev/null
-grep -v -- '--allowedTools, --allowed-tools' "$CLI_HELP/claude-headless-2.1.258.txt" >"$MIXED/claude-headless-2.1.258.txt"
+grep -v -- '--allowedTools, --allowed-tools' "$CLI_HELP/claude-headless-${CLAUDE_MAX_TESTED}.txt" >"$MIXED/claude-headless-${CLAUDE_MAX_TESTED}.txt"
 echo '--some-made-up-flag' >"$MIXED/ghost-adapter-9.9.9.txt.hidden"
 OUT="$(bash "$SCRIPT" flag-contract "$MIXED")"
 RC=$?

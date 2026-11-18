@@ -28,7 +28,7 @@ hand.
   NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR=<dir> go test ./internal/execution/adapters -run '^TestFlagContract$'
   ```
 
-- `<capture>.hidden`, such as `claude-headless-2.1.258.txt.hidden`, lists the
+- `<capture>.hidden`, such as `claude-headless-2.1.316.txt.hidden`, lists the
   flags that version accepts without listing them in its help, one per line.
   Lines starting with `#` are comments. A sidecar holds only for the version
   in its name: the contract reports one with no capture of that name, and it
@@ -69,7 +69,7 @@ hand.
 
 | File                          | Command               | Install source                                                                                                                                    | Exit code |
 | ----------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| `claude-headless-2.1.258.txt` | `claude --help`       | npm `@anthropic-ai/claude-code@2.1.258`                                                                                                           | 0         |
+| `claude-headless-2.1.316.txt` | `claude --help`       | npm `@anthropic-ai/claude-code@2.1.316`                                                                                                           | 0         |
 | `codex-0.145.0.txt`           | `codex --help`        | npm `@openai/codex@0.145.0`                                                                                                                       | 0         |
 | `codex-exec-0.145.0.txt`      | `codex exec --help`   | npm `@openai/codex@0.145.0`                                                                                                                       | 0         |
 | `grok-1.0.4.txt`              | `grok --help`         | `https://x.ai/cli/install.sh` with version argument `1.0.4` (installer sha256 `7fd6fdc75d9418b2e58356726fcbf1ae849416f773925da07d0ccc7a60d3e791`) | 0         |
@@ -119,7 +119,7 @@ inside a throwaway location (#1721).
 
 | Adapter and version     | Flag               | Probe                                                                                                                                                                                        | Control                                                                                 |
 | ----------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| claude-headless 2.1.258 | `--max-turns`      | `claude -p --max-turns 5` exits 1 with `Error: Input must be provided either through stdin or as a prompt argument when using --print`, as the listed `claude -p --max-budget-usd 1.50` does | `claude -p --bogus-xyz` exits 1 with `error: unknown option '--bogus-xyz'`              |
+| claude-headless 2.1.316 | `--max-turns`      | `claude -p --max-turns 5` exits 1 with `Error: Input must be provided either through stdin or as a prompt argument when using --print`, as the listed `claude -p --max-budget-usd 1.50` does | `claude -p --bogus-xyz` exits 1 with `error: unknown option '--bogus-xyz'`              |
 | grok 1.0.4              | `--no-auto-update` | `grok --no-auto-update --help` prints the help and exits 0                                                                                                                                   | `grok --bogus-xyz --help` exits 2 with `error: unexpected argument '--bogus-xyz' found` |
 
 Claude Code prints its help for `--help` even after an unknown option

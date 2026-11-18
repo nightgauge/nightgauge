@@ -43,7 +43,7 @@ export const ADAPTER_COMPAT: Readonly<Record<AdapterCompatKey, AdapterCompatEntr
   Object.freeze({
     "claude-headless": {
       minVersion: "2.1.223",
-      maxTested: "2.1.258",
+      maxTested: "2.1.316",
       floorPolicy: "warn",
       installer: "",
       installerSha256: "",
