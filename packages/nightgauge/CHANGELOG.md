@@ -11,6 +11,7 @@ and this project adheres to
 
 ### Fixed
 
+- The dashboard's Gemini widget shows a key saved in secret storage as configured (#3406).
 - A pre-merge rebase conflict now names non-ASCII files (for example `café.txt`) by their real path instead of git's C-quoted form (#3393).
 
 ### Security
@@ -20,6 +21,7 @@ and this project adheres to
 - Dashboard and Settings webview actions are limited to what each panel shows: an exact command list, a confirmation before merging a Dependabot PR, settings paths from the schema, and doc links inside `docs/` (#3403).
 - The Configure Forge Instance wizard saves the forge's URL and CA bundle to your machine config (`~/.nightgauge/config.yaml`) instead of the repository's `.nightgauge/config.yaml`, accepts only `https://` URLs, and tests the connection without writing anything first. A forge URL or token variable in a repository's config is now ignored (#3404).
 - The Gemini API key from SecretStorage is no longer copied into the extension's environment, where every process it started inherited it; only Gemini stages receive it (#3406).
+- Pipeline stages the extension starts itself receive only the credentials their adapter uses, the same allowlist the daemon applies. Toolchain, proxy and TLS settings still pass; add a name to `NIGHTGAUGE_STAGE_ENV_ALLOW` to pass another (#3406).
 
 ## [0.8.6] - 2026-11-17
 

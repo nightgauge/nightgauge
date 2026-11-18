@@ -74,6 +74,9 @@
           },
           {
             "context": "VSCode host smoke tests"
+          },
+          {
+            "context": "Semgrep"
           }
         ]
       }

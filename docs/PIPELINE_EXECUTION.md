@@ -616,6 +616,16 @@ environment; a repository cannot set it. The extension no longer copies the
 Gemini key from SecretStorage into its own environment: it hands the key to
 the daemon and to a Gemini stage it spawns itself.
 
+The extension applies the same rule to the stages it spawns itself (headless,
+resume, interactive, and the Codex terminal), reading
+`NIGHTGAUGE_STAGE_ENV_ALLOW` from the editor's environment. Its data,
+`packages/nightgauge/src/utils/stageCredentialEnv.generated.ts`, is generated
+from `internal/execution/adapters/stage_env.go`, and
+`internal/execution/adapters/testdata/stage_env_decisions.json` records the Go
+rule's decision for every adapter over a corpus of names, which the extension's
+rule must match. Change the Go rule, then regenerate both with
+`NIGHTGAUGE_UPDATE_GOLDEN=1 go test ./internal/execution/adapters/ -run 'TestStageEnv(GeneratedTSCurrent|DecisionsGolden)'`.
+
 Both dispatch paths export the stage's identity on top of that inheritance:
 `NIGHTGAUGE_STAGE` and `NIGHTGAUGE_DISPATCH_MODEL`, the concrete model the
 stage launched with, for every adapter. `nightgauge knowledge stamp --stage`

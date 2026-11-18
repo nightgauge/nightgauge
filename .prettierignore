@@ -59,3 +59,6 @@ packages/nightgauge/demo/ipc-inventory.json
 # pytest writes its own cache (with a nested .gitignore Prettier does not read)
 # beside the retro engine tests.
 **/.pytest_cache/
+# The stage-env decisions golden (#3406) is Go's json.MarshalIndent output; its
+# drift test compares the bytes exactly, so Prettier must not reflow it.
+internal/execution/adapters/testdata/stage_env_decisions.json

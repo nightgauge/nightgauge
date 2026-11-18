@@ -299,7 +299,7 @@ full rule is in
 [PIPELINE_EXECUTION.md § Spawn Environment Inheritance](PIPELINE_EXECUTION.md#spawn-environment-inheritance-issue-91).
 To pass one to every stage, name it in `NIGHTGAUGE_STAGE_ENV_ALLOW`, a
 comma-separated list read from the environment of the process that runs the
-stages (the daemon, or the CLI). It is not a config key, so no repository can
+stages (the daemon, the CLI, or VS Code for a stage the extension starts). It is not a config key, so no repository can
 set it:
 
 ```bash
