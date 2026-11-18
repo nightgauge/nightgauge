@@ -795,7 +795,7 @@ func verifyACClause(c acClause, inherited []string, d *ACDiff, tests ACTestState
 			return acResult{}
 		}
 		if name, re, ok := acRemovalTarget(c); ok {
-			return acRemoved(name, re, d)
+			return acRemoved(name, re, d, c.Paths)
 		}
 		if !acNegContentRE.MatchString(c.Prose) {
 			// The presence rules below would answer a removal inverted.
@@ -1513,7 +1513,14 @@ func acRemovalTarget(c acClause) (string, *regexp.Regexp, bool) {
 // success condition, so it never makes the clause unmet: a definition still
 // present is unmet; one the diff removed with nothing remaining is met; one
 // never in the diff is left to the judge.
-func acRemoved(name string, re *regexp.Regexp, d *ACDiff) acResult {
+//
+// A clause naming paths ("`TestParse` is removed from `a/a_test.go`") is
+// judged in those paths only, so a same-named definition elsewhere on the
+// branch never makes it unmet.
+func acRemoved(name string, re *regexp.Regexp, d *ACDiff, scope []string) acResult {
+	if len(scope) > 0 {
+		return acRemovedIn(name, re, d, scope)
+	}
 	loc, ok, err := d.findDefinitionErr(re)
 	if err != nil {
 		// The grep never answered, so absence is unproven.
@@ -1536,6 +1543,47 @@ func acRemoved(name string, re *regexp.Regexp, d *ACDiff) acResult {
 		return acResult{}
 	}
 	return acAnswer(ACMet, fmt.Sprintf("`%s` removed from `%s`; `git grep` finds no remaining definition", name, strings.Join(paths, "`, `")), paths...)
+}
+
+// acRemovedIn answers a removal clause scoped to named paths: a definition
+// still in one of them is unmet; one the diff removed from them (or a path the
+// diff deletes) with none left is met; one never in the diff is left to the
+// judge, as is a path whose content cannot be read.
+func acRemovedIn(name string, re *regexp.Regexp, d *ACDiff, scope []string) acResult {
+	var removed []string
+	for _, p := range scope {
+		f := d.Files[p]
+		if f != nil && f.Status == "deleted" {
+			for _, l := range f.Removed {
+				if re.MatchString(l) {
+					removed = append(removed, p)
+					break
+				}
+			}
+			continue
+		}
+		lines, ok := d.lines(p)
+		if !ok {
+			return acResult{}
+		}
+		for i, l := range lines {
+			if re.MatchString(l) {
+				return acAnswer(ACUnmet, fmt.Sprintf("`%s` is still defined at `%s:%d`", name, p, i+1), p)
+			}
+		}
+		if f != nil {
+			for _, l := range f.Removed {
+				if re.MatchString(l) {
+					removed = append(removed, p)
+					break
+				}
+			}
+		}
+	}
+	if len(removed) == 0 {
+		return acResult{}
+	}
+	return acAnswer(ACMet, fmt.Sprintf("`%s` removed from `%s`; no definition remains there", name, strings.Join(acUniq(removed), "`, `")), scope...)
 }
 
 // acNegContentRE marks a negative-content criterion (#3385): "`F` no longer

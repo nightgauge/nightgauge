@@ -1528,6 +1528,36 @@ func TestVerifyACAgainstDiff_RemovalTargets(t *testing.T) {
 	}
 }
 
+// Regression (#3385 review): a path-scoped test removal is judged in the named
+// file only, so a same-named test in another package never makes it unmet.
+func TestVerifyACAgainstDiff_RemovalScopedToPath(t *testing.T) {
+	dir := changelogRepo(t)
+	gitOut(t, dir, "checkout", "-q", "main")
+	writeFile(t, dir, "a/a_test.go", "package a\n\nfunc TestParse(t *testing.T) {}\n\nfunc TestKeep(t *testing.T) {}\n")
+	writeFile(t, dir, "b/b_test.go", "package b\n\nfunc TestParse(t *testing.T) {}\n")
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "seed")
+	gitOut(t, dir, "checkout", "-q", "docs/2661-changelog")
+	gitOut(t, dir, "merge", "-q", "main")
+	writeFile(t, dir, "a/a_test.go", "package a\n\nfunc TestKeep(t *testing.T) {}\n")
+	d := collect(t, dir)
+	none := ACTestState{}
+
+	got, ok := VerifyACAgainstDiff("`TestParse` is removed from `a/a_test.go`.", nil, d, none)
+	if !ok || got.Status != ACMet || strings.Contains(got.Evidence, "b/b_test.go") {
+		t.Errorf("scoped removal: got %+v ok=%v, want met without citing b/b_test.go", got, ok)
+	}
+	got, ok = VerifyACAgainstDiff("`TestKeep` is removed from `a/a_test.go`.", nil, d, none)
+	if !ok || got.Status != ACUnmet || !strings.Contains(got.Evidence, "a/a_test.go:3") {
+		t.Errorf("still in the named file: got %+v ok=%v, want unmet citing a/a_test.go:3", got, ok)
+	}
+	// Unscoped, the same-named test elsewhere still counts.
+	got, ok = VerifyACAgainstDiff("`TestParse` is removed.", nil, d, none)
+	if !ok || got.Status != ACUnmet || !strings.Contains(got.Evidence, "b/b_test.go:3") {
+		t.Errorf("unscoped: got %+v ok=%v, want unmet citing b/b_test.go:3", got, ok)
+	}
+}
+
 // Regression (#3385 Part 2): "no longer contains X" is met when X is absent
 // from the named file on the branch, never judged by the diff adding X.
 func TestVerifyACAgainstDiff_NegativeContent(t *testing.T) {
