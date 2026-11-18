@@ -17,7 +17,7 @@ const payload: RecoveryRequiredPayload = {
 };
 
 test("directory inspection re-enables recovery actions for a second click", async ({ page }) => {
-  const html = getRecoveryDialogHtml({ cspSource: "'unsafe-inline'" } as never, payload);
+  const html = getRecoveryDialogHtml({ cspSource: "vscode-webview://test" } as never, payload);
   await loadWebview(page, html);
 
   await expect(page.locator('[data-action="discard-run"]')).toHaveCount(0);

@@ -6,7 +6,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE'; font-src test-csp;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-NONCE'; style-src test-csp 'unsafe-inline'; font-src test-csp; form-action 'none'; base-uri 'none'">
   <title>Nightgauge Settings</title>
   <style>
 
@@ -3813,7 +3813,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE'; font-src test-csp;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-NONCE'; style-src test-csp 'unsafe-inline'; font-src test-csp; form-action 'none'; base-uri 'none'">
   <title>Nightgauge Settings</title>
   <style>
 
@@ -7602,7 +7602,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE'; font-src test-csp;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-NONCE'; style-src test-csp 'unsafe-inline'; font-src test-csp; form-action 'none'; base-uri 'none'">
   <title>Nightgauge Settings</title>
   <style>
 
@@ -11391,7 +11391,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE'; font-src test-csp;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-NONCE'; style-src test-csp 'unsafe-inline'; font-src test-csp; form-action 'none'; base-uri 'none'">
   <title>Nightgauge Settings</title>
   <style>
 
@@ -15198,7 +15198,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE'; font-src test-csp;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-NONCE'; style-src test-csp 'unsafe-inline'; font-src test-csp; form-action 'none'; base-uri 'none'">
   <title>Nightgauge Settings</title>
   <style>
 

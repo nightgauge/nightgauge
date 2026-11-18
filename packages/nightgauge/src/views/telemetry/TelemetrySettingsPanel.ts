@@ -7,6 +7,8 @@
  */
 
 import * as vscode from "vscode";
+import { getNonce } from "../../utils/webviewNonce";
+import { buildWebviewCsp, type WebviewHtmlSecurity } from "../../utils/webviewCsp";
 import { TelemetryConsentService } from "../../services/TelemetryConsentService.js";
 import { ALL_STREAMS, type TelemetryStream } from "../../services/telemetry/types.js";
 import {
@@ -89,10 +91,10 @@ export class TelemetrySettingsPanel implements vscode.Disposable {
       "nightgaugeTelemetrySettings",
       "Nightgauge: Telemetry Settings",
       vscode.ViewColumn.One,
-      { enableScripts: true, retainContextWhenHidden: true }
+      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] }
     );
 
-    this.panel.webview.html = this.renderHtml();
+    this.panel.webview.html = this.renderHtml(this.panel.webview);
     this.panel.webview.onDidReceiveMessage(
       this.messageHandler.handleMessage,
       undefined,
@@ -163,22 +165,59 @@ export class TelemetrySettingsPanel implements vscode.Disposable {
    * Render the static webview HTML. The `state` message hydrates form values
    * after first paint so we keep the markup minimal and framework-free.
    */
-  private renderHtml(): string {
-    const streamRows = ALL_STREAMS.map(
-      (stream) => `
-      <label class="stream-row">
-        <input type="checkbox" data-stream="${stream}" />
-        <span>${streamLabel(stream)}</span>
-      </label>`
-    ).join("\n");
+  private renderHtml(webview: vscode.Webview): string {
+    return renderTelemetrySettingsHtml({ nonce: getNonce(), cspSource: webview.cspSource });
+  }
 
-    return /* html */ `<!DOCTYPE html>
+  dispose(): void {
+    this.handlePanelClosed();
+    this.panel?.dispose();
+  }
+}
+
+function formatLastUpload(ms: number | null): string {
+  if (ms === null) return "Never";
+  try {
+    return new Date(ms).toLocaleString();
+  } catch {
+    return "Never";
+  }
+}
+
+function streamLabel(stream: TelemetryStream): string {
+  switch (stream) {
+    case "pipeline-run":
+      return "Pipeline runs (anonymous outcomes and durations)";
+    case "health":
+      return "Health metrics (queue, retry, error counts)";
+    case "recommendation":
+      return "Recommendation effectiveness signals";
+    case "trace":
+      return "Run lifecycle decision traces (stage, phase, and decision events)";
+  }
+}
+
+/**
+ * Render the Telemetry settings webview document. Pure, so a test can render it
+ * without a VS Code host; the CSP comes from the shared builder.
+ */
+export function renderTelemetrySettingsHtml(security: WebviewHtmlSecurity): string {
+  const streamRows = ALL_STREAMS.map(
+    (stream) => `
+    <label class="stream-row">
+      <input type="checkbox" data-stream="${stream}" />
+      <span>${streamLabel(stream)}</span>
+    </label>`
+  ).join("\n");
+
+  return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="${buildWebviewCsp(security.nonce, security.cspSource)}" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Telemetry Settings</title>
-  <style>
+  <style nonce="${security.nonce}">
     body {
       font-family: var(--vscode-font-family);
       color: var(--vscode-foreground);
@@ -187,6 +226,7 @@ export class TelemetrySettingsPanel implements vscode.Disposable {
       max-width: 720px;
     }
     h1 { font-size: 1.4rem; margin-top: 0; }
+    .section-heading { font-size: 1.05rem; margin-bottom: 0.5rem; }
     .section { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--vscode-widget-border); }
     .stream-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.25rem 0; }
     .stream-row[data-disabled="true"] { opacity: 0.5; }
@@ -228,7 +268,7 @@ export class TelemetrySettingsPanel implements vscode.Disposable {
   </div>
 
   <div class="section">
-    <h2 style="font-size: 1.05rem; margin-bottom: 0.5rem;">Streams</h2>
+    <h2 class="section-heading">Streams</h2>
     <div id="streams">${streamRows}</div>
   </div>
 
@@ -240,7 +280,7 @@ export class TelemetrySettingsPanel implements vscode.Disposable {
     <div class="meta">Determines how often queued events flush. Range 1–1440.</div>
   </div>
 
-  <script>
+  <script nonce="${security.nonce}">
     const vscode = acquireVsCodeApi();
 
     const masterEnabled = document.getElementById('masterEnabled');
@@ -302,32 +342,4 @@ export class TelemetrySettingsPanel implements vscode.Disposable {
   </script>
 </body>
 </html>`;
-  }
-
-  dispose(): void {
-    this.handlePanelClosed();
-    this.panel?.dispose();
-  }
-}
-
-function formatLastUpload(ms: number | null): string {
-  if (ms === null) return "Never";
-  try {
-    return new Date(ms).toLocaleString();
-  } catch {
-    return "Never";
-  }
-}
-
-function streamLabel(stream: TelemetryStream): string {
-  switch (stream) {
-    case "pipeline-run":
-      return "Pipeline runs (anonymous outcomes and durations)";
-    case "health":
-      return "Health metrics (queue, retry, error counts)";
-    case "recommendation":
-      return "Recommendation effectiveness signals";
-    case "trace":
-      return "Run lifecycle decision traces (stage, phase, and decision events)";
-  }
 }

@@ -13,6 +13,12 @@ and this project adheres to
 
 - A pre-merge rebase conflict now names non-ASCII files (for example `café.txt`) by their real path instead of git's C-quoted form (#3393).
 
+### Security
+
+- The output window sanitizes rendered agent Markdown and escapes the issue title, so output can only show as text and formatting (#3401).
+- Every webview panel, including Notifier and Telemetry settings, now carries the same strict Content-Security-Policy (#3405).
+- Dashboard and Settings webview actions are limited to what each panel shows: an exact command list, a confirmation before merging a Dependabot PR, settings paths from the schema, and doc links inside `docs/` (#3403).
+
 ## [0.8.6] - 2026-11-17
 
 ### Fixed

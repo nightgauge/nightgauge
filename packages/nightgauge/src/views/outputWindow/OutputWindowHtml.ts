@@ -12,7 +12,8 @@
  */
 
 import { getNonce } from "../../utils/webviewNonce";
-import * as vscode from "vscode";
+import { buildWebviewCsp } from "../../utils/webviewCsp";
+import type * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type {
   OutputEntry,
@@ -43,6 +44,14 @@ export function escapeHtml(text: string): string {
 }
 
 // Markdown rendering is handled client-side using marked.js library
+
+/**
+ * Vendored browser builds the output window loads, in load order (#3401).
+ * scripts/vendor-webview-assets.mjs copies them into dist/vendor/ from the
+ * pinned dependencies; scripts/check-runtime-assets.sh fails a package that
+ * lacks one.
+ */
+export const WEBVIEW_VENDOR_SCRIPTS = ["marked.umd.js", "purify.min.js"] as const;
 // See getScript() for the implementation
 
 /**
@@ -121,7 +130,7 @@ function getEntryHtml(entry: OutputEntry): string {
 
   // Content type and language for formatted rendering (Issue #428)
   const contentTypeAttr = entry.contentType ? ` data-content-type="${entry.contentType}"` : "";
-  const languageAttr = entry.language ? ` data-language="${entry.language}"` : "";
+  const languageAttr = entry.language ? ` data-language="${escapeHtml(entry.language)}"` : "";
   const formattedClass = entry.contentType ? ` formatted-content content-${entry.contentType}` : "";
 
   const mainContent = `
@@ -1447,6 +1456,10 @@ function getStyles(): string {
       color: var(--vscode-descriptionForeground);
     }
 
+    .collapsible-code.collapsed .code-details {
+      display: none;
+    }
+
     .code-details pre {
       margin: 0;
       padding: var(--spacing-sm);
@@ -2178,8 +2191,7 @@ function getScript(): string {
         if (codeToggle) {
           const container = codeToggle.closest('.collapsible-code');
           if (container) {
-            console.log('[OutputWindow] Code toggle clicked:', container.dataset.codeId);
-            toggleCodeBlock(container.dataset.codeId);
+            toggleCodeBlock(container);
           }
           return;
         }
@@ -3194,7 +3206,7 @@ function getScript(): string {
         if (summary) {
           const count = details.querySelectorAll('.output-entry, .tool-indicator, .tool-summary').length;
           summary.innerHTML = '<span class="stage-group-icon">' + icon + '</span> ' +
-            '<span class="stage-group-name">' + stageName + '</span>' +
+            '<span class="stage-group-name">' + escapeHtml(stageName) + '</span>' +
             '<span class="stage-group-count">' + count + ' entr' + (count === 1 ? 'y' : 'ies') + '</span>';
         }
       }
@@ -3227,7 +3239,7 @@ function getScript(): string {
           '<span class="entry-time">' + timestamp + '</span>' +
           '<span class="entry-badge ' + getLevelClass(entry.level) + '">' + getLevelBadge(entry.level) + '</span>';
         if (entry.stage) {
-          html += '<span class="entry-stage">[' + formatStageName(entry.stage) + ']</span>';
+          html += '<span class="entry-stage">[' + escapeHtml(formatStageName(entry.stage)) + ']</span>';
         }
         html += '</div>';
 
@@ -3335,10 +3347,14 @@ function getScript(): string {
         return labels[stage] || stage;
       }
 
+      // Escapes text for an element body or a quoted attribute value.
       function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        return String(text == null ? '' : text)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
       }
 
       // Tool indicator functions
@@ -3459,12 +3475,52 @@ function getScript(): string {
         return iconMap[tool] || '\\uD83D\\uDEE0';
       }
 
-      // Configure marked.js for safe rendering
-      if (typeof marked !== 'undefined') {
+      // Markdown rendering (Issue #846, #3401). Agent output is untrusted, so
+      // it renders in two layers: marked's renderer shows raw HTML in the
+      // source as literal text and escapes every attribute it writes, and
+      // DOMPurify then keeps only the formatting elements and attributes below.
+      // Without both libraries the text is shown escaped.
+      var MARKDOWN_ALLOWED_TAGS = [
+        'a', 'b', 'blockquote', 'br', 'code', 'del', 'div', 'em', 'h1', 'h2',
+        'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'li', 'ol', 'p', 'pre', 's', 'span',
+        'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul'
+      ];
+      var MARKDOWN_ALLOWED_ATTR = ['href', 'title', 'class', 'start', 'align'];
+      // Only the classes the code renderer below emits survive sanitizing, so
+      // rendered output can never carry a class a click handler listens for.
+      var MARKDOWN_CLASS_PATTERN =
+        /^(collapsible-code|collapsed|code-toggle|toggle-icon|code-summary|code-details|language-[A-Za-z0-9_+#.-]+)$/;
+      var markdownReady = typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined';
+
+      // A fenced-code info string becomes a class name, so keep only its
+      // leading identifier characters.
+      function safeCodeLanguage(lang) {
+        var match = /^[A-Za-z0-9_+#.-]{1,32}/.exec(String(lang || ''));
+        return match ? match[0] : '';
+      }
+
+      function sanitizeMarkdownHtml(html) {
+        return DOMPurify.sanitize(html, {
+          ALLOWED_TAGS: MARKDOWN_ALLOWED_TAGS,
+          ALLOWED_ATTR: MARKDOWN_ALLOWED_ATTR,
+          ALLOW_DATA_ATTR: false,
+          ALLOW_ARIA_ATTR: false
+        });
+      }
+
+      if (markdownReady) {
+        DOMPurify.addHook('uponSanitizeAttribute', function(_node, data) {
+          if (data.attrName === 'class') {
+            data.attrValue = data.attrValue
+              .split(/\\s+/)
+              .filter(function(c) { return MARKDOWN_CLASS_PATTERN.test(c); })
+              .join(' ');
+          }
+        });
+
         marked.setOptions({
           breaks: false, // Was: true — caused double-spacing (Issue #846)
-          gfm: true,     // GitHub Flavored Markdown
-          sanitize: false // We trust our own content
+          gfm: true      // GitHub Flavored Markdown
         });
 
         // Custom renderer for fenced code blocks (Issue #846)
@@ -3473,48 +3529,50 @@ function getScript(): string {
         renderer.code = function(code, language) {
           // Handle marked v5+ object argument format
           var text = typeof code === 'object' ? code.text : code;
-          var lang = typeof code === 'object' ? code.lang : language;
+          var lang = safeCodeLanguage(typeof code === 'object' ? code.lang : language);
           var lines = text.split('\\n');
           var lineCount = lines.length;
           var langLabel = lang ? ', ' + lang : '';
+          var codeClass = 'language-' + (lang || 'text');
 
           if (lineCount > 8) {
             // Collapse long fenced code blocks
-            var id = 'code-' + Math.random().toString(36).slice(2, 11);
-            return '<div class="collapsible-code collapsed" data-code-id="' + id + '">' +
+            return '<div class="collapsible-code collapsed">' +
               '<div class="code-toggle">' +
               '<span class="toggle-icon">\\u25B6</span> ' +
-              '<span class="code-summary">Code block (' + lineCount + ' lines' + langLabel + ')</span>' +
+              '<span class="code-summary">Code block (' + lineCount + ' lines' + escapeHtml(langLabel) + ')</span>' +
               '</div>' +
-              '<div class="code-details" style="display: none;">' +
-              '<pre><code class="language-' + (lang || 'text') + '">' +
+              '<div class="code-details">' +
+              '<pre><code class="' + escapeHtml(codeClass) + '">' +
               escapeHtml(text) + '</code></pre>' +
               '</div></div>';
           }
 
           // Short code blocks render normally
-          return '<pre><code class="language-' + (lang || 'text') + '">' +
+          return '<pre><code class="' + escapeHtml(codeClass) + '">' +
             escapeHtml(text) + '</code></pre>';
+        };
+        // Raw HTML in the Markdown source is shown as the characters it is.
+        renderer.html = function(token) {
+          var raw = typeof token === 'object' ? (token.text || token.raw || '') : token;
+          return escapeHtml(raw);
+        };
+        // Task-list checkboxes render as characters, not form controls.
+        renderer.checkbox = function(token) {
+          var checked = typeof token === 'object' ? token.checked : token;
+          return checked ? '\\u2611 ' : '\\u2610 ';
         };
 
         marked.use({ renderer: renderer });
       }
 
       // Toggle collapsible fenced code blocks (Issue #846)
-      function toggleCodeBlock(codeId) {
-        var container = document.querySelector('[data-code-id="' + codeId + '"]');
-        if (!container) return;
-        var details = container.querySelector('.code-details');
+      // Collapsed state is the container's \`collapsed\` class; CSS hides the
+      // details, so the sanitized markup needs no inline style.
+      function toggleCodeBlock(container) {
         var icon = container.querySelector('.toggle-icon');
-        if (details.style.display === 'none') {
-          details.style.display = 'block';
-          icon.textContent = '\\u25BC';
-          container.classList.remove('collapsed');
-        } else {
-          details.style.display = 'none';
-          icon.textContent = '\\u25B6';
-          container.classList.add('collapsed');
-        }
+        var collapsed = container.classList.toggle('collapsed');
+        if (icon) icon.textContent = collapsed ? '\\u25B6' : '\\u25BC';
       }
 
       // ===== Content Formatting Functions (Issue #428) =====
@@ -3751,10 +3809,11 @@ function getScript(): string {
         // fence as code, breaking the output.
         processed = balanceFencedCodeBlocks(processed);
 
-        // Use marked.js if available, otherwise escape HTML
-        if (typeof marked !== 'undefined' && marked.parse) {
+        // Render only when both marked and the sanitizer loaded; otherwise
+        // escape HTML (fail closed).
+        if (markdownReady) {
           try {
-            return marked.parse(processed);
+            return sanitizeMarkdownHtml(marked.parse(processed));
           } catch (e) {
             console.error('Markdown parsing error:', e);
             return escapeHtml(processed).replace(/\\n/g, '<br>');
@@ -4253,7 +4312,7 @@ function getTabBarHtml(activeSlots: SlotInfo[], activeSlotIndex: number | null):
       : slot.origin === "cli"
         ? " (started by `nightgauge run` — output goes to the launching terminal)"
         : "";
-    const fullTitle = `Slot ${slot.slotIndex + 1}: #${slot.issueNumber} — ${escapeHtml(slot.title)}${stageLabel}${titleHint}`;
+    const fullTitle = `Slot ${slot.slotIndex + 1}: #${slot.issueNumber} — ${escapeHtml(slot.title)}${escapeHtml(stageLabel)}${titleHint}`;
     html += `<button${cls} data-slot="${slot.slotIndex}" title="${fullTitle}">${escapeHtml(label)}${archivedChip}${cliChip}${getTabBadgesHtml(slot)}</button>`;
   }
 
@@ -4501,25 +4560,29 @@ export function getOutputWindowHtml(
   slotEntries?: Map<number, OutputEntry[]>,
   slotStages?: Map<number, StageProgress[]>,
   /**
-   * Extension install root, used to resolve the vendored webview assets. When
-   * omitted (unit tests that render HTML without an extension host) the marked
-   * script tag is left out and the renderer falls back to escaped HTML, which
-   * is the same path taken when the script fails to load.
+   * Maps a WEBVIEW_VENDOR_SCRIPTS file name to its webview URI (the caller
+   * joins it under `<extensionUri>/dist/vendor/`, so this module needs no
+   * runtime `vscode` import). When omitted (unit tests that render HTML
+   * without an extension host) the script tags are left out and the renderer
+   * falls back to escaped HTML, the same path taken when a script fails to
+   * load.
    */
-  extensionUri?: vscode.Uri
+  vendorScriptUri?: (name: (typeof WEBVIEW_VENDOR_SCRIPTS)[number]) => string
 ): string {
   const nonce = getNonce();
 
-  // Markdown rendering runs client-side, so the webview needs marked's browser
-  // build. Load it from dist/vendor/ via asWebviewUri, never from a CDN: the
-  // Marketplace and Open VSX both require an extension to execute only code
-  // contained in its published package, and a remote <script src> breaks that
-  // even when the CSP names the origin. dist/vendor/marked.umd.js is copied
-  // from the pinned `marked` dependency by scripts/vendor-webview-assets.mjs.
-  const markedScriptTag = extensionUri
-    ? `<script src="${webview.asWebviewUri(
-        vscode.Uri.joinPath(extensionUri, "dist", "vendor", "marked.umd.js")
-      )}" nonce="${nonce}"></script>`
+  // Markdown rendering runs client-side, so the webview needs the browser
+  // builds of marked and of the DOMPurify sanitizer it renders through. Load
+  // them from dist/vendor/ via asWebviewUri, never from a CDN: the Marketplace
+  // and Open VSX both require an extension to execute only code contained in
+  // its published package, and a remote <script src> breaks that even when the
+  // CSP names the origin. scripts/vendor-webview-assets.mjs copies both from
+  // the pinned dependencies. The tags carry the nonce, which is what lets them
+  // run under the nonce-only script-src.
+  const vendorScriptTags = vendorScriptUri
+    ? WEBVIEW_VENDOR_SCRIPTS.map(
+        (name) => `<script src="${escapeHtml(vendorScriptUri(name))}" nonce="${nonce}"></script>`
+      ).join("\n  ")
     : "";
 
   const title = (() => {
@@ -4564,9 +4627,9 @@ export function getOutputWindowHtml(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource};">
-  <title>${title}</title>
-  ${markedScriptTag}
+  <meta http-equiv="Content-Security-Policy" content="${buildWebviewCsp(nonce, webview.cspSource, { inlineStyles: true })}">
+  <title>${escapeHtml(title)}</title>
+  ${vendorScriptTags}
   <style>
     ${getStyles()}
   </style>
@@ -4574,7 +4637,7 @@ export function getOutputWindowHtml(
 <body>
   <div class="output-window mode-headless">
     <header class="output-header">
-      <span class="output-title">${title}</span>
+      <span class="output-title">${escapeHtml(title)}</span>
       <div class="header-actions">
         <div class="mode-indicator mode-headless" id="modeIndicator" title="Headless mode: Stream-json output, token tracking enabled">
           <span class="mode-indicator-icon">⚙</span>

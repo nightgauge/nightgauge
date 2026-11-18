@@ -6,6 +6,7 @@
  */
 
 import { getNonce } from "../../utils/webviewNonce";
+import { buildWebviewCsp } from "../../utils/webviewCsp";
 import * as vscode from "vscode";
 import { type PipelineStage } from "@nightgauge/sdk";
 import { marked } from "marked";
@@ -37,7 +38,7 @@ export function getApprovalDialogHtml(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="${buildWebviewCsp(nonce, webview.cspSource, { inlineStyles: true })}">
   <title>Review Plan #${issueNumber}</title>
   <style>
     ${getStyles()}

@@ -9,6 +9,8 @@
  * can be unit-tested without a VSCode host, mirroring DoctorHtml.ts.
  */
 
+import { buildWebviewCsp } from "../../utils/webviewCsp";
+
 /** Webview hardening inputs — strict CSP + a per-render script nonce. */
 export interface GettingStartedHtmlSecurity {
   cspSource: string;
@@ -66,7 +68,7 @@ function renderStep(step: StepConfig, index: number): string {
  * identical output.
  */
 export function renderGettingStartedHtml(security: GettingStartedHtmlSecurity): string {
-  const csp = `default-src 'none'; style-src ${security.cspSource} 'unsafe-inline'; script-src 'nonce-${security.nonce}';`;
+  const csp = buildWebviewCsp(security.nonce, security.cspSource, { inlineStyles: true });
 
   return /* html */ `<!DOCTYPE html>
 <html lang="en">

@@ -12,6 +12,7 @@
  */
 
 import { getNonce } from "../../utils/webviewNonce";
+import { buildWebviewCsp } from "../../utils/webviewCsp";
 import * as vscode from "vscode";
 import { STATE_CHANGING_RECOVERY_ACTIONS } from "@nightgauge/sdk";
 import type { RecoveryAction, RecoveryRequiredPayload } from "@nightgauge/sdk";
@@ -60,7 +61,7 @@ export function getRecoveryDialogHtml(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="${buildWebviewCsp(nonce, webview.cspSource, { inlineStyles: true })}">
   <title>${escapeHtml(titleBase)}</title>
   <style>
     ${getStyles()}

@@ -83,6 +83,7 @@ const SECRET_KEY_PATHS = new Set<string>(["platform.license_key"]);
  */
 export { MACHINE_TIER_KEY_PATHS } from "./tierRouting";
 import { MACHINE_TIER_KEY_PATHS, isMachineOwnedPath } from "./tierRouting";
+import { resolveDocLink } from "./docLinkGuard";
 
 /**
  * SettingsPanel - WebView panel for Nightgauge configuration
@@ -1237,9 +1238,17 @@ export class SettingsPanel implements vscode.Disposable {
    * Handle open documentation link
    */
   private handleOpenDoc(path: string): void {
-    // Open the doc file in the workspace
-    const docPath = vscode.Uri.file(`${this.workspaceRoot}/${path}`);
-    vscode.commands.executeCommand("vscode.open", docPath);
+    // Open only a file under the workspace's docs/ directory.
+    const target = resolveDocLink(this.workspaceRoot, path);
+    if (!target) {
+      console.warn("Refused a settings documentation link outside docs/");
+      return;
+    }
+    const docUri = vscode.Uri.file(target.file);
+    vscode.commands.executeCommand(
+      "vscode.open",
+      target.fragment ? docUri.with({ fragment: target.fragment }) : docUri
+    );
   }
 
   private async handleAction(action: string, payload?: Record<string, unknown>): Promise<void> {

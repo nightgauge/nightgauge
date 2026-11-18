@@ -12,6 +12,8 @@
  * reply renders incrementally rather than when the turn ends.
  */
 
+import { buildWebviewCsp } from "../../utils/webviewCsp";
+
 export interface ConversationHtmlSecurity {
   cspSource: string;
   nonce: string;
@@ -23,15 +25,7 @@ function attr(value: string): string {
 
 export function renderConversationHtml(security: ConversationHtmlSecurity): string {
   const nonce = attr(security.nonce);
-  const csp = [
-    "default-src 'none'",
-    `style-src 'nonce-${nonce}'`,
-    `script-src 'nonce-${nonce}'`,
-    "img-src 'none'",
-    "connect-src 'none'",
-    "form-action 'none'",
-    "base-uri 'none'",
-  ].join("; ");
+  const csp = buildWebviewCsp(nonce, security.cspSource);
   return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>

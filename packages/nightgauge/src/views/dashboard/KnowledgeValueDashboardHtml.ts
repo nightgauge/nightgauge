@@ -5,6 +5,7 @@
  */
 
 import { getNonce } from "../../utils/webviewNonce";
+import { buildWebviewCsp } from "../../utils/webviewCsp";
 import { PIPELINE_STATE_DISPLAY } from "../../utils/cloneLayout";
 import type { KnowledgeMetricsResult } from "../../services/IpcClientBase";
 import {
@@ -38,7 +39,7 @@ function bandColor(band: "green" | "yellow" | "red" | "neutral"): string {
 
 export function getKnowledgeValueDashboardHtml(state: KnowledgeValueState): string {
   const nonce = getNonce();
-  const csp = `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';`;
+  const csp = buildWebviewCsp(nonce, "");
 
   const body = renderBody(state);
 
