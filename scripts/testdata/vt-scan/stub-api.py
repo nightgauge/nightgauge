@@ -32,6 +32,9 @@ VSIX or tarball can carry a "detection" through extraction unchanged:
   VT-STUB-WINAPI-INQUEST    InQuest's Windows_API_Function rule matches
   VT-STUB-WINAPI-ELSEWHERE  the same rule name from another source matches
 (YARA markers combine: each appends one match.)
+  VT-STUB-MS-ML-FIRST  Microsoft reports Trojan:Script/Wacatac.B!ml on the
+                       file's first analysis only; every later one is clean
+  VT-STUB-MS-ML        the same Microsoft finding on every analysis
   VT-STUB-AI-SUSP      Code insights verdict "suspicious"
   VT-STUB-AI-ABSENT    no crowdsourced_ai_results field
   VT-STUB-AI-ODD       crowdsourced_ai_results in an unknown shape
@@ -95,6 +98,7 @@ UPLOADS = {}  # analysis id -> sha256
 DATES = {}  # sha256 -> last_analysis_date of a file the stub knows
 PENDING = {}  # sha256 -> polls of its running analysis answered so far
 ANALYSED = {}  # sha256 -> date of its latest completed analysis object
+ANALYSIS_COUNT = {}  # sha256 -> analyses of it completed so far
 LAG = {}  # sha256 -> [new last_analysis_date, file GETs still showing the old]
 SEEDED = set()  # sha256s already loaded from <state-dir>/seed
 EPOCH = [None]
@@ -110,7 +114,7 @@ def file_object(sha, content):
         doc = json.load(f)
     attrs = doc["data"]["attributes"]
     doc["data"]["id"] = "0" * 64 if flag("wrong-sha") else sha
-    stats, results = verdict(content)
+    stats, results = verdict(content, sha)
     attrs["last_analysis_date"] = DATES[sha]
     attrs["last_analysis_stats"] = stats
     attrs["last_analysis_results"] = results
@@ -155,7 +159,13 @@ def pending_polls(sha):
     return 0
 
 
-def verdict(content):
+def is_first_analysis(sha):
+    """True until a second analysis of sha has completed (a seeded file the
+    stub never analysed counts as on its first)."""
+    return ANALYSIS_COUNT.get(sha, 0) <= 1
+
+
+def verdict(content, sha=None):
     """Engine stats and results for these bytes, from their markers."""
     count = ENGINES
     if flag("few-engines"):
@@ -185,12 +195,22 @@ def verdict(content):
             "category": "suspicious",
             "result": "Stub.Heuristic",
         }
+    if b"VT-STUB-MS-ML" in content and (
+        b"VT-STUB-MS-ML-FIRST" not in content or is_first_analysis(sha)
+    ):
+        stats["malicious"] += 1
+        results["Microsoft"] = {
+            "engine_name": "Microsoft",
+            "category": "malicious",
+            "result": "Trojan:Script/Wacatac.B!ml",
+        }
+        results.pop(names[-1], None)
     stats["undetected"] -= stats["malicious"] + stats["suspicious"]
     return stats, results
 
 
 def analysis_object(sha, content):
-    stats, results = verdict(content)
+    stats, results = verdict(content, sha)
     status = "queued" if sha in PENDING else "completed"
     if flag("analysis-status"):
         with open(os.path.join(STATE, "analysis-status"), encoding="utf-8") as f:
@@ -221,7 +241,7 @@ def sync_state():
         epoch = None
     if epoch != EPOCH[0]:
         EPOCH[0] = epoch
-        for table in (UPLOADS, DATES, PENDING, CONTENTS, ANALYSED, LAG):
+        for table in (UPLOADS, DATES, PENDING, CONTENTS, ANALYSED, LAG, ANALYSIS_COUNT):
             table.clear()
         SEEDED.clear()
     try:
@@ -259,6 +279,7 @@ def poll_file(sha):
             age = int(f.read().strip() or "0")
     date = max(int(time.time()) - age, DATES.get(sha, 0) + 1)
     ANALYSED[sha] = date
+    ANALYSIS_COUNT[sha] = ANALYSIS_COUNT.get(sha, 0) + 1
     if flag("file-lag") and sha in DATES:
         with open(os.path.join(STATE, "file-lag"), encoding="utf-8") as f:
             LAG[sha] = [date, int(f.read().strip() or "0")]
