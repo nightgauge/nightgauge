@@ -83,14 +83,19 @@ const MODERATE_ONLY_AUDIT = JSON.stringify({
  */
 function setupTestEnv(
   auditJson: string,
-  allowlistContent?: object
+  allowlistContent?: object,
+  runtimeAuditJson: string = auditJson
 ): { tmpDir: string; env: NodeJS.ProcessEnv } {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "npm-audit-test-"));
 
-  // Write mock npm binary
+  // Write mock npm binary. The script audits twice: `npm audit --omit=dev
+  // --json` (runtime dependencies) and `npm audit --json` (the whole tree).
   const mockNpm = path.join(tmpDir, "npm");
-  const escapedJson = auditJson.replace(/'/g, "'\\''");
-  fs.writeFileSync(mockNpm, `#!/bin/sh\necho '${escapedJson}'\n`);
+  const esc = (json: string) => json.replace(/'/g, "'\\''");
+  fs.writeFileSync(
+    mockNpm,
+    `#!/bin/sh\ncase " $* " in\n  *" --omit=dev "*) echo '${esc(runtimeAuditJson)}' ;;\n  *) echo '${esc(auditJson)}' ;;\nesac\n`
+  );
   fs.chmodSync(mockNpm, 0o755);
 
   // Write allowlist if provided
@@ -125,13 +130,17 @@ function runScript(env: NodeJS.ProcessEnv, allowlistPath?: string): SpawnSyncRet
  * Run the script with a specific allowlist file content by temporarily
  * replacing the root .npmauditrc.json. Restores original after run.
  */
-function runWithAllowlist(auditJson: string, allowlist: object): SpawnSyncReturns<Buffer> {
+function runWithAllowlist(
+  auditJson: string,
+  allowlist: object,
+  runtimeAuditJson: string = auditJson
+): SpawnSyncReturns<Buffer> {
   const allowlistPath = path.join(REPO_ROOT, ".npmauditrc.json");
   const originalContent = fs.readFileSync(allowlistPath, "utf8");
 
   try {
     fs.writeFileSync(allowlistPath, JSON.stringify({ allowlist }, null, 2));
-    const { tmpDir, env } = setupTestEnv(auditJson);
+    const { tmpDir, env } = setupTestEnv(auditJson, undefined, runtimeAuditJson);
     const result = runScript(env);
     fs.rmSync(tmpDir, { recursive: true, force: true });
     return result;
@@ -145,11 +154,13 @@ describe("npm-audit-check.js", () => {
     it("exits 0 when npm audit reports no vulnerabilities", () => {
       const result = runWithAllowlist(CLEAN_AUDIT, []);
       expect(result.status).toBe(0);
-      expect(result.stdout.toString()).toContain("No high/critical vulnerabilities found");
+      expect(result.stdout.toString()).toContain(
+        "no moderate+ runtime and no high+ dev vulnerabilities found"
+      );
     });
 
-    it("exits 0 when a moderate-only vulnerability is present (not gated)", () => {
-      const result = runWithAllowlist(MODERATE_ONLY_AUDIT, []);
+    it("exits 0 when a moderate vulnerability is in a dev-only dependency (not gated)", () => {
+      const result = runWithAllowlist(MODERATE_ONLY_AUDIT, [], CLEAN_AUDIT);
       expect(result.status).toBe(0);
     });
 
@@ -175,6 +186,13 @@ describe("npm-audit-check.js", () => {
       expect(result.stderr.toString()).toContain("NPM AUDIT");
       expect(result.stderr.toString()).toContain("[HIGH]");
       expect(result.stderr.toString()).toContain("some-pkg");
+    });
+
+    it("exits 1 when a moderate vulnerability is in a runtime dependency", () => {
+      const result = runWithAllowlist(MODERATE_ONLY_AUDIT, []);
+      expect(result.status).toBe(1);
+      expect(result.stderr.toString()).toContain("[MODERATE] moderate-pkg");
+      expect(result.stderr.toString()).toContain("runtime (--omit=dev)");
     });
 
     it("exits 1 when an unallowed critical vulnerability is found", () => {
