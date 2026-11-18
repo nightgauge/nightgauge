@@ -1243,6 +1243,8 @@ func (s *IssueService) SearchIssues(ctx context.Context, owner, repo, query stri
 			State:  string(f.State),
 			Repo:   string(f.Repository.NameWithOwner),
 			URL:    string(f.URL),
+
+			AuthorLogin: actorLogin(f.Author),
 		}
 		for _, l := range f.Labels.Nodes {
 			issue.Labels = append(issue.Labels, string(l.Name))
