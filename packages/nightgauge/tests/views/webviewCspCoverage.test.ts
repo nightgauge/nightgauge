@@ -253,7 +253,7 @@ describe("every webview panel renders the shared CSP (#3405)", () => {
     if (builder.nonce) expect(nonce).toBe(builder.nonce);
 
     // Every script tag, inline or vendored, carries this render's nonce.
-    const scripts = [...html.matchAll(/<script\b[^>]*>/g)].map((m) => m[0]);
+    const scripts = [...html.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0]);
     expect(scripts.length).toBeGreaterThan(0);
     for (const tag of scripts) expect(tag).toContain(`nonce="${nonce}"`);
 
@@ -263,7 +263,7 @@ describe("every webview panel renders the shared CSP (#3405)", () => {
     } else {
       expect(styleSrc).toContain(`'nonce-${nonce}'`);
       expect(styleSrc).not.toContain("'unsafe-inline'");
-      for (const [tag] of html.matchAll(/<style\b[^>]*>/g)) {
+      for (const [tag] of html.matchAll(/<style\b[^>]*>/gi)) {
         expect(tag).toContain(`nonce="${nonce}"`);
       }
       expect(html).not.toMatch(/\sstyle="/);
