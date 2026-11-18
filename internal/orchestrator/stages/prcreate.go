@@ -29,6 +29,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/preflight"
+	"github.com/nightgauge/nightgauge/internal/scan"
 )
 
 // PRCreatePath is the outcome of a deterministic pr-create attempt.
@@ -45,6 +46,10 @@ type PRCreatePath string
 const (
 	CreatePathCreated PRCreatePath = "created"
 	CreatePathPunt    PRCreatePath = "punt"
+	// CreatePathBlocked — a recorded security_scan gate stop still holds after
+	// the runner rescanned the diff (or the rescan could not run). Terminal: the
+	// caller fails the stage without re-rendering the LLM path (#3419).
+	CreatePathBlocked PRCreatePath = "blocked"
 )
 
 // Reason codes recorded on PRCreateResult.Reason. Free-form strings are also
@@ -705,6 +710,16 @@ type DeterministicPRCreateRunner struct {
 	// writeContext writes pr-{N}.json after a successful create. Indirected
 	// so tests can capture the output without touching disk.
 	writeContext func(workdir string, payload prContextPayload) error
+
+	// diffScan and the gate-stop hooks back the security-rescan phase (#3419).
+	diffScan       func(context.Context, scan.DiffSecretsOptions) (*scan.DiffSecretsResult, error)
+	readGateStop   func(workdir string, issueNumber int) (*prCreateGateStop, error)
+	writeGateStop  func(workdir string, issueNumber int, rec prCreateGateStop) error
+	removeGateStop func(workdir string, issueNumber int) error
+	// isAncestor reports whether the recorded commit is still in HEAD's
+	// history; gitleaksScan counts gitleaks findings over <base>..HEAD.
+	isAncestor   func(ctx context.Context, workdir, sha string) (bool, error)
+	gitleaksScan func(ctx context.Context, workdir, base string) (int, error)
 }
 
 // NewDeterministicPRCreateRunner builds a runner with default file-backed
@@ -718,6 +733,13 @@ func NewDeterministicPRCreateRunner() *DeterministicPRCreateRunner {
 		now:          time.Now,
 		readContext:  defaultReadCreateContext,
 		writeContext: defaultWritePRContext,
+
+		diffScan:       scan.RunDiffSecretsScan,
+		readGateStop:   defaultReadGateStop,
+		writeGateStop:  defaultWriteGateStop,
+		removeGateStop: defaultRemoveGateStop,
+		isAncestor:     defaultIsAncestor,
+		gitleaksScan:   defaultGitleaksScan,
 	}
 }
 
@@ -765,6 +787,18 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 	// hands the LLM skill a branch that carries the work, and above the
 	// client-wiring check so a missing GitHub client cannot disable it.
 	commit = r.ensureWorkCommitted(ctx, workdir, snap)
+
+	// A recorded security_scan gate stop is re-judged here, at the current
+	// HEAD, before anything decides to create (#3419): cleared, the create
+	// proceeds; still failing, the stage ends blocked without an LLM re-render.
+	ph.start("security-rescan")
+	// With no security_scan record the phase still completes: the runner
+	// checked, and a skip on a punt would outrank the skill's own record.
+	if blocked := r.rescanSecurityStop(ctx, workdir, &snap); blocked != nil {
+		ph.failInFlight()
+		return finish(*blocked, nil)
+	}
+	ph.complete("security-rescan")
 
 	// preflight-checks spans everything the runner must establish before it may
 	// open a PR: the create decision, that its clients are wired, that the repo

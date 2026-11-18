@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
@@ -475,6 +476,42 @@ func TestScheduler_PRCreate_NoDiffRefusesWithoutLLM(t *testing.T) {
 	}
 	if kind := ClassifyTerminalKind(refusal.Error()); kind != TerminalKindNotPipelineActionable {
 		t.Errorf("refusal %q classifies as %q, want %q", refusal, kind, TerminalKindNotPipelineActionable)
+	}
+	if got := rs.StageExecutionPath(state.StagePRCreate); got != "deterministic" {
+		t.Errorf("StageExecutionPath = %q, want deterministic", got)
+	}
+}
+
+// #3419: a security_scan stop the rescan kept ends the stage blocked; the LLM
+// pr-create skill is never run, so its prompt is never re-rendered.
+func TestScheduler_PRCreate_BlockedEndsStageWithoutLLM(t *testing.T) {
+	t.Parallel()
+
+	s := newSchedulerForDeterministicTest()
+	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{
+		Path: pmstages.CreatePathBlocked, Reason: pmstages.ReasonSecurityScanFailed,
+		Detail: "1 critical secret finding(s) in the changed files",
+	}}
+	s.WithPRCreateRunner(det)
+	llm := newFakeStageRunner()
+	s.WithStageRunner(llm)
+
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
+	rs.BeginStage(state.StagePRCreate)
+	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
+
+	created, rateLimited, err := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
+	if created || rateLimited || err == nil {
+		t.Fatalf("got created=%v rateLimited=%v err=%v, want a blocking error", created, rateLimited, err)
+	}
+	if want := "[pr-create-gate-stop] security_scan: 1 critical secret finding(s)"; !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %q, want it to contain %q", err, want)
+	}
+	if det.callCount != 1 {
+		t.Errorf("runner calls = %d, want 1", det.callCount)
+	}
+	if llm.callsByStage[state.StagePRCreate] != 0 {
+		t.Errorf("LLM pr-create ran %d times, want 0", llm.callsByStage[state.StagePRCreate])
 	}
 	if got := rs.StageExecutionPath(state.StagePRCreate); got != "deterministic" {
 		t.Errorf("StageExecutionPath = %q, want deterministic", got)

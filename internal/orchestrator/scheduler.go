@@ -12387,6 +12387,16 @@ func (s *Scheduler) tryDeterministicPRCreate(
 		runtime.RecordStagePuntReason(stage, detResult.Reason)
 		return false, false, s.settleNoDiffRun(ctx, item, detResult)
 	}
+	if detErr == nil && detResult.Path == pmstages.CreatePathBlocked {
+		// #3419: a security_scan stop survived the deterministic rescan. The
+		// stage ends here: re-rendering the pr-create skill would only repeat
+		// the stop the rescan just confirmed.
+		runtime.RecordExecutionPath(stage, "deterministic")
+		runtime.RecordStagePuntReason(stage, detResult.Reason)
+		msg := fmt.Sprintf("[pr-create-gate-stop] security_scan: %s", detResult.Detail)
+		log.Printf("#%d: pr-create deterministic path blocked: %s", item.Number, msg)
+		return false, false, errors.New(msg)
+	}
 	if detErr == nil && detResult.Path == pmstages.CreatePathCreated {
 		runtime.RecordExecutionPath(stage, "deterministic")
 		if detResult.PRURL != "" {

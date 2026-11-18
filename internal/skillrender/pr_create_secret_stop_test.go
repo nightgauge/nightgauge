@@ -66,12 +66,13 @@ func TestPrCreateSecretStop_WritesRecordViaNightgaugeBin(t *testing.T) {
 	}
 	var rec struct {
 		Gate    string `json:"gate"`
+		Scanner string `json:"scanner"`
 		HeadSHA string `json:"head_sha"`
 	}
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		t.Fatalf("record is not JSON: %v\n%s", err, raw)
 	}
-	if rec.Gate != "security_scan" || rec.HeadSHA != head {
+	if rec.Gate != "security_scan" || rec.HeadSHA != head || rec.Scanner != "diff-secrets" {
 		t.Errorf("record = %+v, want gate security_scan at %s", rec, head)
 	}
 }

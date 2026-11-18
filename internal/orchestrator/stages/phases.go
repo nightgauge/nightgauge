@@ -160,7 +160,7 @@ var prCreatePhases = stagePhaseSpec{
 		"build-what-to-test-section": phaseOffPath,
 		"preflight-checks":           phaseRunner,
 		"proactive-main-merge":       phaseOffPath,
-		"security-rescan":            phaseOffPath,
+		"security-rescan":            phaseRunner,
 		"scope-drift-gate":           phaseOffPath,
 		"create-pr":                  phaseRunner,
 		"verify-pr-created":          phaseRunner,

@@ -906,6 +906,31 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
     );
   });
 
+  it("pr-create: 'blocked' (security rescan) fails the stage — the LLM skill is NOT run (issue 3419)", async () => {
+    prStageCreate.value = {
+      stage: "pr-create",
+      path: "blocked",
+      reason: "security-scan-failed",
+      terminal_detail: "1 critical secret finding(s) in the changed files",
+      rate_limited: false,
+      duration_ms: 2,
+    };
+    mockSkillSuccess(); // must NOT be invoked
+    const state = createMockStateService("pr-create");
+    const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+    orchestrator.setWorktreeOverride(WORKTREE);
+
+    const result = await orchestrator.runPipeline(300);
+
+    const skillStages = vi.mocked(runStageSkillHeadless).mock.calls.map((c) => c[0]);
+    expect(skillStages).not.toContain("pr-create");
+    expect(result.success).toBe(false);
+    expect(vi.mocked(state.failStage)).toHaveBeenCalledWith(
+      "pr-create",
+      expect.stringContaining("[pr-create-gate-stop] security_scan: 1 critical secret finding(s)")
+    );
+  });
+
   it("pr-merge: a punt is still gated — a leaked published head never reaches the LLM skill (issue 1675)", async () => {
     gitHeadLeaked.value = true;
     try {

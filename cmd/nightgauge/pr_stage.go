@@ -33,9 +33,9 @@ import (
 //
 // Contract (stdout, one line of JSON on a produced result):
 //
-//	{ "stage": "pr-create"|"pr-merge", "path": "created"|"merged"|"punt"|"refused",
+//	{ "stage": "pr-create"|"pr-merge", "path": "created"|"merged"|"punt"|"refused"|"blocked",
 //	  "pr_number": N, "pr_url": "...", "pr_state": "...", "reason": "...",
-//	  "rate_limited": bool, "duration_ms": N }
+//	  "rate_limited": bool, "duration_ms": N, "terminal_detail": "..." }
 //
 // Exit codes:
 //
@@ -43,7 +43,9 @@ import (
 //	    rate-limited). The caller reads `path` + `rate_limited` from the JSON,
 //	    never the exit code, to decide skip-LLM vs LLM-fallthrough vs defer.
 //	    `refused` (pr-merge only, issue 1675) fails the stage: never fall
-//	    through to the LLM skill.
+//	    through to the LLM skill. `blocked` (pr-create only, #3419) does the
+//	    same: a recorded security_scan stop still holds after the rescan, and
+//	    terminal_detail carries the finding count or the scan error.
 //	1 — CLI/setup error (bad args, unresolved repo, client build failure). The
 //	    caller falls through to the LLM path — the safe default.
 func prStageCmd() *cobra.Command {
@@ -96,10 +98,12 @@ type prStageResultJSON struct {
 	CommitSHA    string `json:"commit_sha,omitempty"`
 	CommitReason string `json:"commit_reason,omitempty"`
 
-	// No-diff settlement (#3012), additive. Set only on a
-	// no-diff-against-base punt: the verb has already commented the criteria
-	// and closed the issue when every one is met, so the caller ends the run
-	// with TerminalDetail instead of running the LLM pr-create skill.
+	// No-diff settlement (#3012), additive. Settled and IssueClosed are set
+	// only on a no-diff-against-base punt: the verb has already commented the
+	// criteria and closed the issue when every one is met, so the caller ends
+	// the run with TerminalDetail instead of running the LLM pr-create skill.
+	// TerminalDetail is also set on a `blocked` result (#3419), carrying the
+	// security rescan's detail.
 	Settled        bool   `json:"settled,omitempty"`
 	IssueClosed    bool   `json:"issue_closed,omitempty"`
 	TerminalDetail string `json:"terminal_detail,omitempty"`
@@ -268,6 +272,9 @@ func prStageCreateCmd() *cobra.Command {
 				// the LLM path, never a rate-limit defer.
 				out.Path = string(pmstages.CreatePathPunt)
 				out.Reason = fmt.Sprintf("%s: %v", pmstages.ReasonUnexpected, runErr)
+			} else if out.Path == string(pmstages.CreatePathBlocked) {
+				// The rescan's finding count or error (#3419), counts only.
+				out.TerminalDetail = res.Detail
 			} else if out.Path == string(pmstages.CreatePathPunt) {
 				out.RateLimited = orchestrator.ReasonIndicatesRateLimit(res.Reason)
 				applyPrStageNoDiffSettlement(ctx, &out, issueNumber, res, newPrStageNoDiffSettler(client, repo))

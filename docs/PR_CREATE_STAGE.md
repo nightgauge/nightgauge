@@ -367,6 +367,7 @@ release.
 | `validate-error-category: ↩`              | Hard-gate failure category recorded by feature-validate     | Punt → LLM   |
 | `dead-code-blocked`                       | Any error-severity dead-code warning                        | Punt → LLM   |
 | `security-scan-failed`                    | Preflight security re-scan failed                           | Punt → LLM   |
+| `security-scan-failed` (path `blocked`)   | A recorded `security_scan` gate stop still holds on rescan  | Fail stage   |
 | `scope-drift-failed`                      | type:docs / type:chore scope drift gate failed              | Punt → LLM   |
 | `manual-checklist-unverified`             | Validation produced an unchecked manual checklist           | Punt → LLM   |
 | `spike-issue`                             | `issue.type == "spike"` — defer to skill's spike artifact   | Punt → LLM   |
@@ -412,6 +413,39 @@ The skill at `skills/nightgauge-pr-create/SKILL.md` runs unchanged when:
 - The runner's GitHub client is not wired (production safety: every Run punts
   with `pr-client-unavailable` until the scheduler injects the client).
 
+### Security rescan after a gate stop (#3419)
+
+When pr-create Step 2.5.4 stopped on a secret scan it wrote
+`pr-create-gate-stop-{N}.json` (`gate: security_scan`, `scanner`, `head_sha`).
+On the retry the runner's `security-rescan` phase, before the decision matrix,
+re-judges the stop. Every `security_scan` record takes the same path, whatever
+its `scanner`:
+
+- no record, or a record for another gate — no-op;
+- the record names no commit (`head_sha` empty) — `blocked`: the history
+  cannot be judged;
+- the recorded commit is still an ancestor of HEAD
+  (`git merge-base --is-ancestor`) — `blocked`, record untouched: a fix
+  committed on top leaves the secret in the history the push would publish.
+  Rewrite the branch history to drop that commit, then retry. A recorded
+  commit that no longer exists in the object database is not an ancestor;
+- otherwise gitleaks runs over `<base_branch>..HEAD` (the pre-push hook's
+  invocation) and then `nightgauge scan diff-secrets --base <base_branch>`.
+  Both clean — the record is removed and the create proceeds;
+- any finding — the record is rewritten at the scanned `head_sha` (`scanner`
+  `gitleaks` when gitleaks found anything, else `diff-secrets`) and the result
+  is the terminal path `blocked` (reason `security-scan-failed`,
+  `terminal_detail` the finding counts);
+- the record is unreadable, HEAD is not the feature branch, the ancestry check
+  fails, gitleaks is not installed or fails to run, or the diff scan cannot
+  run — `blocked`, record untouched, fail closed.
+
+`blocked` fails the stage without re-rendering the skill, in both the Go
+scheduler and the TS orchestrator. A passing skill scan removes an earlier
+`security_scan` record, so a fallback run is not blocked by a fixed secret. The TS orchestrator
+keeps a `security_scan` record (the runner owns it) and never opens its
+fallback PR around one, even after HEAD moved.
+
 > **TS (VSCode dogfood) path — Issue #300.** The VSCode
 > autonomous/concurrent runs execute `HeadlessOrchestrator.runPipeline`, not the
 > Go scheduler, so pre-#300 pr-create always ran the LLM skill there. It now
@@ -420,7 +454,8 @@ The skill at `skills/nightgauge-pr-create/SKILL.md` runs unchanged when:
 > invoked with `--repo owner/name --workdir <worktree>`. On `created` the TS
 > orchestrator records `execution_path="deterministic"` and skips the skill; on a
 > punt it records `execution_path="llm"` + `punt_reason` and falls through to the
-> skill; a GitHub rate-limit **defers** (no LLM fallthrough, #3976). See
+> skill; a GitHub rate-limit **defers** (no LLM fallthrough, #3976); `blocked`
+> fails the stage with a `[pr-create-gate-stop] security_scan` error (#3419). See
 > [PR_MERGE_STAGE.md](PR_MERGE_STAGE.md) for the shared seam and JSON contract.
 
 The skill is responsible for content the deterministic path explicitly does
@@ -450,7 +485,8 @@ between them, and the cross-language sentinel guard) is documented once, in
 Per-stage `execution_path` is recorded on `V2StageDetail` (Go) /
 `HistoryStageDetail` (TS Zod). Values:
 
-- `"deterministic"` — Go runner reported `created`.
+- `"deterministic"` — Go runner reported `created`, or `blocked` on a
+  security rescan (`punt_reason` `security-scan-failed`, no PR opened).
 - `"llm"` — Go runner punted; skill ran.
 - _absent_ — record predates PR #3264; readers MUST treat as `unknown`.
 
