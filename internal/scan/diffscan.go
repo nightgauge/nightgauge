@@ -6,13 +6,13 @@
 // Semantics preserved from the bash loop:
 //   - file selection is Step 2.5.1: `git diff --name-only <base>...HEAD`,
 //     minus .nightgauge/, node_modules/ and dist/;
-//   - every pattern is case-insensitive (`grep -iE`);
-//   - the exclude filter ran as `grep -viE` over grep's output line
-//     `path:lineno:content`, so a hit is dropped when the path OR the content
-//     matches it.
+//   - every pattern is case-insensitive (`grep -iE`).
 //
-// One deliberate divergence: the loop added 1 per pattern with any hit; the
-// verb's totals count matching lines per pattern. A changed file that exists
+// Deliberate divergences: the loop added 1 per pattern with any hit; the
+// verb's totals count matching lines per pattern. The loop's `grep -viE` ran
+// the exclude filter over `path:lineno:content`, so an exclude word in the
+// path hid every hit in the file; the verb matches the line content only
+// (#3420). A changed file that exists
 // but cannot be read fails the run instead of being skipped (no fail-open).
 //
 // It differs from `scan secrets` (the audit-rubric counter): changed files
@@ -50,7 +50,9 @@ var DiffSecretsWarningPatterns = []string{
 	`authorization\s*[=:]\s*['"]Bearer [^'"]{20,}['"]`,
 }
 
-// DiffSecretsExcludePattern is the false-positive filter of Step 2.5.3.
+// DiffSecretsExcludePattern is the false-positive filter of Step 2.5.3. It is
+// matched against the line content only: the path is not evidence that a hit is
+// fake, so a secret under test/, mocks/ or examples/ is still reported (#3420).
 const DiffSecretsExcludePattern = `example|placeholder|YOUR_|xxx|test|mock|REDACTED|\*\*\*|TODO|fake|dummy|sample|changeme|<.*>`
 
 const (
@@ -292,7 +294,7 @@ func scanDiffContent(data []byte, rel string) (DiffSecretsFile, bool, error) {
 				continue
 			}
 			if !checked {
-				excluded = diffSecretsExclude.MatchString(fmt.Sprintf("%s:%d:%s", rel, n, line))
+				excluded = diffSecretsExclude.MatchString(line)
 				checked = true
 			}
 			if excluded {

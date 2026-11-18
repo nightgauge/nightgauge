@@ -7711,9 +7711,9 @@ and five warning patterns that pr-create Step 2.5.3 calls it for. Paths under
 `.nightgauge/` or `dist/`, or inside any `node_modules/`, are skipped, as are deleted and
 binary files. Contents are read from the HEAD commit, never the working tree,
 so `head_sha` names exactly what was scanned. Patterns are case-insensitive. A
-hit is dropped when its
-`path:line:content` matches the false-positive filter, so a path containing
-`test`, `mock` or `example` is effectively unscanned. Counts are matching lines
+hit is dropped when its line content matches the false-positive filter; the
+path is not consulted, so an exclude word such as `test` or `mock` in the path
+does not hide a hit. Counts are matching lines
 per pattern. Output is deterministic and never contains file content; each
 finding carries at most five sample line numbers. The orchestrator can re-run
 the verb after a fix without rendering the skill.
