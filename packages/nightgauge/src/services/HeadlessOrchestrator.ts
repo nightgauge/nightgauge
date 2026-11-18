@@ -1388,11 +1388,13 @@ export function decideProgressGatedEscalation(
   return { escalate: delta > 0, current, delta };
 }
 
-/** `nightgauge issue partial-noop --json` (#3163). */
+/** `nightgauge issue partial-noop --json` (#3163, #3423). */
 export interface PartialNoOpDecision {
-  action: "not_scoped" | "relap" | "dispute" | "book";
+  action: "not_scoped" | "relap" | "dispute" | "book" | "close";
   detail?: string;
   steer?: string;
+  /** `--apply-close` closed the issue: its remainder is met on the merged diff (#3423). */
+  applied?: boolean;
 }
 
 export class HeadlessOrchestrator implements vscode.Disposable {
@@ -9258,6 +9260,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         String(scope.criteria),
       ];
       if (this.partialNoOpRelapped.has(issueNumber)) args.push("--relapped");
+      // #3423: Go re-judges the remainder against the earlier PR's merged
+      // diff and, when every criterion is met, closes the issue itself. The
+      // extension never closes on its own reading.
+      const { owner, repo } = await this.resolvePostMergeNwo(issueNumber);
+      if (owner && repo) args.push("--apply-close", "--repo", `${owner}/${repo}`);
       const { stdout } = await execFileAsync(binary, args, {
         cwd: this.getWorkingDirectory(),
         encoding: "utf-8",
@@ -9280,6 +9287,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * - `relap`: re-dispatch feature-dev once with `steer` appended;
    * - `dispute` / `book`: end the run `not_pipeline_actionable` — no lifetime
    *   cap increment, no cascade feed;
+   * - `close` with `applied`: Go closed the issue on a deterministic all-met
+   *   verdict against the earlier PR's merged diff (#3423), so the run ends
+   *   `issue_closed`, a non-failure (`error` carries the run detail, as the
+   *   run record reads it); an unapplied close books the no-op;
    * - null: not a scoped feature-dev no-op, so the gate's verdict stands.
    * Mirrors the Go scheduler's `decidePartialNoOp`.
    */
@@ -9292,11 +9303,21 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   ):
     | { action: "relap"; steer: string }
     | { action: "book"; terminalKind: "not_pipeline_actionable"; error: Error }
+    | { action: "close"; terminalKind: "issue_closed"; error: Error }
     | null {
     if (stage !== "feature-dev" || !gateFail.noOp || !partialRerun) return null;
     if (decision?.action === "not_scoped") return null;
     if (decision?.action === "relap" && decision.steer) {
       return { action: "relap", steer: decision.steer };
+    }
+    if (decision?.action === "close" && decision.applied === true) {
+      return {
+        action: "close",
+        terminalKind: "issue_closed",
+        error: new Error(
+          `[issue_closed] ${decision.detail ?? `#${issueNumber}'s remaining criteria are met on the merged diff`}`
+        ),
+      };
     }
     const detail =
       (decision?.action === "dispute" || decision?.action === "book") && decision.detail
@@ -14339,7 +14360,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               gateKind = partialNoOp.terminalKind;
               gateError = partialNoOp.error;
               this.logger.warn(
-                "Partial-delivery re-run: feature-dev wrote no changes — booked a no-op, not a failure (#3163)",
+                partialNoOp.action === "close"
+                  ? "Partial-delivery re-run: feature-dev wrote no changes and every remaining criterion is met on the merged diff — closed as completed (#3423)"
+                  : "Partial-delivery re-run: feature-dev wrote no changes — booked a no-op, not a failure (#3163)",
                 { issueNumber, stage }
               );
             }

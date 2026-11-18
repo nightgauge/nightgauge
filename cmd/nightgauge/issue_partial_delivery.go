@@ -58,8 +58,8 @@ var partialDeliveryDepsFactory = func(owner, repo string, number int) (hooks.Par
 			}
 			return issue.Body, nil
 		},
-		PR: func(ctx context.Context, pr int) (time.Time, string, error) {
-			return client.PRCreatedAtAndBody(ctx, owner, repo, pr)
+		PR: func(ctx context.Context, pr int) (gh.PartialPR, error) {
+			return client.PartialPR(ctx, owner, repo, pr)
 		},
 		BodyEditedAt: func(ctx context.Context) (*time.Time, error) {
 			return client.IssueLastEditedAt(ctx, owner, repo, number)
@@ -157,11 +157,9 @@ func runIssuePartialDelivery(ctx context.Context, stdout, stderr io.Writer, owne
 	var record *orchestrator.PartialDeliveryFile
 	var scope, dropped []string
 	if status.Pending && !status.Unlisted && len(status.Criteria) > 0 {
-		scope, dropped = orchestrator.ReconcilePartialScope(ctx, reads, ws, number, status.Criteria, status.PR)
-		record = &orchestrator.PartialDeliveryFile{PR: status.PR, Criteria: scope, Dropped: dropped, CommentAt: status.CommentAt}
-		if record.Criteria == nil {
-			record.Criteria = []string{}
-		}
+		rec := orchestrator.ReconcilePartialRecord(ctx, reads, ws, number, status.Criteria, status.PR, status.CommentAt)
+		record = &rec
+		scope, dropped = rec.Criteria, rec.Dropped
 		if writeContext {
 			if err := orchestrator.WritePartialDeliveryContext(ws, number, *record); err != nil {
 				fmt.Fprintf(stderr, "issue partial-delivery: %v\n", err)

@@ -206,14 +206,14 @@ func TestDecidePartialNoOp_FromWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := &state.PartialRerun{PR: 7, Criteria: []string{"x"}}
-	if got := DecidePartialNoOp(ws, n, nil, false); got.Action != "not_scoped" {
+	if got := DecidePartialNoOp(ws, n, nil, false, RemainderVerdict{}); got.Action != "not_scoped" {
 		t.Fatalf("unscoped = %+v", got)
 	}
-	relap := DecidePartialNoOp(ws, n, scope, false)
+	relap := DecidePartialNoOp(ws, n, scope, false, RemainderVerdict{})
 	if relap.Action != "relap" || !strings.Contains(relap.Steer, "internal/x/x_integration_test.go") {
 		t.Fatalf("binding revision = %+v, want relap naming the plan's files", relap)
 	}
-	if got := DecidePartialNoOp(ws, n, scope, true); got.Action != "book" ||
+	if got := DecidePartialNoOp(ws, n, scope, true, RemainderVerdict{}); got.Action != "book" ||
 		ClassifyTerminalKind(got.Detail) != TerminalKindNotPipelineActionable {
 		t.Fatalf("second refusal = %+v, want a not_pipeline_actionable booking", got)
 	}
@@ -221,7 +221,7 @@ func TestDecidePartialNoOp_FromWorkspace(t *testing.T) {
 	if err := os.WriteFile(devPath, []byte(`{"feedback":[{"signal_type":"PLAN_REVISION_NEEDED","evidence":["Task 2"]}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := DecidePartialNoOp(ws, n, scope, false); got.Action != "dispute" || !strings.Contains(got.Detail, "Task 2") {
+	if got := DecidePartialNoOp(ws, n, scope, false, RemainderVerdict{}); got.Action != "dispute" || !strings.Contains(got.Detail, "Task 2") {
 		t.Fatalf("named dispute = %+v", got)
 	}
 }

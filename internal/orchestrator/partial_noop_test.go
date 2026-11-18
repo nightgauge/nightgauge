@@ -45,7 +45,7 @@ func TestDecidePartialNoOp(t *testing.T) {
 			want: partialNoOpBook},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d := decidePartialNoOp(1051, tc.scope, tc.rev, tc.dispute, tc.relapped)
+			d := decidePartialNoOp(1051, tc.scope, tc.rev, tc.dispute, tc.relapped, RemainderVerdict{})
 			if d.Action != tc.want {
 				t.Fatalf("action = %v, want %v", d.Action, tc.want)
 			}
@@ -290,7 +290,7 @@ func TestPartialNoOp_BookingSkipsCascadeAndLifetimeCap(t *testing.T) {
 	scope := &state.PartialRerun{PR: 1, Criteria: []string{"x"}}
 	for _, n := range []int{1750, 1051, 1052} {
 		addRunning(as, "acme/repo", n, "partial re-run")
-		d := decidePartialNoOp(n, scope, operatorRevision{}, "", false)
+		d := decidePartialNoOp(n, scope, operatorRevision{}, "", false, RemainderVerdict{})
 		as.onPipelineComplete("acme/repo", n, false, false, TerminalKindNotPipelineActionable, d.Detail, false)
 		as.drainBackground()
 		if got := as.state.LifetimeIssueFailures[fmt.Sprintf("acme/repo#%d", n)]; got != 0 {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/execution"
 	stagecontext "github.com/nightgauge/nightgauge/internal/execution/context"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
@@ -698,5 +699,138 @@ func TestNoDiffBeforePRCreate_BookingLeavesFailureCounter(t *testing.T) {
 	}
 	if ClassifyTerminalKind(detail) != TerminalKindNotPipelineActionable {
 		t.Errorf("detail classifies as %q, want not_pipeline_actionable", ClassifyTerminalKind(detail))
+	}
+}
+
+// The record carries the partial PR's merge commit, read once with the
+// reconcile's PR read, and reads back as written (#3423).
+func TestReconcilePartialRecord_MergeSHA(t *testing.T) {
+	t.Parallel()
+	ws := t.TempDir()
+	gitInitForPartialRecord(t, ws)
+	calls := 0
+	reads := PartialScopeReads{
+		// A body with criteria, so the reconcile itself reaches reads.PR.
+		Body: func(context.Context) (string, error) { return "## Acceptance criteria\n\n- [ ] a\n", nil },
+		PR: func(context.Context, int) (gh.PartialPR, error) {
+			calls++
+			return gh.PartialPR{MergeSHA: strings.Repeat("c", 40)}, nil
+		},
+		BodyEditedAt: func(context.Context) (*time.Time, error) { return nil, nil },
+	}
+	rec := ReconcilePartialRecord(context.Background(), reads, ws, 3423, []string{"a"}, 3422, nil)
+	if rec.MergeSHA != strings.Repeat("c", 40) || calls != 1 || rec.PR != 3422 || len(rec.Criteria) != 1 {
+		t.Fatalf("record %+v after %d PR read(s), want the merge SHA from one read", rec, calls)
+	}
+	if err := WritePartialDeliveryContext(ws, 3423, rec); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadPartialDeliveryContext(ws, 3423)
+	if err != nil || got.MergeSHA != rec.MergeSHA || got.PR != 3422 {
+		t.Fatalf("read back %+v, %v", got, err)
+	}
+	reads.PR = func(context.Context, int) (gh.PartialPR, error) { return gh.PartialPR{}, errors.New("forge down") }
+	if rec := ReconcilePartialRecord(context.Background(), reads, ws, 3423, []string{"a"}, 3422, nil); rec.MergeSHA != "" {
+		t.Fatalf("unreadable PR: merge SHA %q, want empty", rec.MergeSHA)
+	}
+	reads.PR = nil
+	if rec := ReconcilePartialRecord(context.Background(), reads, ws, 3423, []string{"a"}, 3422, nil); rec.MergeSHA != "" {
+		t.Fatalf("no PR read configured: merge SHA %q, want empty", rec.MergeSHA)
+	}
+	if err := RemovePartialDeliveryContext(ws, 3423); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadPartialDeliveryContext(ws, 3423); err == nil {
+		t.Fatal("missing record: want an error")
+	}
+}
+
+func gitInitForPartialRecord(t *testing.T, dir string) {
+	t.Helper()
+	gittest.Run(t, dir, "init", "-q")
+}
+
+// mergeSiblingInto commits, in root, a partial PR as a real merge commit that
+// changes only a sibling of `ExcludePattern`, and returns the merge SHA.
+func mergeSiblingInto(t *testing.T, root string) string {
+	t.Helper()
+	write := func(content string) {
+		if err := os.MkdirAll(filepath.Join(root, "scan"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "scan", "scan.go"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("package scan\n\nconst ExcludePattern = `^---`\n\nfunc match() bool { return true }\n")
+	gitIn(t, root, "add", ".")
+	gitIn(t, root, "commit", "-m", "scan")
+	gitIn(t, root, "checkout", "-b", "partial")
+	write("package scan\n\nconst ExcludePattern = `^---`\n\nfunc match() bool { return false }\n")
+	gitIn(t, root, "commit", "-am", "partial")
+	gitIn(t, root, "checkout", "main")
+	gitIn(t, root, "merge", "--no-ff", "-m", "Merge PR #3422", "partial")
+	return gittest.Run(t, root, "rev-parse", "HEAD")
+}
+
+// #3423: a zero-change partial re-run whose remainder is met on the earlier
+// PR's merged diff closes the issue and ends issue_closed, posting no
+// remainder comment; a failed close books not_pipeline_actionable; an unmet
+// remainder keeps the #3160 booking and comment.
+//
+// Serial: swaps package var reconcileExecGh (via partialRerunScheduler).
+func TestPartialRerun_MetRemainderCloses(t *testing.T) {
+	const preserved = "`ExcludePattern` keeps its current value"
+	for _, tc := range []struct {
+		name      string
+		gate      bool
+		criterion string
+		closeErr  error
+		wantKind  string
+		wantClose bool
+	}{
+		{"clean exit, met", false, preserved, nil, TerminalKindIssueClosed, true},
+		{"gate no-op, met", true, preserved, nil, TerminalKindIssueClosed, true},
+		{"met, close fails", true, preserved, errors.New("forge down"), TerminalKindNotPipelineActionable, true},
+		{"presence remainder", true, partialRerunCriterion, nil, TerminalKindNotPipelineActionable, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &partialRerunRunner{}
+			s, root := partialRerunScheduler(t, runner, tc.gate)
+			merge := mergeSiblingInto(t, root)
+			s.partialDeliveryRead = pendingRemainder(3422, tc.criterion)
+			s.partialPRRead = func(context.Context, string, int) (partialPR, error) {
+				return partialPR{CreatedAt: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), MergeSHA: merge}, nil
+			}
+			commenter := &recordingCommenter{}
+			s.noDiffCommenter = commenter
+			var closes []RemainderVerdict
+			s.partialRemainderClose = func(_ context.Context, _ types.BoardItem, pr int, v RemainderVerdict) (PartialCloseResult, error) {
+				closes = append(closes, v)
+				if tc.closeErr != nil {
+					return PartialCloseResult{}, tc.closeErr
+				}
+				return PartialCloseResult{Closed: true}, nil
+			}
+
+			_, kind := s.runPipeline(context.Background(),
+				types.BoardItem{Number: 3423, Repo: "nightgauge/test", ID: "item-3423", NodeID: "I_3423"})
+
+			if ranStage(runner, state.StageFeatureValidate) {
+				t.Fatal("feature-validate ran on a zero-change partial re-run")
+			}
+			if kind != tc.wantKind {
+				t.Fatalf("terminal kind = %q, want %q", kind, tc.wantKind)
+			}
+			if got := len(closes) > 0; got != tc.wantClose {
+				t.Fatalf("close attempted = %v, want %v", got, tc.wantClose)
+			}
+			if tc.wantClose && (!closes[0].AllMet || closes[0].MergeSHA != merge) {
+				t.Fatalf("closed on verdict %+v, want all met on %s", closes[0], merge)
+			}
+			if wantComments := map[bool]int{true: 0, false: 1}[tc.wantClose]; commenter.count() != wantComments {
+				t.Fatalf("posted %d remainder comment(s), want %d", commenter.count(), wantComments)
+			}
+		})
 	}
 }

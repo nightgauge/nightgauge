@@ -34,17 +34,22 @@ func TestIssueLastEditedAt(t *testing.T) {
 	}
 }
 
-func TestPRCreatedAtAndBody(t *testing.T) {
-	c := graphQLStub(t, `{"data":{"repository":{"pullRequest":{"createdAt":"2026-11-01T00:00:00Z","body":"## Acceptance criteria\n\n- x"}}}}`)
-	at, body, err := c.PRCreatedAtAndBody(context.Background(), "o", "r", 9)
-	if err != nil || !at.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)) || body != "## Acceptance criteria\n\n- x" {
-		t.Fatalf("got %v, %q, %v", at, body, err)
+func TestPartialPR(t *testing.T) {
+	c := graphQLStub(t, `{"data":{"repository":{"pullRequest":{"createdAt":"2026-11-01T00:00:00Z","body":"## Acceptance criteria\n\n- x","mergeCommit":{"oid":"abc123"}}}}}`)
+	got, err := c.PartialPR(context.Background(), "o", "r", 9)
+	if err != nil || !got.CreatedAt.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)) ||
+		got.Body != "## Acceptance criteria\n\n- x" || got.MergeSHA != "abc123" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	c = graphQLStub(t, `{"data":{"repository":{"pullRequest":{"createdAt":"2026-11-01T00:00:00Z","body":"","mergeCommit":null}}}}`)
+	if got, err := c.PartialPR(context.Background(), "o", "r", 9); err != nil || got.MergeSHA != "" {
+		t.Fatalf("unmerged PR: got %+v, %v", got, err)
 	}
 	c = graphQLStub(t, `{"data":{"repository":{"pullRequest":null}}}`)
-	if _, _, err := c.PRCreatedAtAndBody(context.Background(), "o", "r", 9); err == nil {
+	if _, err := c.PartialPR(context.Background(), "o", "r", 9); err == nil {
 		t.Fatal("missing PR: want an error")
 	}
-	if _, _, err := c.PRCreatedAtAndBody(context.Background(), "o", "r", 0); err == nil {
+	if _, err := c.PartialPR(context.Background(), "o", "r", 0); err == nil {
 		t.Fatal("PR 0: want an error")
 	}
 }

@@ -633,3 +633,39 @@ func TestACRemovalSpan(t *testing.T) {
 		t.Error("ACAsksAddition misjudged a mixed or a pure removal clause")
 	}
 }
+
+func TestACAsksPreservation(t *testing.T) {
+	for text, want := range map[string]bool{
+		"`DiffSecretsExcludePattern` keeps its current value, so the pinned test in `internal/scan/diffscan_test.go` still passes unchanged": true,
+		"Keep `X` and add `Y`":                     true,
+		"`X` remains exported":                     true,
+		"`X` stays at its default":                 true,
+		"`TestPinned` still passes":                true,
+		"`docs/A.md` is unchanged":                 true,
+		"`X` is not modified":                      true,
+		"The change does not change `X`":           true,
+		"`X` is removed":                           false,
+		"`F` no longer contains `X`":               false,
+		"`X` remains absent from `a.go`":           false,
+		"Add `X` to `a.go`":                        false,
+		"function `KeepAlive` is added":            false,
+		"the value stays the same":                 false,
+		"`TestNew` stays and `TestOld` is deleted": false,
+	} {
+		if got := ACAsksPreservation(text); got != want {
+			t.Errorf("ACAsksPreservation(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
+// A preservation criterion is never routed to the removal reading (#3423):
+// its span is kept, so absence would answer it inverted.
+func TestACPreservationNotRemoval(t *testing.T) {
+	text := "`DiffSecretsExcludePattern` keeps its current value"
+	if ACAsksRemoval(text) || ACRemovalSpan(text) != "" {
+		t.Fatalf("preservation criterion %q read as a removal", text)
+	}
+	if got := ACPreservationVerbs("Keep `X` and add `Y`, so `Z` still passes"); len(got) != 2 || got[0][0] != 0 {
+		t.Errorf("ACPreservationVerbs = %v, want two verbs, the first at 0", got)
+	}
+}
