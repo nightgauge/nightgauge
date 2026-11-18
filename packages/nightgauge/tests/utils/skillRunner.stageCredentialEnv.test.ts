@@ -172,11 +172,18 @@ describe("stage spawn env credential allowlist (#3406)", () => {
     runStageSkillHeadless("feature-dev", 42, {});
     const env = lastSpawnEnv();
     expect(env).toMatchObject(TOOLCHAIN);
-    expect(credentialShaped(env)).toEqual([
+    // Forge tokens are always kept, and skillRunner injects GH_TOKEN and
+    // GITHUB_TOKEN whenever a GitHub token resolves (config, env or
+    // `gh auth token`), which depends on the machine running the test: a
+    // hosted runner resolves one, a clean laptop may not. Assert the forge
+    // tokens by name, and every other credential exactly.
+    const FORGE = new Set(["GH_TOKEN", "GITHUB_TOKEN"]);
+    const shaped = credentialShaped(env);
+    expect(shaped.filter((k) => !FORGE.has(k))).toEqual([
       "ANTHROPIC_API_KEY",
       "CLAUDE_CODE_OAUTH_TOKEN",
-      "GH_TOKEN",
     ]);
+    expect(shaped).toContain("GH_TOKEN");
     expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-operator");
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("oauth-operator");
     expect(env.GH_TOKEN).toBe("forge");
