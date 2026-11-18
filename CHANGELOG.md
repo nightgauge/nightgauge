@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- The plugin manifest now names its icon through the `icon` field (`./.claude-plugin/icon.png`), so tools that read the manifest find it without relying on auto-detection (#2863).
 - The tested Claude Code version is now 2.1.316, the version the install-docs gate was proven on: the `claude-headless` `max_tested` pin, its flag-contract `--help` capture, the install-docs gate and the clean-install image all use it (#3047).
 
 ### Fixed
