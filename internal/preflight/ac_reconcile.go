@@ -710,6 +710,28 @@ var (
 	}
 )
 
+// acRemovalRE matches a criterion whose removal verb governs a named code span
+// (#3385): "`X` is removed", "the `X` tests are removed", "`X` removed",
+// "`X` no longer exists", "Delete `X`". A removal word elsewhere in the prose
+// ("function `RemoveStale` is added", "a helper that drops expired rows is
+// defined") does not make the criterion a removal request. acRemovalCoverRE
+// marks prose where a test covers the removal ("`TestX` covers the deleted
+// case"); it is matched with code spans stripped, so a span cannot veto it.
+var (
+	acRemovalRE = regexp.MustCompile("(?i)`[^`]+`\\s+(?:(?:tests?|functions?|methods?|helpers?|types?|symbols?|files?|cases?)\\s+)?(?:(?:(?:is|are|was|were|gets?|has been|have been|is being)\\s+)?(?:fully\\s+|also\\s+)?(?:removed|deleted|dropped|gone)|no longer (?:exists?|defined|present))\\b" +
+		"|(?:^|[.;:]\\s*|\\band\\s+)(?:remove|delete|drop)s?\\s+(?:the\\s+)?(?:\\w+\\s+)?`")
+	acRemovalCoverRE = regexp.MustCompile(`(?i)\b(?:covers?|pass(?:es)?|asserts?|verif(?:y|ies)|exercises?)\b`)
+	acCodeSpanRE     = regexp.MustCompile("`[^`]*`")
+)
+
+// ACAsksRemoval reports whether a criterion asks for a named code span to be
+// removed. Such a criterion is met by the span's absence, so a presence check
+// would answer it inverted. pr-create's diff judge shares this predicate.
+func ACAsksRemoval(text string) bool {
+	return acRemovalRE.MatchString(text) &&
+		!acRemovalCoverRE.MatchString(acCodeSpanRE.ReplaceAllString(text, ""))
+}
+
 // grepForSymbolRule looks for a symbol the criterion says was added. A miss on a
 // declared symbol ("function X") is unmet; a miss on a bare backticked span is
 // undecided, because the span may be a value rather than a code symbol (#3312).
@@ -718,6 +740,11 @@ func grepForSymbolRule() acRule {
 		name: "grep-for-symbol",
 		applies: func(text string) map[string]string {
 			if !acSymbolVerbRE.MatchString(text) {
+				return nil
+			}
+			// A removal criterion is met by the symbol's absence, so a
+			// presence grep would answer it inverted (#3385).
+			if ACAsksRemoval(text) {
 				return nil
 			}
 			if m := acDeclRE.FindStringSubmatch(text); m != nil {

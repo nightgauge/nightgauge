@@ -21,6 +21,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A criterion asking for a test or symbol to be removed is no longer judged unmet because
+  it is absent: pr-create's diff check marks it met when the diff deletes it and nothing
+  remains, unmet only while it is still defined. A negative-content criterion ("`F` no longer
+  contains `X`") is met when `X` is absent from `F` on the branch. ac-reconcile skips its
+  presence grep only for criteria that ask for a removal, so "function `RemoveStale` is added"
+  is still checked, and the feature-validate judge follows the same rules (#3385).
 - The CLI binary no longer carries script payloads that raised malware-scanner verdicts on the Linux build: the OpenCode plugin and the git pre-push hook ship as files beside the binary, and the new `nightgauge opencode install` downloads, verifies and runs the pinned OpenCode installer in Go. `nightgauge doctor` now prints that command. The VS Code extension now bundles the whole OpenCode plugin tree. A `go install`-built CLI has nothing beside it: set `NIGHTGAUGE_SHIPPED_FILES_DIR` to a nightgauge checkout before `nightgauge pre-push install` or an OpenCode stage (#3383).
 
 ### Changed

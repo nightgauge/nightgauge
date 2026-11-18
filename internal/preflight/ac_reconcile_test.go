@@ -558,3 +558,61 @@ func TestParseACs_WrappedCheckboxProse(t *testing.T) {
 		t.Error("fingerprint ignores the wrapped continuation")
 	}
 }
+
+// Regression (#3385): a removal criterion is met by absence, so the presence
+// grep must not classify it unsatisfied.
+func TestReconcileACs_GrepForSymbol_RemovalNotInverted(t *testing.T) {
+	dir := t.TempDir()
+	writeTreeFile(t, dir, "main.go", "package main\n\nfunc Bar() {}\n")
+	body := "- [ ] `function Foo` is removed and no longer defined\n" +
+		"- [ ] `function Bar` is removed and no longer defined\n"
+	res := ReconcileACs(dir, 14, body)
+	for i, ac := range res.AcceptanceCriteria {
+		if ac.Classification == ACUnsatisfied || ac.Classification == ACSatisfied {
+			t.Errorf("removal criterion %d = %s, want neither satisfied nor unsatisfied (%+v)", i, ac.Classification, ac)
+		}
+	}
+}
+
+// Regression (#3385 Part 3): additive criteria naming a removal-ish symbol keep
+// the presence grep; a removal criterion over a still-present symbol is never
+// satisfied by it.
+func TestReconcileACs_GrepForSymbol_RemovalScope(t *testing.T) {
+	dir := t.TempDir()
+	writeTreeFile(t, dir, "main.go", "package main\n\nfunc Foo() {}\n")
+	body := "- [ ] function `RemoveStale` is added\n" +
+		"- [ ] function `dropExpired` that drops expired rows is defined\n" +
+		"- [ ] `function Foo` is removed and no longer defined\n"
+	res := ReconcileACs(dir, 14, body)
+	if len(res.AcceptanceCriteria) != 3 {
+		t.Fatalf("got %d criteria", len(res.AcceptanceCriteria))
+	}
+	for i := 0; i < 2; i++ {
+		if got := res.AcceptanceCriteria[i].Classification; got != ACUnsatisfied {
+			t.Errorf("additive criterion %d = %s, want unsatisfied", i, got)
+		}
+	}
+	if got := res.AcceptanceCriteria[2].Classification; got == ACSatisfied {
+		t.Errorf("removal of a present symbol classified satisfied")
+	}
+}
+
+func TestACAsksRemoval(t *testing.T) {
+	for text, want := range map[string]bool{
+		"`TestCheckParity_*` is removed.":              true,
+		"The `TestCheckParity_*` tests are removed.":   true,
+		"Delete `TestFoo`.":                            true,
+		"`Bar` removed":                                true,
+		"`Bar` no longer exists":                       true,
+		"`function Foo` is added and `Bar` removed":    true,
+		"function `RemoveStale` is added":              false,
+		"a helper that drops expired rows is defined":  false,
+		"`TestSkip` checks deleted rows are skipped":   false,
+		"`TestX` covers the case where `Y` is removed": false,
+		"`TestPasses` is removed":                      true,
+	} {
+		if got := ACAsksRemoval(text); got != want {
+			t.Errorf("ACAsksRemoval(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
