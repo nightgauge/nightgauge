@@ -438,6 +438,10 @@ func OpenACs(verdicts []ACVerdict) []ACVerdict {
 // issue, so the two must agree.
 const UnmetACHeading = "## ⚠️ Unmet acceptance criteria"
 
+// ACMetHeading is the PR-body heading that lists met criteria; pr-merge
+// appends the criteria it judges met beneath it (#3424).
+const ACMetHeading = "## Acceptance criteria"
+
 // ACNotesHeading heads the section where pr-create renders feature-validate's
 // per-criterion pr_note (#3154): the PR-description content a criterion asks
 // for.

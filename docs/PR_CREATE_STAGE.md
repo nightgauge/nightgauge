@@ -279,6 +279,23 @@ A missing token is `unmet` only when the clause names a diffed file. With no
 diffed file named, the clause is skipped, because it may be about something
 the diff does not hold.
 
+A `name: value` span on a Go file is also matched as a composite-literal
+field (#3424): it is met when an added line sets field `name` to `value`,
+keyed (`name: value`) or positional, the position taken from the struct
+type's field order with `go/ast` on the branch content. Inline struct types,
+the elided element types of slice, array and map literals, and named types
+declared in the same file resolve. When a positional literal on an added line
+has a type declared elsewhere, or the file does not parse, the span is
+`❔ not verifiable`, never `❌ unmet`. A resolved field set to another value
+stays unmet. A YAML file keeps its key-path rule, and any other file is
+matched as text.
+
+A criterion naming a CI check (`` `integration-tests` passes ``) cannot be
+decided here, because the check runs only once the PR exists. pr-merge judges
+it from the check's conclusion after the CI wait and can turn `Refs #<N>`
+into `Closes #<N>`: see
+[Check-named criteria at merge](PR_MERGE_STAGE.md#check-named-criteria-at-merge-3424).
+
 `IssueClosedBy` writes `Closes #<N>` only when there is at least one criterion
 and every one is `met`. Any `unmet` or `not_verifiable` criterion, or no
 criteria at all, gives `Refs #<N>`. Met criteria render under
@@ -305,6 +322,10 @@ unmet criteria under `Remaining acceptance criteria:` and not-verifiable ones
 under `Not verifiable by the pipeline:`; pr-create reads
 the same list back to credit a later PR (see above). An
 unreadable body keeps the close.
+
+On a closing merge the hook also ticks each issue checkbox the PR reported
+`✅ met`, so a PR that pr-merge promoted to `Closes` leaves no box unticked
+(#3424). A failed tick there is a warning, not a failed close.
 
 A partial-delivery re-run whose feature-dev writes no changes re-judges the
 remainder deterministically (#3423). Each criterion is judged against the
