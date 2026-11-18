@@ -401,7 +401,9 @@ describe("stage spawn env - launching-session residue (#2848)", () => {
     expect(env.CLAUDECODE).toBeUndefined();
     expect(env.CLAUDE_EFFORT).toBeUndefined();
     expect(env.CLAUDE_CODE_SESSION_ID).toBeUndefined();
-    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("auth-value");
+    // A kept name is still subject to the credential allowlist (#3406): this
+    // stage runs on Gemini, whose harness does not declare the Claude login.
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     expect(env.CLAUDE_CONFIG_DIR).toBe("/home/op/claude-home");
     expect(env.NIGHTGAUGE_GEMINI_MODEL).toBeTruthy();
   });

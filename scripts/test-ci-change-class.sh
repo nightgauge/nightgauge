@@ -389,6 +389,18 @@ done
 refute_block security '^    needs: changes$' \
   "the security job is deliberately left ungated"
 
+# Semgrep is a required context (#3407). The merge queue only runs what the
+# workflow runs on merge_group, so the job must carry no gate that could skip
+# it there, and the recorded ruleset must name the context the job reports.
+refute_block semgrep '^    (needs|if):' \
+  "the Semgrep job is ungated, so the merge queue runs it"
+assert_block semgrep '^    name: Semgrep$' "the semgrep job reports the 'Semgrep' context"
+if [ "$(jq '[.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | index("Semgrep") != null' "$REPO_ROOT/.github/rulesets/main-branch.json")" = "true" ]; then
+  ok "the recorded ruleset requires Semgrep"
+else
+  bad "the recorded ruleset requires Semgrep" "no Semgrep context in main-branch.json"
+fi
+
 # step_block prints the one step of <job> whose text contains <marker>, so
 # "is this step gated?" is asked of that step alone. A `grep -B<n>` around the
 # marker answers a different question — it reaches into the PREVIOUS step's

@@ -20,6 +20,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The dashboard's Gemini adapter widget reports a key stored in the editor's secret storage as configured; it read only the environment, where that key is never placed (#3406).
 - `nightgauge review quality` now names the reviewer unit, the JSON parse error and its byte offset when a findings file is invalid JSON (for example a claim containing `\303`), instead of a generic schema message, and tells reviewers to write a literal backslash as `\\` (#3397).
 - The VirusTotal gate judges a file it uploaded whose first report carries only Microsoft `!ml` findings on one reanalysis after `VT_ML_RECHECK_DELAY` (default one hour), instead of failing on a first-sight verdict later analyses clear; a finding that persists, or any other finding, still fails, and the report names every file judged this way (#3398).
 - The release-string margin build is now stamped `vX.Y.Z` like the release binary, built in a scratch clone with a local tag, and `release-dwarf-check` fails a margin binary carrying any other stamp (#3398).
@@ -33,6 +34,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Security
 
+- Agent stages the VS Code extension spawns itself (headless, resume, interactive, and the Codex terminal) now apply the same credential allowlist as the daemon's: toolchain, proxy and TLS variables and the forge and cloud platform credentials pass, a credential-named variable reaches only the adapter whose harness declares it, and `NIGHTGAUGE_STAGE_ENV_ALLOW` opts more names in. The extension's data is generated from the Go rule, and a test fails when the two decide any name differently (#3406).
+- `Semgrep` is recorded as a required status check in `.github/rulesets/main-branch.json`, and a CI self-test asserts the job stays ungated so the merge queue runs it (#3407).
 - The output window renders agent Markdown through a vendored DOMPurify sanitizer with a fixed formatting allowlist, shows raw HTML in the source as text, and escapes the issue title in the document title and header and the code-block language. Without the sanitizer it shows the text escaped (#3401).
 - Every webview builds its Content-Security-Policy from one shared builder: `default-src 'none'`, a nonce-only `script-src`, `form-action 'none'` and `base-uri 'none'`. The Notifier and Telemetry settings panels now have a policy and an empty `localResourceRoots`, the output window's `script-src` no longer lists the webview resource origin, and a test fails when a webview panel renders without the policy (#3405).
 - The Dashboard and Settings webviews can ask the extension for less: the Dashboard runs only the three commands it has buttons for and validates every message, merges a Dependabot PR only from the fetched list after a confirmation dialog, and applies only a recommendation it is showing. Settings accepts only paths in the configuration schema and opens only files inside `docs/` (#3403).

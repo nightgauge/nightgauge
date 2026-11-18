@@ -24,6 +24,7 @@ import {
   type PlatformQuotaData,
 } from "./DashboardHtml";
 import { PipelineSlotsTracker } from "./PipelineSlotsTracker";
+import { hasGeminiApiKey } from "../../services/geminiApiKey";
 import type {
   PipelineSlotsViewData,
   SlotCardData,
@@ -3925,9 +3926,9 @@ export class Dashboard implements vscode.Disposable {
       adapter,
       displayName: ADAPTER_DISPLAY_NAMES[adapter] ?? adapter,
       authMethod: isGemini ? settings.geminiAuthMethod : undefined,
-      authConfigured: isGemini
-        ? !!process.env.GEMINI_API_KEY || !!process.env.GOOGLE_API_KEY
-        : undefined,
+      // The SecretStorage key never enters process.env (ADR-023 Decision 7),
+      // so the environment alone would report a configured key as missing.
+      authConfigured: isGemini ? hasGeminiApiKey() : undefined,
       model: isGemini ? settings.geminiModel : undefined,
     };
   }

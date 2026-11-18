@@ -254,6 +254,10 @@ import {
 } from "./resolvers/adapterResolver";
 import { resolveMainRepoRoot } from "./adaptiveBudgetLoader";
 import { withoutLaunchingSessionEnv } from "./launchingSessionEnv";
+import {
+  stageWithheldCredentialNames,
+  withoutWithheldStageCredentials,
+} from "./stageCredentialEnv";
 import { geminiApiKeyEnv } from "../services/geminiApiKey";
 
 // Re-export for consumers
@@ -4186,6 +4190,33 @@ export function resolveTokenForSubprocess(
  * Returns environment variables to pass to Claude CLI
  */
 /**
+ * The environment an agent stage inherits from this extension (#3406): the
+ * editor's environment without the launching session's residue (#2848) and
+ * without any credential `adapter`'s harness does not declare (ADR-023
+ * Decision 7). Every stage, resume and interactive spawn starts from it.
+ */
+export function stageInheritedEnv(
+  adapter: string,
+  hostEnv: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
+  return withoutWithheldStageCredentials(adapter, withoutLaunchingSessionEnv(hostEnv), hostEnv);
+}
+
+/**
+ * The credentials an `adapter` stage launched in a VS Code terminal must not
+ * inherit, each mapped to null: a terminal's `env` is merged over the editor's
+ * own environment, and a null value removes the variable.
+ */
+export function stageWithheldCredentialEnvNulls(
+  adapter: string,
+  hostEnv: NodeJS.ProcessEnv = process.env
+): Record<string, null> {
+  const out: Record<string, null> = {};
+  for (const name of stageWithheldCredentialNames(adapter, hostEnv, hostEnv)) out[name] = null;
+  return out;
+}
+
+/**
  * The CI variables every stage spawn gets. `CI=true` keeps tools
  * non-interactive; `NIGHTGAUGE_HOST_CI` carries the operator's own value so
  * `config.CIHost` does not mistake an operator machine for a shared CI runner
@@ -5919,7 +5950,10 @@ function runStageSkillHeadlessImpl(
   // (see #370 / ADR-017).
   const knowledgeDir = stageKnowledgeDir(workspaceRoot);
   const spawnEnv: NodeJS.ProcessEnv = {
-    ...withoutLaunchingSessionEnv(),
+    // The inherited base, without the credentials this adapter's harness does
+    // not declare (#3406, ADR-023 Decision 7; Go: StageEnvWithhold). The maps
+    // spread after it are Nightgauge's own choices and arrive whatever their name.
+    ...stageInheritedEnv(adapter),
     // Export the resolved Go binary (NIGHTGAUGE_BIN + PATH prepend) so
     // skill subprocesses discover it under any adapter without a
     // VSCode-extension-specific glob (Issue #4029). Spread before the other
@@ -9070,7 +9104,7 @@ export function resumeSessionWithResponse(
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
     env: {
-      ...withoutLaunchingSessionEnv(),
+      ...stageInheritedEnv("claude"),
       ...stageCIEnv(),
     },
   });
@@ -9578,7 +9612,9 @@ function launchCodexInteractiveTerminal(
   const terminal = vscode.window.createTerminal({
     name: terminalName,
     cwd: workspaceRoot,
-    env: resolveBinaryDiscoveryEnv(),
+    // A terminal merges `env` over the editor's environment, so a withheld
+    // credential is removed by naming it with a null value (#3406).
+    env: { ...stageWithheldCredentialEnvNulls("codex"), ...resolveBinaryDiscoveryEnv() },
     shellPath: launch.shellPath,
     shellArgs: launch.shellArgs,
   });
@@ -9848,7 +9884,7 @@ export function runStageSkillInteractive(
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
     env: {
-      ...interactiveKnowledgeEnv(withoutLaunchingSessionEnv(), interactiveKnowledgeDir),
+      ...interactiveKnowledgeEnv(stageInheritedEnv("claude"), interactiveKnowledgeDir),
       ...autoAcceptEnv,
     },
   });

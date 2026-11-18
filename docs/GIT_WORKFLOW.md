@@ -133,7 +133,7 @@ gh pr merge <n> --squash --delete-branch
 
 **No `--admin`.** The `main` ruleset requires **zero** approving reviews while
 the project has one maintainer, so a plain squash merge succeeds on its own —
-and GitHub enforces the 14 required status checks itself. The gate is machine
+and GitHub enforces the 15 required status checks itself. The gate is machine
 -enforced: a merge is _impossible_ while a check is red or pending.
 
 This replaces an earlier policy that used `--admin` to satisfy a

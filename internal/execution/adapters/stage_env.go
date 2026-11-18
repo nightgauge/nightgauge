@@ -28,7 +28,8 @@ import (
 //     in StageEnvAllowVar (comma-separated). A repository cannot set it.
 //
 // The decision reads only the name, never a value, so nothing it withholds
-// can be logged.
+// can be logged. The VS Code extension applies the same rule to the stages it
+// spawns itself, from data generated from this file (stage_env_ts_test.go).
 
 // StageEnvAllowVar names the operator's extra stage credentials, a
 // comma-separated list of variable names read from the daemon's environment.
@@ -89,6 +90,18 @@ var adapterCredentialEnv = map[string]credentialEnvDecl{
 	"opencode": {catalogOwn: true},
 }
 
+// credentialFinalSegments and credentialAnySegments are the name segments
+// that mark a variable as a credential (credentialEnvName). They are package
+// data, not a switch, so the generated TypeScript twin carries the same lists
+// (TestStageEnvGeneratedTSCurrent).
+var (
+	credentialFinalSegments = []string{
+		"TOKEN", "KEY", "SECRET", "PASSWORD", "PASSWD", "APIKEY", "PAT",
+		"CREDENTIAL", "CREDENTIALS", "DSN",
+	}
+	credentialAnySegments = []string{"SECRET", "PASSWORD", "PASSWD", "APIKEY", "WEBHOOK"}
+)
+
 // credentialEnvName reports whether a variable's name marks it as a
 // credential: a final segment of TOKEN, KEY, SECRET, PASSWORD, PASSWD,
 // APIKEY, PAT, CREDENTIAL(S) or DSN, or a SECRET, PASSWORD, PASSWD, APIKEY or
@@ -96,14 +109,11 @@ var adapterCredentialEnv = map[string]credentialEnvDecl{
 // not credentials and do not match.
 func credentialEnvName(key string) bool {
 	segs := strings.Split(strings.ToUpper(key), "_")
-	switch segs[len(segs)-1] {
-	case "TOKEN", "KEY", "SECRET", "PASSWORD", "PASSWD", "APIKEY", "PAT",
-		"CREDENTIAL", "CREDENTIALS", "DSN":
+	if slices.Contains(credentialFinalSegments, segs[len(segs)-1]) {
 		return true
 	}
 	for _, s := range segs {
-		switch s {
-		case "SECRET", "PASSWORD", "PASSWD", "APIKEY", "WEBHOOK":
+		if slices.Contains(credentialAnySegments, s) {
 			return true
 		}
 	}

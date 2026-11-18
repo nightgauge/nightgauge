@@ -213,7 +213,7 @@ jobs:
       # 3m15s it replaced, split it back into two sequential steps — that is a
       # smaller change than the one that introduced it.
       #
-      # ONE STEP, NOT TWO JOBS, on purpose: `Go build & test` is one of the 14
+      # ONE STEP, NOT TWO JOBS, on purpose: `Go build & test` is one of the 15
       # contexts pinned in `.github/rulesets/main-branch.json`, and that file
       # is documentation of the LIVE ruleset — nothing in this repo applies it.
       # A new job would report a context the ruleset does not require, so the
@@ -739,7 +739,10 @@ jobs:
   # here; then the scan fails on any finding not in .semgrep/allowlist.yaml and
   # on any allow-list entry that no longer matches. Not change-class gated for
   # the same reason as the security job above. Semgrep OSS only: no login, no
-  # metrics, nothing uploaded.
+  # metrics, nothing uploaded. `Semgrep` is a required context
+  # (.github/rulesets/main-branch.json), so the job carries no `if:` and runs on
+  # every trigger above, merge_group included: a required check the queue never
+  # runs would hold every queued pull request until it times out.
   semgrep:
     name: Semgrep
     runs-on: ubuntu-latest
