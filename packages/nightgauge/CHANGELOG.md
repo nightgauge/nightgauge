@@ -9,6 +9,10 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- A pre-merge rebase conflict now names non-ASCII files (for example `café.txt`) by their real path instead of git's C-quoted form (#3393).
+
 ## [0.8.6] - 2026-11-17
 
 ### Fixed
