@@ -35,8 +35,8 @@ import (
 const StageEnvAllowVar = "NIGHTGAUGE_STAGE_ENV_ALLOW"
 
 // stageBaseCredentialEnv are credential-named variables every stage keeps:
-// the forge tokens and the AWS session variables the platform family needs
-// alongside openCodePlatformEnvNames.
+// the forge tokens, the AWS session variables the platform family needs
+// alongside openCodePlatformEnvNames, and the credential a shipped skill reads.
 var stageBaseCredentialEnv = map[string]bool{
 	"GH_TOKEN":                true,
 	"GITHUB_TOKEN":            true,
@@ -45,6 +45,9 @@ var stageBaseCredentialEnv = map[string]bool{
 	"GITLAB_TOKEN":            true,
 	"AWS_SESSION_TOKEN":       true,
 	"AWS_SECURITY_TOKEN":      true,
+	// The verify-ui skill's dashboard-auth flow signs in a test account with
+	// IB_VERIFY_EMAIL and this.
+	"IB_VERIFY_PASSWORD": true,
 }
 
 // credentialEnvDecl is what one adapter's harness authenticates with.

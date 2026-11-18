@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -62,28 +63,129 @@ forges:
 	}
 }
 
-// Aliases and merge keys are resolved before the strip, so neither carries an
-// endpoint past it.
-func TestStripRepoTierForgeEndpointsResolvesAliases(t *testing.T) {
-	out, removed := stripRepoTierForgeEndpoints([]byte(`
-owner: o
-defaults: &d
-  base_url: http://repo-chosen.example
-  token_env: GITHUB_TOKEN
+// A repository tier may not use a YAML merge key or a top-level alias: the
+// strips read literal keys and the final parse resolves both, so either could
+// bring a stripped block back. Each form is refused, naming the file and the
+// rule, and none reaches the resolved forges config.
+func TestLoadMergedRefusesRepoTierMergeKeys(t *testing.T) {
+	cases := map[string]string{
+		"merge-key-inline": `
+<<: {forges: {corp: {kind: gitlab, base_url: "http://repo-chosen.example", token_env: GITHUB_TOKEN}}}
+`,
+		"merge-key-via-anchor": `
+x-evil: &evil
+  forges:
+    corp:
+      base_url: http://repo-chosen.example
+      token_env: GITHUB_TOKEN
+<<: *evil
+`,
+		"nested merge key": `
+x-d: &d {base_url: "http://repo-chosen.example", token_env: GITHUB_TOKEN}
 forges:
-  x:
+  corp:
     <<: *d
     kind: gitlab
-`))
-	if len(removed) == 0 {
-		t.Fatal("nothing removed")
+`,
+		"tagged merge key": `
+x-d: &d {platform: {url: "http://repo-chosen.example"}}
+? !!merge <<
+: *d
+`,
+		"root-alias": `
+x-f: &f
+  corp: {base_url: "http://repo-chosen.example", token_env: GITHUB_TOKEN}
+forges: *f
+`,
 	}
-	cfg, err := parseYAML(out)
+	for name, body := range cases {
+		for _, tier := range []string{"project", "local"} {
+			t.Run(name+"/"+tier, func(t *testing.T) {
+				withMachineConfig(t, "forges:\n  corp:\n    base_url: https://gitlab.corp.example\n")
+				dir := t.TempDir()
+				doc := "schema_version: \"2\"\nowner: o\n" + body
+				want := ProjectConfigPath(dir)
+				if tier == "project" {
+					writeProjectYAML(t, dir, doc)
+				} else {
+					writeProjectYAML(t, dir, "schema_version: \"2\"\nowner: o\n")
+					writeLocalYAML(t, dir, body)
+					want = LocalConfigPath(dir)
+				}
+				cfg, err := LoadMerged(dir)
+				if err == nil {
+					t.Fatalf("loaded; forges.corp = %+v", cfg.Forges["corp"])
+				}
+				if !errors.Is(err, ErrRepoTierMergeKey) {
+					t.Fatalf("error is not ErrRepoTierMergeKey: %v", err)
+				}
+				if !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "merge key") {
+					t.Fatalf("error does not name the file and the rule: %v", err)
+				}
+			})
+		}
+	}
+}
+
+// A normal repository document, including nested anchors used as plain
+// values, still loads.
+func TestLoadMergedAcceptsRepoTierWithoutMergeKeys(t *testing.T) {
+	withNoMachineConfig(t)
+	dir := t.TempDir()
+	writeProjectYAML(t, dir, `
+schema_version: "2"
+owner: o
+autonomous:
+  enabled_repos: &repos [a, b]
+forges:
+  corp: {kind: gitlab, auth_method: pat}
+`)
+	cfg, err := LoadMerged(dir)
 	if err != nil {
-		t.Fatalf("parse stripped: %v\n%s", err, out)
+		t.Fatalf("LoadMerged: %v", err)
 	}
-	if x := cfg.Forges["x"]; x == nil || x.BaseURL != "" || x.TokenEnv != "" || x.Kind != "gitlab" {
-		t.Fatalf("alias carried an endpoint past the strip: %+v\n%s", x, out)
+	if cfg.Forges["corp"] == nil || cfg.Forges["corp"].Kind != "gitlab" {
+		t.Fatalf("forges.corp = %+v", cfg.Forges["corp"])
+	}
+}
+
+// The operator's machine tier may still use merge keys and anchors.
+func TestLoadMergedMachineTierMayUseMergeKeys(t *testing.T) {
+	withMachineConfig(t, `
+x-corp: &corp
+  base_url: https://gitlab.corp.example
+  token_env: CORP_TOKEN
+forges:
+  corp:
+    <<: *corp
+    kind: gitlab
+`)
+	dir := t.TempDir()
+	writeProjectYAML(t, dir, "schema_version: \"2\"\nowner: o\n")
+	cfg, err := LoadMerged(dir)
+	if err != nil {
+		t.Fatalf("LoadMerged: %v", err)
+	}
+	if c := cfg.Forges["corp"]; c == nil || c.BaseURL != "https://gitlab.corp.example" || c.TokenEnv != "CORP_TOKEN" {
+		t.Fatalf("machine-tier merge key not honoured: %+v", c)
+	}
+}
+
+// The strips and the merge fail closed on their own, whatever runs before
+// them.
+func TestStripsAndMergeRefuseMergeKeys(t *testing.T) {
+	doc := []byte("owner: o\nx: &x {platform: {url: u}}\n<<: *x\n")
+	if out := removeTopLevelYAMLKey(doc, "platform"); len(out) != 0 {
+		t.Fatalf("removeTopLevelYAMLKey kept a merge-key document:\n%s", out)
+	}
+	if out, _ := stripRepoTierForgeEndpoints(doc); len(out) != 0 {
+		t.Fatalf("stripRepoTierForgeEndpoints kept a merge-key document:\n%s", out)
+	}
+	if _, err := mergeYAMLDocuments(nil, doc, nil); !errors.Is(err, ErrRepoTierMergeKey) {
+		t.Fatalf("mergeYAMLDocuments accepted a project-tier merge key: %v", err)
+	}
+	if _, err := mergeYAMLDocuments(doc, nil, nil); err != nil {
+		t.Fatalf("mergeYAMLDocuments refused a machine-tier merge key: %v", err)
 	}
 }
 

@@ -292,6 +292,18 @@ func LoadMerged(workspaceRoot string) (*Config, error) {
 			return nil, err
 		}
 	}
+	// A merge key could bring a stripped block back after the strip below,
+	// so a repository tier may not use one at all.
+	if hasProject {
+		if err := ValidateRepoTierStructure(projectData, ProjectConfigPath(workspaceRoot)); err != nil {
+			return nil, err
+		}
+	}
+	if hasLocal {
+		if err := ValidateRepoTierStructure(localData, LocalConfigPath(workspaceRoot)); err != nil {
+			return nil, err
+		}
+	}
 
 	// Surface shadow warnings only when both machine and project YAML define
 	// the same key (actual conflict), not just when the project has the key.
@@ -373,6 +385,11 @@ func removeTopLevelYAMLKey(data []byte, key string) []byte {
 	if err := yaml.Unmarshal(data, &doc); err != nil || doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 		return data
 	}
+	// LoadMerged refuses these first (ValidateRepoTierStructure); a strip
+	// that meets one anyway drops the whole tier rather than guess.
+	if repoTierUnsafeStructure(&doc) {
+		return []byte{}
+	}
 	root := doc.Content[0]
 	if root.Kind != yaml.MappingNode {
 		return data
@@ -384,7 +401,8 @@ func removeTopLevelYAMLKey(data []byte, key string) []byte {
 			if err == nil {
 				return out
 			}
-			return data
+			// Never fall back to the unstripped bytes: drop the tier.
+			return []byte{}
 		}
 	}
 	return data
@@ -398,7 +416,7 @@ func removeTopLevelYAMLKey(data []byte, key string) []byte {
 func mergeYAMLDocuments(tiers ...[]byte) (*yaml.Node, error) {
 	merged := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 
-	for _, data := range tiers {
+	for i, data := range tiers {
 		if len(data) == 0 {
 			continue
 		}
@@ -413,7 +431,10 @@ func mergeYAMLDocuments(tiers ...[]byte) (*yaml.Node, error) {
 		if root.Kind != yaml.MappingNode {
 			continue
 		}
-		mergeMappingInto(merged, root)
+		// Tier 0 is the machine tier; the rest are repository-controlled.
+		if err := mergeMappingInto(merged, root, i > 0); err != nil {
+			return nil, err
+		}
 	}
 
 	return merged, nil
@@ -428,7 +449,15 @@ func mergeYAMLDocuments(tiers ...[]byte) (*yaml.Node, error) {
 // wants the union of machine and project lists must spell that out
 // explicitly — implicit list concatenation produces non-obvious results
 // for things like enabled_repos (where duplicates would surprise).
-func mergeMappingInto(dst, src *yaml.Node) {
+//
+// repoTier marks src as a repository-controlled tier (project or local). Such
+// a tier may not carry a YAML merge key anywhere: the merged document is
+// re-parsed, which would resolve it, and could reintroduce a block the loader
+// stripped by name. The machine tier may.
+func mergeMappingInto(dst, src *yaml.Node, repoTier bool) error {
+	if repoTier && hasYAMLMergeKey(src) {
+		return fmt.Errorf("%w: a project or local config tier", ErrRepoTierMergeKey)
+	}
 	for i := 0; i+1 < len(src.Content); i += 2 {
 		srcKey := src.Content[i]
 		srcVal := src.Content[i+1]
@@ -448,11 +477,13 @@ func mergeMappingInto(dst, src *yaml.Node) {
 
 		dstVal := dst.Content[existingIdx+1]
 		if dstVal.Kind == yaml.MappingNode && srcVal.Kind == yaml.MappingNode {
-			mergeMappingInto(dstVal, srcVal)
+			// src was checked whole above; the subtree needs no second walk.
+			_ = mergeMappingInto(dstVal, srcVal, false)
 		} else {
 			dst.Content[existingIdx+1] = cloneNode(srcVal)
 		}
 	}
+	return nil
 }
 
 // cloneNode returns a deep copy of a yaml.Node. yaml.v3 does not provide

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -41,6 +42,11 @@ func stripRepoTierForgeEndpoints(data []byte) ([]byte, []string) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil || doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 		return data, nil
+	}
+	// LoadMerged refuses these first (ValidateRepoTierStructure); a strip
+	// that meets one anyway drops the whole tier rather than guess.
+	if repoTierUnsafeStructure(&doc) {
+		return []byte{}, []string{"(the whole file: it uses a YAML merge key)"}
 	}
 	root := doc.Content[0]
 	if root.Kind != yaml.MappingNode {
@@ -178,4 +184,87 @@ func isLoopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// ErrRepoTierMergeKey marks a load refused because a repository-controlled
+// config file uses a YAML merge key (`<<`) or a root alias.
+var ErrRepoTierMergeKey = errors.New("YAML merge key in a repository config file")
+
+// yamlMergeKey reports whether a mapping key node is a YAML merge key: the
+// plain `<<` scalar, or any key tagged !!merge.
+func yamlMergeKey(k *yaml.Node) bool {
+	return k != nil && k.Kind == yaml.ScalarNode && (k.Value == "<<" || k.Tag == "!!merge")
+}
+
+// hasYAMLMergeKey reports whether any mapping under n, at any depth, has a
+// merge key. It does not follow aliases: the anchored node is visited where
+// it is defined, which is in the same document.
+func hasYAMLMergeKey(n *yaml.Node) bool {
+	if n == nil {
+		return false
+	}
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if yamlMergeKey(n.Content[i]) {
+				return true
+			}
+		}
+	}
+	for _, c := range n.Content {
+		if hasYAMLMergeKey(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// repoTierUnsafeStructure reports whether a parsed repository-tier document
+// can reintroduce a key the loader strips by name: a merge key anywhere, a
+// root that is an alias, or a top-level value that is an alias. The strips read literal keys, and the final parse
+// resolves both forms, so a protected block such as forges or platform could
+// come back through either.
+func repoTierUnsafeStructure(doc *yaml.Node) bool {
+	if doc == nil {
+		return false
+	}
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+		root := doc.Content[0]
+		if root.Kind == yaml.AliasNode {
+			return true
+		}
+		// A top-level key whose value is an alias can carry a protected
+		// block under another name, or dangle once the strip removes the
+		// anchor it points into.
+		if root.Kind == yaml.MappingNode {
+			for i := 1; i < len(root.Content); i += 2 {
+				if root.Content[i].Kind == yaml.AliasNode {
+					return true
+				}
+			}
+		}
+	}
+	return hasYAMLMergeKey(doc)
+}
+
+// ValidateRepoTierStructure refuses a repository-controlled config file (the
+// project or local tier) that uses a YAML merge key (`<<`) anywhere, or an
+// alias as the document or as a top-level value. Protected blocks are stripped from those tiers by key,
+// and a merge key could bring one back after the strip, so the rule is: no
+// merge keys in a repository config file. Anchors and aliases nested below
+// the top level are still accepted. The machine-tier file is not a repository tier
+// and may use merge keys. A file that is not YAML is left for the parser.
+func ValidateRepoTierStructure(data []byte, path string) error {
+	if IsMachineTierFile(path) {
+		return nil
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil
+	}
+	if !repoTierUnsafeStructure(&doc) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s uses a YAML merge key (<<) or a top-level alias. "+
+		"A repository config file may not use merge keys: write the keys out in full. "+
+		"See docs/SETTINGS_ARCHITECTURE.md", ErrRepoTierMergeKey, path)
 }
