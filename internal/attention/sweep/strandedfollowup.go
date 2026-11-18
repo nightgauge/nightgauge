@@ -19,9 +19,12 @@ package sweep
 //
 // The tracking issue is filed once. The card's fingerprint records its
 // number, so a later pass reads it back by number whatever its state; with no
-// card, an open issue bearing the exact title the producer generates (unique
-// per PR) is the tracking issue. Search results carry no body, so the hidden
-// marker cannot be the lookup key.
+// card, the tracking issue is an open issue that has the exact title the
+// producer generates (unique per PR), carries the hidden marker, and was filed
+// by the pipeline's own identity. Title and marker can be copied by anyone who
+// can open an issue, so the author is what makes the match trustworthy
+// (#2688). An unknown identity fails the pass closed: nothing is filed or
+// linked.
 //
 // When no PR is stranded it returns an empty slice, which auto-resolves any
 // card raised earlier.
@@ -73,9 +76,11 @@ type StrandedFollowUpPRs struct {
 	ListOpenPRs func(ctx context.Context, in Input) ([]forge.OpenPRSummary, error)
 	// GetIssues overrides the batched forge issue read (tests).
 	GetIssues func(ctx context.Context, in Input, numbers []int) (map[int]*forgetypes.Issue, error)
-	// FindTracking overrides the title search (tests). It returns the open
-	// tracking issue titled title, or nil.
-	FindTracking func(ctx context.Context, in Input, title string) (*forgetypes.Issue, error)
+	// SearchTracking overrides the open-issue title search (tests). It returns
+	// the raw hits; pickTracking decides which, if any, is the tracking issue.
+	SearchTracking func(ctx context.Context, in Input, title string) ([]forgetypes.Issue, error)
+	// Self overrides the pipeline identity lookup (tests).
+	Self func(ctx context.Context, in Input) (string, error)
 	// FileTracking overrides issue creation (tests).
 	FileTracking func(ctx context.Context, in Input, title, body string) (*forgetypes.Issue, error)
 	// AddToBoard overrides the board sync (tests).
@@ -121,6 +126,7 @@ func (p *StrandedFollowUpPRs) Evaluate(ctx context.Context, in Input) ([]attenti
 	}
 	issue := func(n int) *forgetypes.Issue { return states[n] }
 
+	var self string
 	var reqs []attention.DecisionRequest
 	for _, pr := range prs {
 		m := strandedBranchRE.FindStringSubmatch(pr.HeadRef)
@@ -139,8 +145,13 @@ func (p *StrandedFollowUpPRs) Evaluate(ctx context.Context, in Input) ([]attenti
 		if err != nil {
 			return nil, fmt.Errorf("%s: read tracking issue for PR #%d: %w", ProducerStrandedFollowUpPRs, pr.Number, err)
 		}
+		if tracking == nil && self == "" {
+			if self, err = p.self(ctx, in); err != nil {
+				return nil, fmt.Errorf("%s: resolve pipeline identity: %w", ProducerStrandedFollowUpPRs, err)
+			}
+		}
 		if tracking == nil {
-			if tracking, err = p.findTracking(ctx, in, title); err != nil {
+			if tracking, err = p.findTracking(ctx, in, title, StrandedFollowUpMarker(pr.Number), self); err != nil {
 				return nil, fmt.Errorf("%s: search tracking issue for PR #%d: %w", ProducerStrandedFollowUpPRs, pr.Number, err)
 			}
 		}
@@ -278,20 +289,71 @@ func (p *StrandedFollowUpPRs) trackingFromCard(ctx context.Context, in Input, pr
 	return issues[n], nil
 }
 
-func (p *StrandedFollowUpPRs) findTracking(ctx context.Context, in Input, title string) (*forgetypes.Issue, error) {
-	if p.FindTracking != nil {
-		return p.FindTracking(ctx, in, title)
+func (p *StrandedFollowUpPRs) findTracking(ctx context.Context, in Input, title, marker, self string) (*forgetypes.Issue, error) {
+	var found []forgetypes.Issue
+	var err error
+	if p.SearchTracking != nil {
+		found, err = p.SearchTracking(ctx, in, title)
+	} else {
+		found, err = in.Forge.Issues().SearchIssues(ctx, in.Owner, in.Name, fmt.Sprintf("%q in:title", title), 20)
 	}
-	found, err := in.Forge.Issues().SearchIssues(ctx, in.Owner, in.Name, fmt.Sprintf("%q in:title", title), 20)
 	if err != nil {
 		return nil, err
 	}
-	for i := range found {
-		if found[i].Title == title {
-			return &found[i], nil
+	return pickTracking(found, title, marker, self), nil
+}
+
+// pickTracking returns the first hit that is this producer's tracking issue:
+// exact title, the hidden marker in its body, and filed by self. A hit missing
+// any of the three, including one whose author is unknown, is ignored, so a
+// planted look-alike makes the producer file its own issue (#2688).
+func pickTracking(hits []forgetypes.Issue, title, marker, self string) *forgetypes.Issue {
+	if self == "" {
+		return nil
+	}
+	for i := range hits {
+		h := &hits[i]
+		if h.Title == title && h.AuthorLogin != "" && strings.EqualFold(h.AuthorLogin, self) &&
+			strings.Contains(h.Body, marker) {
+			return h
 		}
 	}
-	return nil, nil
+	return nil
+}
+
+// self returns the login the pipeline files issues as. An unknown identity is
+// an error, never "trust every author".
+func (p *StrandedFollowUpPRs) self(ctx context.Context, in Input) (string, error) {
+	if p.Self != nil {
+		login, err := p.Self(ctx, in)
+		if err != nil {
+			return "", err
+		}
+		return checkLogin(login)
+	}
+	auth := in.Forge.Auth()
+	if auth == nil {
+		return "", fmt.Errorf("forge client has no auth surface: %w", forge.ErrUnsupported)
+	}
+	actor, err := auth.Whoami(ctx)
+	if err != nil {
+		return "", err
+	}
+	if actor == nil || actor.Login == "" {
+		return "", fmt.Errorf("forge reported no login for the active token")
+	}
+	return checkLogin(actor.Login)
+}
+
+// checkLogin rejects an identity that no issue author can carry. A GitHub App
+// with no slug configured reports a description such as "github-app 1
+// (installation 2)"; matching authors against it would never succeed, so
+// every pass would file another tracking issue.
+func checkLogin(login string) (string, error) {
+	if strings.ContainsAny(login, " \t()") {
+		return "", fmt.Errorf("pipeline identity %q is not an author login (configure the GitHub App slug)", login)
+	}
+	return login, nil
 }
 
 func (p *StrandedFollowUpPRs) addToBoard(ctx context.Context, in Input, number int) error {

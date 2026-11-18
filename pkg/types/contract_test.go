@@ -166,6 +166,7 @@ func TestIssueContractValues(t *testing.T) {
 		Title:             "Add photo upload feature",
 		Body:              "## Summary\nImplement photo upload with drag-and-drop support.",
 		State:             "OPEN",
+		AuthorLogin:       "nightgauge[bot]",
 		StateReason:       "REOPENED",
 		Labels:            []string{"type:feature", "priority:high"},
 		LabelsTruncated:   true,

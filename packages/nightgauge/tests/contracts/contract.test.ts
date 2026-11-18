@@ -77,7 +77,7 @@ const ISSUE_TS_OPTIONAL: Record<string, string> = {
 };
 
 // Fields Go serializes but TS IssueDetail does not declare.
-const ISSUE_GO_ONLY_FIELDS = new Set(["nodeId", "repo", "labelsTruncated"]);
+const ISSUE_GO_ONLY_FIELDS = new Set(["nodeId", "repo", "labelsTruncated", "authorLogin"]);
 
 const ISSUE_ALL_KNOWN = new Set([
   ...Object.keys(ISSUE_TS_FIELDS),

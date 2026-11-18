@@ -4,6 +4,7 @@
   "title": "Add photo upload feature",
   "body": "## Summary\nImplement photo upload with drag-and-drop support.",
   "state": "OPEN",
+  "authorLogin": "nightgauge[bot]",
   "stateReason": "REOPENED",
   "labels": ["type:feature", "priority:high"],
   "labelsTruncated": true,

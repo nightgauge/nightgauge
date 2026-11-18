@@ -21,6 +21,7 @@ changelog, and the release workflow refuses a tag that does not.
 ### Fixed
 
 - The dashboard's Gemini adapter widget reports a key stored in the editor's secret storage as configured; it read only the environment, where that key is never placed (#3406).
+- The stranded follow-up PR sweep links a card only to a tracking issue that has its exact title and hidden marker and was filed by the pipeline's own identity; a look-alike issue anyone else opened is ignored, and an unknown identity fails the pass instead of trusting every author (#2688).
 - `nightgauge review quality` now names the reviewer unit, the JSON parse error and its byte offset when a findings file is invalid JSON (for example a claim containing `\303`), instead of a generic schema message, and tells reviewers to write a literal backslash as `\\` (#3397).
 - The VirusTotal gate judges a file it uploaded whose first report carries only Microsoft `!ml` findings on one reanalysis after `VT_ML_RECHECK_DELAY` (default one hour), instead of failing on a first-sight verdict later analyses clear; a finding that persists, or any other finding, still fails, and the report names every file judged this way (#3398).
 - The release-string margin build is now stamped `vX.Y.Z` like the release binary, built in a scratch clone with a local tag, and `release-dwarf-check` fails a margin binary carrying any other stamp (#3398).
