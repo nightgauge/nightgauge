@@ -1466,6 +1466,19 @@ func TestVerifyACAgainstDiff_RemovalCriterion(t *testing.T) {
 	if !ok || got.Status != ACUnmet || !strings.Contains(got.Evidence, "half_test.go:3") {
 		t.Errorf("partial prefix removal: got %+v ok=%v, want unmet citing half_test.go:3", got, ok)
 	}
+	// The target is the span the removal verb governs, not the first span.
+	got, ok = VerifyACAgainstDiff("`TestKeepMe` stays and `TestCheckParity_Foo` is deleted.", nil, d, failed)
+	if !ok || got.Status != ACMet || !strings.Contains(got.Evidence, "TestCheckParity_Foo") {
+		t.Errorf("governed span: got %+v ok=%v, want met on TestCheckParity_Foo", got, ok)
+	}
+	// A clause that also asks for an addition is not decided by the removal.
+	if got, ok = VerifyACAgainstDiff("Add `TestKeepMe` and remove `TestCheckParity_Foo`.", nil, d, failed); ok && got.Status != "" {
+		t.Errorf("mixed add/remove: got %+v, want the judge", got)
+	}
+	// A removal scoped to a file in the diff is never answered by presence.
+	if got, ok = VerifyACAgainstDiff("`TestHalf_Gone` is removed from `half_test.go`.", nil, d, failed); ok && got.Status == ACUnmet {
+		t.Errorf("path-scoped removal: got %+v, must not be unmet", got)
+	}
 	// A test criterion that only mentions deletion is not a removal request.
 	if got, ok = VerifyACAgainstDiff("`TestKeepMe` checks deleted rows are skipped.", nil, d, ACTestState{Passed: true}); ok && strings.Contains(got.Evidence, "still defined") {
 		t.Errorf("mention of deletion routed as removal: got %+v", got)
@@ -1573,9 +1586,14 @@ func TestVerifyACAgainstDiff_NegativeContent(t *testing.T) {
 func TestACGitGrepPattern(t *testing.T) {
 	for tok, want := range map[string]string{
 		"git grep -n foo":            "foo",
-		"git grep -n foo -- docs/":   "foo",
-		"git grep -e foo src/":       "foo",
-		"git grep -nF foo docs/x.md": "foo",
+		"git grep -nF foo":           "foo",
+		"git grep -e foo":            "foo",
+		"git grep -n foo -- docs/":   "",
+		"git grep -e foo src/":       "",
+		"git grep -nF foo docs/x.md": "",
+		"git grep -i FOO":            "",
+		"git grep -w foo":            "",
+		"git grep -E fo+":            "",
 		"git grep 'two words'":       "",
 		"git grep -A 3 foo":          "",
 		"git grep -e a -e b":         "",

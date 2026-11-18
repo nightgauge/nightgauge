@@ -732,6 +732,35 @@ func ACAsksRemoval(text string) bool {
 		!acRemovalCoverRE.MatchString(acCodeSpanRE.ReplaceAllString(text, ""))
 }
 
+// ACRemovalSpan returns the code span a removal criterion asks to remove: the
+// span the removal verb governs, not the criterion's first span. "Add `TestNew`
+// and remove `TestOld`" names `TestOld`. It returns "" when no removal matches.
+func ACRemovalSpan(text string) string {
+	if !ACAsksRemoval(text) {
+		return ""
+	}
+	loc := acRemovalRE.FindStringIndex(text)
+	m := text[loc[0]:loc[1]]
+	if strings.HasSuffix(m, "`") {
+		rest := text[loc[1]:]
+		if end := strings.IndexByte(rest, '`'); end >= 0 {
+			return rest[:end]
+		}
+		return ""
+	}
+	start := strings.IndexByte(m, '`')
+	end := strings.IndexByte(m[start+1:], '`')
+	return m[start+1 : start+1+end]
+}
+
+// ACAsksAddition reports whether a criterion, code spans aside, also asks for
+// something to be added, so a removal check alone cannot decide it.
+func ACAsksAddition(text string) bool {
+	return acAdditionRE.MatchString(acCodeSpanRE.ReplaceAllString(text, ""))
+}
+
+var acAdditionRE = regexp.MustCompile(`(?i)\b(?:adds?|added|introduces?|introduced|creates?|created|defines?|defined|implements?|implemented)\b`)
+
 // grepForSymbolRule looks for a symbol the criterion says was added. A miss on a
 // declared symbol ("function X") is unmet; a miss on a bare backticked span is
 // undecided, because the span may be a value rather than a code symbol (#3312).

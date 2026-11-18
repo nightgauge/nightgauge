@@ -616,3 +616,20 @@ func TestACAsksRemoval(t *testing.T) {
 		}
 	}
 }
+
+func TestACRemovalSpan(t *testing.T) {
+	for text, want := range map[string]string{
+		"Add `TestNew` and remove `TestOld`":       "TestOld",
+		"Add `newFn` and remove `oldOne`":          "oldOne",
+		"`TestOld` is removed":                     "TestOld",
+		"`TestNew` stays and `TestOld` is deleted": "TestOld",
+		"function `RemoveStale` is added":          "",
+	} {
+		if got := ACRemovalSpan(text); got != want {
+			t.Errorf("ACRemovalSpan(%q) = %q, want %q", text, got, want)
+		}
+	}
+	if !ACAsksAddition("Add `TestNew` and remove `TestOld`") || ACAsksAddition("Remove `TestOld`") {
+		t.Error("ACAsksAddition misjudged a mixed or a pure removal clause")
+	}
+}

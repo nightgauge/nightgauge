@@ -790,8 +790,16 @@ func verifyACClause(c acClause, inherited []string, d *ACDiff, tests ACTestState
 		return acResult{}
 	}
 	if acIsRemoval(c) {
+		if preflight.ACAsksAddition(c.Raw) {
+			// A removal check answers only half a mixed clause.
+			return acResult{}
+		}
 		if name, re, ok := acRemovalTarget(c); ok {
 			return acRemoved(name, re, d)
+		}
+		if !acNegContentRE.MatchString(c.Prose) {
+			// The presence rules below would answer a removal inverted.
+			return acResult{}
 		}
 	}
 	if acNegContentRE.MatchString(c.Prose) && len(c.Tokens) > 0 {
@@ -1459,6 +1467,10 @@ func acIsRemoval(c acClause) bool {
 // trailing `*` (`TestCheckParity_*`) is a prefix. The regex is ERE-portable
 // because findDefinition also hands it to git grep.
 func acRemovalTarget(c acClause) (string, *regexp.Regexp, bool) {
+	span := preflight.ACRemovalSpan(c.Raw)
+	if span == "" {
+		return "", nil, false
+	}
 	goDef := func(name string, prefix bool) *regexp.Regexp {
 		tail := `\(`
 		if prefix {
@@ -1466,16 +1478,16 @@ func acRemovalTarget(c acClause) (string, *regexp.Regexp, bool) {
 		}
 		return regexp.MustCompile(`func (\([^)]*\) )?` + regexp.QuoteMeta(name) + tail)
 	}
-	if loc := acGoTestRE.FindStringIndex(c.Raw); loc != nil {
-		name := c.Raw[loc[0]:loc[1]]
-		prefix := loc[1] < len(c.Raw) && c.Raw[loc[1]] == '*'
+	if loc := acGoTestRE.FindStringIndex(span); loc != nil {
+		name := span[loc[0]:loc[1]]
+		prefix := loc[1] < len(span) && span[loc[1]] == '*'
 		shown := name
 		if prefix {
 			shown += "*"
 		}
 		return shown, goDef(name, prefix), true
 	}
-	if m := acPyTestRE.FindString(c.Raw); m != "" {
+	if m := acPyTestRE.FindString(span); m != "" {
 		return m, regexp.MustCompile(`def ` + m + `\(`), true
 	}
 	if len(c.Paths) > 0 || len(c.Headings) > 0 {
@@ -1483,12 +1495,9 @@ func acRemovalTarget(c acClause) (string, *regexp.Regexp, bool) {
 		// token rules decide it.
 		return "", nil, false
 	}
-	for _, tok := range c.Tokens {
-		if !acGoIdentRE.MatchString(tok) {
-			continue
-		}
-		name := strings.TrimSuffix(tok, "*")
-		return tok, goDef(name, name != tok), true
+	if acGoIdentRE.MatchString(span) {
+		name := strings.TrimSuffix(span, "*")
+		return span, goDef(name, name != span), true
 	}
 	return "", nil, false
 }
@@ -1610,7 +1619,8 @@ func acGitGrepPattern(tok string) string {
 		f := fields[i]
 		switch {
 		case f == "--":
-			return pat
+			// A pathspec scopes the grep; the whole-tree grep would not.
+			return ""
 		case f == "-e":
 			if pat != "" || i+1 >= len(fields) {
 				return ""
@@ -1618,17 +1628,23 @@ func acGitGrepPattern(tok string) string {
 			pat = fields[i+1]
 			i++
 		case strings.HasPrefix(f, "-"):
-			if acGrepValueFlagRE.MatchString(f) {
+			if !acGrepPlainFlagRE.MatchString(f) {
+				// -i, -w, -E, -P and friends change what matches.
 				return ""
 			}
 		case pat == "":
 			pat = f
+		default:
+			// A pathspec scopes the grep; the whole-tree grep would not.
+			return ""
 		}
 	}
 	return pat
 }
 
-var acGrepValueFlagRE = regexp.MustCompile(`^-(?:[ABCfm]|-(?:after|before|context|max-count)-?\w*)$`)
+// acGrepPlainFlagRE lists the flags that leave a fixed-string, case-sensitive,
+// whole-tree grep's answer unchanged.
+var acGrepPlainFlagRE = regexp.MustCompile(`^-(?:[nFIh]+|-(?:untracked|line-number|fixed-strings|no-color|color))$`)
 
 func acUniq(in []string) []string {
 	seen := map[string]bool{}
