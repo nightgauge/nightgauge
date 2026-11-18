@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -788,6 +789,29 @@ func verifyACClause(c acClause, inherited []string, d *ACDiff, tests ACTestState
 		// neither they nor inherited files may decide the clause (#3042).
 		return acResult{}
 	}
+	if acIsRemoval(c) {
+		if preflight.ACAsksAddition(c.Raw) {
+			// A removal check answers only half a mixed clause.
+			return acResult{}
+		}
+		if name, re, ok := acRemovalTarget(c); ok {
+			return acRemoved(name, re, d, c.Paths)
+		}
+		if !acNegContentRE.MatchString(c.Prose) {
+			// The presence rules below would answer a removal inverted.
+			return acResult{}
+		}
+	}
+	if acNegContentRE.MatchString(c.Prose) && len(c.Tokens) > 0 {
+		if _, _, isTest := acTestName(c); isTest || acNegCoverRE.MatchString(c.Prose) {
+			// "`TestX` asserts the log does not contain `Y`" asks for a
+			// test, not for an absence; the judge decides it.
+			return acResult{}
+		}
+		// A positive rule would answer a negative criterion inverted, so
+		// one acAbsent cannot decide goes to the judge.
+		return acAbsent(c, d)
+	}
 	if pattern, ok := acRunPattern(c); ok {
 		return acRunTest(pattern, d, tests)
 	}
@@ -1437,6 +1461,270 @@ func acTestName(c acClause) (string, *regexp.Regexp, bool) {
 	return "", nil, false
 }
 
+var acGoIdentRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*\*?$`)
+
+func acIsRemoval(c acClause) bool {
+	return preflight.ACAsksRemoval(c.Raw)
+}
+
+// acRemovalTarget names what a removal clause asks to remove: a Go or Python
+// test, or a Go function written as a code span. A name written with a
+// trailing `*` (`TestCheckParity_*`) is a prefix. The regex is ERE-portable
+// because findDefinition also hands it to git grep.
+func acRemovalTarget(c acClause) (string, *regexp.Regexp, bool) {
+	span := preflight.ACRemovalSpan(c.Raw)
+	if span == "" {
+		return "", nil, false
+	}
+	goDef := func(name string, prefix bool) *regexp.Regexp {
+		tail := `\(`
+		if prefix {
+			tail = `[A-Za-z0-9_]*\(`
+		}
+		// Anchored: gofmt puts top-level funcs at column 0, so a string
+		// literal or comment holding the text is not a definition.
+		return regexp.MustCompile(`^func (\([^)]*\) )?` + regexp.QuoteMeta(name) + tail)
+	}
+	if loc := acGoTestRE.FindStringIndex(span); loc != nil {
+		name := span[loc[0]:loc[1]]
+		prefix := loc[1] < len(span) && span[loc[1]] == '*'
+		shown := name
+		if prefix {
+			shown += "*"
+		}
+		return shown, goDef(name, prefix), true
+	}
+	if m := acPyTestRE.FindString(span); m != "" {
+		return m, regexp.MustCompile(`^[[:space:]]*def ` + m + `\(`), true
+	}
+	if len(c.Paths) > 0 || len(c.Headings) > 0 {
+		// A path or section names where the removal happens; the
+		// token rules decide it.
+		return "", nil, false
+	}
+	if acGoIdentRE.MatchString(span) {
+		name := strings.TrimSuffix(span, "*")
+		return span, goDef(name, name != span), true
+	}
+	return "", nil, false
+}
+
+// acRemoved answers a removal criterion (#3385). Absence on the branch is the
+// success condition, so it never makes the clause unmet: a definition still
+// present is unmet; one the diff removed with nothing remaining is met; one
+// never in the diff is left to the judge.
+//
+// A clause naming paths ("`TestParse` is removed from `a/a_test.go`") is
+// judged in those paths only, so a same-named definition elsewhere on the
+// branch never makes it unmet.
+func acRemoved(name string, re *regexp.Regexp, d *ACDiff, scope []string) acResult {
+	if len(scope) > 0 {
+		return acRemovedIn(name, re, d, scope)
+	}
+	loc, ok, err := d.findDefinitionErr(re)
+	if err != nil {
+		// The grep never answered, so absence is unproven.
+		return acResult{}
+	}
+	if ok {
+		file, _, _ := strings.Cut(loc, ":")
+		return acAnswer(ACUnmet, fmt.Sprintf("`%s` is still defined at `%s`", name, loc), file)
+	}
+	var paths []string
+	for _, p := range d.sortedPaths() {
+		for _, l := range d.Files[p].Removed {
+			if re.MatchString(l) {
+				paths = append(paths, p)
+				break
+			}
+		}
+	}
+	if len(paths) == 0 {
+		return acResult{}
+	}
+	return acAnswer(ACMet, fmt.Sprintf("`%s` removed from `%s`; `git grep` finds no remaining definition", name, strings.Join(paths, "`, `")), paths...)
+}
+
+// acRemovedIn answers a removal clause scoped to named paths: a definition
+// still in one of them is unmet; one the diff removed from them (or a path the
+// diff deletes) with none left is met; one never in the diff is left to the
+// judge, as is a path whose content cannot be read.
+func acRemovedIn(name string, re *regexp.Regexp, d *ACDiff, scope []string) acResult {
+	var removed []string
+	for _, p := range scope {
+		f := d.Files[p]
+		if f != nil && f.Status == "deleted" {
+			for _, l := range f.Removed {
+				if re.MatchString(l) {
+					removed = append(removed, p)
+					break
+				}
+			}
+			continue
+		}
+		lines, ok := d.lines(p)
+		if !ok {
+			return acResult{}
+		}
+		for i, l := range lines {
+			if re.MatchString(l) {
+				return acAnswer(ACUnmet, fmt.Sprintf("`%s` is still defined at `%s:%d`", name, p, i+1), p)
+			}
+		}
+		if f != nil {
+			for _, l := range f.Removed {
+				if re.MatchString(l) {
+					removed = append(removed, p)
+					break
+				}
+			}
+		}
+	}
+	if len(removed) == 0 {
+		return acResult{}
+	}
+	return acAnswer(ACMet, fmt.Sprintf("`%s` removed from `%s`; no definition remains there", name, strings.Join(acUniq(removed), "`, `")), scope...)
+}
+
+// acNegContentRE marks a negative-content criterion (#3385): "`F` no longer
+// contains `X`", "`git grep X` returns no match". Absence on the branch is
+// the success condition, never whether the diff adds the token.
+var (
+	acNegContentRE = regexp.MustCompile(`(?i)\bno longer (?:contains?|includes?|mentions?|references?|has)\b|\bdoes(?: not|n't) (?:contain|include|mention|reference)\b|\bcontains no\b|\b(?:returns?|finds?|has|have) no (?:match(?:es)?|occurrences?|hits?|results?)\b`)
+	acGitGrepRE    = regexp.MustCompile(`^git\s+grep\b`)
+	acNegCoverRE   = regexp.MustCompile(`(?i)\b(?:covers?|asserts?|verif(?:y|ies)|exercises?|checks?|tests?)\b`)
+	acBREMetaRE    = regexp.MustCompile(`[.*\[\]^$\\]`)
+)
+
+// acAbsent answers a negative-content criterion. With named paths each token
+// must be absent from each path's content on the branch; a path the diff
+// deletes holds nothing. Without one, a `git grep` span is run over the
+// branch tree. An unreadable file, a failed grep, or a span it cannot parse
+// returns the empty result, leaving the clause to the judge.
+func acAbsent(c acClause, d *ACDiff) acResult {
+	if len(c.Paths) == 0 {
+		for _, tok := range c.Tokens {
+			if !acGitGrepRE.MatchString(tok) {
+				continue
+			}
+			pat := acGitGrepPattern(tok)
+			if pat == "" || d.Workdir == "" {
+				return acResult{}
+			}
+			loc, found, err := acGitGrep(d.Workdir, "-F", pat)
+			if err != nil {
+				return acResult{}
+			}
+			if found {
+				file, _, _ := strings.Cut(loc, ":")
+				return acAnswer(ACUnmet, fmt.Sprintf("`%s` still matches at `%s`", pat, loc), file)
+			}
+			return acAnswer(ACMet, fmt.Sprintf("`git grep` finds no `%s` on the branch", pat))
+		}
+		return acResult{}
+	}
+	matchers := make([]func(string) bool, len(c.Tokens))
+	for i, tok := range c.Tokens {
+		matchers[i] = acSpanMatcher(tok)
+	}
+	var removedFrom []string
+	for _, p := range c.Paths {
+		if f := d.Files[p]; f != nil && f.Status == "deleted" {
+			removedFrom = append(removedFrom, p)
+			continue
+		}
+		lines, ok := d.lines(p)
+		if !ok {
+			return acResult{}
+		}
+		for ti, match := range matchers {
+			for i, l := range lines {
+				if match(l) {
+					return acAnswer(ACUnmet, fmt.Sprintf("`%s` still present at `%s:%d`", c.Tokens[ti], p, i+1), p)
+				}
+			}
+		}
+		if f := d.Files[p]; f != nil {
+			for _, match := range matchers {
+				for _, l := range f.Removed {
+					if match(l) {
+						removedFrom = append(removedFrom, p)
+						break
+					}
+				}
+			}
+		}
+	}
+	ev := fmt.Sprintf("%s absent from `%s` on the branch", acList(c.Tokens, 3), strings.Join(c.Paths, "`, `"))
+	if len(removedFrom) > 0 {
+		ev += fmt.Sprintf("; the diff removed it from `%s`", strings.Join(acUniq(removedFrom), "`, `"))
+	}
+	return acAnswer(ACMet, ev, c.Paths...)
+}
+
+// acGitGrepPattern is the pattern a `git grep [flags] PATTERN [--] [path…]`
+// span names: the `-e` argument, else the first argument that is not a flag.
+// A quoted pattern, several `-e`, or a flag taking a value returns "", so the
+// judge decides rather than a grep for the wrong string.
+func acGitGrepPattern(tok string) string {
+	if strings.ContainsAny(tok, `"'`) {
+		return ""
+	}
+	fields := strings.Fields(tok)[2:]
+	pat := ""
+	fixed := false
+	for i := 0; i < len(fields); i++ {
+		f := fields[i]
+		switch {
+		case f == "--":
+			// A pathspec scopes the grep; the whole-tree grep would not.
+			return ""
+		case f == "-e":
+			if pat != "" || i+1 >= len(fields) {
+				return ""
+			}
+			pat = fields[i+1]
+			i++
+		case strings.HasPrefix(f, "-"):
+			if !acGrepPlainFlagRE.MatchString(f) {
+				// -i, -w, -E, -P and friends change what matches.
+				return ""
+			}
+			if f == "--fixed-strings" || (!strings.HasPrefix(f, "--") && strings.Contains(f, "F")) {
+				fixed = true
+			}
+		case pat == "":
+			pat = f
+		default:
+			// A pathspec scopes the grep; the whole-tree grep would not.
+			return ""
+		}
+	}
+	if !fixed && acBREMetaRE.MatchString(pat) {
+		// Plain git grep reads the pattern as a basic regex; a fixed-string
+		// grep for it would answer a different question.
+		return ""
+	}
+	return pat
+}
+
+// acGrepPlainFlagRE lists the flags that leave a case-sensitive whole-tree
+// grep's answer unchanged. The pattern is grepped with -F, so a pattern
+// holding a regex metacharacter needs -F in the span (acGitGrepPattern).
+var acGrepPlainFlagRE = regexp.MustCompile(`^-(?:[nFIh]+|-(?:untracked|line-number|fixed-strings|no-color|color))$`)
+
+func acUniq(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // acTest: the named test must be defined on the branch and the stage's test
 // run must have passed.
 func acTest(name string, re *regexp.Regexp, d *ACDiff, tests ACTestState) acResult {
@@ -1462,32 +1750,51 @@ func acTest(name string, re *regexp.Regexp, d *ACDiff, tests ACTestState) acResu
 }
 
 func (d *ACDiff) findDefinition(re *regexp.Regexp) (string, bool) {
+	loc, found, _ := d.findDefinitionErr(re)
+	return loc, found
+}
+
+// findDefinitionErr is findDefinition that tells "no definition" from "the
+// grep never answered": err is set when there is no Workdir or git grep
+// failed, so absence is never inferred from a search that did not run.
+func (d *ACDiff) findDefinitionErr(re *regexp.Regexp) (string, bool, error) {
 	for _, p := range d.sortedPaths() {
 		for _, l := range d.Files[p].Added {
 			if re.MatchString(l.Text) {
-				return fmt.Sprintf("%s:%d", p, l.N), true
+				return fmt.Sprintf("%s:%d", p, l.N), true, nil
 			}
 		}
 	}
 	if d.Workdir == "" {
-		return "", false
+		return "", false, errors.New("no workdir to grep")
 	}
+	return acGitGrep(d.Workdir, "-E", re.String())
+}
+
+// acGitGrep runs `git grep -n <mode> -m 1` over the branch tree and returns
+// the first match as file:line. git grep exits 1 for no match, which is an
+// answer; any other failure is an error.
+func acGitGrep(workdir, mode, pat string) (string, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), acDiffTimeout)
 	defer cancel()
 	// submodule.recurse=false: a user config enabling it makes git grep
 	// reject --untracked.
-	cmd := exec.CommandContext(ctx, "git", "-c", "core.quotePath=false", "-c", "submodule.recurse=false", "grep", "-n", "-E", "--untracked", "-e", re.String())
-	cmd.Dir = d.Workdir
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.quotePath=false", "-c", "submodule.recurse=false", "grep", "-n", "-m", "1", mode, "--untracked", "-e", pat)
+	cmd.Dir = workdir
 	out, err := cmd.Output()
 	if err != nil {
-		return "", false
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 1 && ctx.Err() == nil {
+			return "", false, nil
+		}
+		return "", false, err
 	}
 	first, _, _ := strings.Cut(string(out), "\n")
 	parts := strings.SplitN(first, ":", 3)
 	if len(parts) < 2 {
-		return "", false
+		return "", false, fmt.Errorf("unparsed git grep output %q", first)
 	}
-	return parts[0] + ":" + parts[1], true
+	return parts[0] + ":" + parts[1], true, nil
 }
 
 // acSection: some added line in a named diffed file sits beneath the named

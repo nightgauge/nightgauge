@@ -48,6 +48,14 @@ write the key `acceptance_criteria`, a `verdict` field, or 1-based indexes.
 - `not_verifiable`: it cannot be judged from the diff (an operator action,
   a post-merge observation).
 
+A criterion that asks for a test, symbol or file to be removed is `met` when
+the diff deletes it and `git grep` finds no remaining definition (or call site) on the branch;
+name the removed path or test in `evidence`. Absence on the branch is never by
+itself a reason for `unmet`. A removal whose target is still present is `unmet`,
+with the remaining `file:line` in `evidence`. A negative-content criterion
+("`F` no longer contains `X`") is `met` when `X` is absent from `F` on the
+branch, never judged by whether the diff adds `X` (#3385).
+
 A criterion that asks for a command and its result in the PR body is answered
 by `evidence`: run the command and record it with its result, for example
 `go test ./internal/ipc -run 'TestX' -count=50: ok internal/ipc 119.1s`.

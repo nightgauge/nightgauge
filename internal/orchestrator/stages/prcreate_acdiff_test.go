@@ -1422,3 +1422,223 @@ func TestParseACClause_RevisionNeedsAdjacentWording(t *testing.T) {
 		t.Errorf("adjacent `at` names a revision: %+v", c.Revisions)
 	}
 }
+
+// Regression (#3385): a criterion asking for a test to be removed is met when
+// the diff deletes it, unmet only while it is still defined, and never unmet
+// merely because the test is absent.
+func TestVerifyACAgainstDiff_RemovalCriterion(t *testing.T) {
+	dir := changelogRepo(t)
+	gitOut(t, dir, "checkout", "-q", "main")
+	writeFile(t, dir, "parity_test.go", "package w\n\nfunc TestCheckParity_Foo(t *testing.T) {}\n\nfunc TestCheckParity_Bar(t *testing.T) {}\n")
+	writeFile(t, dir, "keep_test.go", "package w\n\nfunc TestKeepMe(t *testing.T) {}\n")
+	writeFile(t, dir, "half_test.go", "package w\n\nfunc TestHalf_Keep(t *testing.T) {}\n\nfunc TestHalf_Gone(t *testing.T) {}\n")
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "tests")
+	gitOut(t, dir, "checkout", "-q", "docs/2661-changelog")
+	gitOut(t, dir, "merge", "-q", "main")
+	gitOut(t, dir, "rm", "-q", "parity_test.go")
+	writeFile(t, dir, "half_test.go", "package w\n\nfunc TestHalf_Keep(t *testing.T) {}\n")
+	// A string literal holding the definition text is not a definition.
+	writeFile(t, dir, "lit_test.go", "package w\n\nvar src = \"func TestCheckParity_Foo(t *testing.T) {}\"\n")
+	d := collect(t, dir)
+	failed := ACTestState{Source: "feature-validate unit tests"}
+
+	got, ok := VerifyACAgainstDiff("`TestCheckParity_*` is removed.", nil, d, failed)
+	if !ok || got.Status != ACMet || !strings.Contains(got.Evidence, "parity_test.go") {
+		t.Errorf("removed prefix: got %+v ok=%v, want met citing parity_test.go", got, ok)
+	}
+	got, ok = VerifyACAgainstDiff("The `TestCheckParity_*` tests are removed.", nil, d, failed)
+	if !ok || got.Status != ACMet {
+		t.Errorf("removed with noun: got %+v ok=%v, want met", got, ok)
+	}
+	got, ok = VerifyACAgainstDiff("Delete `TestCheckParity_Foo`.", nil, d, failed)
+	if !ok || got.Status != ACMet || !strings.Contains(got.Evidence, "parity_test.go") {
+		t.Errorf("removed exact: got %+v ok=%v, want met", got, ok)
+	}
+	got, ok = VerifyACAgainstDiff("`TestKeepMe` is removed.", nil, d, failed)
+	if !ok || got.Status != ACUnmet || !strings.Contains(got.Evidence, "keep_test.go:3") {
+		t.Errorf("still defined: got %+v ok=%v, want unmet citing keep_test.go:3", got, ok)
+	}
+	if got, ok = VerifyACAgainstDiff("`TestNeverExisted` is removed.", nil, d, failed); ok && got.Status == ACUnmet {
+		t.Errorf("absent, never in the diff: got %+v, must not be unmet", got)
+	}
+	// A partial prefix removal: the diff deletes TestHalf_Gone but
+	// TestHalf_Keep survives, so the clause is unmet.
+	got, ok = VerifyACAgainstDiff("`TestHalf_*` is removed.", nil, d, failed)
+	if !ok || got.Status != ACUnmet || !strings.Contains(got.Evidence, "half_test.go:3") {
+		t.Errorf("partial prefix removal: got %+v ok=%v, want unmet citing half_test.go:3", got, ok)
+	}
+	// The target is the span the removal verb governs, not the first span.
+	got, ok = VerifyACAgainstDiff("`TestKeepMe` stays and `TestCheckParity_Foo` is deleted.", nil, d, failed)
+	if !ok || got.Status != ACMet || !strings.Contains(got.Evidence, "TestCheckParity_Foo") {
+		t.Errorf("governed span: got %+v ok=%v, want met on TestCheckParity_Foo", got, ok)
+	}
+	// A clause that also asks for an addition is not decided by the removal.
+	if got, ok = VerifyACAgainstDiff("Add `TestKeepMe` and remove `TestCheckParity_Foo`.", nil, d, failed); ok && got.Status != "" {
+		t.Errorf("mixed add/remove: got %+v, want the judge", got)
+	}
+	// A removal scoped to a file in the diff is never answered by presence.
+	if got, ok = VerifyACAgainstDiff("`TestHalf_Gone` is removed from `half_test.go`.", nil, d, failed); ok && got.Status == ACUnmet {
+		t.Errorf("path-scoped removal: got %+v, must not be unmet", got)
+	}
+	// A test criterion that only mentions deletion is not a removal request.
+	if got, ok = VerifyACAgainstDiff("`TestKeepMe` checks deleted rows are skipped.", nil, d, ACTestState{Passed: true}); ok && strings.Contains(got.Evidence, "still defined") {
+		t.Errorf("mention of deletion routed as removal: got %+v", got)
+	}
+	got, ok = VerifyACAgainstDiff("`TestMissing` covers the deleted-file case.", nil, d, ACTestState{Passed: true})
+	if !ok || got.Status != ACUnmet || !strings.Contains(got.Evidence, "not defined") {
+		t.Errorf("non-removal missing test: got %+v ok=%v, want unmet", got, ok)
+	}
+}
+
+// Regression (#3385): the other removal targets — a Python test, a bare Go
+// identifier (receiver and prefix forms) — and the clauses that must not be
+// routed as removals.
+func TestVerifyACAgainstDiff_RemovalTargets(t *testing.T) {
+	dir := changelogRepo(t)
+	gitOut(t, dir, "checkout", "-q", "main")
+	writeFile(t, dir, "test_util.py", "def test_foo():\n    pass\n")
+	writeFile(t, dir, "h.go", "package w\n\nfunc (r *T) helperFn() {}\n\nfunc helperA() {}\n")
+	writeFile(t, dir, "k.go", "package w\n\nfunc keepFn() {}\n")
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "seed")
+	gitOut(t, dir, "checkout", "-q", "docs/2661-changelog")
+	gitOut(t, dir, "merge", "-q", "main")
+	gitOut(t, dir, "rm", "-q", "test_util.py", "h.go")
+	d := collect(t, dir)
+	none := ACTestState{}
+
+	for _, text := range []string{"`test_foo` is removed.", "`helperFn` is removed.", "`helper*` is removed."} {
+		got, ok := VerifyACAgainstDiff(text, nil, d, none)
+		if !ok || got.Status != ACMet {
+			t.Errorf("%q: got %+v ok=%v, want met", text, got, ok)
+		}
+	}
+	got, ok := VerifyACAgainstDiff("`keepFn` is removed.", nil, d, none)
+	if !ok || got.Status != ACUnmet || !strings.Contains(got.Evidence, "k.go:3") {
+		t.Errorf("still defined: got %+v ok=%v, want unmet citing k.go:3", got, ok)
+	}
+	// A named path sends the clause to the token rules, not acRemoved.
+	if got, ok = VerifyACAgainstDiff("`keepFn` is removed from `k.go`.", nil, d, none); ok && strings.Contains(got.Evidence, "still defined") {
+		t.Errorf("path-named removal routed to acRemoved: %+v", got)
+	}
+	// An additive criterion naming a removal-ish symbol is never met by absence.
+	if got, ok = VerifyACAgainstDiff("function `RemoveStale` is added.", nil, d, none); ok && got.Status == ACMet {
+		t.Errorf("additive RemoveStale met by its absence: %+v", got)
+	}
+}
+
+// Regression (#3385 review): a path-scoped test removal is judged in the named
+// file only, so a same-named test in another package never makes it unmet.
+func TestVerifyACAgainstDiff_RemovalScopedToPath(t *testing.T) {
+	dir := changelogRepo(t)
+	gitOut(t, dir, "checkout", "-q", "main")
+	writeFile(t, dir, "a/a_test.go", "package a\n\nfunc TestParse(t *testing.T) {}\n\nfunc TestKeep(t *testing.T) {}\n")
+	writeFile(t, dir, "b/b_test.go", "package b\n\nfunc TestParse(t *testing.T) {}\n")
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "seed")
+	gitOut(t, dir, "checkout", "-q", "docs/2661-changelog")
+	gitOut(t, dir, "merge", "-q", "main")
+	writeFile(t, dir, "a/a_test.go", "package a\n\nfunc TestKeep(t *testing.T) {}\n")
+	d := collect(t, dir)
+	none := ACTestState{}
+
+	got, ok := VerifyACAgainstDiff("`TestParse` is removed from `a/a_test.go`.", nil, d, none)
+	if !ok || got.Status != ACMet || strings.Contains(got.Evidence, "b/b_test.go") {
+		t.Errorf("scoped removal: got %+v ok=%v, want met without citing b/b_test.go", got, ok)
+	}
+	got, ok = VerifyACAgainstDiff("`TestKeep` is removed from `a/a_test.go`.", nil, d, none)
+	if !ok || got.Status != ACUnmet || !strings.Contains(got.Evidence, "a/a_test.go:3") {
+		t.Errorf("still in the named file: got %+v ok=%v, want unmet citing a/a_test.go:3", got, ok)
+	}
+	// Unscoped, the same-named test elsewhere still counts.
+	got, ok = VerifyACAgainstDiff("`TestParse` is removed.", nil, d, none)
+	if !ok || got.Status != ACUnmet || !strings.Contains(got.Evidence, "b/b_test.go:3") {
+		t.Errorf("unscoped: got %+v ok=%v, want unmet citing b/b_test.go:3", got, ok)
+	}
+}
+
+// Regression (#3385 Part 2): "no longer contains X" is met when X is absent
+// from the named file on the branch, never judged by the diff adding X.
+func TestVerifyACAgainstDiff_NegativeContent(t *testing.T) {
+	dir := changelogRepo(t)
+	gitOut(t, dir, "checkout", "-q", "main")
+	writeFile(t, dir, "docs/X.md", "# X\n\nRun `git diff --diff-filter=U`.\n\nAgain --diff-filter=U here.\n")
+	writeFile(t, dir, "docs/Gone.md", "uses --old-flag\n")
+	writeFile(t, dir, "src.go", "package w\n// fooMarker\n")
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "seed")
+	gitOut(t, dir, "checkout", "-q", "docs/2661-changelog")
+	gitOut(t, dir, "merge", "-q", "main")
+	writeFile(t, dir, "docs/X.md", "# X\n\nRun `git diff --name-only`.\n")
+	gitOut(t, dir, "rm", "-q", "docs/Gone.md")
+	d := collect(t, dir)
+	none := ACTestState{}
+
+	got, ok := VerifyACAgainstDiff("`docs/X.md` no longer contains `--diff-filter=U`.", nil, d, none)
+	if !ok || got.Status != ACMet || !strings.Contains(got.Evidence, "removed it from `docs/X.md`") {
+		t.Errorf("both removed: got %+v ok=%v, want met", got, ok)
+	}
+	got, ok = VerifyACAgainstDiff("`docs/Gone.md` no longer contains `--old-flag`.", nil, d, none)
+	if !ok || got.Status != ACMet {
+		t.Errorf("deleted file: got %+v ok=%v, want met", got, ok)
+	}
+	got, ok = VerifyACAgainstDiff("`git grep -n fooMarker` returns no match.", nil, d, none)
+	if !ok || got.Status != ACUnmet || !strings.Contains(got.Evidence, "src.go:2") {
+		t.Errorf("grep present: got %+v ok=%v, want unmet citing src.go:2", got, ok)
+	}
+	got, ok = VerifyACAgainstDiff("`git grep -n neverThere` returns no match.", nil, d, none)
+	if !ok || got.Status != ACMet {
+		t.Errorf("grep absent: got %+v ok=%v, want met", got, ok)
+	}
+	// A test asserting an absence asks for the test, not for the absence.
+	if got, ok = VerifyACAgainstDiff("`TestRedact` in `src.go` asserts the log does not contain `fooMarker`.", nil, d, none); ok && got.Status != "" {
+		t.Errorf("test asserting absence: got %+v, want the judge", got)
+	}
+	// A positive criterion still goes to the token rule.
+	got, ok = VerifyACAgainstDiff("`docs/X.md` contains `--name-only`.", nil, d, none)
+	if !ok || got.Status != ACMet || strings.Contains(got.Evidence, "absent") {
+		t.Errorf("positive: got %+v ok=%v, want met by the token rule", got, ok)
+	}
+
+	// The second of two paths still holds the token.
+	got, ok = VerifyACAgainstDiff("`docs/Gone.md` and `src.go` no longer contain `fooMarker`.", nil, d, none)
+	if !ok || got.Status != ACUnmet || !strings.Contains(got.Evidence, "src.go:2") {
+		t.Errorf("second path: got %+v ok=%v, want unmet citing src.go:2", got, ok)
+	}
+	// No path and no git grep span: never met by the positive token rule.
+	if got, ok = VerifyACAgainstDiff("The docs no longer mention `--name-only`.", nil, d, none); ok && got.Status == ACMet {
+		t.Errorf("negative clause met by an added token: %+v", got)
+	}
+
+	// One occurrence left: unmet citing its line.
+	writeFile(t, dir, "docs/X.md", "# X\n\nRun `git diff --name-only`.\n\nAgain --diff-filter=U here.\n")
+	got, ok = VerifyACAgainstDiff("`docs/X.md` no longer contains `--diff-filter=U`.", nil, collect(t, dir), none)
+	if !ok || got.Status != ACUnmet || !strings.Contains(got.Evidence, "docs/X.md:5") {
+		t.Errorf("one left: got %+v ok=%v, want unmet citing docs/X.md:5", got, ok)
+	}
+}
+
+func TestACGitGrepPattern(t *testing.T) {
+	for tok, want := range map[string]string{
+		"git grep -n foo":            "foo",
+		"git grep -nF foo":           "foo",
+		"git grep -e foo":            "foo",
+		"git grep -n foo -- docs/":   "",
+		"git grep -e foo src/":       "",
+		"git grep -nF foo docs/x.md": "",
+		"git grep -i FOO":            "",
+		"git grep -n os.Exit":        "",
+		"git grep -nF os.Exit":       "os.Exit",
+		"git grep -w foo":            "",
+		"git grep -E fo+":            "",
+		"git grep 'two words'":       "",
+		"git grep -A 3 foo":          "",
+		"git grep -e a -e b":         "",
+		"git grep -n":                "",
+	} {
+		if got := acGitGrepPattern(tok); got != want {
+			t.Errorf("acGitGrepPattern(%q) = %q, want %q", tok, got, want)
+		}
+	}
+}
