@@ -761,6 +761,38 @@ func ACAsksAddition(text string) bool {
 
 var acAdditionRE = regexp.MustCompile(`(?i)\b(?:adds?|added|introduces?|introduced|creates?|created|defines?|defined|implements?|implemented)\b`)
 
+// acPreservationRE matches a verb asking for something to stay as it is
+// (#3423): "`X` keeps its value", "`X` remains", "the test still passes
+// unchanged", "`X` is not modified", "does not change `X`". It is matched with
+// code spans stripped, so a span cannot supply the verb.
+var acPreservationRE = regexp.MustCompile(`(?i)\b(?:keeps?|kept|remains?|stays?|still pass(?:es)?|unchanged|untouched|(?:is|are) not (?:modified|changed|touched|edited)|do(?:es)? not change)\b`)
+
+// acAbsenceRE marks prose asking for a span's absence ("remains absent", "no
+// longer contains"): a preservation verb there keeps an absence, which the
+// negative-content rules decide.
+var acAbsenceRE = regexp.MustCompile(`(?i)\bno longer\b|\babsent\b|\bnot present\b|\bdoes(?: not|n't) (?:contain|include|mention|reference|exist)\b|\bcontains no\b|\breturns? no\b`)
+
+// ACAsksPreservation reports whether a criterion asks for a named code span to
+// stay as it is (#3423). Such a criterion is met by the span being present and
+// untouched, so a check for added content would answer it inverted. A removal
+// or absence criterion is never a preservation. pr-create's diff judge shares
+// this predicate.
+func ACAsksPreservation(text string) bool {
+	if !strings.Contains(text, "`") || ACAsksRemoval(text) {
+		return false
+	}
+	prose := acCodeSpanRE.ReplaceAllString(text, " ")
+	return acPreservationRE.MatchString(prose) && !acAbsenceRE.MatchString(prose)
+}
+
+// ACPreservationVerbs returns the [start, end) byte offsets in text of each
+// preservation verb outside a code span, so a caller can tell which span each
+// one governs.
+func ACPreservationVerbs(text string) [][]int {
+	masked := acCodeSpanRE.ReplaceAllStringFunc(text, func(m string) string { return strings.Repeat(" ", len(m)) })
+	return acPreservationRE.FindAllStringIndex(masked, -1)
+}
+
 // grepForSymbolRule looks for a symbol the criterion says was added. A miss on a
 // declared symbol ("function X") is unmet; a miss on a bare backticked span is
 // undecided, because the span may be a value rather than a code symbol (#3312).

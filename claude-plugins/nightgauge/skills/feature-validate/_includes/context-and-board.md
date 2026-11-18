@@ -56,6 +56,14 @@ with the remaining `file:line` in `evidence`. A negative-content criterion
 ("`F` no longer contains `X`") is `met` when `X` is absent from `F` on the
 branch, never judged by whether the diff adds `X` (#3385).
 
+A preservation criterion ("`X` keeps its current value, so the test in `p`
+still passes unchanged", "`X` remains", "`X` is not modified") is `met` when
+`X` is on the branch and no non-comment line the diff adds or removes contains
+it; it never asks the diff to add `X`, and a file named only as context may
+change. It is `unmet` when a changed line contains `X`; name that `file:line`.
+A Markdown bullet or heading naming `X` is content, not a comment. "Keep `X`
+and add `Y`" is judged on `Y` (#3423).
+
 A criterion that asks for a command and its result in the PR body is answered
 by `evidence`: run the command and record it with its result, for example
 `go test ./internal/ipc -run 'TestX' -count=50: ok internal/ipc 119.1s`.

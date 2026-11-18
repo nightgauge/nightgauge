@@ -11,6 +11,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/acparse"
+	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/trust"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -283,7 +284,7 @@ type BoardSyncer interface {
 	AddIssueByNumber(ctx context.Context, owner, repo string, number int) (string, error)
 }
 
-// syncIssueDone drives the merged issue's board Status to Done, adding the row
+// SyncIssueDone drives the merged issue's board Status to Done, adding the row
 // first when there is not one.
 //
 // The missing row is the common case, not an edge case: issues filed ad-hoc with
@@ -295,10 +296,10 @@ type BoardSyncer interface {
 // Only ErrIssueNotOnBoard is repaired. An auth or network failure is not made
 // better by writing to the board, and retrying it as if it were would turn a
 // clear error into a confusing one.
-func syncIssueDone(ctx context.Context, boardSvc BoardSyncer, input PostMergeInput) BoardSyncOutcome {
+func SyncIssueDone(ctx context.Context, boardSvc BoardSyncer, input PostMergeInput) BoardSyncOutcome {
 	owner, repo, num := input.RepositoryOwner, input.RepositoryName, input.IssueNumber
 
-	syncErr := boardSvc.SyncStatus(ctx, owner, repo, num, "Done")
+	syncErr := boardSvc.SyncStatus(ctx, owner, repo, num, string(state.StatusDone))
 	if syncErr == nil {
 		fmt.Fprintf(os.Stderr, "Post-merge: synced issue #%d board status to Done\n", num)
 		return BoardSyncSynced
@@ -315,7 +316,7 @@ func syncIssueDone(ctx context.Context, boardSvc BoardSyncer, input PostMergeInp
 		fmt.Fprintf(os.Stderr, "Warning: post-merge board repair failed for #%d: %v\n", num, addErr)
 		return BoardSyncFailed
 	}
-	if retryErr := boardSvc.SyncStatus(ctx, owner, repo, num, "Done"); retryErr != nil {
+	if retryErr := boardSvc.SyncStatus(ctx, owner, repo, num, string(state.StatusDone)); retryErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: post-merge board sync to Done failed for #%d after adding it: %v\n", num, retryErr)
 		return BoardSyncFailed
 	}
@@ -486,7 +487,7 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	// issue otherwise lingers as "In progress"/"Ready" on the board.
 	out.IssueDoneSync = BoardSyncNotAttempted
 	if boardSvc != nil && input.ProjectNumber > 0 && issueClosed {
-		out.IssueDoneSync = syncIssueDone(ctx, boardSvc, input)
+		out.IssueDoneSync = SyncIssueDone(ctx, boardSvc, input)
 		// A board left out of date is a failure of what the caller asked for,
 		// even when the epic half succeeds (#1025).
 		if out.IssueDoneSync == BoardSyncFailed {

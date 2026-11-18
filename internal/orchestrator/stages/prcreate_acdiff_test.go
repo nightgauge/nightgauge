@@ -1642,3 +1642,251 @@ func TestACGitGrepPattern(t *testing.T) {
 		}
 	}
 }
+
+// crit3422 is the #3422 criterion pr-create booked unmet on a diff that left
+// the constant alone (#3423).
+const crit3422 = "`DiffSecretsExcludePattern` keeps its current value, so the pinned test in " +
+	"`internal/scan/diffscan_test.go` still passes unchanged"
+
+const diffscanBase = "package scan\n\n" +
+	"// DiffSecretsExcludePattern is the pinned exclude filter.\n" +
+	"const DiffSecretsExcludePattern = `^(?:\\+\\+\\+|---) `\n\n" +
+	"func matchLine(s string) bool {\n\treturn s != \"\"\n}\n"
+
+const diffscanTestBase = "package scan\n\nimport \"testing\"\n\n" +
+	"func TestPinnedPattern(t *testing.T) {\n\tif DiffSecretsExcludePattern == \"\" {\n\t\tt.Fatal(\"empty\")\n\t}\n}\n"
+
+// scanRepo builds a repo whose main holds the #3422 files, with a feature
+// branch checked out.
+func scanRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	gitOut(t, dir, "init", "-q", "-b", "main")
+	gitOut(t, dir, "config", "user.email", "test@example.com")
+	gitOut(t, dir, "config", "user.name", "Test")
+	gitOut(t, dir, "config", "commit.gpgsign", "false")
+	writeFile(t, dir, "internal/scan/diffscan.go", diffscanBase)
+	writeFile(t, dir, "internal/scan/diffscan_test.go", diffscanTestBase)
+	writeFile(t, dir, "docs/SCAN.md", "# Scan\n\n* `DiffSecretsExcludePattern` excludes diff headers.\n")
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "base")
+	gitOut(t, dir, "checkout", "-q", "-b", "fix/3420")
+	return dir
+}
+
+// #3422 regression: a changed sibling function and an added test leave an
+// untouched constant preserved; editing the constant's line is unmet.
+func TestVerifyACAgainstDiff_Issue3422Preservation(t *testing.T) {
+	dir := scanRepo(t)
+	writeFile(t, dir, "internal/scan/diffscan.go",
+		strings.Replace(diffscanBase, "return s != \"\"", "return strings.TrimSpace(s) != \"\"", 1))
+	writeFile(t, dir, "internal/scan/diffscan_test.go", diffscanTestBase+
+		"\nfunc TestMatchLineBlank(t *testing.T) {\n\tif matchLine(\" \") {\n\t\tt.Fatal(\"blank\")\n\t}\n}\n")
+	got, ok := VerifyACAgainstDiff(crit3422, nil, collect(t, dir), ACTestState{})
+	if !ok || got.Status != ACMet {
+		t.Fatalf("unchanged constant: got %+v ok=%v, want met", got, ok)
+	}
+
+	writeFile(t, dir, "internal/scan/diffscan.go",
+		strings.Replace(diffscanBase, "`^(?:\\+\\+\\+|---) `", "`^(?:\\+\\+\\+) `", 1))
+	got, ok = VerifyACAgainstDiff(crit3422, nil, collect(t, dir), ACTestState{})
+	if !ok || got.Status != ACUnmet || !strings.Contains(got.Evidence, "internal/scan/diffscan.go:4") {
+		t.Fatalf("edited constant: got %+v ok=%v, want unmet naming diffscan.go:4", got, ok)
+	}
+}
+
+// "keep `X` and add `Y`" is judged on the addition: met only when `Y` is
+// added, and never unmet because of the preserved `X`.
+func TestVerifyACAgainstDiff_PreservationMixedClause(t *testing.T) {
+	crit := "Keep `DiffSecretsExcludePattern` and add `matchHeader` in `internal/scan/diffscan.go`"
+	dir := scanRepo(t)
+	writeFile(t, dir, "internal/scan/diffscan.go", diffscanBase+"\nfunc matchHeader() {}\n")
+	if got, ok := VerifyACAgainstDiff(crit, nil, collect(t, dir), ACTestState{}); !ok || got.Status != ACMet {
+		t.Fatalf("addition present: got %+v ok=%v, want met", got, ok)
+	}
+	writeFile(t, dir, "internal/scan/diffscan.go", diffscanBase+"\nfunc other() {}\n")
+	if got, ok := VerifyACAgainstDiff(crit, nil, collect(t, dir), ACTestState{}); !ok || got.Status != ACUnmet ||
+		strings.Contains(got.Evidence, "DiffSecretsExcludePattern") {
+		t.Fatalf("addition missing: got %+v ok=%v, want unmet on `matchHeader` only", got, ok)
+	}
+}
+
+// A Markdown bullet is content: an edit to a bullet holding the preserved span
+// is caught, while a Go comment naming it is not a change to it (#3423).
+func TestVerifyACAgainstDiff_PreservationCommentsByLanguage(t *testing.T) {
+	crit := "`DiffSecretsExcludePattern` remains as documented"
+	dir := scanRepo(t)
+	writeFile(t, dir, "docs/SCAN.md", "# Scan\n\n* `DiffSecretsExcludePattern` excludes diff headers and hunks.\n")
+	got, ok := VerifyACAgainstDiff(crit, nil, collect(t, dir), ACTestState{})
+	if !ok || got.Status != ACUnmet || !strings.Contains(got.Evidence, "docs/SCAN.md") {
+		t.Fatalf("doc bullet edit: got %+v ok=%v, want unmet naming docs/SCAN.md", got, ok)
+	}
+
+	dir = scanRepo(t)
+	writeFile(t, dir, "internal/scan/diffscan.go",
+		strings.Replace(diffscanBase, "is the pinned exclude filter", "is the pinned exclude filter (#3420)", 1))
+	if got, ok := VerifyACAgainstDiff(crit, nil, collect(t, dir), ACTestState{}); !ok || got.Status != ACMet {
+		t.Fatalf("Go comment edit: got %+v ok=%v, want met", got, ok)
+	}
+}
+
+func TestACCommentLine(t *testing.T) {
+	for _, c := range []struct {
+		path, line string
+		want       bool
+	}{
+		{"a.go", "// X", true},
+		{"a.go", " * X", true},
+		{"a.go", "*p = X", false},
+		{"a.ts", "/* X */", true},
+		{"a.yml", "# X", true},
+		{"Makefile", "# X", true},
+		{"a.go", "# X", false},
+		{"a.md", "* `X` bullet", false},
+		{"a.md", "# X heading", false},
+		{"a.md", "<!-- X -->", true},
+		{"a.md", "// X", false},
+	} {
+		if got := acCommentLine(c.path, c.line); got != c.want {
+			t.Errorf("acCommentLine(%q, %q) = %v, want %v", c.path, c.line, got, c.want)
+		}
+	}
+}
+
+// mergeRepo commits base on main, merges a branch applying change with a
+// real merge commit, and returns the repo and that merge's SHA.
+func mergeRepo(t *testing.T, change func(dir string)) (string, string) {
+	t.Helper()
+	dir := scanRepo(t)
+	change(dir)
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "change")
+	gitOut(t, dir, "checkout", "-q", "main")
+	writeFile(t, dir, "README.md", "main moved on\n")
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "main")
+	gitOut(t, dir, "merge", "-q", "--no-ff", "-m", "merge", "fix/3420")
+	return dir, strings.TrimSpace(gitOut(t, dir, "rev-parse", "HEAD"))
+}
+
+func judgeOnMerge(t *testing.T, dir, merge, crit string) (bool, string) {
+	t.Helper()
+	d, err := CollectACDiffRange(context.Background(), dir, merge+"^1", merge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return VerifyACOnMerge(crit, d)
+}
+
+// The merged-diff judge answers only preservation and removal, and anything
+// it cannot decide is unmet (#3423).
+func TestVerifyACOnMerge(t *testing.T) {
+	sibling := func(dir string) {
+		writeFile(t, dir, "internal/scan/diffscan.go", strings.Replace(diffscanBase,
+			"return s != \"\"", "return len(s) > 0", 1)+"\nfunc TestOld() {}\n")
+	}
+	dir, merge := mergeRepo(t, sibling)
+	if met, ev := judgeOnMerge(t, dir, merge, crit3422); !met {
+		t.Errorf("preservation over a sibling-only merge: unmet (%s), want met", ev)
+	}
+	if met, ev := judgeOnMerge(t, dir, merge, "`NoSuchName` keeps its value"); met || !strings.Contains(ev, "NoSuchName") {
+		t.Errorf("span on neither side: met=%v (%s), want unmet", met, ev)
+	}
+	if met, ev := judgeOnMerge(t, dir, merge, "`matchLine` is removed"); met || !strings.Contains(ev, "still") {
+		t.Errorf("removal of a span still present: met=%v (%s), want unmet", met, ev)
+	}
+	if met, ev := judgeOnMerge(t, dir, merge, "`neverDefined` is removed"); met || !strings.HasPrefix(ev, "undecidable:") {
+		t.Errorf("never-defined removal target: met=%v (%s), want undecidable", met, ev)
+	}
+	if met, ev := judgeOnMerge(t, dir, merge, "Add `matchHeader` to `internal/scan/diffscan.go`"); met {
+		t.Errorf("presence criterion: met (%s), want unmet", ev)
+	}
+	if met, ev := judgeOnMerge(t, dir, merge, "The scanner is faster"); met || !strings.HasPrefix(ev, "undecidable:") {
+		t.Errorf("criterion with no span: met=%v (%s), want undecidable", met, ev)
+	}
+
+	dir, merge = mergeRepo(t, func(dir string) {
+		writeFile(t, dir, "internal/scan/diffscan.go",
+			strings.Replace(diffscanBase, "`^(?:\\+\\+\\+|---) `", "`^---`", 1))
+	})
+	if met, ev := judgeOnMerge(t, dir, merge, crit3422); met || !strings.Contains(ev, "diffscan.go") {
+		t.Errorf("merge edited the span's line: met=%v (%s), want unmet", met, ev)
+	}
+
+	dir, merge = mergeRepo(t, func(dir string) {
+		writeFile(t, dir, "internal/scan/diffscan.go", strings.Replace(diffscanBase,
+			"func matchLine(s string) bool {\n\treturn s != \"\"\n}\n", "", 1))
+	})
+	if met, ev := judgeOnMerge(t, dir, merge, "`matchLine` is removed"); !met {
+		t.Errorf("removal present at ^1 and gone at merge: unmet (%s), want met", ev)
+	}
+}
+
+func TestCollectACDiffRange_MissingCommit(t *testing.T) {
+	dir := scanRepo(t)
+	if _, err := CollectACDiffRange(context.Background(), dir, "0123456789abcdef0123456789abcdef01234567^1",
+		"0123456789abcdef0123456789abcdef01234567"); err == nil {
+		t.Fatal("a merge commit missing from the object store must be an error")
+	}
+	if met, ev := VerifyACOnMerge(crit3422, nil); met || !strings.HasPrefix(ev, "undecidable:") {
+		t.Errorf("nil diff: met=%v (%s), want undecidable", met, ev)
+	}
+}
+
+// "`p` is unchanged" on a merged diff: met when the merge left p alone and p
+// exists, unmet when it changed p, undecidable when p is absent.
+func TestVerifyACOnMerge_PathPreservation(t *testing.T) {
+	dir, merge := mergeRepo(t, func(dir string) {
+		writeFile(t, dir, "internal/scan/diffscan.go", diffscanBase+"\nfunc extra() {}\n")
+	})
+	if met, ev := judgeOnMerge(t, dir, merge, "`docs/SCAN.md` is unchanged"); !met {
+		t.Errorf("untouched path: unmet (%s), want met", ev)
+	}
+	if met, ev := judgeOnMerge(t, dir, merge, "`internal/scan/diffscan.go` is unchanged"); met || !strings.Contains(ev, "diffscan.go") {
+		t.Errorf("changed path: met=%v (%s), want unmet naming it", met, ev)
+	}
+	if met, ev := judgeOnMerge(t, dir, merge, "`docs/MISSING.md` is unchanged"); met || !strings.HasPrefix(ev, "undecidable:") {
+		t.Errorf("absent path: met=%v (%s), want undecidable", met, ev)
+	}
+}
+
+func TestCollectACDiffRange_RejectsBadArguments(t *testing.T) {
+	dir := scanRepo(t)
+	for _, c := range [][3]string{{"", "HEAD^1", "HEAD"}, {dir, "", "HEAD"}, {dir, "HEAD^1", ""}, {dir, "--output=/tmp/x", "HEAD"}, {dir, "HEAD^1", "-p"}} {
+		if _, err := CollectACDiffRange(context.Background(), c[0], c[1], c[2]); err == nil {
+			t.Errorf("CollectACDiffRange(%q, %q, %q): want an error", c[0], c[1], c[2])
+		}
+	}
+	for _, rev := range []string{"", "--all"} {
+		if _, _, err := acGitGrepRev(dir, rev, "-F", "x", nil); err == nil {
+			t.Errorf("acGitGrepRev rev %q: want an error", rev)
+		}
+	}
+}
+
+func TestACPreservedTokens(t *testing.T) {
+	for _, c := range []struct {
+		text string
+		want string // comma-joined governed spans
+		pres bool   // acIsPreservation
+	}{
+		{"`X` keeps its current value", "X", true},
+		{"Keep `X` and add `Y`", "X", true},
+		{"`X` is unchanged", "X", true},
+		{"The change does not change `X`", "X", true},
+		{"`X`, and many other words here, stays", "", false},
+		{"`X` is mentioned before a sentence. It stays", "", false},
+		{"`npm test` still passes", "", false},
+		{"`docs/A.md` is unchanged", "", false},
+		{"`TestPinned` still passes", "TestPinned", false},
+		{"`go test -run TestX` still passes", "", false},
+	} {
+		cl := parseACClause(c.text)
+		if got := strings.Join(acPreservedTokens(cl), ","); got != c.want {
+			t.Errorf("acPreservedTokens(%q) = %q, want %q", c.text, got, c.want)
+		}
+		if got := acIsPreservation(cl); got != c.pres {
+			t.Errorf("acIsPreservation(%q) = %v, want %v", c.text, got, c.pres)
+		}
+	}
+}

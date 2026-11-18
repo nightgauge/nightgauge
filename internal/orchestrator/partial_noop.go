@@ -15,8 +15,11 @@ package orchestrator
 //   - an operator-revised plan that names files earns one more feature-dev lap
 //     with the rule restated, so the operator's revision is not lost to one
 //     model's re-reading of the remainder;
+//   - a remainder JudgeRemainder finds all met on the earlier PR's merged diff
+//     closes the issue as completed (#3423);
 //   - anything else books not_pipeline_actionable: no retry, no cascade
-//     strike, no lifetime-cap increment, the remainder left on the issue.
+//     strike, no lifetime-cap increment, the remainder and the unmet list left
+//     on the issue.
 
 import (
 	"fmt"
@@ -37,6 +40,18 @@ const (
 	partialNoOpDispute
 	// partialNoOpBook: end the run as a non-failure no-op.
 	partialNoOpBook
+	// partialNoOpClose: every remaining criterion is met on the earlier PR's
+	// merged diff, so the issue is closed as completed (#3423).
+	partialNoOpClose
+)
+
+// PartialNoOpResult.Action values, shared with the extension's stage loop.
+const (
+	PartialNoOpActionNotScoped = "not_scoped"
+	PartialNoOpActionRelap     = "relap"
+	PartialNoOpActionDispute   = "dispute"
+	PartialNoOpActionBook      = "book"
+	PartialNoOpActionClose     = "close"
 )
 
 type partialNoOpDecision struct {
@@ -49,8 +64,10 @@ type partialNoOpDecision struct {
 
 // decidePartialNoOp decides what a zero-change feature-dev means on a run
 // scoped to scope. dispute is planRevisionDispute's result; relapped is true
-// once this run has spent its one extra lap.
-func decidePartialNoOp(issue int, scope *state.PartialRerun, rev operatorRevision, dispute string, relapped bool) partialNoOpDecision {
+// once this run has spent its one extra lap; remainder is JudgeRemainder's
+// verdict on the scope. Only remainder decides a close: nothing a model wrote
+// is read here.
+func decidePartialNoOp(issue int, scope *state.PartialRerun, rev operatorRevision, dispute string, relapped bool, remainder RemainderVerdict) partialNoOpDecision {
 	if scope == nil || scope.PR <= 0 {
 		return partialNoOpDecision{Action: partialNoOpNotScoped}
 	}
@@ -71,37 +88,49 @@ func decidePartialNoOp(issue int, scope *state.PartialRerun, rev operatorRevisio
 				strings.Join(files, ", ")),
 		}
 	}
+	if remainder.AllMet && len(remainder.Criteria) > 0 {
+		return partialNoOpDecision{Action: partialNoOpClose, Detail: PartialClosedDetail(issue, scope.PR, remainder)}
+	}
 	why := "wrote no changes"
 	if rev.binding() {
 		why = "wrote no changes twice on an operator-revised plan"
 	}
-	return partialNoOpDecision{
-		Action: partialNoOpBook,
-		Detail: fmt.Sprintf("[not-pipeline-actionable] feature-dev: partial-delivery re-run of #%d (after PR #%d) %s, so the run ends as a no-op, not a failure; %d remaining criteria stay open and #%d waits in Backlog for a human [#3163]",
-			issue, scope.PR, why, len(scope.Criteria), issue),
+	detail := fmt.Sprintf("[not-pipeline-actionable] feature-dev: partial-delivery re-run of #%d (after PR #%d) %s, so the run ends as a no-op, not a failure; %d remaining criteria stay open and #%d waits in Backlog for a human [#3163]",
+		issue, scope.PR, why, len(scope.Criteria), issue)
+	if unmet := unmetSummary(remainder); unmet != "" {
+		detail += "; unmet on the merged diff: " + unmet
 	}
+	return partialNoOpDecision{Action: partialNoOpBook, Detail: detail}
 }
 
 // PartialNoOpResult is decidePartialNoOp's verdict in the shape
 // `nightgauge issue partial-noop --json` hands the extension, so both stage
 // loops take one decision from one source (#3163).
 type PartialNoOpResult struct {
-	// Action is one of "not_scoped", "relap", "dispute", "book".
+	// Action is one of the PartialNoOpAction* values.
 	Action string `json:"action"`
 	Detail string `json:"detail,omitempty"`
 	Steer  string `json:"steer,omitempty"`
+	// Remainder is the deterministic re-judge behind a close or a book.
+	Remainder *RemainderVerdict `json:"remainder,omitempty"`
 }
 
 // DecidePartialNoOp reads ws's planning-{N}.json and dev-{N}.json and returns
-// the decision for a zero-change feature-dev on a run scoped to scope.
-func DecidePartialNoOp(ws string, issue int, scope *state.PartialRerun, relapped bool) PartialNoOpResult {
+// the decision for a zero-change feature-dev on a run scoped to scope, given
+// remainder, JudgeRemainder's verdict on the scope.
+func DecidePartialNoOp(ws string, issue int, scope *state.PartialRerun, relapped bool, remainder RemainderVerdict) PartialNoOpResult {
 	planningPath, _ := stagecontext.ContextPath(ws, issue, "planning")
-	d := decidePartialNoOp(issue, scope, readOperatorRevision(planningPath), planRevisionDispute(ws, issue), relapped)
+	d := decidePartialNoOp(issue, scope, readOperatorRevision(planningPath), planRevisionDispute(ws, issue), relapped, remainder)
 	action := map[partialNoOpAction]string{
-		partialNoOpNotScoped: "not_scoped",
-		partialNoOpRelap:     "relap",
-		partialNoOpDispute:   "dispute",
-		partialNoOpBook:      "book",
+		partialNoOpNotScoped: PartialNoOpActionNotScoped,
+		partialNoOpRelap:     PartialNoOpActionRelap,
+		partialNoOpDispute:   PartialNoOpActionDispute,
+		partialNoOpBook:      PartialNoOpActionBook,
+		partialNoOpClose:     PartialNoOpActionClose,
 	}[d.Action]
-	return PartialNoOpResult{Action: action, Detail: d.Detail, Steer: d.Steer}
+	res := PartialNoOpResult{Action: action, Detail: d.Detail, Steer: d.Steer}
+	if d.Action == partialNoOpClose || d.Action == partialNoOpBook {
+		res.Remainder = &remainder
+	}
+	return res
 }

@@ -102,4 +102,28 @@ describe("HeadlessOrchestrator.partialRerunNoOpBooking (#3163)", () => {
       })
     ).toBeNull();
   });
+
+  it("ends the run issue_closed when Go applied a close on the merged-diff verdict (#3423)", () => {
+    const detail =
+      "partial-delivery re-run of #3423 (after PR #3422) wrote no changes; every one of its 1 remaining criteria is met on abcdef12's merged diff, so #3423 is closed as completed [#3423]";
+    const booking = HeadlessOrchestrator.partialRerunNoOpBooking(3423, "feature-dev", noOp, true, {
+      action: "close",
+      detail,
+      applied: true,
+    });
+    if (booking?.action !== "close") throw new Error("expected a close");
+    expect(booking.terminalKind).toBe("issue_closed");
+    expect(booking.error.message).toContain("closed as completed");
+    expect(classifyTerminalKind(booking.error.message)).toBe("issue_closed");
+  });
+
+  it("never treats an unapplied close as closed", () => {
+    const booking = HeadlessOrchestrator.partialRerunNoOpBooking(3423, "feature-dev", noOp, true, {
+      action: "close",
+      detail: "met",
+    });
+    if (booking?.action !== "book") throw new Error("expected a booking");
+    expect(booking.terminalKind).toBe("not_pipeline_actionable");
+    expect(classifyTerminalKind(booking.error.message)).toBe("not_pipeline_actionable");
+  });
 });

@@ -1505,9 +1505,19 @@ nightgauge issue operator-revision <number>
 
 # Decide what a zero-change feature-dev means on a partial-delivery re-run
 # (#3163), as JSON: "relap" (re-dispatch once with `steer`), "dispute" (end as
-# the named PLAN_REVISION_NEEDED dispute), "book" (end not_pipeline_actionable)
-# or "not_scoped". Reads planning-{N}.json and dev-{N}.json; local only.
-nightgauge issue partial-noop <number> --pr <N> [--criteria <count>] [--relapped]
+# the named PLAN_REVISION_NEEDED dispute), "close" (every remaining criterion is
+# met on the earlier PR's merged diff, #3423), "book" (end
+# not_pipeline_actionable, with the unmet list) or "not_scoped". The remainder
+# is re-judged from partial-delivery-{N}.json's criteria and merge_sha against
+# `<merge>^1..<merge>`: only a preservation or a removal can be met, and anything
+# undecidable is unmet. `remainder` carries each criterion's verdict. Reads
+# planning-{N}.json, dev-{N}.json and partial-delivery-{N}.json; local only
+# unless --apply-close, which on "close" posts the evidence comment, ticks the
+# met boxes, closes the issue as completed and moves its board row to Done
+# ("applied": true). A failed close turns the action into "book"; an unresolved
+# board is reported as "board_error".
+nightgauge issue partial-noop <number> --pr <N> [--criteria <count>] [--relapped] \
+  [--apply-close --repo OWNER/REPO]
 
 # Edit issue body (full replacement or append)
 nightgauge issue edit <number> --body "new full body" [--owner ORG] [--repo REPO] [--json]
