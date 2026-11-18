@@ -109,9 +109,17 @@ type ACDiff struct {
 	// so a criterion comparing a file with another repository's file at a
 	// revision can be decided locally (#3042). Empty means none is known.
 	Repos map[string]string
+	// FromRev and ToRev are set by CollectACDiffRange: the diff is
+	// FromRev..ToRev, and content is read at ToRev, never from the working
+	// tree (#3423).
+	FromRev string
+	ToRev   string
 
 	content map[string]acContent
 	yaml    map[string]*yaml.Node
+	gofiles map[string]*acGoFile
+	// gofields memoises goFieldValue by path and span (#3424).
+	gofields map[string]acGoFieldMatch
 }
 
 // acContent is one file's working-tree lines; ok=false means the file could
@@ -264,6 +272,9 @@ func (d *ACDiff) headContent(path string) ([]byte, bool) {
 	if d.Workdir == "" {
 		return nil, false
 	}
+	if d.ToRev != "" {
+		return acBlob(d.Workdir, d.ToRev, path)
+	}
 	if d.Uncommitted[path] {
 		return acReadBounded(filepath.Join(d.Workdir, path))
 	}
@@ -338,7 +349,11 @@ func (d *ACDiff) lines(path string) ([]string, bool) {
 		return c.lines, c.ok
 	}
 	var c acContent
-	if d.Workdir != "" {
+	if d.Workdir != "" && d.ToRev != "" {
+		if data, ok := acBlob(d.Workdir, d.ToRev, path); ok {
+			c = acContent{lines: strings.Split(string(data), "\n"), ok: true}
+		}
+	} else if d.Workdir != "" {
 		if data, ok := acReadBounded(filepath.Join(d.Workdir, path)); ok {
 			c = acContent{lines: strings.Split(string(data), "\n"), ok: true}
 		}
@@ -774,6 +789,16 @@ func verifyACClause(c acClause, inherited []string, d *ACDiff, tests ACTestState
 	switch {
 	case acScopeRE.MatchString(c.Prose) && len(c.Paths) > 0:
 		return acScope(c, d)
+	case acIsPreservation(c) && !preflight.ACAsksAddition(c.Raw):
+		// A preservation names a span to keep, so it is judged on the span
+		// being present and untouched, never on added content (#3423).
+		return acPreserved(c, d)
+	case acIsPreservation(c):
+		// "keep `X` and add `Y`" is judged on the addition only: no unmet
+		// comes from the preserved span (#3423).
+		c = acAdditionPart(c)
+	}
+	switch {
 	case acUnchangedAboutTarget(c.Raw):
 		return acUnchanged(c, d)
 	case acChangelogRE.MatchString(c.Prose) && len(c.Paths) == 0 && len(c.Headings) > 0:
@@ -1982,7 +2007,8 @@ func acTokens(c acClause, named, inherited []string, d *ACDiff) acResult {
 			added++
 		} else {
 			missing = append(missing, tok)
-			skipped = skipped || unread
+			skipped = skipped || unread ||
+				acGoFieldUndecided(tok, scope, d) || acGoFieldUndecided(tok, wide, d)
 		}
 	}
 	// A prose #NNN ref is context the criterion names, never text the diff
@@ -2292,8 +2318,24 @@ func acAddedToken(tok string, scope []string, d *ACDiff) (string, bool) {
 				}
 			}
 		}
+		// A Go field span set by a keyed or positional literal (#3424).
+		if g, _ := d.goFieldValue(tok, p); len(g.added) > 0 {
+			return fmt.Sprintf("%s:%d", p, g.added[0]), true
+		}
 	}
 	return "", false
+}
+
+// acGoFieldUndecided reports that a Go field span may be set positionally
+// in a scope file whose struct field order cannot be resolved (#3424): its
+// absence is then not evidence, so the clause is not verifiable, never unmet.
+func acGoFieldUndecided(tok string, scope []string, d *ACDiff) bool {
+	for _, p := range scope {
+		if g, ok := d.goFieldValue(tok, p); ok && g.undecided {
+			return true
+		}
+	}
+	return false
 }
 
 // acYAMLKeyRE parses a YAML key-path span `a: b`: `:` only, so `a=b` stays
@@ -2431,4 +2473,382 @@ func (d *ACDiff) hasDeliverable() bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// Preservation (#3423)
+// ---------------------------------------------------------------------------
+
+// acIsPreservation reports whether a clause asks for a named span to stay as
+// it is: a preservation verb (preflight.ACAsksPreservation) governs a literal
+// span that is not a path. A clause naming a heading keeps the section rule
+// (acUnchanged), and one naming a test or a `go test -run` pattern keeps its
+// test rule, which reads the test run.
+func acIsPreservation(c acClause) bool {
+	if !preflight.ACAsksPreservation(c.Raw) || len(c.Headings) > 0 || len(acPreservedTokens(c)) == 0 {
+		return false
+	}
+	if _, ok := acRunPattern(c); ok {
+		return false
+	}
+	_, _, isTest := acTestName(c)
+	return !isTest
+}
+
+// acPreserveObjectRE marks a preservation verb that takes its span as an
+// object ("keep `X`", "does not change `X`"); every other verb governs the
+// span before it ("`X` remains", "`X` is unchanged").
+var acPreserveObjectRE = regexp.MustCompile(`(?i)^(?:keeps?|do(?:es)? not change)$`)
+
+// acPreservedTokens returns the literal spans a preservation verb governs: the
+// span directly before the verb ("`X` keeps its value", "`X` is unchanged")
+// or, for a transitive verb, directly after it ("keep `X`"), with at most
+// three words and no clause break between. A path, a span holding whitespace
+// (a command such as `npm test`), a placeholder and an expression are never
+// preserved spans.
+func acPreservedTokens(c acClause) []string {
+	lit, _ := acLiteralSpans(c.Tokens)
+	literal := map[string]bool{}
+	for _, t := range lit {
+		if !strings.ContainsAny(t, " \t") {
+			literal[t] = true
+		}
+	}
+	spans := acCodeSpans(c.Raw)
+	near := func(gap string) bool {
+		return !acUnchangedBreakRE.MatchString(gap) && !strings.Contains(gap, ",") && len(strings.Fields(gap)) <= 3
+	}
+	seen := map[string]bool{}
+	var out []string
+	take := func(sp [4]int) {
+		tok := strings.TrimSpace(acSpanContent(c.Raw[sp[2]:sp[3]]))
+		if literal[tok] && !seen[tok] {
+			seen[tok] = true
+			out = append(out, tok)
+		}
+	}
+	for _, v := range preflight.ACPreservationVerbs(c.Raw) {
+		for i := len(spans) - 1; i >= 0; i-- {
+			if spans[i][1] <= v[0] {
+				if near(c.Raw[spans[i][1]:v[0]]) {
+					take(spans[i])
+				}
+				break
+			}
+		}
+		if !acPreserveObjectRE.MatchString(c.Raw[v[0]:v[1]]) {
+			continue
+		}
+		for _, sp := range spans {
+			if sp[0] >= v[1] {
+				if near(c.Raw[v[1]:sp[0]]) {
+					take(sp)
+				}
+				break
+			}
+		}
+	}
+	return out
+}
+
+// acAdditionPart narrows a mixed clause ("keep `X` and add `Y`") to the spans
+// no preservation verb governs, so it is judged on the addition alone.
+func acAdditionPart(c acClause) acClause {
+	kept := map[string]bool{}
+	for _, t := range acPreservedTokens(c) {
+		kept[t] = true
+	}
+	out := c
+	out.Tokens = nil
+	for _, tok := range c.Tokens {
+		if !kept[tok] {
+			out.Tokens = append(out.Tokens, tok)
+		}
+	}
+	return out
+}
+
+// acPreserved answers a preservation clause (#3423): met when every literal
+// span it names exists on the branch and no non-comment line the diff adds or
+// removes contains it; unmet naming the changed line when one does, or when a search
+// that ran finds no such span. A path the clause names need only exist. A
+// file that cannot be read, or a search that did not run, leaves the clause
+// undecided.
+func acPreserved(c acClause, d *ACDiff) acResult {
+	tokens := acPreservedTokens(c)
+	if len(tokens) == 0 {
+		return acResult{}
+	}
+	for _, p := range c.Paths {
+		if f := d.Files[p]; f != nil && f.Status == "deleted" {
+			return acAnswer(ACUnmet, fmt.Sprintf("the diff deletes `%s`", p), p)
+		}
+		if _, ok := d.lines(p); !ok {
+			return acResult{}
+		}
+	}
+	for _, tok := range tokens {
+		match := acSpanMatcher(tok)
+		for _, p := range d.sortedPaths() {
+			f := d.Files[p]
+			for _, l := range f.Added {
+				if match(l.Text) && !acCommentLine(p, l.Text) {
+					return acAnswer(ACUnmet, fmt.Sprintf("the diff changes a line containing `%s` at `%s:%d`", tok, p, l.N), p)
+				}
+			}
+			for _, l := range f.Removed {
+				if match(l) && !acCommentLine(p, l) {
+					return acAnswer(ACUnmet, fmt.Sprintf("the diff removes a line containing `%s` from `%s`", tok, p), p)
+				}
+			}
+		}
+	}
+	var ev []string
+	for _, tok := range tokens {
+		loc, found, err := acPresentAnywhere(tok, c.Paths, d)
+		if err != nil {
+			return acResult{}
+		}
+		if !found {
+			return acAnswer(ACUnmet, fmt.Sprintf("`%s` is not on the branch, so nothing keeps it", tok), c.Paths...)
+		}
+		ev = append(ev, fmt.Sprintf("`%s` at `%s`", tok, loc))
+	}
+	return acAnswer(ACMet, "the diff changes no line containing "+acList(tokens, 5)+"; kept: "+strings.Join(ev, ", "))
+}
+
+// acPresentAnywhere finds tok on the branch: in the named paths first, else
+// anywhere in the tree (at ToRev for a range diff, else the working tree).
+// err is set when the search could not run, so absence is never inferred
+// from a grep that did not answer.
+func acPresentAnywhere(tok string, paths []string, d *ACDiff) (string, bool, error) {
+	if len(paths) > 0 {
+		if loc, found, _ := acPresentToken(tok, paths, d); found {
+			return loc, true, nil
+		}
+	}
+	if d.Workdir == "" {
+		// Only the diffed files are known: look in each, and answer absent
+		// only when every one could be read.
+		loc, found, unread := acPresentToken(tok, d.sortedPaths(), d)
+		if !found && unread {
+			return "", false, errors.New("a diffed file could not be read")
+		}
+		return loc, found, nil
+	}
+	lit := tok
+	if m := acCallSpanRE.FindStringSubmatch(tok); m != nil {
+		lit = m[1]
+	} else if id := acWrappedIdent(tok); id != "" {
+		lit = id
+	}
+	if d.ToRev != "" {
+		return acGitGrepRev(d.Workdir, d.ToRev, "-F", lit, nil)
+	}
+	return acGitGrep(d.Workdir, "-F", lit)
+}
+
+// acCommentLine reports whether line is a comment in path's language, keyed
+// on the file extension (#3423). Markdown and plain text have only `<!--`
+// comments: a `* ` bullet or a `# ` heading there is content. `#` is a
+// comment only in `#`-comment languages, and `//`, `/*` and a `*`
+// continuation only in C-family code.
+func acCommentLine(path, line string) bool {
+	t := strings.TrimSpace(line)
+	if t == "" {
+		return false
+	}
+	base := filepath.Base(path)
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".md", ".mdx", ".markdown", ".txt", ".rst", ".html", ".htm", ".xml", ".svg", ".vue", ".svelte":
+		return strings.HasPrefix(t, "<!--")
+	case ".go", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".c", ".h", ".cc", ".cpp",
+		".hpp", ".java", ".kt", ".kts", ".rs", ".swift", ".dart", ".scala", ".cs", ".css", ".scss", ".less", ".proto":
+		return strings.HasPrefix(t, "//") || strings.HasPrefix(t, "/*") ||
+			t == "*" || t == "*/" || strings.HasPrefix(t, "* ")
+	case ".yml", ".yaml", ".sh", ".bash", ".zsh", ".py", ".toml", ".rb", ".pl", ".r", ".mk", ".cfg", ".ini", ".conf", ".tf":
+		return strings.HasPrefix(t, "#")
+	}
+	switch base {
+	case "Makefile", "Dockerfile", ".gitignore", ".gitattributes", ".dockerignore", ".npmignore":
+		return strings.HasPrefix(t, "#")
+	}
+	return false
+}
+
+// ---------------------------------------------------------------------------
+// Merged-diff judge (#3423)
+// ---------------------------------------------------------------------------
+
+// CollectACDiffRange diffs from..to in the repository at workdir: the changes
+// one commit range made, with content read at to, never from the working
+// tree. A partial-delivery remainder is judged on the earlier PR's merge
+// commit against its first parent (`<merge>^1`, `<merge>`). It fails when
+// either revision is not a commit in the local object store.
+func CollectACDiffRange(ctx context.Context, workdir, from, to string) (*ACDiff, error) {
+	if workdir == "" || from == "" || to == "" || strings.HasPrefix(from, "-") || strings.HasPrefix(to, "-") {
+		return nil, fmt.Errorf("diff range %q..%q in %q: missing or invalid revision", from, to, workdir)
+	}
+	ctx, cancel := context.WithTimeout(ctx, acDiffTimeout)
+	defer cancel()
+	git := func(args ...string) (string, error) {
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.quotePath=false"}, args...)...)
+		cmd.Dir = workdir
+		out, err := cmd.Output()
+		return string(out), err
+	}
+	for _, rev := range []string{from, to} {
+		if _, err := git("cat-file", "-e", rev+"^{commit}"); err != nil {
+			return nil, fmt.Errorf("revision %s is not a commit in %s: %w", rev, workdir, err)
+		}
+	}
+	out, err := git("diff", "--unified=0", "--no-color", "--no-ext-diff", "-M", from, to)
+	if err != nil {
+		return nil, fmt.Errorf("git diff %s %s: %w", from, to, err)
+	}
+	return &ACDiff{
+		Files: parseUnifiedDiff(out), Workdir: workdir, Uncommitted: map[string]bool{},
+		FromRev: from, ToRev: to,
+	}, nil
+}
+
+// acGitGrepRev is acGitGrep over the tree at rev, limited to paths when any
+// are given. It returns the first match as file:line.
+func acGitGrepRev(workdir, rev, mode, pat string, paths []string) (string, bool, error) {
+	if rev == "" || strings.HasPrefix(rev, "-") {
+		return "", false, fmt.Errorf("invalid revision %q", rev)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), acDiffTimeout)
+	defer cancel()
+	args := []string{"-c", "core.quotePath=false", "-c", "submodule.recurse=false", "grep", "-n", "-m", "1", mode, "-e", pat, rev}
+	if len(paths) > 0 {
+		args = append(append(args, "--"), paths...)
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = workdir
+	out, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 1 && ctx.Err() == nil {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	first, _, _ := strings.Cut(string(out), "\n")
+	first = strings.TrimPrefix(first, rev+":")
+	parts := strings.SplitN(first, ":", 3)
+	if len(parts) < 2 {
+		return "", false, fmt.Errorf("unparsed git grep output %q", first)
+	}
+	return parts[0] + ":" + parts[1], true, nil
+}
+
+// VerifyACOnMerge judges one remaining criterion against a merged diff from
+// CollectACDiffRange (#3423). Only two rules can answer met: a preservation
+// (the diff changed no non-comment line containing the span, and the span
+// exists at the merge) and a removal (the span existed at the first parent and
+// is absent at the merge). Every other outcome — a clause that is neither, a
+// clause naming no span, a span on neither side, a read or grep error — is
+// unmet, with evidence beginning "undecidable:". met is never inferred from a
+// missing answer.
+func VerifyACOnMerge(text string, d *ACDiff) (met bool, evidence string) {
+	if d == nil || d.FromRev == "" || d.ToRev == "" || d.Workdir == "" {
+		return false, "undecidable: no merged diff to judge against"
+	}
+	prose := acStripCodeSpans(text)
+	for _, r := range acRuntimeSteps {
+		if r.re.MatchString(prose) {
+			return false, "undecidable: needs " + r.step
+		}
+	}
+	var ev []string
+	for _, raw := range splitACClauses(text) {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		ok, e := acJudgeOnMerge(parseACClause(raw), d)
+		if !ok {
+			return false, e
+		}
+		ev = append(ev, e)
+	}
+	if len(ev) == 0 {
+		return false, "undecidable: the criterion names nothing to judge"
+	}
+	return true, strings.Join(ev, "; ")
+}
+
+// acJudgeOnMerge judges one clause of a remaining criterion on a merged diff.
+func acJudgeOnMerge(c acClause, d *ACDiff) (bool, string) {
+	if preflight.ACAsksAddition(c.Raw) {
+		return false, "undecidable: asks for an addition, which only a new change can deliver"
+	}
+	switch {
+	case acIsPreservation(c):
+		r := acPreserved(c, d)
+		switch {
+		case !r.ok:
+			return false, fmt.Sprintf("undecidable: %s could not be found at %s", acList(c.Tokens, 3), ShortRev(d.ToRev))
+		case r.status == ACUnmet:
+			return false, r.evidence
+		}
+		return true, r.evidence
+	case preflight.ACAsksPreservation(c.Raw) && len(c.Paths) > 0 && len(c.Headings) == 0 && len(c.Globs) == 0:
+		return acPathsPreservedOnMerge(c, d)
+	case preflight.ACAsksRemoval(c.Raw):
+		return acRemovedOnMerge(c, d)
+	}
+	return false, "undecidable: neither a preservation nor a removal"
+}
+
+// acPathsPreservedOnMerge answers "`p` is unchanged" on a merged diff: met
+// when the diff does not touch p and p exists at the merge.
+func acPathsPreservedOnMerge(c acClause, d *ACDiff) (bool, string) {
+	for _, p := range c.Paths {
+		if _, changed := d.Files[p]; changed {
+			return false, fmt.Sprintf("`%s` changes in %s", p, ShortRev(d.ToRev))
+		}
+		if _, ok := acBlob(d.Workdir, d.ToRev, p); !ok {
+			return false, fmt.Sprintf("undecidable: `%s` does not exist at %s", p, ShortRev(d.ToRev))
+		}
+	}
+	return true, fmt.Sprintf("%s untouched by %s", acList(c.Paths, 3), ShortRev(d.ToRev))
+}
+
+// acRemovedOnMerge answers a removal on a merged diff: met only when the span
+// existed at the first parent and is absent at the merge. A span that never
+// existed is not removed — it is undecidable, so unmet.
+func acRemovedOnMerge(c acClause, d *ACDiff) (bool, string) {
+	span := preflight.ACRemovalSpan(c.Raw)
+	if span == "" {
+		return false, "undecidable: no removal span"
+	}
+	mode, pat, shown := "-F", span, span
+	if name, re, ok := acRemovalTarget(c); ok {
+		mode, pat, shown = "-E", re.String(), name
+	}
+	from, found, err := acGitGrepRev(d.Workdir, d.FromRev, mode, pat, c.Paths)
+	if err != nil {
+		return false, fmt.Sprintf("undecidable: could not search %s: %v", ShortRev(d.FromRev), err)
+	}
+	if !found {
+		return false, fmt.Sprintf("undecidable: `%s` did not exist at %s, so the merge cannot have removed it", shown, ShortRev(d.FromRev))
+	}
+	to, found, err := acGitGrepRev(d.Workdir, d.ToRev, mode, pat, c.Paths)
+	if err != nil {
+		return false, fmt.Sprintf("undecidable: could not search %s: %v", ShortRev(d.ToRev), err)
+	}
+	if found {
+		return false, fmt.Sprintf("`%s` is still at `%s` in %s", shown, to, ShortRev(d.ToRev))
+	}
+	return true, fmt.Sprintf("`%s` at `%s` before the merge; absent at %s", shown, from, ShortRev(d.ToRev))
+}
+
+// ShortRev shortens a full commit id for evidence to 12 characters;
+// anything else is kept.
+func ShortRev(rev string) string {
+	if len(rev) > 12 && acRevisionRE.MatchString(rev) {
+		return rev[:12]
+	}
+	return rev
 }

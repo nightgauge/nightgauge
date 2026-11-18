@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -54,6 +55,10 @@ type PartialDeliveryFile struct {
 	// no longer contains (#3235).
 	Dropped   []string   `json:"dropped,omitempty"`
 	CommentAt *time.Time `json:"comment_at,omitempty"`
+	// MergeSHA is the partial PR's merge commit, read from the forge at
+	// scope time. A zero-change re-run judges the remainder against it and
+	// its first parent (#3423); empty means the remainder cannot be judged.
+	MergeSHA string `json:"merge_sha,omitempty"`
 }
 
 // readPartialDelivery reads repo#issue's pending partial-delivery remainder
@@ -113,7 +118,8 @@ func (s *Scheduler) scopePartialRerun(ctx context.Context, runtime *state.Runtim
 	if !status.Pending || status.Unlisted || len(status.Criteria) == 0 {
 		return
 	}
-	scope, dropped := s.reconcilePartialScope(ctx, item, ws, status.Criteria, status.PR)
+	rec := s.reconcilePartialScope(ctx, item, ws, status.Criteria, status.PR, status.CommentAt)
+	scope := rec.Criteria
 	if len(scope) == 0 {
 		// Every listed criterion left the body and none is new: the remainder
 		// is resolved. Scope the run to nothing, never to the whole issue,
@@ -122,9 +128,7 @@ func (s *Scheduler) scopePartialRerun(ctx context.Context, runtime *state.Runtim
 			item.Number, status.PR)
 	}
 	runtime.SetPartialRerun(status.PR, scope)
-	if err := WritePartialDeliveryContext(ws, item.Number, PartialDeliveryFile{
-		PR: status.PR, Criteria: scope, Dropped: dropped, CommentAt: status.CommentAt,
-	}); err != nil {
+	if err := WritePartialDeliveryContext(ws, item.Number, rec); err != nil {
 		log.Printf("#%d: could not write the partial-delivery context: %v", item.Number, err)
 	}
 	log.Printf("#%d: partial-delivery re-run after PR #%d — scope is the %d remaining criteria [#3160]",
@@ -142,12 +146,11 @@ func (s *Scheduler) scopePartialRerun(ctx context.Context, runtime *state.Runtim
 // are always undetectable, so that would re-open what the partial PR already
 // delivered. When the body cannot be read or has no criteria, the comment
 // list stands unchanged.
-func (s *Scheduler) reconcilePartialScope(ctx context.Context, item types.BoardItem, ws string, listed []string, pr int) (scope, dropped []string) {
+func (s *Scheduler) reconcilePartialScope(ctx context.Context, item types.BoardItem, ws string, listed []string, pr int, commentAt *time.Time) PartialDeliveryFile {
 	reads := PartialScopeReads{
 		Body: func(ctx context.Context) (string, error) { return s.readACReconcileBody(ctx, item) },
-		PR: func(ctx context.Context, pr int) (time.Time, string, error) {
-			got, err := s.readPartialPR(ctx, item.Repo, pr)
-			return got.CreatedAt, got.Body, err
+		PR: func(ctx context.Context, pr int) (gh.PartialPR, error) {
+			return s.readPartialPR(ctx, item.Repo, pr)
 		},
 		BodyEditedAt: func(ctx context.Context) (*time.Time, error) {
 			if s.issueBodyEditedAt != nil {
@@ -156,7 +159,7 @@ func (s *Scheduler) reconcilePartialScope(ctx context.Context, item types.BoardI
 			return forgeIssueBodyEditedAt(s, ctx, item)
 		},
 	}
-	return ReconcilePartialScope(ctx, reads, ws, item.Number, listed, pr)
+	return ReconcilePartialRecord(ctx, reads, ws, item.Number, listed, pr, commentAt)
 }
 
 // PartialScopeReads are the forge reads behind ReconcilePartialScope. Body
@@ -164,7 +167,7 @@ func (s *Scheduler) reconcilePartialScope(ctx context.Context, item types.BoardI
 // leaves the comment's list standing.
 type PartialScopeReads struct {
 	Body         func(ctx context.Context) (string, error)
-	PR           func(ctx context.Context, pr int) (created time.Time, body string, err error)
+	PR           func(ctx context.Context, pr int) (gh.PartialPR, error)
 	BodyEditedAt func(ctx context.Context) (*time.Time, error)
 }
 
@@ -185,7 +188,8 @@ func ReconcilePartialScope(ctx context.Context, reads PartialScopeReads, ws stri
 	}
 	var prCriteria []string
 	addNew := false
-	created, prBody, err := reads.PR(ctx, pr)
+	got, err := reads.PR(ctx, pr)
+	created, prBody := got.CreatedAt, got.Body
 	if err != nil {
 		// Without the PR's met and unmet sections nothing can be told apart
 		// from what it delivered (prose criteria are always undetectable), so
@@ -206,13 +210,70 @@ func ReconcilePartialScope(ctx context.Context, reads PartialScopeReads, ws stri
 	return scope, dropped
 }
 
-// partialPR is what the reconcile reads from the partial PR: when it was
-// opened, the earliest moment its unmet list could have been computed, and
-// its body, whose acceptance-criteria sections name what it covered.
-type partialPR struct {
-	CreatedAt time.Time
-	Body      string
+// ReconcilePartialRecord is ReconcilePartialScope plus the partial PR's merge
+// commit, as the partial-delivery-{N}.json record both the scheduler and
+// `nightgauge issue partial-delivery --write-context` write (#3423). The PR
+// is read once: the reconcile's read is reused, and made here only when the
+// reconcile never reached it. An unreadable PR leaves MergeSHA empty, so the
+// remainder is never judged met against a merge nobody read.
+func ReconcilePartialRecord(ctx context.Context, reads PartialScopeReads, ws string, issue int, listed []string, pr int, commentAt *time.Time) PartialDeliveryFile {
+	var read *gh.PartialPR
+	var readErr error
+	inner := reads.PR
+	reads.PR = func(ctx context.Context, n int) (gh.PartialPR, error) {
+		if read == nil && readErr == nil && inner == nil {
+			readErr = errors.New("no partial PR read configured")
+		}
+		if read == nil && readErr == nil {
+			got, err := inner(ctx, n)
+			if err != nil {
+				readErr = err
+				return gh.PartialPR{}, err
+			}
+			read = &got
+		}
+		if readErr != nil {
+			return gh.PartialPR{}, readErr
+		}
+		return *read, nil
+	}
+	scope, dropped := ReconcilePartialScope(ctx, reads, ws, issue, listed, pr)
+	if scope == nil {
+		scope = []string{}
+	}
+	rec := PartialDeliveryFile{PR: pr, Criteria: scope, Dropped: dropped, CommentAt: commentAt}
+	if got, err := reads.PR(ctx, pr); err != nil {
+		log.Printf("#%d: partial PR #%d merge commit unreadable (%v) — a zero-change re-run cannot judge the remainder [#3423]",
+			issue, pr, err)
+	} else {
+		rec.MergeSHA = got.MergeSHA
+	}
+	return rec
 }
+
+// ReadPartialDeliveryContext reads partial-delivery-{N}.json from ws's
+// pipeline state directory, the record WritePartialDeliveryContext wrote.
+func ReadPartialDeliveryContext(ws string, issue int) (PartialDeliveryFile, error) {
+	path, err := stagecontext.ContextPath(ws, issue, partialDeliveryContextType)
+	if err != nil {
+		return PartialDeliveryFile{}, fmt.Errorf("partial-delivery context path for #%d: %w", issue, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return PartialDeliveryFile{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	var f PartialDeliveryFile
+	if err := json.Unmarshal(data, &f); err != nil {
+		return PartialDeliveryFile{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return f, nil
+}
+
+// partialPR is what the reconcile reads from the partial PR: when it was
+// opened, the earliest moment its unmet list could have been computed; its
+// body, whose acceptance-criteria sections name what it covered; and its
+// merge commit (#3423).
+type partialPR = gh.PartialPR
 
 func (s *Scheduler) readPartialPR(ctx context.Context, repo string, pr int) (partialPR, error) {
 	if s.partialPRRead != nil {
@@ -245,11 +306,7 @@ var forgePartialPR = func(s *Scheduler, ctx context.Context, repo string, pr int
 	if err != nil {
 		return partialPR{}, err
 	}
-	created, body, err := client.PRCreatedAtAndBody(ctx, owner, name, pr)
-	if err != nil {
-		return partialPR{}, err
-	}
-	return partialPR{CreatedAt: created, Body: body}, nil
+	return client.PartialPR(ctx, owner, name, pr)
 }
 
 // forgeIssueBodyEditedAt is the production read behind bodyEditedSince.
@@ -527,23 +584,27 @@ func renderPartialRerunPromptBlock(stage state.PipelineStage, scope *state.Parti
 }
 
 // stopNoDiffPartialRerun ends a partial re-run whose feature-dev left the
-// branch level with its base (#3160). It posts the remainder on the issue,
-// never closes it (closing over a recorded remainder is a human decision,
-// #3089), and returns the not_pipeline_actionable detail. stopped is false
-// for an unscoped run, a branch with a diff, or a diff that could not be read
-// — each of which continues to feature-validate as before.
-func (s *Scheduler) stopNoDiffPartialRerun(ctx context.Context, runtime *state.RuntimeState, item types.BoardItem, ws string) (detail string, stopped bool) {
+// branch level with its base (#3160). When remainder finds every remaining
+// criterion met on the earlier PR's merged diff it returns met, posting
+// nothing, and the caller closes the issue (#3423); otherwise it posts the
+// remainder on the issue and returns the not_pipeline_actionable detail.
+// stopped is false for an unscoped run, a branch with a diff, or a diff that
+// could not be read — each of which continues to feature-validate as before.
+func (s *Scheduler) stopNoDiffPartialRerun(ctx context.Context, runtime *state.RuntimeState, item types.BoardItem, ws string, remainder func() RemainderVerdict) (detail string, stopped, met bool) {
 	scope := runtime.PartialRerunScope()
 	if scope == nil {
-		return "", false
+		return "", false, false
 	}
 	branch, base, level, err := pmstages.BranchNoDiff(ctx, ws, item.Number)
 	if err != nil {
 		log.Printf("#%d: partial re-run: could not compare the branch with its base (%v) — continuing to feature-validate", item.Number, err)
-		return "", false
+		return "", false, false
 	}
 	if !level {
-		return "", false
+		return "", false, false
+	}
+	if v := remainder(); v.AllMet {
+		return "", true, true
 	}
 	if branch == "" {
 		branch = runtime.FeatureBranch()
@@ -563,7 +624,7 @@ func (s *Scheduler) stopNoDiffPartialRerun(ctx context.Context, runtime *state.R
 	}
 	detail = pmstages.PartialRerunNoDiffDetail(item.Number, scope.PR, branch, base, len(scope.Criteria))
 	log.Printf("#%d: %s", item.Number, detail)
-	return detail, true
+	return detail, true, false
 }
 
 // stagesInclude reports whether stage is among stages.

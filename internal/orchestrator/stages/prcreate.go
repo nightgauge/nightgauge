@@ -467,7 +467,7 @@ func RenderBody(snap PRCreateSnapshot) string {
 		}
 	}
 	if len(met) > 0 {
-		b.WriteString("## Acceptance criteria\n\n")
+		b.WriteString(ACMetHeading + "\n\n")
 		for _, v := range met {
 			b.WriteString(fmt.Sprintf("- %s: %s", acStatusLabel(v.Status), acText(v.Text)))
 			switch {

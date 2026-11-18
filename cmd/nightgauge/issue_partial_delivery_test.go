@@ -149,8 +149,8 @@ func partialCmdReads(bodyCriteria, delivered, listed []string, edited time.Time)
 	prBody := pmstages.RenderBody(pmstages.PRCreateSnapshot{IssueNumber: 3242, ACVerdicts: vs})
 	return orchestrator.PartialScopeReads{
 		Body: func(context.Context) (string, error) { return body, nil },
-		PR: func(context.Context, int) (time.Time, string, error) {
-			return partialCmdOpened, prBody, nil
+		PR: func(context.Context, int) (gh.PartialPR, error) {
+			return gh.PartialPR{CreatedAt: partialCmdOpened, Body: prBody}, nil
 		},
 		BodyEditedAt: func(context.Context) (*time.Time, error) { return &edited, nil },
 	}

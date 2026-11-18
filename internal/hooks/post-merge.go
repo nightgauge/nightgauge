@@ -11,6 +11,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/acparse"
+	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/trust"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -283,7 +284,7 @@ type BoardSyncer interface {
 	AddIssueByNumber(ctx context.Context, owner, repo string, number int) (string, error)
 }
 
-// syncIssueDone drives the merged issue's board Status to Done, adding the row
+// SyncIssueDone drives the merged issue's board Status to Done, adding the row
 // first when there is not one.
 //
 // The missing row is the common case, not an edge case: issues filed ad-hoc with
@@ -295,10 +296,10 @@ type BoardSyncer interface {
 // Only ErrIssueNotOnBoard is repaired. An auth or network failure is not made
 // better by writing to the board, and retrying it as if it were would turn a
 // clear error into a confusing one.
-func syncIssueDone(ctx context.Context, boardSvc BoardSyncer, input PostMergeInput) BoardSyncOutcome {
+func SyncIssueDone(ctx context.Context, boardSvc BoardSyncer, input PostMergeInput) BoardSyncOutcome {
 	owner, repo, num := input.RepositoryOwner, input.RepositoryName, input.IssueNumber
 
-	syncErr := boardSvc.SyncStatus(ctx, owner, repo, num, "Done")
+	syncErr := boardSvc.SyncStatus(ctx, owner, repo, num, string(state.StatusDone))
 	if syncErr == nil {
 		fmt.Fprintf(os.Stderr, "Post-merge: synced issue #%d board status to Done\n", num)
 		return BoardSyncSynced
@@ -315,7 +316,7 @@ func syncIssueDone(ctx context.Context, boardSvc BoardSyncer, input PostMergeInp
 		fmt.Fprintf(os.Stderr, "Warning: post-merge board repair failed for #%d: %v\n", num, addErr)
 		return BoardSyncFailed
 	}
-	if retryErr := boardSvc.SyncStatus(ctx, owner, repo, num, "Done"); retryErr != nil {
+	if retryErr := boardSvc.SyncStatus(ctx, owner, repo, num, string(state.StatusDone)); retryErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: post-merge board sync to Done failed for #%d after adding it: %v\n", num, retryErr)
 		return BoardSyncFailed
 	}
@@ -457,6 +458,16 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	issueClosed := closedByUs || alreadyClosed
 
 	out = PostMergeResult{IssueClosed: issueClosed, MergedCommitSha: mergedSha, MergedAt: mergedAt, BaseRef: merge.BaseRef, MergedBy: merge.MergedBy}
+	// (#3424) A closing PR ticks the boxes it reported met, as a partial
+	// delivery does: a PR pr-merge promoted to Closes on its checks' evidence
+	// leaves no box unticked. A failed tick is reported, not a failed close.
+	if issueClosed && input.BodyEditor != nil && strings.TrimSpace(merge.Body) != "" {
+		if ticked, err := tickMetCriteria(ctx, input.BodyEditor, issue, computeRemainder(issue.Body, merge.Body, nil)); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: post-merge could not tick the criteria PR #%d met on #%d: %v\n", input.PRNumber, input.IssueNumber, err)
+		} else {
+			out.TickedCriteria = ticked
+		}
+	}
 	// (#1249) Observe the base branch AFTER the fast reconciliation below has
 	// run, not before: the poll can take minutes, and the issue close, board
 	// sync and epic rollup must not wait on CI. Every return path past this
@@ -486,7 +497,7 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	// issue otherwise lingers as "In progress"/"Ready" on the board.
 	out.IssueDoneSync = BoardSyncNotAttempted
 	if boardSvc != nil && input.ProjectNumber > 0 && issueClosed {
-		out.IssueDoneSync = syncIssueDone(ctx, boardSvc, input)
+		out.IssueDoneSync = SyncIssueDone(ctx, boardSvc, input)
 		// A board left out of date is a failure of what the caller asked for,
 		// even when the epic half succeeds (#1025).
 		if out.IssueDoneSync == BoardSyncFailed {
@@ -805,16 +816,13 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 		out.UnmetCriteria = UnmetCriteria(merge.Body)
 	}
 	out.OwnerOnlyRemainder = isOwnerOnlyRemainder(out.UnmetCriteria) || plan.NotVerifiableOnly
-	if len(plan.TickIndices) > 0 && input.BodyEditor != nil && !input.AlreadyMerged {
-		newBody, marked := acparse.Mark(issue.Body, plan.TickIndices)
-		if len(marked.Changed) == 0 {
-			// Nothing to write.
-		} else if _, err := input.BodyEditor.EditIssue(ctx, issue.NodeID, newBody); err != nil {
+	if input.BodyEditor != nil && !input.AlreadyMerged {
+		if ticked, err := tickMetCriteria(ctx, input.BodyEditor, issue, plan); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: post-merge could not tick the criteria PR #%d met on #%d: %v\n", input.PRNumber, input.IssueNumber, err)
 			out.Failed = true
 			out.Error = err.Error()
 		} else {
-			out.TickedCriteria = marked.Changed
+			out.TickedCriteria = ticked
 		}
 	}
 	if out.EmptyDelivery || out.OwnerOnlyRemainder || out.AllCriteriaTicked {
@@ -969,4 +977,20 @@ func remainderComment(prNumber int, remaining, notVerifiable, met []string, back
 	}
 	writeList(NotVerifiableCriteriaHeading, nv)
 	return b.String()
+}
+
+// tickMetCriteria ticks the issue boxes plan reports met (#3318, #3424) and
+// returns the acparse indices it changed; nil when there is nothing to tick.
+func tickMetCriteria(ctx context.Context, editor IssueBodyEditor, issue *types.Issue, plan remainderPlan) ([]int, error) {
+	if len(plan.TickIndices) == 0 {
+		return nil, nil
+	}
+	newBody, marked := acparse.Mark(issue.Body, plan.TickIndices)
+	if len(marked.Changed) == 0 {
+		return nil, nil
+	}
+	if _, err := editor.EditIssue(ctx, issue.NodeID, newBody); err != nil {
+		return nil, err
+	}
+	return marked.Changed, nil
 }

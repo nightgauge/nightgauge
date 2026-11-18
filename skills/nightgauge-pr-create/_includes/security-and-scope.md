@@ -89,7 +89,10 @@ fi
 
 `nightgauge scan diff-secrets` scans the files changed since the base for four
 critical and five warning secret patterns. It exits 1 on a critical finding
-and 2 when it cannot run. The orchestrator can re-run the same verb after a fix.
+and 2 when it cannot run. A scan that cannot run stops pr-create like a critical
+finding: it records the `security_scan` gate stop, so the orchestrator
+does not open a fallback PR with no secret scan (#3421). The orchestrator can
+re-run the same verb after a fix.
 
 ```bash
 SCAN_JSON=$("${NIGHTGAUGE_BIN:-nightgauge}" scan diff-secrets --base "$BASE_BRANCH" --json)
@@ -101,6 +104,15 @@ if { [ "$SCAN_EXIT" -ne 0 ] && [ "$SCAN_EXIT" -ne 1 ]; } || \
     and (.critical|type=="number") and (.warnings|type=="number")
     and ((.critical > 0) == ($x == 1))' >/dev/null 2>&1; then
   echo "ERROR: nightgauge scan diff-secrets could not run (exit $SCAN_EXIT)" >&2
+  # Record the stop so the orchestrator does not open a fallback PR without a scan (#3421).
+  ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+  [ -n "$ISSUE_NUMBER" ] || { echo "ERROR: no issue number; the security_scan gate stop is not recorded" >&2; exit 1; }
+  jq -n --arg gate security_scan \
+    --arg reason "secret scan could not run (scan diff-secrets exit $SCAN_EXIT)" \
+    --arg head_sha "$(git rev-parse HEAD)" --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{gate: $gate, reason: $reason, head_sha: $head_sha, created_at: $created_at}' \
+    | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "pr-create-gate-stop-${ISSUE_NUMBER}.json" >/dev/null \
+    || echo "ERROR: could not record the security_scan gate stop" >&2
   exit 1
 fi
 printf '%s\n' "$SCAN_JSON" | jq -r '.files[] | select(.critical > 0 or .warnings > 0)

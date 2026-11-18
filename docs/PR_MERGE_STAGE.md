@@ -338,6 +338,45 @@ findings are recorded in the ledger, so a retry does not file twice. In report
 mode nothing is filed: the findings go to `discovered-work-{N}.json` and the merge
 proceeds, because that mode is the operator's choice.
 
+### Check-named criteria at merge (#3424)
+
+After the CI wait, the review gate and the steering re-check, and before the
+closed-issue gate and either merge path, the runner re-judges the criteria
+the PR body left open under `## ⚠️ Unmet acceptance criteria`. A criterion
+whose code span names a check in the status rollup (exact name, case and
+surrounding space ignored) is judged by that check's conclusion. A named
+check that concluded anything but `SUCCESS` makes it unmet. It is met only
+when the checks are the whole claim: every code span names a check on the PR
+(a ref after `against`, `on` or `branch` aside), the rest says no more than
+that they pass (`` `lint` passes ``, ``the `unit` and `e2e` checks are green``),
+and every named check concluded `SUCCESS`. Where rows share a name (re-runs,
+matrix legs), the worst conclusion wins. A criterion is left as pr-create
+wrote it, `❔ not verifiable`, with the PR keeping `Refs #<N>`, when it names
+no check on the PR, when a named check is still running, or when it asks for
+more than the checks. A criterion pr-create booked `❌ unmet` is never
+re-judged.
+
+A met criterion moves to `## Acceptance criteria` as
+``- ✅ met: <text> (this PR — pr-merge: check `X` concluded SUCCESS on PR #P)``.
+An unmet one gets its status line rewritten to `_❌ unmet — pr-merge: …_`.
+The unmet section is dropped when nothing is left in it. The body is then
+promoted to `Closes #<N>`, and `pr-{N}.json` records `closes_issue: true`,
+only when all of these hold:
+
+- the post-merge hook's own remainder rule (`hooks.RemainingCriteria`) leaves
+  nothing;
+- no unmet section remains;
+- every unchecked issue criterion appears in `ac-reconcile-{N}.json`.
+
+So post-merge closes the issue, ticks the boxes the PR reports met, and posts
+no partial-delivery comment. The body is edited once, before the merge or the
+enqueue.
+
+Failures leave `Refs`. A PR that already closes the issue, a PR the AC
+backstop demoted, a client that cannot read or edit bodies, or a failed PR-body
+read or edit leaves the body as it was. A failed issue-body read still records
+the re-judged verdicts but keeps `Refs`.
+
 ### Rate limits
 
 A `429` / `rate limit exceeded` error from `gh pr view` or `gh pr merge` is

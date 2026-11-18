@@ -914,9 +914,13 @@ type Scheduler struct {
 	// issueBodyEditedAt replaces the issue body's last-edit read behind the
 	// partial-delivery scope reconcile (#3235), in tests. nil in production.
 	issueBodyEditedAt func(ctx context.Context, item types.BoardItem) (*time.Time, error)
-	// partialPRRead replaces the partial PR's creation-time and body read
-	// behind the same reconcile (#3235), in tests. nil in production.
+	// partialPRRead replaces the partial PR's read — creation time, body and
+	// merge commit — behind the same reconcile (#3235) and the remainder
+	// judge's merge SHA (#3423), in tests. nil in production.
 	partialPRRead func(ctx context.Context, repo string, pr int) (partialPR, error)
+	// partialRemainderClose replaces the forge writes that close an issue
+	// whose partial-delivery remainder is met on the merged diff (#3423).
+	partialRemainderClose func(ctx context.Context, item types.BoardItem, pr int, v RemainderVerdict) (PartialCloseResult, error)
 	// partialCheckoutAtBase replaces checkoutAtBase, the re-admit vet's
 	// check that its checkout is clean and on origin's base, in tests. nil in
 	// production.
@@ -7913,12 +7917,28 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// the named-dispute ending are decided first: the usual zero-change
 		// case is a branch still level with its base, and the level-branch stop
 		// below would otherwise end the run before either could apply.
+		//
+		// The remainder is re-judged once, deterministically, against the
+		// earlier PR's merged diff (#3423): all met closes the issue as
+		// completed, anything else books it to Backlog with the unmet list.
 		var partialNoOp partialNoOpDecision
+		var remainder *RemainderVerdict
+		judgeRemainder := func() RemainderVerdict {
+			if remainder == nil {
+				v := s.judgePartialRemainder(ctx, runtime.PartialRerunScope(), item.Number, stageWorkspace(runtime, workspaceRoot))
+				remainder = &v
+			}
+			return *remainder
+		}
 		if stage == state.StageFeatureDev && gateRan && gateRes.Kind == gates.KindNoOp {
 			sws := stageWorkspace(runtime, workspaceRoot)
 			planningPath, _ := stagecontext.ContextPath(sws, item.Number, "planning")
-			partialNoOp = decidePartialNoOp(item.Number, runtime.PartialRerunScope(), readOperatorRevision(planningPath),
-				planRevisionDispute(sws, item.Number), operatorRelapped)
+			rev, dispute := readOperatorRevision(planningPath), planRevisionDispute(sws, item.Number)
+			var verdict RemainderVerdict
+			if scope := runtime.PartialRerunScope(); scope != nil && dispute == "" && (!rev.binding() || operatorRelapped) {
+				verdict = judgeRemainder()
+			}
+			partialNoOp = decidePartialNoOp(item.Number, runtime.PartialRerunScope(), rev, dispute, operatorRelapped, verdict)
 			switch partialNoOp.Action {
 			case partialNoOpRelap:
 				operatorRelapped = true
@@ -7938,6 +7958,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				runtime.SetStageError(stage, partialNoOp.Detail)
 				terminalFailureKind = TerminalKindNotPipelineActionable
 				return
+			case partialNoOpClose:
+				detail, kind := s.endPartialRemainderMet(ctx, item, runtime.PartialRerunScope().PR, verdict)
+				runtime.SetStageError(stage, detail)
+				s.emitStateChanged(item.Repo, item.Number, runtime)
+				terminalFailureKind = kind
+				return
 			}
 		}
 
@@ -7945,13 +7971,19 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// its base ends here, before feature-validate (#3160). Both a clean exit
 		// and a gate no-op verdict (zero files recorded, or files claimed but
 		// none on disk) reach it; the branch-against-base comparison inside is
-		// what decides. Either way there is nothing to validate, and the
-		// remainder is posted, not closed.
+		// what decides. Either way there is nothing to validate. A remainder
+		// met on the earlier PR's merged diff closes the issue, ending the run
+		// issue_closed (#3423); any other remainder is posted and stays open.
 		if stage == state.StageFeatureDev &&
 			((err == nil && exitCode == 0) || (gateRan && gateRes.Kind == gates.KindNoOp)) {
-			if detail, stopped := s.stopNoDiffPartialRerun(ctx, runtime, item, stageWorkspace(runtime, workspaceRoot)); stopped {
+			if detail, stopped, met := s.stopNoDiffPartialRerun(ctx, runtime, item, stageWorkspace(runtime, workspaceRoot), judgeRemainder); stopped {
+				kind := TerminalKindNotPipelineActionable
+				if met {
+					detail, kind = s.endPartialRemainderMet(ctx, item, runtime.PartialRerunScope().PR, judgeRemainder())
+					s.emitStateChanged(item.Repo, item.Number, runtime)
+				}
 				runtime.SetStageError(stage, detail)
-				terminalFailureKind = TerminalKindNotPipelineActionable
+				terminalFailureKind = kind
 				return
 			}
 		}

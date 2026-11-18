@@ -1,6 +1,7 @@
 package skillrender
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,7 +14,8 @@ import (
 
 // Step 2.5.3 calls `scan diff-secrets` (#2702). Run 2.5.3 and 2.5.4 together
 // against a stub verb: a critical count stops with the record, a warnings-only
-// count passes without one, and a verb that cannot run fails the step.
+// count passes without one, and a verb that cannot run stops with the same
+// security_scan record, so no fallback PR opens without a scan (#3421).
 func TestPrCreateDiffScan_FeedsTheStop(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(prCreateSecurityRel)))
 	if err != nil {
@@ -33,10 +35,11 @@ func TestPrCreateDiffScan_FeedsTheStop(t *testing.T) {
 	}{
 		{"critical", `{"v":1,"critical":1,"warnings":0,"files":[{"path":"a","critical":1,"warnings":0}]}`, 1, 1, true, "a: critical=1 warnings=0"},
 		{"warnings-only", `{"v":1,"critical":0,"warnings":2,"files":[{"path":"a","critical":0,"warnings":2}]}`, 0, 0, false, "WARNING: 2 potential"},
-		{"verb-error", `{"v":1,"critical":0,"warnings":0,"files":[]}`, 2, 1, false, "could not run"},
+		{"verb-error", `{"v":1,"critical":0,"warnings":0,"files":[]}`, 2, 1, true, "could not run"},
 		// An older binary without the verb exits 1 with nothing on stdout.
-		{"exit1-no-json", ``, 1, 1, false, "could not run"},
-		{"exit1-no-critical", `{"v":1,"critical":0,"warnings":0,"files":[]}`, 1, 1, false, "could not run"},
+		{"exit1-no-json", ``, 1, 1, true, "could not run"},
+		{"exit2-no-json", ``, 2, 1, true, "could not run"},
+		{"exit1-no-critical", `{"v":1,"critical":0,"warnings":0,"files":[]}`, 1, 1, true, "could not run"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -87,9 +90,26 @@ func TestPrCreateDiffScan_FeedsTheStop(t *testing.T) {
 			if !strings.Contains(string(out), c.wantOut) {
 				t.Errorf("output lacks %q:\n%s", c.wantOut, out)
 			}
-			_, statErr := os.Stat(filepath.Join(outDir, "pr-create-gate-stop-42.json"))
+			rec, statErr := os.ReadFile(filepath.Join(outDir, "pr-create-gate-stop-42.json"))
 			if (statErr == nil) != c.wantRecord {
 				t.Fatalf("record present = %v, want %v\n%s", statErr == nil, c.wantRecord, out)
+			}
+			if c.wantRecord {
+				var r struct {
+					Gate    string `json:"gate"`
+					Reason  string `json:"reason"`
+					HeadSHA string `json:"head_sha"`
+				}
+				if err := json.Unmarshal(rec, &r); err != nil {
+					t.Fatalf("record is not JSON: %v\n%s", err, rec)
+				}
+				head := strings.TrimSpace(gittest.Run(t, repo, "rev-parse", "HEAD"))
+				if r.Gate != "security_scan" || r.HeadSHA != head || r.Reason == "" {
+					t.Errorf("record = %+v, want gate security_scan, head_sha %s, a reason", r, head)
+				}
+				if wantRun := c.wantOut == "could not run"; wantRun != strings.Contains(r.Reason, "could not run") {
+					t.Errorf("reason %q does not match the stop path", r.Reason)
+				}
 			}
 		})
 	}
