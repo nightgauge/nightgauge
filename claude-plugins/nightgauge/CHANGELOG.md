@@ -11,6 +11,7 @@ and this project adheres to
 
 ### Changed
 
+- The plugin manifest now names its icon through the `icon` field (`./.claude-plugin/icon.png`), so tools that read the manifest find it without relying on auto-detection (#2863).
 - Plugin version 1.29.2: the `pr-create` skill and shared stale-branch merge guidance changed since v0.8.6, so installed plugins pick the update up (#3393).
 
 ### Added
