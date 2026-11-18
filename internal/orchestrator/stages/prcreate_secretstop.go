@@ -144,6 +144,17 @@ func (r *DeterministicPRCreateRunner) rescanSecurityStop(ctx context.Context, wo
 			shortSHA(sha), rec.Reason))
 	}
 
+	// The scanners read their config and ignore files from the tree being
+	// judged, so a branch that edits them could silence its own finding.
+	changed, err := r.scannerConfigChanges(ctx, workdir, base)
+	if err != nil {
+		return blocked(fmt.Sprintf("could not check %s...HEAD for scanner config changes: %s", base, truncateErr(err, 200)))
+	}
+	if len(changed) > 0 {
+		return blocked(fmt.Sprintf("the branch changes scanner config (%s), so a clean rescan cannot clear the stop; "+
+			"land that change separately, then retry", strings.Join(changed, ", ")))
+	}
+
 	// Re-judge scans: gitleaks over the history, then the changed files.
 	leaks, err := r.gitleaksScan(ctx, workdir, base)
 	if err != nil {
@@ -161,6 +172,7 @@ func (r *DeterministicPRCreateRunner) rescanSecurityStop(ctx context.Context, wo
 			return blocked(truncateErr(err, 200))
 		}
 		snap.SecurityScan = "passed"
+		snap.SecurityStopCleared = true
 		return nil
 	}
 
@@ -294,4 +306,18 @@ func (r *DeterministicPRCreateRunner) defaultSecretStopHooks() {
 	if r.gitleaksScan == nil {
 		r.gitleaksScan = defaultGitleaksScan
 	}
+	if r.scannerConfigChanges == nil {
+		r.scannerConfigChanges = defaultScannerConfigChanges
+	}
+}
+
+// defaultScannerConfigChanges lists the gitleaks config and ignore files that
+// <base>...HEAD changes. The scanners read both from the tree they judge.
+func defaultScannerConfigChanges(ctx context.Context, workdir, base string) ([]string, error) {
+	out, err := gitOutput(ctx, workdir, "diff", "--name-only", base+"...HEAD", "--",
+		".gitleaks.toml", ".gitleaksignore")
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(out), nil
 }

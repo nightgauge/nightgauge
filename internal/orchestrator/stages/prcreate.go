@@ -177,8 +177,12 @@ type PRCreateSnapshot struct {
 	UnverifiedDeliverable deliverable.Finding
 	DeadCodeWarningError  bool   // true when any dead_code_warnings entry has severity == "error"
 	SecurityScan          string // "passed" | "failed" | "skipped" | ""
-	ScopeDrift            string // "passed" | "failed" | "skipped" | ""
-	ManualChecklistOpen   bool   // true when any manual_checklist entry has verified == false
+	// SecurityStopCleared is set when this run's rescan cleared a
+	// security_scan stop. The clean verdict covers local HEAD only, so the PR
+	// must then be opened from what this run pushed, never from origin's copy.
+	SecurityStopCleared bool
+	ScopeDrift          string // "passed" | "failed" | "skipped" | ""
+	ManualChecklistOpen bool   // true when any manual_checklist entry has verified == false
 
 	// ACVerdicts is one resolved verdict per issue acceptance criterion
 	// (#2595), built by ResolveACVerdicts. Unless every verdict is met
@@ -720,6 +724,8 @@ type DeterministicPRCreateRunner struct {
 	// history; gitleaksScan counts gitleaks findings over <base>..HEAD.
 	isAncestor   func(ctx context.Context, workdir, sha string) (bool, error)
 	gitleaksScan func(ctx context.Context, workdir, base string) (int, error)
+	// scannerConfigChanges lists scanner config files <base>...HEAD changes.
+	scannerConfigChanges func(ctx context.Context, workdir, base string) ([]string, error)
 }
 
 // NewDeterministicPRCreateRunner builds a runner with default file-backed
@@ -734,12 +740,13 @@ func NewDeterministicPRCreateRunner() *DeterministicPRCreateRunner {
 		readContext:  defaultReadCreateContext,
 		writeContext: defaultWritePRContext,
 
-		diffScan:       scan.RunDiffSecretsScan,
-		readGateStop:   defaultReadGateStop,
-		writeGateStop:  defaultWriteGateStop,
-		removeGateStop: defaultRemoveGateStop,
-		isAncestor:     defaultIsAncestor,
-		gitleaksScan:   defaultGitleaksScan,
+		diffScan:             scan.RunDiffSecretsScan,
+		readGateStop:         defaultReadGateStop,
+		writeGateStop:        defaultWriteGateStop,
+		removeGateStop:       defaultRemoveGateStop,
+		isAncestor:           defaultIsAncestor,
+		gitleaksScan:         defaultGitleaksScan,
+		scannerConfigChanges: defaultScannerConfigChanges,
 	}
 }
 
@@ -875,6 +882,14 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 		if existsErr != nil || !exists {
 			ph.supersedeInFlight()
 			return finish(PRCreateResult{Path: CreatePathPunt, Reason: fmt.Sprintf("%s: %s", ReasonPushFailed, truncateErr(pushErr, 200))}, nil)
+		}
+		if snap.SecurityStopCleared {
+			// The rescan judged local HEAD; origin's branch may still carry
+			// the flagged commit, so never open the PR from it.
+			ph.supersedeInFlight()
+			return finish(PRCreateResult{Path: CreatePathBlocked, Reason: ReasonSecurityScanFailed,
+				Detail: fmt.Sprintf("the secret-scan stop was cleared on local HEAD but the push was rejected; "+
+					"origin's %s may still hold the flagged commit: %s", snap.Branch, truncateErr(pushErr, 200))}, nil)
 		}
 		// Branch already on origin — proceed to open the PR from it.
 		createReason = ReasonPushedRemoteExists

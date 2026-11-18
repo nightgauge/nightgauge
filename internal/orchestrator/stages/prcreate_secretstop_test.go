@@ -582,3 +582,52 @@ func TestSecretStop_PreScanGuardsFailClosed(t *testing.T) {
 		}
 	}
 }
+
+// A stop cleared on local HEAD must not fall back to origin's branch when the
+// push is rejected: origin may still hold the flagged commit.
+func TestSecretStop_ClearedStopRejectedPushDoesNotUseRemote(t *testing.T) {
+	repo, stateDir, old := rewrittenRepo(t, "plain text\n")
+	writeStop(t, stateDir, scannerDiffSecrets, old)
+
+	prc := &fakePRClient{createdPR: &CreatedPR{Number: 9, URL: "u"}}
+	git := &fakeGit{branch: "feat/42-pr-create", pushErr: errors.New("non-fast-forward"), remoteExists: true}
+	r := stopRunner(richSnap(), prc, git, &fakeGitleaks{})
+	res, err := r.Run(context.Background(), 42, "owner/repo", repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Path != CreatePathBlocked || res.Reason != ReasonSecurityScanFailed {
+		t.Fatalf("got path=%q reason=%q, want blocked/%s", res.Path, res.Reason, ReasonSecurityScanFailed)
+	}
+	if prc.createCalls != 0 {
+		t.Errorf("CreatePR called %d times from origin's branch after a cleared stop", prc.createCalls)
+	}
+}
+
+// A branch that edits the scanner's config or ignore file cannot clear its
+// own stop with a clean rescan.
+func TestSecretStop_ScannerConfigChangeKeepsStop(t *testing.T) {
+	repo, stateDir, old := rewrittenRepo(t, "plain text\n")
+	recPath := writeStop(t, stateDir, scannerGitleaks, old)
+	if err := os.WriteFile(filepath.Join(repo, ".gitleaksignore"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Run(t, repo, "add", ".gitleaksignore")
+	gittest.Run(t, repo, "commit", "-q", "-m", "ignore")
+
+	prc := &fakePRClient{createdPR: &CreatedPR{Number: 9}}
+	gl := &fakeGitleaks{}
+	r := stopRunner(richSnap(), prc, &fakeGit{branch: "feat/42-pr-create"}, gl)
+	r.scannerConfigChanges = defaultScannerConfigChanges
+	res, err := r.Run(context.Background(), 42, "owner/repo", repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Path != CreatePathBlocked || !strings.Contains(res.Detail, ".gitleaksignore") {
+		t.Fatalf("got path=%q detail=%q, want blocked naming .gitleaksignore", res.Path, res.Detail)
+	}
+	if prc.createCalls != 0 || len(gl.bases) != 0 {
+		t.Errorf("createCalls=%d gitleaks runs=%d, want 0/0", prc.createCalls, len(gl.bases))
+	}
+	readBytes(t, recPath)
+}
