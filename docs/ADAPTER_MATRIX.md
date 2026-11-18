@@ -100,7 +100,7 @@ version runs exactly like a tested one. Only the floor is enforced, as its
 
 | Adapter           | Floor (`min_version`) | Floor policy | Tested up to (`max_tested`) |
 | ----------------- | --------------------- | ------------ | --------------------------- |
-| `claude-headless` | `2.1.223`             | warn         | `2.1.258`                   |
+| `claude-headless` | `2.1.223`             | warn         | `2.1.316`                   |
 | `codex`           | `0.111.0`             | warn         | `0.145.0`                   |
 | `copilot`         | none                  | warn         | none captured               |
 | `gemini`          | `0.29.0`              | warn         | none captured               |
