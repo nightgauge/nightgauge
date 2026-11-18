@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
@@ -46,6 +47,7 @@ type rawGitLabMR struct {
 	SourceBranch         string              `json:"source_branch"`
 	TargetBranch         string              `json:"target_branch"`
 	WebURL               string              `json:"web_url"`
+	CreatedAt            string              `json:"created_at"`
 	Labels               []string            `json:"labels"`
 	Draft                bool                `json:"draft"`
 	WorkInProgress       bool                `json:"work_in_progress"`
@@ -73,6 +75,21 @@ func translateMergeStatus(gitlabStatus string) string {
 	}
 }
 
+// normaliseGitLabTime converts a GitLab ISO 8601 timestamp such as
+// "2026-01-15T10:20:30.123Z" into the RFC 3339 UTC form the GitHub adapter
+// emits ("2026-01-15T10:20:30Z"). Empty or unparseable input yields "", the
+// field's zero value.
+func normaliseGitLabTime(s string) string {
+	if s == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
 // toForgePR translates a raw GitLab MR into the forge-agnostic
 // PullRequest shape.
 func (r *rawGitLabMR) toForgePR(owner, repo string) *forgetypes.PullRequest {
@@ -92,6 +109,7 @@ func (r *rawGitLabMR) toForgePR(owner, repo string) *forgetypes.PullRequest {
 		Mergeable: translateMergeStatus(r.MergeStatus),
 		Labels:    append([]string(nil), r.Labels...),
 		IsDraft:   r.Draft || r.WorkInProgress,
+		CreatedAt: normaliseGitLabTime(r.CreatedAt),
 	}
 	// Best-effort changes_count → Additions; GitLab returns it as a
 	// stringified count when known, empty otherwise.

@@ -62,7 +62,7 @@ RUN case "$(dpkg --print-architecture)" in \
 
 # The AI agent the extension drives by default (README § Before you start).
 # Pinned so the gate exercises a known CLI, not whatever shipped overnight.
-RUN npm install -g @anthropic-ai/claude-code@2.1.258 && npm cache clean --force
+RUN npm install -g @anthropic-ai/claude-code@2.1.316 && npm cache clean --force
 
 # A user with nothing in their home directory. Auth arrives at run time only:
 # GH_TOKEN in the environment and either ANTHROPIC_API_KEY or a mounted

@@ -68,7 +68,9 @@ change.
   `model`, `stage`.
 - **Edge kinds:** `part-of`, `owns-file`, `implements`, `documents`, `tests`,
   `consumes`, `produces`, `blocks`, `supersedes`, `discovered-in`, `violates`,
-  `serves-band`, `runs-on`.
+  `serves-band`, `runs-on`, `references`. `references` (#139) joins an issue
+  to a repository path its body mentions; it is dangling by design until a
+  file set is merged in.
 - **Store:** `StoreDir` is `.nightgauge/graph`, workspace-relative and ignored
   by git.
 - Extractors reuse existing parsers rather than reimplementing them: issue

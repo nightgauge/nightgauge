@@ -1,4 +1,4 @@
-# adapter=claude-headless version=2.1.258 command=claude --help
+# adapter=claude-headless version=2.1.316 command=claude --help
 Usage: claude [options] [command] [prompt]
 
 Claude Code - starts an interactive session by default, use -p/--print for
@@ -12,10 +12,11 @@ Options:
                                         access to
   --agent <agent>                       Agent for the current session. Overrides
                                         the 'agent' setting.
-  --agents <json>                       JSON object defining custom agents (e.g.
-                                        '{"reviewer": {"description": "Reviews
-                                        code", "prompt": "You are a code
-                                        reviewer"}}')
+  --agents <json-or-file>               JSON object defining custom agents, or
+                                        with --print the path to a file that
+                                        holds one (e.g. '{"reviewer":
+                                        {"description": "Reviews code",
+                                        "prompt": "You are a code reviewer"}}')
   --allow-dangerously-skip-permissions  Enable bypassing all permission checks
                                         as an option, without it being enabled
                                         by default. Recommended only for
@@ -38,10 +39,13 @@ Options:
                                         session in the background under the same
                                         ID, or starts a copy and says so when
                                         the session is already running
-  --bare                                Minimal mode: skip hooks, LSP, plugin
-                                        sync, attribution, auto-memory,
-                                        background prefetches, keychain reads,
-                                        and CLAUDE.md auto-discovery. Sets
+  --bare                                Minimal mode: skip hooks (those defined
+                                        in settings and by installed plugins;
+                                        features built into Claude Code are
+                                        unaffected), LSP, plugin sync,
+                                        attribution, auto-memory, background
+                                        prefetches, keychain reads, and
+                                        CLAUDE.md auto-discovery. Sets
                                         CLAUDE_CODE_SIMPLE=1. Anthropic auth is
                                         strictly ANTHROPIC_API_KEY or
                                         apiKeyHelper via --settings (OAuth and
@@ -67,11 +71,14 @@ Options:
                                         Recommended only for sandboxes with no
                                         internet access.
   -d, --debug [filter]                  Enable debug mode with optional category
-                                        filtering (e.g., "api,hooks" or
-                                        "!1p,!file")
+                                        filtering (e.g., --debug=hooks,mcp or
+                                        --debug='!hooks,!mcp')
   --debug-file <path>                   Write debug logs to a specific file path
                                         (implicitly enables debug mode)
-  --disable-slash-commands              Disable all skills
+  --desktop                             Open in the Claude Desktop app instead
+                                        of the terminal (with --continue or
+                                        --resume <id> to pick the session)
+  --disable-slash-commands              Disable all skills and commands
   --disallowedTools, --disallowed-tools <tools...>
       Comma or space-separated list of tool names to deny (e.g. "Bash(git *)
       Edit")
@@ -90,8 +97,7 @@ Options:
                                         overloaded or not available. Accepts a
                                         comma-separated list to try each in
                                         order. Re-tries the primary at the start
-                                        of each user turn. (only works with
-                                        --print)
+                                        of each user turn.
   --file <specs...>                     File resources to download at startup.
                                         Format: file_id:relative_path (e.g.,
                                         --file file_abc:doc.txt
@@ -120,7 +126,8 @@ Options:
                                         (realtime streaming input) (choices:
                                         "text", "stream-json")
   --json-schema <schema>                JSON Schema for structured output
-                                        validation. Example:
+                                        validation (only works with --print).
+                                        Example:
                                         {"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}
   --max-budget-usd <amount>             Maximum dollar amount to spend on API
                                         calls (only works with --print)
@@ -129,8 +136,7 @@ Options:
   --model <model>                       Model for the current session. Provide
                                         an alias for the latest model (e.g.
                                         'fable', 'opus', or 'sonnet') or a
-                                        model's full name (e.g.
-                                        'claude-fable-5').
+                                        model's full name.
   -n, --name <name>                     Set a display name for this session
                                         (shown in the prompt box, /resume
                                         picker, and terminal title)
@@ -147,8 +153,17 @@ Options:
                                         (choices: "acceptEdits", "auto",
                                         "bypassPermissions", "manual",
                                         "dontAsk", "plan")
+  --permission-prompts <target>         Who answers permission prompts with
+                                        --print: "host" (the SDK host or
+                                        --permission-prompt-tool) or "none"
+                                        (nobody: anything that would prompt is
+                                        denied automatically; the permission
+                                        mode still decides everything else)
+                                        (choices: "host", "none", default:
+                                        "host")
   --plugin-dir <path>                   Load a plugin from a directory or .zip
-                                        for this session only (repeatable:
+                                        for this session only; a folder of
+                                        plugins loads each child (repeatable:
                                         --plugin-dir A --plugin-dir B.zip)
                                         (default: [])
   --plugin-url <url>                    Fetch a plugin .zip from a URL for this
@@ -180,32 +195,32 @@ Options:
                                         --output-format=stream-json)
   --restricted                          Restricted mode: removes the built-in
                                         tools that run commands or code (Bash,
-                                        PowerShell, REPL and the other
-                                        code-running tools) and WebFetch unless
-                                        --tools names them, and ignores user,
-                                        project and local settings files
-                                        (managed settings and --settings still
-                                        apply; add --strict-mcp-config to skip
-                                        MCP servers too). Also confines the file
-                                        tools to the working directories
-                                        (--add-dir included), refuses
-                                        bypassPermissions, and lets only a
-                                        person or the configured permission
-                                        handler approve writes to settings, git
-                                        and tool-configuration files.
-  -r, --resume [value]                  Resume a conversation by session ID, or
-                                        open interactive picker with optional
-                                        search term
+                                        PowerShell and the other code-running
+                                        tools) and WebFetch unless --tools names
+                                        them, and ignores user, project and
+                                        local settings files (managed settings
+                                        and --settings still apply; add
+                                        --strict-mcp-config to skip MCP servers
+                                        too). Also confines the file tools to
+                                        the working directories (--add-dir
+                                        included), refuses bypassPermissions,
+                                        and lets only a person or the configured
+                                        permission handler approve writes to
+                                        settings, git and tool-configuration
+                                        files.
+  -r, --resume [value]                  Resume a conversation by session ID or
+                                        name, or open interactive picker with
+                                        optional search term
   --safe-mode                           Start with all customizations
-                                        (CLAUDE.md, skills, plugins, hooks, MCP
-                                        servers, custom commands and agents,
-                                        output styles, workflows, custom themes,
-                                        keybindings, and more) disabled — useful
-                                        for troubleshooting a broken
+                                        (CLAUDE.md, skills, installed plugins,
+                                        hooks, MCP servers, custom commands and
+                                        agents, output styles, workflows, custom
+                                        themes, keybindings, and more) disabled
+                                        — useful for troubleshooting a broken
                                         configuration. Admin-managed (policy)
                                         settings still apply. Auth, model
-                                        selection, built-in tools, and
-                                        permissions work normally. Sets
+                                        selection, built-in tools and plugins,
+                                        and permissions work normally. Sets
                                         CLAUDE_CODE_SAFE_MODE=1.
   --session-id <uuid>                   Use a specific session ID for the
                                         conversation (must be a valid UUID)
@@ -218,21 +233,19 @@ Options:
   --system-prompt <prompt>              System prompt to use for the session
   --system-prompt-snapshot <on|off>     Record the system prompt once per
                                         conversation and reuse it verbatim on
-                                        every request and resume (recommended:
-                                        on). By default it is on for the
-                                        built-in prompt, and passing
-                                        --system-prompt or
-                                        --append-system-prompt turns it off so
-                                        the given text applies fresh each
-                                        launch. on: an existing record in the
-                                        conversation is sent as-is (a later
-                                        launch's different
-                                        --system-prompt/--append-system-prompt
-                                        is ignored until compaction); otherwise
-                                        the prompt is rendered with the append
-                                        included, sent, and recorded. off: never
-                                        record. No effect where system-prompt
-                                        recording is not yet enabled. (choices:
+                                        every request and resume. on (the
+                                        default, except under --bare outside
+                                        cloud and background sessions): the
+                                        prompt is rendered on the conversation's
+                                        first request — a --system-prompt or
+                                        --append-system-prompt included — sent,
+                                        and recorded; every later request and
+                                        resume sends the record as-is, even when
+                                        a later launch passes different text,
+                                        until the conversation is compacted.
+                                        off: never record; the prompt is
+                                        rendered fresh every request (for
+                                        iterating on prompt text). (choices:
                                         "on", "off")
   --teleport [session]                  Resume a teleport session, optionally
                                         specify session ID
@@ -242,8 +255,8 @@ Options:
                                         --tmux=classic for traditional tmux.
   --tools <tools...>                    Specify the list of available tools from
                                         the built-in set. Use "" to disable all
-                                        tools, "default" to use all tools, or
-                                        specify tool names (e.g.
+                                        tools, "default" to use the default set,
+                                        or specify tool names (e.g.
                                         "Bash,Edit,Read").
   --verbose                             Override verbose mode setting from
                                         config
@@ -253,13 +266,13 @@ Options:
 
 Commands:
   agents [options]                      Manage background agents
-  attach <id>                           Open a background session in this
+  attach <id|name>                      Open a background session in this
                                         terminal. <id> is the short id that
                                         `claude --bg` prints and `claude agents`
-                                        lists
+                                        lists. Part of the session name works
+                                        too
   auth                                  Manage authentication
-  auto-mode                             Inspect or reset auto mode classifier
-                                        configuration
+  auto-mode                             Inspect or reset auto mode configuration
   doctor                                Check the health of your Claude Code
                                         installation. Reads settings files in
                                         the current directory without a trust
@@ -272,11 +285,14 @@ Commands:
   install [options] [target]            Install Claude Code native build. Use
                                         [target] to specify version (stable,
                                         latest, or specific version)
-  logs <id>                             Print a background session's recent
+  logs <id|name>                        Print a background session's recent
                                         terminal output
   mcp                                   Configure and manage MCP servers
   plugin|plugins                        Manage Claude Code plugins
-  project                               Manage Claude Code project state
+  purge [options] [path]                Delete a project's Claude Code data
+                                        (transcripts, tasks, file history, and
+                                        its entry in ~/.claude.json) from this
+                                        computer only
   respawn [options] [id]                Restart a background session, or all of
                                         them with --all, so it runs the current
                                         Claude Code version
@@ -294,4 +310,5 @@ Commands:
                                         number / base branch) and print the
                                         findings
   update|upgrade                        Check for updates and install if
-                                        available
+                                        available; package-manager installs
+                                        update through the package manager

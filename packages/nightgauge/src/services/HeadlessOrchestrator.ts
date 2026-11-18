@@ -5782,14 +5782,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       try {
         const { stdout: statusOut } = await execFileAsync(
           "git",
-          ["diff", "--name-only", "--diff-filter=U"],
+          // -z: without it git C-quotes non-ASCII paths ("caf\303\251.txt"), and
+          // trimming would corrupt names with edge whitespace (#3393).
+          ["diff", "--name-only", "-z", "--diff-filter=U"],
           { encoding: "utf-8", cwd, timeout: 10_000 }
         );
-        conflictFiles = statusOut
-          .trim()
-          .split("\n")
-          .map((f) => f.trim())
-          .filter(Boolean);
+        conflictFiles = statusOut.split("\0").filter((f) => f.length > 0);
       } catch {
         // Best-effort — proceed with empty list
       }

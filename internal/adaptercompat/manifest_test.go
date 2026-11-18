@@ -73,7 +73,7 @@ func TestGet_OpenCodeIsPinnedAndFailsClosed(t *testing.T) {
 // the evidence they were taken from (see each manifest's _reason fields).
 func TestManifests_ExistingFloorsAndStartingValues(t *testing.T) {
 	want := map[string]struct{ min, max, policy string }{
-		"claude-headless": {"2.1.223", "2.1.258", FloorWarn},
+		"claude-headless": {"2.1.223", "2.1.316", FloorWarn},
 		"codex":           {"0.111.0", "0.145.0", FloorWarn},
 		"gemini":          {"0.29.0", "", FloorWarn},
 		"copilot":         {"", "", FloorWarn},

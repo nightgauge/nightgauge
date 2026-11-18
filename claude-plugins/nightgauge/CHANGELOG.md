@@ -9,6 +9,10 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- Plugin version 1.29.2: the `pr-create` skill and shared stale-branch merge guidance changed since v0.8.6, so installed plugins pick the update up (#3393).
+
 ### Added
 
 - The Claude Code plugin ships a square 512 px icon at `.claude-plugin/icon.png`, the location the validator auto-detects, clearing the validator's `ICON_MISSING` warning (#2863).

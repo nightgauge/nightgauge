@@ -11,9 +11,13 @@ and this project adheres to
 
 ### Fixed
 
-- The extension bundles the whole OpenCode plugin tree and the git pre-push hook beside its `nightgauge` binary, which now reads them from there instead of carrying them inside it (#3383).
+- A pre-merge rebase conflict now names non-ASCII files (for example `café.txt`) by their real path instead of git's C-quoted form (#3393).
 
 ## [0.8.6] - 2026-11-17
+
+### Fixed
+
+- The extension bundles the whole OpenCode plugin tree and the git pre-push hook beside its `nightgauge` binary, which now reads them from there instead of carrying them inside it (#3383).
 
 ### Security
 
