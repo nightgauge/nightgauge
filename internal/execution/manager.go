@@ -1484,23 +1484,6 @@ func (m *Manager) CancelWithGrace(key string, timeout time.Duration) (bool, erro
 	return graceful, nil
 }
 
-// signalProcessTree delivers sig to the stage's whole PROCESS GROUP, falling
-// back to the single process when the group cannot be resolved (#1253).
-//
-// Stages are spawned with Setpgid (see startProcess), which makes the child a
-// group leader whose pgid equals its pid — so `kill(-pid, sig)` reaches the
-// stage AND everything it spawned. Signalling the bare pid reached only the
-// direct child, and every grandchild survived, reparented to PID 1.
-//
-// The fallback matters more than it looks. If a stage was started before this
-// change, or Setpgid failed, or the child already exited and its group is
-// gone, syscall.Kill(-pid, …) returns ESRCH — and a kill path that treated
-// that as "done" would silently signal NOTHING. Falling back to the process
-// keeps the old behaviour as the floor: this can reach more than before, never
-// less.
-//
-// Returns whether anything was signalled, so a caller can tell "reaped" from
-// "there was nothing to reap".
 // openCodePluginHandshakeMarker renders a failed Nightgauge OpenCode plugin
 // handshake check (#1635) as the stage's stderr marker. err is an
 // *opencodeplugin.IncompatibleError; its own Error() already carries the bare
@@ -1522,16 +1505,77 @@ func openCodePluginHandshakeMarker(err error, ocBinary string) string {
 	return fmt.Sprintf("[nightgauge-opencode-plugin] %v (opencode --version: %s)", err, version)
 }
 
+// signalProcessTree delivers sig to the stage's whole PROCESS GROUP, falling
+// back to the single process otherwise (#1253).
+//
+// Stages are spawned with Setpgid (see startProcess), which makes the child a
+// group leader whose pgid equals its pid, so `kill(-pid, sig)` reaches the
+// stage AND everything it spawned. Signalling the bare pid reached only the
+// direct child, and every grandchild survived, reparented to PID 1.
+//
+// The group signal is sent only while proc is unreaped and leads a group other
+// than the caller's (leadsForeignGroup, #3443). A reaped leader's pid number
+// can be reused under fork load, and kill(-pid) would then reach an unrelated
+// group or the caller's own. A reaped leader's surviving group members are
+// still group-signalled (orphanedForeignGroup): the kernel never hands out a
+// pid that is still in use as a process group ID, so while survivors keep
+// the group alive no process can hold that number. Otherwise the bare pid is
+// signalled, a no-op once reaped.
+//
+// Returns whether anything was signalled, so a caller can tell "reaped" from
+// "there was nothing to reap".
 func signalProcessTree(proc *os.Process, sig syscall.Signal) bool {
 	if proc == nil {
 		return false
 	}
 	// Negative pid == "the process group led by pid". Only meaningful because
-	// startProcess made the child a group leader.
-	if err := syscall.Kill(-proc.Pid, sig); err == nil {
-		return true
+	// startProcess made the child a group leader, and only while it still is
+	// (#3443): once the leader is reaped its pid number can be reused under
+	// fork load, and kill(-pid) would then hit whatever group that number now
+	// leads, or the caller's own group (a `go test` binary running the daemon
+	// in-process). So group-signal only a live process that leads a group
+	// other than ours; otherwise signal the pid alone, a no-op once reaped.
+	if leadsForeignGroup(proc) || orphanedForeignGroup(proc) {
+		if err := syscall.Kill(-proc.Pid, sig); err == nil {
+			return true
+		}
 	}
 	return proc.Signal(sig) == nil
+}
+
+// leadsForeignGroup reports whether proc is unreaped and leads a process
+// group that is not the caller's own (#3443).
+func leadsForeignGroup(proc *os.Process) bool {
+	// pid <= 1 would make kill(-pid) broadcast or hit init's group.
+	if proc.Pid <= 1 {
+		return false
+	}
+	if errors.Is(proc.Signal(syscall.Signal(0)), os.ErrProcessDone) {
+		return false
+	}
+	pgid, err := syscall.Getpgid(proc.Pid)
+	if err != nil || pgid != proc.Pid {
+		return false
+	}
+	return pgid != syscall.Getpgrp()
+}
+
+// orphanedForeignGroup reports whether proc has been reaped but the group it
+// led still has members, and that group is not the caller's own (#3443).
+// POSIX forbids reusing a pid while a process group with that ID exists, so a
+// live process holding proc.Pid means the old group is gone and the number
+// was reused: that case is rejected.
+func orphanedForeignGroup(proc *os.Process) bool {
+	if proc.Pid <= 1 || proc.Pid == syscall.Getpgrp() {
+		return false
+	}
+	if !errors.Is(proc.Signal(syscall.Signal(0)), os.ErrProcessDone) {
+		return false
+	}
+	if syscall.Kill(proc.Pid, 0) == nil {
+		return false // the pid number belongs to another process now
+	}
+	return syscall.Kill(-proc.Pid, 0) == nil
 }
 
 // openCodeHandshakeKillWindow bounds killProcessTreeUntilGone's re-signal

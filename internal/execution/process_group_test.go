@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -149,8 +150,8 @@ func TestSignalProcessTree_PerPidKillLeaksGrandchild(t *testing.T) {
 // A process whose group is gone must still be signalled by pid rather than
 // silently skipped — the fallback must never make this reach LESS than before.
 func TestSignalProcessTree_FallsBackToPidWhenGroupIsGone(t *testing.T) {
-	// Started WITHOUT Setpgid: it shares the test binary's group, so
-	// kill(-pid) finds no group led by this pid and returns ESRCH.
+	// Started WITHOUT Setpgid: it shares the test binary's group, so it leads
+	// no group, leadsForeignGroup rejects it, and only the pid is signalled.
 	cmd := exec.Command("sleep", "300")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start: %v", err)
@@ -277,5 +278,104 @@ func TestRunStageReturnsWhenASurvivorHoldsThePipes(t *testing.T) {
 	}
 	if took := time.Since(started); took > 30*time.Second {
 		t.Errorf("RunStage took %v: a child holding the pipes held the stage", took)
+	}
+}
+
+// startGroupLeader starts `sleep 300` as the leader of its own process group.
+func startGroupLeader(t *testing.T) *exec.Cmd {
+	t.Helper()
+	cmd := exec.Command("sleep", "300")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); _, _ = cmd.Process.Wait() })
+	return cmd
+}
+
+// TestSignalProcessTree_ReapedProcessSendsNoGroupSignal (#3443): a reaped
+// stage process whose pid number now leads another group must not reach that
+// group. The sentinel stands in for the reused pid: the stale *os.Process is
+// rebuilt with the sentinel's pid but marked done by Wait.
+func TestSignalProcessTree_ReapedProcessSendsNoGroupSignal(t *testing.T) {
+	sentinel := startGroupLeader(t)
+	exited := make(chan struct{})
+	go func() { _ = sentinel.Wait(); close(exited) }()
+
+	stale := exec.Command("true")
+	if err := stale.Run(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	reaped := stale.Process
+	reaped.Pid = sentinel.Process.Pid // simulate pid reuse after reap
+
+	if signalProcessTree(reaped, syscall.SIGKILL) {
+		t.Error("signalProcessTree reported signalling a reaped process")
+	}
+	select {
+	case <-exited:
+		t.Error("a reaped process's group signal killed the group now led by its pid number")
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestLeadsForeignGroup(t *testing.T) {
+	leader := startGroupLeader(t)
+	if !leadsForeignGroup(leader.Process) {
+		t.Error("a live group leader was rejected")
+	}
+
+	// A child in our group does not lead a group: per-pid only.
+	member := exec.Command("sleep", "300")
+	if err := member.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = member.Process.Kill(); _, _ = member.Process.Wait() })
+	if leadsForeignGroup(member.Process) {
+		t.Error("a non-leader was accepted as a group leader")
+	}
+
+	init, err := os.FindProcess(1)
+	if err != nil {
+		t.Fatalf("find 1: %v", err)
+	}
+	if leadsForeignGroup(init) {
+		t.Error("pid 1 was accepted; kill(-1) would broadcast")
+	}
+
+	pg := syscall.Getpgrp()
+	if got, err := syscall.Getpgid(pg); err != nil || got != pg || pg <= 1 {
+		t.Skipf("own group leader %d is not a live leader; own-group arm untestable", pg)
+	}
+	own, err := os.FindProcess(pg)
+	if err != nil {
+		t.Fatalf("find own leader: %v", err)
+	}
+	if leadsForeignGroup(own) {
+		t.Error("the caller's own process group was accepted")
+	}
+}
+
+// TestSignalProcessTree_ReapedLeaderStillReachesSurvivors (#3443 review): once
+// the leader is reaped, members left in its group must still be signalled.
+func TestSignalProcessTree_ReapedLeaderStillReachesSurvivors(t *testing.T) {
+	leader := exec.Command("sh", "-c", "sleep 300 >/dev/null 2>&1 & echo $!")
+	leader.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	out, err := leader.Output() // leader exits and is reaped; its child survives
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	var child int
+	if _, err := fmt.Sscanf(string(out), "%d", &child); err != nil {
+		t.Fatalf("parse child pid %q: %v", out, err)
+	}
+	pgid := leader.Process.Pid
+	t.Cleanup(func() { _ = syscall.Kill(-pgid, syscall.SIGKILL) })
+
+	if !signalProcessTree(leader.Process, syscall.SIGKILL) {
+		t.Fatal("signalProcessTree reported nothing signalled with a survivor in the group")
+	}
+	if !processGroupGone(pgid, 2*time.Second) {
+		t.Errorf("survivor %d of reaped leader %d's group was not signalled", child, pgid)
 	}
 }
