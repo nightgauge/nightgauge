@@ -71,10 +71,7 @@ func TestOpenCodeConfigGolden(t *testing.T) {
 	// the golden holds one placeholder for all of them and is the same on
 	// every OS: no /private/var twin of a /var path, no OS cache directory,
 	// no randomly named go-build directory.
-	base, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := openCodeGoldenBase(t)
 	dir := func(name string) string {
 		d := filepath.Join(base, name)
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -258,7 +255,11 @@ func TestOpenCodeConfigGolden(t *testing.T) {
 	if err := enc.Encode(golden); err != nil {
 		t.Fatal(err)
 	}
-	for _, leak := range []string{"fake-mcp-credential-1648", base} {
+	leaks := []string{"fake-mcp-credential-1648", base, "/tmp/Test", "/private/tmp/Test"}
+	if alias, ok := openCodeGoldenAliasForm(base); ok {
+		leaks = append(leaks, alias)
+	}
+	for _, leak := range leaks {
 		if strings.Contains(buf.String(), leak) {
 			t.Fatalf("the golden would carry %q", leak)
 		}
@@ -287,4 +288,47 @@ func TestOpenCodeConfigGolden(t *testing.T) {
 		t.Errorf("the verb or the Go spawn env drifted from %s. If the change is deliberate, regenerate it with %s=1 go test ./cmd/nightgauge -run TestOpenCodeConfigGolden and let the SDK test prove the SDK follows.\n--- got ---\n%s",
 			openCodeConfigGoldenPath, openCodeConfigGoldenUpdateEnv, buf.String())
 	}
+}
+
+// openCodeGoldenBase returns a symlink-free base directory that has no
+// system-alias form. The opencode adapter re-roots every path resolved under
+// a system alias's target (/tmp -> /private/tmp on macOS) and emits an extra
+// rule per form (#1651), so a base under /private/tmp — as with TMPDIR=/tmp —
+// would grow the compared permission list (#2792). Such a base is relocated
+// under /var/tmp, whose resolved form has no alias.
+func openCodeGoldenBase(t *testing.T) string {
+	t.Helper()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := openCodeGoldenAliasForm(base); !ok {
+		return base
+	}
+	dir, err := os.MkdirTemp("/var/tmp", "nightgauge-opencode-golden-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	if base, err = filepath.EvalSymlinks(dir); err != nil {
+		t.Fatal(err)
+	}
+	if alias, ok := openCodeGoldenAliasForm(base); ok {
+		t.Fatalf("relocated golden base %q still has the alias form %q", base, alias)
+	}
+	return base
+}
+
+// openCodeGoldenAliasForm reports the /tmp-rooted form of path when /tmp is a
+// symlink and path lies under its resolved target.
+func openCodeGoldenAliasForm(path string) (string, bool) {
+	target, err := filepath.EvalSymlinks("/tmp")
+	if err != nil || target == "/tmp" {
+		return "", false
+	}
+	rel, err := filepath.Rel(target, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.Join("/tmp", rel), true
 }
