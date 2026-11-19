@@ -609,7 +609,7 @@ func fallbackCommands(workdir, framework string) []string {
 	case "go":
 		return []string{"go build ./...", "go test ./..."}
 	case "flutter":
-		return []string{"dart fix --apply", "dart analyze", "flutter test"}
+		return []string{"dart fix --apply", detect.FlutterAnalyzeCommand(workdir, configuredAnalyze(workdir)), "flutter test"}
 	default:
 		return []string{}
 	}
@@ -667,4 +667,24 @@ var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// configuredAnalyze reads commands.analyze from the project config. internal/ci
+// cannot import internal/config (config imports ci), so it reads the one key
+// directly. Discovery only lists commands: an unreadable config yields "" and
+// the build check, which loads the full config, reports the error (#3449).
+func configuredAnalyze(workdir string) string {
+	data, err := os.ReadFile(filepath.Join(workdir, ".nightgauge", "config.yaml"))
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		Commands struct {
+			Analyze string `yaml:"analyze"`
+		} `yaml:"commands"`
+	}
+	if yaml.Unmarshal(data, &cfg) != nil {
+		return ""
+	}
+	return cfg.Commands.Analyze
 }

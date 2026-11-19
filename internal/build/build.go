@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/detect"
 )
 
@@ -65,12 +66,29 @@ func RunBuildJSON(ctx context.Context, workdir string) ([]byte, error) {
 	return json.Marshal(result)
 }
 
-// runFlutterBuild runs `flutter analyze` as the fast compile-correctness
-// gate: Dart has no separate build-only step, and this matches what
-// internal/ci already assumes for the framework (#195).
+// runFlutterBuild runs the repository's analyze entry point as the fast
+// compile-correctness gate: Dart has no separate build-only step. The command
+// comes from detect.FlutterAnalyzeCommand, shared with internal/ci (#195,
+// #3449). A config that fails to load fails the check rather than silently
+// falling back to the racy bare `flutter analyze`.
 func runFlutterBuild(ctx context.Context, workdir string) (BuildResult, error) {
-	out, err := runCmd(ctx, workdir, "flutter", "analyze")
 	ts := time.Now().UTC().Format(time.RFC3339)
+	cfg, err := config.Load(workdir)
+	if err != nil {
+		return BuildResult{
+			Ran:       true,
+			Status:    "failed",
+			Commands:  []string{},
+			Output:    fmt.Sprintf("load config for analyze command: %v", err),
+			Timestamp: ts,
+		}, nil
+	}
+	configured := ""
+	if cfg.Commands != nil {
+		configured = cfg.Commands.Analyze
+	}
+	cmd := detect.FlutterAnalyzeCommand(workdir, configured)
+	out, err := runCmd(ctx, workdir, "sh", "-c", cmd)
 	status := "passed"
 	if err != nil {
 		status = "failed"
@@ -78,9 +96,9 @@ func runFlutterBuild(ctx context.Context, workdir string) (BuildResult, error) {
 	return BuildResult{
 		Ran:       true,
 		Status:    status,
-		Commands:  []string{"flutter analyze"},
+		Commands:  []string{cmd},
 		Output:    out,
-		Timestamp: ts,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }
 

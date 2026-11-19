@@ -5048,13 +5048,18 @@ Blocked issues are visually distinguished in the Ready Items tree:
 
 Override default commands used by skills.
 
-| Option      | Default       | Description        |
-| ----------- | ------------- | ------------------ |
-| `test`      | auto-detected | Test command       |
-| `lint`      | auto-detected | Lint command       |
-| `typecheck` | auto-detected | Type check command |
-| `format`    | auto-detected | Format command     |
-| `build`     | auto-detected | Build command      |
+| Option      | Default       | Description             |
+| ----------- | ------------- | ----------------------- |
+| `test`      | auto-detected | Test command            |
+| `lint`      | auto-detected | Lint command            |
+| `typecheck` | auto-detected | Type check command      |
+| `format`    | auto-detected | Format command          |
+| `build`     | auto-detected | Build command           |
+| `analyze`   | auto-detected | Flutter analyze command |
+
+`analyze` is read by the Go build check (`nightgauge build run`) and ci command discovery.
+Unset, they run `bash scripts/flutter-analyze.sh` when the repository ships it, else `flutter analyze`.
+A project config that fails to load fails the build check.
 
 **Example:**
 
