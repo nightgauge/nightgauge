@@ -120,10 +120,17 @@ def make_repo(tmp: str) -> str:
     return tmp
 
 
-def run_check(tmp: str, base: str) -> tuple[int, str]:
-    """The checker, end to end, with its diff base pinned. Returns (code, out)."""
+def run_check(tmp: str, base: str | None) -> tuple[int, str]:
+    """The checker, end to end. Returns (code, out).
+
+    `base` pins NG_BOUNDARY_DIFF_BASE; None removes every base-steering variable
+    the checker reads, so only the checkout's own refs can supply a base.
+    """
     env = dict(os.environ)
-    env["NG_BOUNDARY_DIFF_BASE"] = base
+    for k in ("NG_BOUNDARY_DIFF_BASE", "GITHUB_BASE_REF", "GITHUB_EVENT_NAME"):
+        env.pop(k, None)
+    if base is not None:
+        env["NG_BOUNDARY_DIFF_BASE"] = base
     env["NG_BOUNDARY_JOBS"] = "1"
     r = subprocess.run(
         [sys.executable, str(CHECK)],
@@ -243,6 +250,21 @@ def case_a_lagging_branch_is_not_blocked_by_the_ratchet(tmp: str) -> None:
     check(
         "COUNT ROSE" not in out,
         "the ratchet does not fire on a pre-existing reference the mainline has resolved",
+    )
+
+
+def case_no_base_fails_closed(tmp: str) -> None:
+    """END TO END: a real checkout with no main, no origin/main and no override
+    has nothing to diff against, and the checker refuses -- exit 2 -- instead of
+    checking nothing. #3430 relies on this refusal staying fail-closed."""
+    write_manifest(tmp, 0)
+    commit(tmp, "feat: base work (#100)")
+    git("branch", "--quiet", "-m", "main", "work", cwd=tmp)
+    code, out = run_check(tmp, None)
+    check(code == 2, f"no resolvable base exits 2 (exit {code})")
+    check(
+        "cannot resolve a base commit" in out,
+        "the refusal names the unresolvable base",
     )
 
 
@@ -651,6 +673,10 @@ def main() -> int:
         (
             "the lowering advice is a fixed point (#1080)",
             case_the_lowering_advice_is_a_fixed_point,
+        ),
+        (
+            "no resolvable base fails closed (#3430)",
+            case_no_base_fails_closed,
         ),
     ]:
         run_case(name, body)
