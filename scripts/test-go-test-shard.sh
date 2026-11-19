@@ -71,6 +71,7 @@ for pkg in "${pkgs[@]}"; do
       for ((r = 0; r < reps; r++)); do
         echo "{\"Action\":\"run\",\"Package\":\"$pkg\",\"Test\":\"$t\"}"
         echo "{\"Action\":\"run\",\"Package\":\"$pkg\",\"Test\":\"$t/sub\"}"
+        [ "$t" = "${STUB_SIGTERM:-}" ] && kill -TERM $$
         echo "{\"Action\":\"pass\",\"Package\":\"$pkg\",\"Test\":\"$t\"}"
       done
     done
@@ -194,6 +195,14 @@ check "an empty shard passes without running go, and says so" $?
 shard run --plan "$TMP/plan.json" --pkg example/a --shard 4 --timeout 7m --json "$TMP/x.json" >/dev/null 2>&1
 [ $? -eq 2 ]
 check "a shard index outside the package's shards is refused" $?
+
+STUB_SIGTERM=TestGolf shard run --plan "$TMP/plan.json" --pkg example/a --shard 1 \
+  --timeout 7m --json "$TMP/killed.json" >/dev/null 2>"$TMP/killed.err"
+[ $? -eq 143 ] && grep -qF 'killed by SIGTERM' "$TMP/killed.err" &&
+  grep -qxF 'go-test-shard: go test was killed by SIGTERM; tests still running: example/a TestGolf' \
+    "$TMP/killed.err" &&
+  ! grep -qF 'TestGolf/sub' "$TMP/killed.err"
+check "a go test killed by SIGTERM exits 143 naming the signal and the in-flight test (#3443)" $?
 
 # ── rest ────────────────────────────────────────────────────────────────────
 : > "$STUB_ARGV"

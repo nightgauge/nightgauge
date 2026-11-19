@@ -32,6 +32,7 @@ import concurrent.futures
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import zlib
@@ -179,18 +180,55 @@ def _try(fn, arg):
 
 
 def stream(cmd, json_path):
-    """Run cmd, write its stdout to json_path and echo it readably. Return the exit code."""
+    """Run cmd, write its stdout to json_path and echo it readably. Return the exit code.
+
+    A `go test` killed by a signal is reported as such (#3443): the signal and the
+    top-level tests still running are named, and the code is 128+N, the shell
+    convention. Returning Popen's -N made sys.exit print 256-N (241 for SIGTERM),
+    a number that hid the fact the process was killed.
+    """
     print("%s: %s" % (PROG, " ".join(cmd)), flush=True)
+    running = {}
     with open(json_path, "w") as sink:
         echo = subprocess.Popen([sys.executable, ECHO], stdin=subprocess.PIPE, text=True)
         go = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
         for line in go.stdout:
             sink.write(line)
             echo.stdin.write(line)
+            track_running(running, line)
         code = go.wait()
         echo.stdin.close()
         echo.wait()
+    if code < 0:
+        signum = -code
+        try:
+            name = signal.Signals(signum).name
+        except ValueError:
+            name = "signal %d" % signum
+        tests = ", ".join("%s %s" % key for key in sorted(running)) or "none"
+        print("%s: go test was killed by %s; tests still running: %s" % (PROG, name, tests),
+              file=sys.stderr, flush=True)
+        return 128 + signum
     return code
+
+
+def track_running(running, line):
+    """Update the set of top-level tests that have a `run` event and no result yet."""
+    try:
+        ev = json.loads(line)
+    except ValueError:
+        return
+    if not isinstance(ev, dict):
+        return
+    test = ev.get("Test")
+    if not test or "/" in test:
+        return
+    key = (ev.get("Package", ""), test)
+    action = ev.get("Action")
+    if action == "run":
+        running[key] = True
+    elif action in ("pass", "fail", "skip"):
+        running.pop(key, None)
 
 
 def go_test_cmd(args):
