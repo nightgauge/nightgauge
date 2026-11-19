@@ -147,6 +147,13 @@ type requestSpec struct {
 	// token is read once, here, so a sign-out after a caller checked for a
 	// session cannot send the request with the fallback credential.
 	SessionOnly bool
+
+	// Bearer, when non-empty, is the credential for this one request instead
+	// of the client's own (#1883): a JWT-only call made before the client
+	// holds any session, such as issuing a device key right after sign-in. It
+	// is checked against Op.Security exactly like the client's credential, so a
+	// license key passed here is refused before the wire.
+	Bearer string
 }
 
 // newRequest is the only way this package builds a request against the
@@ -171,7 +178,9 @@ func (c *Client) newRequest(ctx context.Context, spec requestSpec) (*http.Reques
 	}
 
 	var bearer string
-	if spec.SessionOnly {
+	if spec.Bearer != "" {
+		bearer = strings.TrimSpace(spec.Bearer)
+	} else if spec.SessionOnly {
 		if bearer = c.sessionBearer(); bearer == "" {
 			return nil, fmt.Errorf("platform request %s: %w", op, ErrNoSession)
 		}

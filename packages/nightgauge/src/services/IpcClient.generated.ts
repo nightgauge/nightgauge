@@ -49,6 +49,7 @@ import type {
   ConfigTierAuditResult,
   ConfigureForgeInstanceResult,
   CostAnalyticsResult,
+  DeviceKeyResult,
   DoctorApplyRemedyResult,
   DoctorHistoryResult,
   DoctorRecheckResult,
@@ -83,6 +84,7 @@ import type {
   PipelineMaxConcurrentResult,
   PipelineResolveStageBudgetsResult,
   PipelineStatus,
+  PlatformReloadLicenseResult,
   PlatformStatus,
   PlatformSyncTelemetryResult,
   PortalSessionResult,
@@ -381,6 +383,14 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async platformStartTrial(accessToken: string): Promise<TrialResult> {
     return this.call<TrialResult>('platform.startTrial', { accessToken });
+  }
+
+  async platformRequestDeviceKey(accessToken: string, machineId?: string, hostname?: string, platform?: string): Promise<DeviceKeyResult> {
+    return this.call<DeviceKeyResult>('platform.requestDeviceKey', { accessToken, machineId, hostname, platform });
+  }
+
+  async platformReloadLicense(): Promise<PlatformReloadLicenseResult> {
+    return this.call<PlatformReloadLicenseResult>('platform.reloadLicense');
   }
 
   async platformSubmitAnalytics(eventType: string, payload?: unknown, timestamp?: string): Promise<StatusOK> {

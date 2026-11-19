@@ -161,6 +161,10 @@ import {
   setLicenseReconciliation,
   vscodeLicenseKeychainBridge,
 } from "../services/licenseKeychainBridge";
+import { DeviceKeyService } from "../platform/DeviceKeyService";
+import { registerLinkMachineCommand } from "../commands/linkMachine";
+import { buildAccountUrl } from "../commands/auditCommands";
+import * as nodeOs from "node:os";
 import { migrateLegacyGeminiApiKey } from "../commands/migrateConfig";
 import { loadGeminiApiKey } from "../services/geminiApiKey";
 import { NotifierStatusTracker } from "../services/notifications/NotifierStatusTracker";
@@ -4601,6 +4605,9 @@ export async function initializeServices(
     );
   }
 
+  // Device-key resolution (#1883), constructed once the sidebar is wired.
+  let deviceKeyService: DeviceKeyService | null = null;
+
   // Initialize TierGate (Issue #1472)
   // TierGate is stateless — no dependencies needed beyond instantiation.
   const tierGate = new TierGate();
@@ -4667,6 +4674,9 @@ export async function initializeServices(
   // from the same LicensePreflight result. Entry points: sidebar Subscription
   // section row and the command palette.
   context.subscriptions.push(registerShowMachineBindingCommand(licensePreflight));
+  // Link This Machine (#1883): contributed in every window, so always
+  // registered; it explains itself when cloud features or a session are off.
+  context.subscriptions.push(registerLinkMachineCommand(() => deviceKeyService));
   // One-shot diagnostics snapshot into the main channel (#749): platform
   // connectivity, which credential kind is in use, Go binary path/version,
   // and the last transport error per platform surface.
@@ -4714,6 +4724,44 @@ export async function initializeServices(
     // SubscriptionSectionTreeItem into the actual sidebar tree provider).
     if (licensePreflight) {
       treeProvider.setLicensePreflight(sessionManager, licensePreflight);
+    }
+
+    // Resolve a license key after every sign-in and on restore (#1883): when
+    // no explicit key resolves, request a device key, store it where the CLI
+    // and daemon read it, and have the running daemon pick it up.
+    if (secretService && machineFingerprint) {
+      const fingerprint = machineFingerprint;
+      const secrets = secretService;
+      deviceKeyService = new DeviceKeyService({
+        getIpc: () => IpcClient.getInstance(),
+        session: sessionManager,
+        secrets,
+        secretKey: SECRET_KEYS.platformLicenseKey,
+        bridge: vscodeLicenseKeychainBridge(),
+        machine: () => ({
+          machineId: fingerprint.getMachineId(),
+          hostname: nodeOs.hostname(),
+          platform: process.platform,
+        }),
+        globalState: context.globalState,
+        logger,
+        tokenRefresher: onDemandTokenRefresher,
+        machinesUrl: buildAccountUrl,
+        onKeyIssued: async (issued) => {
+          cachedLicenseKey = issued.licenseKey;
+          await treeProvider.refreshSubscription();
+        },
+      });
+      context.subscriptions.push(deviceKeyService);
+      const service = deviceKeyService;
+      licensePreflight?.setRejectionListener((status, key) => {
+        void service.onLicenseRejected(status, key);
+      });
+      // restore() ran above; its transition may already have fired. A pass
+      // started here and the transition's pass share one in-flight request.
+      void sessionManager.isAuthenticated().then((authed) => {
+        if (authed) void service.ensure("session-restore");
+      });
     }
 
     // Set VSCode context key for when-clause filtering (Issue #1472)

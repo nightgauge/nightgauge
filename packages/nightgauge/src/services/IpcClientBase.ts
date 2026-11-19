@@ -495,6 +495,28 @@ export interface TrialResult {
   runAllowance: number;
 }
 
+/** Result of platform.requestDeviceKey (matches Go platform.DeviceKeyResult, #1883). */
+export interface DeviceKeyResult {
+  /** Returned once by the platform: store it before anything else. */
+  licenseKey: string;
+  deviceKeyId: string;
+  tier: string;
+  /** ISO 8601, or absent for no expiry. */
+  expiresAt?: string;
+}
+
+/** Result of platform.reloadLicense (matches Go ipc.PlatformReloadLicenseResult, #1883). */
+export interface PlatformReloadLicenseResult {
+  /** The daemon's platform client holds a license key. */
+  licensePresent: boolean;
+  /** This call installed a key the daemon lacked. */
+  adopted: boolean;
+  /** Where the re-resolved key came from, or "absent". */
+  source: string;
+  /** The Action Center platform bridge is active. */
+  bridgeAttached: boolean;
+}
+
 /** Resolved skill from platform.resolveSkill (matches Go platform.CachedSkill). */
 export interface CachedSkill {
   stage: string;

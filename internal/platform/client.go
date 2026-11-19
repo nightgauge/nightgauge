@@ -177,6 +177,44 @@ func (c *Client) SetSessionToken(token string) {
 	c.credMu.Unlock()
 }
 
+// LicenseKey returns the license key the client holds, or "" when none.
+func (c *Client) LicenseKey() string {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	return c.licenseKey
+}
+
+// AdoptLicenseKey installs key as the client's license key when it holds none
+// (#1883), and reports whether it did. A daemon started before the editor
+// obtained a device key picks the key up this way without a restart. A key
+// the client already holds is never replaced: it is an explicit one, or one
+// every running service already authenticates with.
+func (c *Client) AdoptLicenseKey(key string) bool {
+	key = strings.TrimSpace(key)
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	if key == "" || c.licenseKey != "" {
+		return false
+	}
+	c.licenseKey = key
+	return true
+}
+
+// ReplaceLicenseKey installs key as the client's license key when it differs
+// from the one held, and reports whether it changed (#1883). It exists for a
+// stored key the platform re-issued after rejecting the previous one: the
+// caller decides that the key's source may replace a held key.
+func (c *Client) ReplaceLicenseKey(key string) bool {
+	key = strings.TrimSpace(key)
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	if key == "" || c.licenseKey == key {
+		return false
+	}
+	c.licenseKey = key
+	return true
+}
+
 // HasSessionToken reports whether a user-scoped JWT is currently installed.
 func (c *Client) HasSessionToken() bool {
 	c.credMu.RLock()

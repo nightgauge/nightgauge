@@ -152,6 +152,8 @@ var contractTestedMethods = map[string]bool{
 	"platform.submitAnalytics":     true,
 	"platform.validateLicense":     true,
 	"platform.startTrial":          true,
+	"platform.requestDeviceKey":    true,
+	"platform.reloadLicense":       true,
 	"platform.getCostAnalytics":    true,
 	"platform.getAnalyticsHealth":  true,
 	"platform.getAnalyticsRuns":    true,
@@ -1261,6 +1263,20 @@ func TestContract_Platform(t *testing.T) {
 			"accessToken": "jwt_test_contract",
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.startTrial")
+	})
+
+	t.Run("platform.requestDeviceKey/registered", func(t *testing.T) {
+		h.bind(t)
+		id := h.sendRequest("platform.requestDeviceKey", map[string]interface{}{
+			"accessToken": "",
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.requestDeviceKey")
+	})
+
+	t.Run("platform.reloadLicense/registered", func(t *testing.T) {
+		h.bind(t)
+		id := h.sendRequest("platform.reloadLicense", nil)
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.reloadLicense")
 	})
 
 	t.Run("platform.submitAnalytics/registered", func(t *testing.T) {

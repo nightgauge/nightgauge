@@ -132,6 +132,13 @@ var contractCallSites = []callSite{
 		_, err := c.ReadAgentWorkspaceThrottles(ctx, "agent-1")
 		return err
 	}},
+	// The device key is requested with a per-call JWT (#1883). Passing the
+	// client's own bearer lets the harness drive both credential arms through
+	// the one call site.
+	{api.OpLicenseIssueDeviceKey, func(ctx context.Context, c *Client) error {
+		_, err := NewLicenseService(c).RequestDeviceKey(ctx, c.bearer(), MachineInfo{MachineID: "m-1"})
+		return err
+	}},
 	{api.OpAgentsRegister, func(ctx context.Context, c *Client) error {
 		_, err := NewAgentRegistrationService(c, "test").RegisterAgent(ctx)
 		return err

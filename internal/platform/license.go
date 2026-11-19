@@ -117,7 +117,7 @@ func (s *LicenseService) Validate(ctx context.Context, machine MachineInfo) (*Li
 	}
 
 	// Validate with platform
-	licenseKey := s.client.licenseKey
+	licenseKey := s.client.LicenseKey()
 	if licenseKey == "" {
 		return s.communityInfo(), nil
 	}
@@ -245,7 +245,7 @@ func (s *LicenseService) rememberMachine(machine MachineInfo) MachineInfo {
 // ConfiguredKey returns the license key the client was constructed with (the
 // session key), or "" when none is configured.
 func (s *LicenseService) ConfiguredKey() string {
-	return s.client.licenseKey
+	return s.client.LicenseKey()
 }
 
 // invalidInfo is a non-cached "not valid" result for ValidateKey when the key

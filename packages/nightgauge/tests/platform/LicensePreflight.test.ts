@@ -532,4 +532,48 @@ describe("LicensePreflight", () => {
       expect(result.offline).toBe(true);
     });
   });
+
+  // #1883: a rejected key is reported so an issued device key can be replaced.
+  describe("rejection listener", () => {
+    for (const status of ["revoked", "suspended", "expired"] as const) {
+      it(`reports ${status} with the key that was validated`, async () => {
+        mockClient.platformValidateLicense.mockResolvedValue({ valid: false, tier: "", status });
+        const preflight = new LicensePreflight(
+          mockClient.client,
+          machineFingerprint,
+          () => "ng_live_issued"
+        );
+        const listener = vi.fn();
+        preflight.setRejectionListener(listener);
+
+        await preflight.validate();
+        expect(listener).toHaveBeenCalledWith(status, "ng_live_issued");
+      });
+    }
+
+    it("stays silent for a valid key, a machine limit, and an offline answer", async () => {
+      const preflight = new LicensePreflight(
+        mockClient.client,
+        machineFingerprint,
+        () => "ng_live_issued"
+      );
+      const listener = vi.fn();
+      preflight.setRejectionListener(listener);
+
+      mockClient.platformValidateLicense.mockResolvedValueOnce(validLicenseResponse);
+      await preflight.validate();
+      preflight.clearCache();
+      mockClient.platformValidateLicense.mockResolvedValueOnce({
+        valid: false,
+        tier: "",
+        status: "machine_limit",
+      });
+      await preflight.validate();
+      preflight.clearCache();
+      mockClient.platformValidateLicense.mockRejectedValueOnce(new Error("socket closed"));
+      await preflight.validate();
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+  });
 });

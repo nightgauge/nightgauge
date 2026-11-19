@@ -359,7 +359,8 @@ func collectImportTypes(methods []MethodDef) []string {
 		"RecoveryClaimResult":    true, "RecoveryExecuteResult": true, // #794 — recovery transactions
 		"ModelRouteResult": true, "FailureClassification": true, "CostEstimate": true,
 		"BatchAssessment": true, "PlatformStatus": true, "LicenseInfo": true,
-		"TrialResult":   true, // Issue #1138 — Start Free Trial
+		"TrialResult":     true,                                      // Issue #1138 — Start Free Trial
+		"DeviceKeyResult": true, "PlatformReloadLicenseResult": true, // #1883 — device key after sign-in
 		"IpcQueueState": true, "IpcQueueItem": true, "RunPipelineResult": true,
 		"HealthAnalysis": true, "PullRequestDetail": true, "GitStatusResult": true,
 		"GitLogEntry": true, "StatusCounts": true,

@@ -249,6 +249,20 @@ credential, which `serve` uses only when `platform.enabled: true`. A
 `NIGHTGAUGE_LICENSE_KEY` in the environment VS Code was started from reaches
 the daemon unchanged and stays an explicit opt-in.
 
+**A signed-in machine gets a key without a paste (#1883).** After any platform
+sign-in and on session restore, the extension walks a precedence ladder:
+`NIGHTGAUGE_LICENSE_KEY`, then what `auth license status` reports (the OS
+keychain or `platform.license_key` in the machine config), then SecretStorage.
+Only when none resolves does it call `platform.requestDeviceKey`
+(`POST /v1/license/device-key`, session JWT only), at most once per session,
+because a second call for the same machine revokes that machine's previous
+device key. The issued key is written like any other (SecretStorage and
+`auth license set`), and the extension then calls `platform.reloadLicense`:
+the running daemon re-resolves the stored key with `serve`'s own precedence,
+adopts it only when it holds none, logs
+`serve: platform license reloaded (license=present, ...)`, and attaches the
+Action Center bridge. An explicit key is never replaced.
+
 **The shared keychain entry is the source of truth.** The extension records
 the fingerprint of the last key the CLI confirmed and compares fingerprints
 on startup and after every write:
@@ -286,6 +300,8 @@ output.
 ### The daemon's platform agent
 
 When a platform and a license key are configured, `nightgauge serve`
+(at startup, or later when `platform.reloadLicense` adopts a device key, #1883;
+the Action Center bridge attaches at most once per daemon)
 registers its own platform agent (`POST /v1/agents/register`,
 `internal/platform/agent_registration.go`), heartbeats it and opens that
 agent's command stream. The VS Code extension registers a second agent for
@@ -9973,6 +9989,24 @@ its `status` field carries one of the following extension-facing values
 | `suspended`     | The license is suspended (e.g. billing failure).                        |
 | `machine_limit` | The key is valid, but this machine can't take a seat — the license's machine cap is already full. Distinct from the lifecycle states above: the fix is freeing or adding a seat, not renewing or contacting support. |
 | `""` (empty)    | Unknown — either a connectivity/5xx fallback, or a 4xx with no parseable license error code. |
+
+`platform.requestDeviceKey` (#1883) takes `{accessToken, machineId?,
+hostname?, platform?}` and returns `{licenseKey, deviceKeyId, tier,
+expiresAt?}`. Its `machineId` on the wire is
+`HMAC-SHA256("nightgauge/device-key/v1", machineId)`, not the validate digest:
+validate keys its HMAC on a license key, which does not exist yet, and the
+value must stay stable because the platform revokes a machine's previous
+device key when the same `machineId` asks again. Changing the derivation
+strands every issued key; `TestDeviceKeyMachineID_StableAndDistinctFromValidateHash`
+pins it. A failure's message leads with its code: `LICENSE_NOT_FOUND`,
+`LICENSE_EXPIRED`, `LICENSE_REVOKED`, `LICENSE_MACHINE_LIMIT`,
+`RATE_LIMITED`, `UNAUTHORIZED` or `UNAVAILABLE` (a 404 without
+`LICENSE_NOT_FOUND`, a transport failure, or a malformed key).
+
+`platform.reloadLicense` (no params) returns `{licensePresent, adopted,
+source, bridgeAttached}`: whether the daemon holds a key, whether this call
+installed it, where it came from, and whether the Action Center bridge is
+active.
 
 #### Per-Operation Identity Resolution
 
