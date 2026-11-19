@@ -49,6 +49,11 @@ func init() {
 		func(ctx context.Context, env *Env) ([]Finding, string) {
 			return preservedWipFindings(env.Cwd, env.Now)
 		})
+	// A branch_forked run's pinned tip, outside refs/heads/ (#2753).
+	native("stranded_refs", "Stranded fork refs", "NGD052",
+		func(ctx context.Context, e *Env) ([]Finding, string) {
+			return strandedRefFindings(e.Cwd, issueStateDoor(ctx, e.Client))
+		})
 	// A stage that is never killed leaks itself (#341).
 	native("orphaned_processes", "Orphaned processes", "NGD021",
 		func(ctx context.Context, env *Env) ([]Finding, string) {

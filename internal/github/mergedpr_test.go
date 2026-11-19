@@ -345,3 +345,15 @@ func TestNewMergedPRLookupForRoot_DoesNotBuildAClientForANonGitHubRemote(t *test
 		t.Error("a nil factory must produce the closed door, not a panicking one")
 	}
 }
+
+func TestNewIssueStateLookupForRoot_ClosedDoors(t *testing.T) {
+	ctx := context.Background()
+	if NewIssueStateLookupForRoot(ctx, nil, t.TempDir()) != nil {
+		t.Error("nil client factory produced an open door")
+	}
+	calls := 0
+	factory := func() (*Client, error) { calls++; return nil, nil }
+	if NewIssueStateLookupForRoot(ctx, factory, t.TempDir()) != nil || calls != 0 {
+		t.Errorf("non-GitHub root: open door or client built (%d calls)", calls)
+	}
+}

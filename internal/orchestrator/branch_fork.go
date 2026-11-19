@@ -35,6 +35,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/reclaim"
 )
 
 // branchForkGitTimeout bounds every git invocation these primitives make. The
@@ -535,7 +537,7 @@ func originOnlyCommits(ctx context.Context, dir, base, local, remote string) []s
 
 // StrandedRef names the ref that pins a branch_forked run's tip.
 func StrandedRef(issue int) string {
-	return fmt.Sprintf("refs/nightgauge/stranded/%d", issue)
+	return reclaim.StrandedRefName(issue)
 }
 
 // PreserveStrandedTip pins the local tip of `branch` at

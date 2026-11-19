@@ -14,6 +14,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- `nightgauge doctor` now reports stranded fork refs (`refs/nightgauge/stranded/<issue>`, NGD052), which a branch_forked run leaves behind and nothing else reclaimed. `doctor --fix` deletes one once its issue is closed; a ref whose issue is open is kept, and one whose issue state cannot be read is reported as unverifiable and never deleted (#2753).
+
 ### Changed
 
 - pr-create's changed-file secret scan now runs as `nightgauge scan diff-secrets --base <ref>`, a deterministic verb that reads the HEAD commit and has JSON output and a gating exit code (2 when it cannot run), so the same check can be re-run after a fix without rendering the skill. Its counts are matching lines per pattern, not one per pattern as before (#2702).
