@@ -531,3 +531,153 @@ func TestDoctorProducer_ConcurrentSweepsShareOneScan(t *testing.T) {
 		t.Fatalf("scans = %d, want 1", n)
 	}
 }
+
+// --- claude_plugin_health end to end (#2803) ---------------------------------
+
+const (
+	claudePluginCheckID     = "claude_plugin_health"
+	claudePluginCode        = "NGD051"
+	claudePluginCacheMiss   = "Marketplace nightgauge-plugins failed to load: cache-miss"
+	claudePluginOutageList  = `[{"id":"nightgauge@nightgauge-plugins","version":"1.25.0","scope":"user","enabled":true,"errors":["` + claudePluginCacheMiss + `"]}]`
+	claudePluginHealthyList = `[{"id":"nightgauge@nightgauge-plugins","version":"1.25.0","scope":"user","enabled":true}]`
+)
+
+// claudePluginWorld runs the real registered claude_plugin_health check
+// against a plugin list the test can change between sweeps.
+type claudePluginWorld struct {
+	t     *testing.T
+	list  string
+	check doctor.Check
+}
+
+func newClaudePluginWorld(t *testing.T, list string) *claudePluginWorld {
+	t.Helper()
+	w := &claudePluginWorld{t: t, list: list}
+	for _, c := range doctor.DefaultRegistry().Checks() {
+		if c.ID == claudePluginCheckID {
+			w.check = c
+		}
+	}
+	if w.check.ID == "" {
+		t.Fatalf("%s is not in the default registry", claudePluginCheckID)
+	}
+	t.Cleanup(doctor.SwapClaudePluginListForTest(func() ([]byte, error) { return []byte(w.list), nil }))
+	return w
+}
+
+func (w *claudePluginWorld) fixer(string) *doctor.Fixer {
+	reg := doctor.NewRegistry()
+	reg.MustRegister(w.check)
+	return &doctor.Fixer{Registry: reg, Env: &doctor.Env{}}
+}
+
+func (w *claudePluginWorld) sweeper() (*Sweeper, *attention.Store) {
+	p := &Doctor{
+		Scan: func(ctx context.Context, root string) ([]doctor.CheckResult, error) {
+			return w.fixer(root).Scan(ctx), nil
+		},
+		PrimaryRepo: func(string) string { return "" },
+		cache:       newDoctorScanCache(0),
+	}
+	return coverageSweeper(w.t, p)
+}
+
+func (w *claudePluginWorld) onlyCard(store *attention.Store) attention.DecisionRequest {
+	w.t.Helper()
+	cards := openDoctorCards(w.t, store)
+	if len(cards) != 1 {
+		w.t.Fatalf("open doctor cards = %d, want 1: %v", len(cards), cards)
+	}
+	for key, c := range cards {
+		if !strings.HasPrefix(key, attention.DoctorCardKey(claudePluginCheckID, "")) {
+			w.t.Errorf("card key %q is not %s's", key, claudePluginCheckID)
+		}
+		return c
+	}
+	panic("unreachable")
+}
+
+func TestDoctorProducer_ClaudePluginFailureRaisesOneCard(t *testing.T) {
+	w := newClaudePluginWorld(t, claudePluginOutageList)
+	sw, store := w.sweeper()
+	if res := sweepDoctor(t, sw); res.Created != 1 {
+		t.Fatalf("created = %d, want 1 (%+v)", res.Created, res)
+	}
+	card := w.onlyCard(store)
+	if !strings.HasPrefix(card.Title, claudePluginCode) {
+		t.Errorf("title = %q, want NGD051 first", card.Title)
+	}
+	for _, want := range []string{"cache-miss", "Reload the VS Code window", "scripts/install-agent-skills.sh --claude-only"} {
+		if !strings.Contains(card.Body, want) {
+			t.Errorf("body lacks %q:\n%s", want, card.Body)
+		}
+	}
+	if len(card.Options) != 1 || card.Options[0].Verb != attention.VerbDoctorRecheck {
+		t.Errorf("options = %+v, want only recheck", card.Options)
+	}
+	// A second failing sweep keeps the one card; it does not raise another.
+	if res := sweepDoctor(t, sw); res.Created != 0 {
+		t.Errorf("second failing sweep created %d cards", res.Created)
+	}
+	if again := w.onlyCard(store); again.ID != card.ID {
+		t.Errorf("second failing sweep replaced card %s with %s", card.ID, again.ID)
+	}
+}
+
+func TestDoctorProducer_ClaudePluginRecoveryResolvesOnNextSweep(t *testing.T) {
+	w := newClaudePluginWorld(t, claudePluginOutageList)
+	sw, store := w.sweeper()
+	sweepDoctor(t, sw)
+	id := w.onlyCard(store).ID
+	w.list = claudePluginHealthyList
+	sweepDoctor(t, sw)
+	if got, found, err := store.Get(id); err != nil || !found || got.Lifecycle.State != attention.StateAutoResolved {
+		t.Fatalf("card after the healthy sweep = %+v, %v, %v; want auto_resolved", got, found, err)
+	}
+	if open := openDoctorCards(t, store); len(open) != 0 {
+		t.Fatalf("cards still open: %v", open)
+	}
+}
+
+// The operator repairs the plugin and re-checks: the card resolves, and the
+// next sweep inside the rescan interval scans again instead of re-raising the
+// card from the scan cached before the repair.
+func TestDoctorProducer_ClaudePluginRecheckResolves(t *testing.T) {
+	w := newClaudePluginWorld(t, claudePluginOutageList)
+	scans := 0
+	p, cache, clock := cachedDoctor(func(ctx context.Context, root string) ([]doctor.CheckResult, error) {
+		scans++
+		return w.fixer(root).Scan(ctx), nil
+	})
+	sw, store := coverageSweeper(t, p)
+	sweepDoctor(t, sw)
+	card := w.onlyCard(store)
+	w.list = claudePluginHealthyList
+	runner := DoctorRemedies{WorkspaceRoot: sw.WorkspaceRoot, NewFixer: w.fixer, cache: cache}
+	if _, err := store.Resolve(context.Background(), card.ID, "recheck", "operator@test", "", "",
+		doctorVerbExecutor{runner: runner}); err != nil {
+		t.Fatalf("resolve via recheck: %v", err)
+	}
+	if got, found, err := store.Get(card.ID); err != nil || !found || !got.Lifecycle.State.IsTerminal() {
+		t.Fatalf("card after recheck = %+v, %v, %v; want resolved", got, found, err)
+	}
+	clock.t = clock.t.Add(time.Minute) // well inside the interval
+	sweepDoctor(t, sw)
+	if scans != 2 {
+		t.Fatalf("scans = %d, want 2: the recheck must drop the cached scan", scans)
+	}
+	if open := openDoctorCards(t, store); len(open) != 0 {
+		t.Fatalf("the recovered plugin was raised again: %v", open)
+	}
+}
+
+func TestDoctorProducer_HealthyClaudePluginRaisesNoCard(t *testing.T) {
+	w := newClaudePluginWorld(t, claudePluginHealthyList)
+	sw, store := w.sweeper()
+	if res := sweepDoctor(t, sw); res.Created != 0 {
+		t.Fatalf("created = %d, want 0", res.Created)
+	}
+	if open := openDoctorCards(t, store); len(open) != 0 {
+		t.Fatalf("healthy plugin raised cards: %v", open)
+	}
+}

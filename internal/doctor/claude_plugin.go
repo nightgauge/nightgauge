@@ -103,3 +103,14 @@ func claudePluginUnverifiable(reason string) ([]Finding, string) {
 	return []Finding{unverifiableFinding(claudePluginCheck, claudePluginCode, SeverityWarning,
 		"Claude plugin health", reason)}, "could not read the Claude plugin list"
 }
+
+// SwapClaudePluginListForTest makes claude_plugin_health find a `claude` CLI
+// whose `plugin list --json` returns what list returns, until the returned
+// function restores the real probes. Exported so the workspace doctor sweep
+// test (#2803) can run the real check end to end without a Claude install.
+func SwapClaudePluginListForTest(list func() ([]byte, error)) (restore func()) {
+	prevLook, prevList := claudeLookPath, claudePluginList
+	claudeLookPath = func(string) (string, error) { return "/usr/bin/claude", nil }
+	claudePluginList = func(context.Context, string) ([]byte, error) { return list() }
+	return func() { claudeLookPath, claudePluginList = prevLook, prevList }
+}
