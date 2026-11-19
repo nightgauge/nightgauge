@@ -286,6 +286,22 @@ type CancelActiveForNetworkOutageResult struct {
 	CancelledIssues []int `json:"cancelledIssues"`
 }
 
+// CancelForOperatorStopParams are the parameters for
+// pipeline.cancelForOperatorStop (#1848). Repo is "owner/name"; empty matches
+// every repository. IssueNumber <= 0 stops every active run (Stop All).
+type CancelForOperatorStopParams struct {
+	Repo        string `json:"repo,omitempty"`
+	IssueNumber int    `json:"issueNumber,omitempty"`
+}
+
+// CancelForOperatorStopResult is the response from
+// pipeline.cancelForOperatorStop (#1848).
+type CancelForOperatorStopResult struct {
+	// CancelledIssues lists the issue numbers whose stages were signalled,
+	// one entry per run. Empty when no matching stage was active.
+	CancelledIssues []int `json:"cancelledIssues"`
+}
+
 // IssueViewManyParams are parameters for issue.viewMany — fetches multiple
 // issues from one repo in a single batched GraphQL request, without their
 // relationship lists (IssueSummary on the TypeScript side).

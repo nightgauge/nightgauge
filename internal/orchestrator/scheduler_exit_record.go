@@ -137,7 +137,13 @@ func (s *Scheduler) writeStageExitRecord(
 	// source has text but the SkillRunner surfaced the kill marker via
 	// SetStageError (#3207). Prefers the gate's structured terminal kind over
 	// prose classification (Issue #9).
-	if !success {
+	// An operator stop is a structural fact, never text (#1848): the stage was
+	// killed by the scheduler or the extension's cancel, so its exit text
+	// (SIGTERM, exit 143) says nothing reliable. Without this the record carried
+	// an empty terminal_kind — the same shape as a zero-output hang.
+	if !success && result != nil && result.Cancelled {
+		rec.TerminalKind = TerminalKindOperatorStop
+	} else if !success {
 		errText := stageFailureText(stageErr, result)
 		if errText == "" && snap != nil && snap.StageErrors != nil {
 			errText = snap.StageErrors[string(stage)]
@@ -155,6 +161,9 @@ func (s *Scheduler) writeStageExitRecord(
 		rec.SessionID = result.SessionID
 		rec.Signal = result.Signal
 		rec.SignalSource = result.SignalSource
+		if result.Cancelled && rec.SignalSource == "" {
+			rec.SignalSource = SignalSourceOperator
+		}
 		// #161: the ceiling that fired and its configured value. Without the
 		// pair, a killed stage's record names only the delivering closure and
 		// the actual limit has to be re-derived from the resolver chain.

@@ -1747,6 +1747,10 @@ func (as *AutonomousScheduler) runLoop(ctx context.Context) error {
 		}
 	}()
 
+	// #1848: the pr-merge fix hand-back ends an admission-stopped run as an
+	// operator stop instead of booking an exhausted auto-fix.
+	as.scheduler.SetAdmissionStopped(as.admissionStopped)
+
 	// Wire up the pipeline-complete callback so we can cascade unblocks.
 	prevCallback := as.scheduler.onPipelineComplete
 	as.scheduler.OnPipelineComplete(func(repo string, issue int, runtime *state.RuntimeState, success bool) {
@@ -1756,8 +1760,6 @@ func (as *AutonomousScheduler) runLoop(ctx context.Context) error {
 		// kinds (e.g. stream_idle_timeout) through dedicated retry policies
 		// instead of penalizing the issue for an upstream-API problem.
 		// (#3398)
-		terminalKind := ""
-		failureDetail := ""
 		// merged carries the post-merge ground-truth breadcrumb
 		// (RuntimeState.MergedCommitSha, set only after verifyPRMergeForStage
 		// confirms the run's own PR is MERGED) into as.onPipelineComplete
@@ -1767,27 +1769,7 @@ func (as *AutonomousScheduler) runLoop(ctx context.Context) error {
 		// threading the flag through, this wrapper independently re-applies
 		// failure accounting, the cascade feed, and its OWN board revert to
 		// a run whose merge already landed — #1650's exact repro.
-		merged := false
-		terminalKind = resumeNoOpKind(runtime, success)
-		if !success && runtime != nil {
-			snap := runtime.Snapshot()
-			merged = snap.MergedCommitSha != ""
-			if snap.Stage != "" {
-				if errMsg, ok := snap.StageErrors[string(snap.Stage)]; ok {
-					// Prefer the failing stage's gate-sourced structured kind
-					// over prose classification of errMsg (Issue #9).
-					gateRan := false
-					gateTerminalKind := ""
-					if grs := snap.StageGateResults[string(snap.Stage)]; len(grs) > 0 {
-						gateRan = true
-						gateTerminalKind = grs[len(grs)-1].TerminalKind
-					}
-					terminalKind = ResolveTerminalKind(gateRan, gateTerminalKind,
-						snap.StageHostSlept[string(snap.Stage)], errMsg)
-					failureDetail = errMsg
-				}
-			}
-		}
+		terminalKind, failureDetail, merged := completionTerminalKind(runtime, success)
 		as.onPipelineComplete(repo, issue, success, false, terminalKind, failureDetail, merged)
 		if !success && !merged {
 			as.recordTransientRunPR(repo, issue, runtime, terminalKind)
@@ -2942,6 +2924,42 @@ func (as *AutonomousScheduler) Stop() {
 	case as.stopRefinementCh <- struct{}{}:
 	default:
 	}
+}
+
+// completionTerminalKind derives what the autonomous completion callback
+// passes to onPipelineComplete for a finished run: the terminal kind, the
+// failure detail, and whether the run's own PR already merged. The kind comes
+// from the failed stage's structured verdicts first — operator stop (#1848),
+// then host sleep, then the gate — and only then from the error text.
+func completionTerminalKind(runtime *state.RuntimeState, success bool) (terminalKind, failureDetail string, merged bool) {
+	terminalKind = resumeNoOpKind(runtime, success)
+	if !success && runtime != nil {
+		snap := runtime.Snapshot()
+		merged = snap.MergedCommitSha != ""
+		if snap.Stage != "" {
+			if errMsg, ok := snap.StageErrors[string(snap.Stage)]; ok {
+				// Prefer the failing stage's gate-sourced structured kind
+				// over prose classification of errMsg (Issue #9).
+				gateRan := false
+				gateTerminalKind := ""
+				if grs := snap.StageGateResults[string(snap.Stage)]; len(grs) > 0 {
+					gateRan = true
+					gateTerminalKind = grs[len(grs)-1].TerminalKind
+				}
+				terminalKind = ResolveSnapshotTerminalKind(snap, gateRan, gateTerminalKind, errMsg)
+				failureDetail = errMsg
+			}
+		}
+	}
+	return terminalKind, failureDetail, merged
+}
+
+// admissionStopped reports whether Stop was requested and admission has not
+// been restarted since (#1848).
+func (as *AutonomousScheduler) admissionStopped() bool {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	return as.stopRequested
 }
 
 // SetMaxConcurrent updates the global concurrent-dispatch ceiling at runtime.

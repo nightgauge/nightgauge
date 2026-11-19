@@ -789,3 +789,64 @@ func TestRunStage_ForwardsServedModelAttribution(t *testing.T) {
 		t.Fatal("RunStage did not return within 2 seconds")
 	}
 }
+
+// TestRunStage_OperatorStopCauseMarksCancelled pins #1848 AC0/AC1 on the
+// extension path: a stage whose context was cancelled with the operator-stop
+// cause (pipeline.cancelForOperatorStop) reports Cancelled, so the scheduler
+// books operator_stop. Any other cancel, and a stage that fails on its own,
+// must not — the mark is never derived from error text.
+func TestRunStage_OperatorStopCauseMarksCancelled(t *testing.T) {
+	cases := []struct {
+		name  string
+		cause error // nil: the stage fails on its own, no cancel
+		want  bool
+	}{
+		{"operator stop", orchestrator.ErrOperatorStop, true},
+		{"plain cancel", context.Canceled, false},
+		{"network outage", orchestrator.ErrNetworkUnavailable, false},
+		{"own failure", nil, false},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			runner := newTestStageRunner(&buf)
+			ctx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			issue := 1848 + i
+			params := orchestrator.StageRunParams{
+				Stage:       state.StagePRMerge,
+				IssueNumber: issue,
+				Repo:        "nightgauge/nightgauge",
+				Timeout:     10 * time.Second,
+				RunID:       testRunID,
+			}
+			done := make(chan *orchestrator.StageRunResult, 1)
+			go func() {
+				r, _ := runner.RunStage(ctx, params)
+				done <- r
+			}()
+			time.Sleep(50 * time.Millisecond)
+			if tc.cause != nil {
+				cancel(tc.cause)
+			} else {
+				runner.DeliverStageResult(StageResultParams{
+					Stage:        string(state.StagePRMerge),
+					IssueNumber:  issue,
+					Success:      false,
+					ExitCode:     143,
+					ErrorText:    "exit status 143",
+					ElapsedMs:    35555,
+					IdleMsAtExit: 34889,
+				})
+			}
+			select {
+			case r := <-done:
+				if r.Cancelled != tc.want {
+					t.Errorf("Cancelled = %v, want %v", r.Cancelled, tc.want)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("RunStage did not return")
+			}
+		})
+	}
+}

@@ -192,7 +192,7 @@ the discovery regex and the atomic-write contract. This section documents the
 | Position       | `stage`, `startedAt`, `stageStart`                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Process        | `pid`, `ownerPid`, `worktreeDir`                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Totals         | `inputTokens`, `outputTokens`, `totalCostUsd`, `authoritativeChangeClass`, `actualLinesChanged`                                                                                                                                                                                                                                                                                                                                                        |
-| Progress       | `completedStages`, `supersededStages`, `skippedStages`, `phaseHistory`, `supersededPhaseHistory`, `stageErrors`, `stageHostSlept`, `retryCount`, `escalationHistory`, `ralphIterations`, `backtracks`                                                                                                                                                                                                                                                  |
+| Progress       | `completedStages`, `supersededStages`, `skippedStages`, `phaseHistory`, `supersededPhaseHistory`, `stageErrors`, `stageHostSlept`, `stageOperatorStopped`, `retryCount`, `escalationHistory`, `ralphIterations`, `backtracks`                                                                                                                                                                                                                          |
 | Per-stage maps | `stageModes`, `stageAdapters`, `stageModels`, `stageServedModels`, `stageOpenCodeSessions`, `stageModelIdentities`, `stageEndpointFailovers`, `stageContexts`, `stageEfforts`, `stageThinking`, `stageServedEfforts`, `stageServedThinking`, `stagePluginVersions`, `stageModelSelectionModes`, `stageExecutionPaths`, `stagePuntReasons`, `stageGateResults`, `stageAnomalies`, `stageRecoveryAttempts`, `stageOutputTails`, `terminatingStageTokens` |
 | Outcome        | `gateResults`, `prUrl`, `mergedPr`, `mergeNoOp`, `resumedAtMerge`, `readyWithheld`, `mergedCommitSha`, `mergedAt`, `partialDelivery`, `mainCheckVerdict`, `mainCheckFailing`, `license`, `licenseExpiredMidRun`, `toolCalls`, `modelRefusalFallbacks`                                                                                                                                                                                                  |
 | Lineage        | `lastLineage`, `stageLineages`, `handoffEvents`                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -253,6 +253,15 @@ sleeping through that stage's most recent attempt and booked it `host_slept`
 booking writes it, and a later plain stage error or a successful completion
 clears it. Terminal-kind resolution reads this field; the `[host-slept]` text
 in the stage error is display-only, so echoed output cannot forge the verdict.
+
+#### `stageOperatorStopped` — structured operator-stop verdict
+
+`stageOperatorStopped` maps a stage to `true` when its most recent attempt was
+stopped by the operator (an extension Stop, a cancel that tore the run down, or
+a pr-merge hand-back interrupted by an admission stop) and the scheduler booked
+it `operator_stop` (#1848). It shares the current-attempt contract of
+`stageHostSlept`. Terminal-kind resolution reads it ahead of the stage error,
+which for a SIGTERM'd stage says nothing about why it exited.
 
 #### `completedStages[]` vs `supersededStages[]` — `StageResult`
 

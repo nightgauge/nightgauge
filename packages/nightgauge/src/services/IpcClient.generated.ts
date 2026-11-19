@@ -39,6 +39,7 @@ import type {
   BoardItem,
   CachedSkill,
   CancelActiveForNetworkOutageResult,
+  CancelForOperatorStopResult,
   CheckAuthorizationResult,
   ComplianceReportDetail,
   ComplianceReportDownload,
@@ -251,6 +252,10 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async pipelineCancelActiveForNetworkOutage(): Promise<CancelActiveForNetworkOutageResult> {
     return this.call<CancelActiveForNetworkOutageResult>('pipeline.cancelActiveForNetworkOutage');
+  }
+
+  async pipelineCancelForOperatorStop(repo?: string, issueNumber?: number): Promise<CancelForOperatorStopResult> {
+    return this.call<CancelForOperatorStopResult>('pipeline.cancelForOperatorStop', { repo, issueNumber });
   }
 
   async pipelineStatus(owner: string, projectNumber: number, itemId: string, ownerType?: string, githubUser?: string): Promise<PipelineStatus> {

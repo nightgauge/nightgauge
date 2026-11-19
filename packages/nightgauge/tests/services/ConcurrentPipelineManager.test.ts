@@ -82,9 +82,14 @@ const gitComposeBranchName = vi.fn(
   }
 );
 
+const { mockPipelineCancelForOperatorStop } = vi.hoisted(() => ({
+  mockPipelineCancelForOperatorStop: vi.fn().mockResolvedValue({ cancelledIssues: [] }),
+}));
+
 vi.mock("../../src/services/IpcClient", () => ({
   IpcClient: {
     getInstance: () => ({
+      pipelineCancelForOperatorStop: mockPipelineCancelForOperatorStop,
       gitComposeBranchName,
     }),
   },

@@ -207,6 +207,13 @@ import { throttleInForce, type WorkspaceThrottle } from "./WorkspaceThrottle";
 import { IpcClient } from "./IpcClient";
 import { confirmAndReportPrivateRun, visibilityOption, withVisibility } from "./RunVisibility";
 import type { AbandonedDispatchSituation, QueueHandBackRef } from "./IpcClientBase";
+import type { TerminalFailureKind } from "../schemas/executionHistory";
+
+/** Upper bound on how long a Stop waits for Go to record the stop (#1848). */
+const OPERATOR_STOP_NOTIFY_TIMEOUT_MS = 1_000;
+
+/** Terminal kind Go books for an operator stop (TerminalKindOperatorStop, #1487/#1848). */
+const OPERATOR_STOP_TERMINAL_KIND = "operator_stop" satisfies TerminalFailureKind;
 
 /**
  * Factory function to create a HeadlessOrchestrator for a worktree.
@@ -2061,7 +2068,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           item.issueNumber,
           new Error(`Cancelled by user`),
           0, // no pipeline ran — there is no spend to report
-          item.repoName
+          item.repoName,
+          OPERATOR_STOP_TERMINAL_KIND
         )
       );
       return "cancelled";
@@ -2398,12 +2406,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           stageWhenCancelled: result.failedStage,
           costUsd: slotCostUsd,
         });
+        // #1848: name the stop structurally. Without a kind, Go classifies
+        // "Cancelled by user" as text, finds nothing, and charges the issue a
+        // lifetime failure for the operator's own Stop.
         this.callbacks.onSlotFailed?.(
           slot.index,
           slot.issueNumber,
           new Error(`Cancelled by user`),
           slotCostUsd,
-          slot.repo
+          slot.repo,
+          OPERATOR_STOP_TERMINAL_KIND
         );
       } else {
         this.logger.warn("Concurrent pipeline slot failed", {
@@ -3792,6 +3804,15 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       this.noteHeldRemoteRuns();
     }
 
+    // Tell Go first (#1848), so each stage context carries the operator-stop
+    // cause before its process is killed and the run books operator_stop, not
+    // a pipeline failure charged to the issue's lifetime cap. A reload does not
+    // wait: the window may be gone before the answer arrives.
+    const goStop = this.notifyGoOperatorStop();
+    if (!keepQueued) {
+      await goStop;
+    }
+
     // Stop all running orchestrators. Mark each slot as user-cancelled BEFORE
     // issuing the stop so the slot's runSlot completion handler treats the
     // cancellation as a deliberate user action, not a pipeline failure.
@@ -4088,7 +4109,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           slot.issueNumber,
           new Error(`Cancelled by user`),
           costUsd,
-          slot.repo
+          slot.repo,
+          OPERATOR_STOP_TERMINAL_KIND
         );
       } catch (err) {
         this.logger.error(
@@ -4229,7 +4251,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         issueNumber,
         new Error(`Cancelled by user`),
         0, // no pipeline ran — there is no spend to report
-        reservation.repo
+        reservation.repo,
+        OPERATOR_STOP_TERMINAL_KIND
       )
     );
     // ── claim decision made; awaits are safe from here on ────────────────
@@ -4324,8 +4347,58 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // through the cancellation path instead of treating the cancel as a
     // real pipeline failure.
     slot.userCancelled = true;
-    slot.orchestrator.stop();
+    // Go's stage context is cancelled with the operator-stop cause before the
+    // process is killed (#1848); the kill follows whether or not Go answers.
+    void this.notifyGoOperatorStop(slot.repo, issueNumber).then(() => {
+      try {
+        slot.orchestrator.stop();
+      } catch (err) {
+        this.logger.error("abortSlot: stopping the slot's orchestrator failed", {
+          issueNumber,
+          repo: slot.repo ?? "",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
     return true;
+  }
+
+  /**
+   * Ask the Go scheduler to cancel the matching stage contexts with the
+   * operator-stop cause (#1848). Without it an extension Stop reaches Go only
+   * as a killed process, indistinguishable from a crash, and the run is booked
+   * as a pipeline failure. Bounded and best effort: the stop itself never
+   * waits on Go for longer than {@link OPERATOR_STOP_NOTIFY_TIMEOUT_MS}.
+   */
+  private async notifyGoOperatorStop(repo?: string, issueNumber?: number): Promise<void> {
+    const warn = (err: unknown): void => {
+      this.logger.warn("Operator stop was not delivered to the Go scheduler", {
+        repo: repo ?? "",
+        issueNumber: issueNumber ?? 0,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    };
+    let call: Promise<void>;
+    try {
+      call = IpcClient.getInstance()
+        .pipelineCancelForOperatorStop(repo, issueNumber)
+        .then(() => undefined, warn);
+    } catch (err) {
+      // The stop must never depend on the IPC client being usable.
+      warn(err);
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, OPERATOR_STOP_NOTIFY_TIMEOUT_MS);
+    });
+    try {
+      await Promise.race([call, timeout]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
   }
 
   /**
@@ -4855,6 +4928,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     const slot = this.slotByRemoteRunId(remoteRunId);
     if (slot) {
       slot.userCancelled = true;
+      await this.notifyGoOperatorStop(slot.repo, slot.issueNumber);
       await slot.orchestrator.gracefulStop(10_000);
       return "applied";
     }

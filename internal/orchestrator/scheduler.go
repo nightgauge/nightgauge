@@ -1196,10 +1196,15 @@ type Scheduler struct {
 	// It receives the epic's own repository with its number (#2377).
 	epicCheckpoint     func(epicRepo string, epicNumber int)
 	onPipelineComplete func(repo string, issue int, runtime *state.RuntimeState, success bool)
-	onQueueChanged     func(QueueState)
-	onStateChanged     func(repo string, issue int, runtime *state.RuntimeState)
-	onModelFallback    func(repo string, issue int, stage, fromModel, toModel, reason string)
-	onPhaseDetected    func(repo string, issue int, stage, name string, index, total int)
+	// admissionStopped reports whether the autonomous scheduler's admission
+	// was stopped (#1848). Set by the autonomous scheduler; nil when none
+	// drives this scheduler. Read only by the pr-merge fix hand-back, which
+	// must end an interrupted run as an operator stop, not a failure.
+	admissionStopped func() bool
+	onQueueChanged   func(QueueState)
+	onStateChanged   func(repo string, issue int, runtime *state.RuntimeState)
+	onModelFallback  func(repo string, issue int, stage, fromModel, toModel, reason string)
+	onPhaseDetected  func(repo string, issue int, stage, name string, index, total int)
 	// onPhaseSettled is onPhaseDetected's terminal arm (#1247). A skill-driven
 	// stage only ever needed the start half here, because the extension owned
 	// the completion side; a deterministic stage has no extension in the loop,
@@ -1263,6 +1268,22 @@ type Scheduler struct {
 // and resets board status to "Ready" for re-pickup once connectivity returns.
 // See docs/FAILURE_TAXONOMY.md (terminal_failure_kind="network_unavailable").
 var ErrNetworkUnavailable = errors.New("network unavailable: extended GitHub connectivity loss")
+
+// ErrOperatorStop is the cancel cause used when an operator stops a running
+// issue from the extension (#1848). It is the IPC-mode counterpart of
+// execution.Manager's stopRequested: the extension's Stop kills the stage
+// subprocess, which exits 143 with no text a classifier can tell from a crash,
+// so the stop travels as this structural cause on the stage context instead.
+// A stage whose context carries it reports StageRunResult.Cancelled, which
+// books TerminalKindOperatorStop.
+var ErrOperatorStop = errors.New("stopped by the operator")
+
+// IsOperatorStop reports whether ctx was cancelled by an operator stop
+// (ErrOperatorStop). Every consumer reads the cause through this predicate,
+// never from error text.
+func IsOperatorStop(ctx context.Context) bool {
+	return ctx != nil && errors.Is(context.Cause(ctx), ErrOperatorStop)
+}
 
 // QueueEntry represents an issue queued for pipeline execution (legacy alias).
 type QueueEntry struct {
@@ -2226,6 +2247,32 @@ func (s *Scheduler) CancelAllForNetworkOutage() []int {
 	}
 	sort.Ints(cancelled)
 	log.Printf("CancelAllForNetworkOutage: cancelled %d active stage(s): %v", len(cancelled), cancelled)
+	return cancelled
+}
+
+// CancelForOperatorStop cancels the active stage context of every run of
+// repo#issueNumber with cause ErrOperatorStop, so the stage reports Cancelled
+// and the run books operator_stop instead of a pipeline failure (#1848). An
+// empty repo matches any repository; issueNumber <= 0 matches every active
+// run (Stop All). Returns the signalled issue numbers, one entry per run.
+func (s *Scheduler) CancelForOperatorStop(repo string, issueNumber int) []int {
+	s.activeStagesMu.Lock()
+	defer s.activeStagesMu.Unlock()
+	var cancelled []int
+	for _, st := range s.activeStages {
+		if repo != "" && st.repo != repo {
+			continue
+		}
+		if issueNumber > 0 && st.issue != issueNumber {
+			continue
+		}
+		st.cancel(ErrOperatorStop)
+		cancelled = append(cancelled, st.issue)
+	}
+	sort.Ints(cancelled)
+	if len(cancelled) > 0 {
+		log.Printf("CancelForOperatorStop: stopped %d active stage(s): %v", len(cancelled), cancelled)
+	}
 	return cancelled
 }
 
@@ -4519,6 +4566,24 @@ func (s *Scheduler) OnPipelineComplete(fn func(repo string, issue int, runtime *
 	s.onPipelineComplete = fn
 }
 
+// SetAdmissionStopped installs the predicate that reports an autonomous
+// admission stop (#1848). nil clears it.
+func (s *Scheduler) SetAdmissionStopped(fn func() bool) {
+	s.admissionStopped = fn
+}
+
+// handbackInterrupted reports whether a pr-merge fix hand-back was interrupted
+// by the operator rather than ended by the PR (#1848): the stage context was
+// cancelled (an operator stop, or a cancel tearing the run down) or autonomous
+// admission was stopped. A network-outage cancel is not a stop; the scheduler
+// classifies it from its own cause.
+func (s *Scheduler) handbackInterrupted(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return !errors.Is(context.Cause(ctx), ErrNetworkUnavailable)
+	}
+	return s.admissionStopped != nil && s.admissionStopped()
+}
+
 // OnStateChanged sets a callback invoked on every runtime state mutation.
 func (s *Scheduler) OnStateChanged(fn func(repo string, issue int, runtime *state.RuntimeState)) {
 	s.onStateChanged = fn
@@ -5793,7 +5858,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// skip the calibration update entirely (Issue #3296).
 		if !pipelineSuccess && terminalFailureKind == "" && snap.Stage != "" {
 			if errMsg, ok := snap.StageErrors[string(snap.Stage)]; ok {
-				terminalFailureKind = ResolveTerminalKind(false, "", snap.StageHostSlept[string(snap.Stage)], errMsg)
+				terminalFailureKind = ResolveSnapshotTerminalKind(snap, false, "", errMsg)
 				if terminalFailureKind == "" {
 					// Unclassifiable — fall back to the most generic kind so
 					// the record still distinguishes "failed" from "complete"
@@ -7525,6 +7590,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if cause := context.Cause(stageCtx); errors.Is(cause, ErrNetworkUnavailable) {
 				stageRunErr = ErrNetworkUnavailable
 			}
+			// An operator stop (#1848) is carried as the stage context's cause,
+			// whichever runner ran the stage: mark the result Cancelled so the
+			// failure path below books operator_stop, not a pipeline failure.
+			if IsOperatorStop(stageCtx) {
+				if result == nil {
+					result = &StageRunResult{ExitCode: 1}
+				}
+				result.Cancelled = true
+			}
 			cancelStage(nil) // release ctx resources
 		}
 		// Every arm records this attempt's context telemetry, so a retry that
@@ -8250,7 +8324,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// would relaunch work an operator just asked to stop.
 			if result != nil && result.Cancelled {
 				terminalFailureKind = TerminalKindOperatorStop
-				runtime.SetStageError(stage, terminalFailureReason(exitCode, err, "stage stopped by the operator"))
+				// The structured verdict, not the text, is what the autonomous
+				// completion callback and both run-record writers read (#1848).
+				runtime.SetStageOperatorStoppedError(stage, terminalFailureReason(exitCode, err, "stage stopped by the operator"))
 				s.emitStateChanged(item.Repo, item.Number, runtime)
 				log.Printf("#%d: stage %s stopped by the operator (exit %d) — not the issue's failure, no retry, no escalation",
 					item.Number, stage, exitCode)
@@ -11179,6 +11255,8 @@ func (s *Scheduler) recordV2History(
 	record := hw.BuildV2Record(snap, success, errMsg, input, now)
 	// #2756: an architecture-approval hold is a non-failure.
 	ApplyNonFailureOutcome(&record)
+	// #1848: a record still booked failed names its stage and reason.
+	EnsureFailureAttribution(&record, string(snap.Stage), errMsg)
 
 	// Attach gate results (best-effort — missing file is not an error) and the
 	// predicted-vs-actual routing decisions from recordOutcome.
@@ -12314,6 +12392,18 @@ func (s *Scheduler) runPRMergeSkillWithFixHandback(
 		switch {
 		case merged:
 			return total, nil
+		case s.handbackInterrupted(ctx):
+			// #1848: the operator stopped the run (or admission) while the PR
+			// waited. That is not an exhausted auto-fix: end the stage
+			// Cancelled so the run books operator_stop, keeps its failure
+			// budget, and resumes into pr-merge for the still-open PR.
+			log.Printf("#%d: pr-merge hand-back for PR #%d interrupted by an operator stop — not a failure",
+				item.Number, marker.PRNumber)
+			stopped := *total
+			stopped.ExitCode = 1
+			stopped.Cancelled = true
+			stopped.ErrorText = "pr-merge hand-back interrupted by an operator stop"
+			return &stopped, nil
 		case rateLimited:
 			return fail(total, fmt.Errorf("github-quota-low: pr-merge deterministic path rate-limited after auto-fix; deferring until GitHub bucket reset [#3976]"))
 		case refusal != nil:

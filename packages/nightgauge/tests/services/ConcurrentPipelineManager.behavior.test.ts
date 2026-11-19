@@ -100,9 +100,14 @@ const gitComposeBranchName = vi.fn(
   }
 );
 
+const { mockPipelineCancelForOperatorStop } = vi.hoisted(() => ({
+  mockPipelineCancelForOperatorStop: vi.fn().mockResolvedValue({ cancelledIssues: [] }),
+}));
+
 vi.mock("../../src/services/IpcClient", () => ({
   IpcClient: {
     getInstance: () => ({
+      pipelineCancelForOperatorStop: mockPipelineCancelForOperatorStop,
       gitComposeBranchName,
     }),
   },
@@ -539,7 +544,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
 
       // stop() should have been called on issue 10's orchestrator
       const orch10 = controllable.getOrchestrator(10);
-      expect(orch10!.stop).toHaveBeenCalled();
+      await vi.waitFor(() => expect(orch10!.stop).toHaveBeenCalled());
 
       // aborting non-existent slot returns false
       expect(manager.abortSlot(999)).toBe(false);
