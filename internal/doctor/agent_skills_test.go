@@ -78,7 +78,7 @@ func TestAgentSkillsReportsMissingInstalledVersion(t *testing.T) {
 	}
 }
 
-func TestAgentSkillsMarkerlessPointsAtAdopt(t *testing.T) {
+func TestAgentSkillsMarkerlessPointsAtExtensionAndAdopt(t *testing.T) {
 	home, roots := agentSkillsFixture(t)
 	// A matching version still needs adopting: every later install skips it.
 	writeSkillVersion(t, filepath.Join(home.skills, "nightgauge-retro"), "1.0.0", false)
@@ -86,8 +86,17 @@ func TestAgentSkillsMarkerlessPointsAtAdopt(t *testing.T) {
 	if len(fs) != 1 || !strings.Contains(findingsText(fs), "no install marker") {
 		t.Fatalf("findings = %s; want a marker finding", findingsText(fs))
 	}
-	if !strings.Contains(strings.Join(fs[0].Remedies[0].Steps, " "), "--adopt") {
-		t.Errorf("remedy does not name --adopt: %v", fs[0].Remedies[0].Steps)
+	steps := fs[0].Remedies[0].Steps
+	if len(steps) == 0 || !strings.Contains(steps[0], "VS Code extension") {
+		t.Errorf("first step does not name the extension reinstall: %v", steps)
+	}
+	for _, step := range steps {
+		if strings.Contains(step, "--adopt") && !strings.Contains(step, "checkout") {
+			t.Errorf("--adopt offered without a checkout: %q", step)
+		}
+	}
+	if !strings.Contains(strings.Join(steps, " "), "--adopt") {
+		t.Errorf("remedy does not name --adopt for a checkout: %v", steps)
 	}
 }
 

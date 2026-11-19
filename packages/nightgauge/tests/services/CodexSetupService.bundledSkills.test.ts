@@ -180,9 +180,96 @@ describe("copySkillsTree counts and retired skills (#2739)", () => {
     const { copySkillsTree, formatSkillCopySummary } =
       await import("../../src/services/bundledSkills");
     const result = await copySkillsTree(source, dest, vi.fn(), { prune: false });
-    expect(result).toEqual({ installed: 1, total: 2, skipped: 1, removed: 0 });
+    expect(result).toEqual({ installed: 1, total: 2, skipped: 1, adopted: 0, removed: 0 });
     expect(formatSkillCopySummary(result)).toBe("installed 1 of 2, skipped 1");
     expect(fs.existsSync(path.join(dest, "nightgauge-retro", "mine.md"))).toBe(true);
+  });
+
+  it("adopts a marker-less byte copy of the source and moves the old copy aside (#2831)", async () => {
+    skill(dest, "nightgauge-retro");
+    fs.mkdirSync(path.join(dest, "nightgauge-retro", "refs"));
+    // A copy under another path still matches: the proof is content only.
+    fs.writeFileSync(path.join(dest, "nightgauge-retro", "refs", "x.md"), "# nightgauge-retro");
+    const warn = vi.fn();
+    const { copySkillsTree, formatSkillCopySummary, ADOPTED_SUFFIX } =
+      await import("../../src/services/bundledSkills");
+    const result = await copySkillsTree(source, dest, warn, { prune: false });
+    expect(result).toEqual({ installed: 2, total: 2, skipped: 0, adopted: 1, removed: 0 });
+    expect(formatSkillCopySummary(result)).toBe("installed 2 of 2, skipped 0, adopted 1");
+    expect(fs.existsSync(path.join(dest, "nightgauge-retro", ".nightgauge-installed"))).toBe(true);
+    expect(fs.existsSync(path.join(dest, "nightgauge-retro", "refs"))).toBe(false);
+    const asideRoot = fs.realpathSync(dest) + ADOPTED_SUFFIX;
+    const stamps = fs.readdirSync(asideRoot);
+    expect(stamps).toHaveLength(1);
+    expect(stamps[0]).toMatch(/^\d{8}T\d{6}Z$/);
+    const aside = path.join(asideRoot, stamps[0], "nightgauge-retro");
+    expect(fs.readFileSync(path.join(aside, "SKILL.md"), "utf8")).toBe("# nightgauge-retro");
+    expect(fs.readFileSync(path.join(aside, "refs", "x.md"), "utf8")).toBe("# nightgauge-retro");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`Adopted nightgauge-retro`));
+  });
+
+  it("skips a marker-less directory with one edited file and names it (#2831)", async () => {
+    skill(dest, "nightgauge-retro");
+    fs.writeFileSync(path.join(dest, "nightgauge-retro", "SKILL.md"), "# edited");
+    const warn = vi.fn();
+    const { copySkillsTree, ADOPTED_SUFFIX } = await import("../../src/services/bundledSkills");
+    const result = await copySkillsTree(source, dest, warn, { prune: false });
+    expect(result).toEqual({ installed: 1, total: 2, skipped: 1, adopted: 0, removed: 0 });
+    expect(fs.readFileSync(path.join(dest, "nightgauge-retro", "SKILL.md"), "utf8")).toBe(
+      "# edited"
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(`${path.join(dest, "nightgauge-retro")} has no install marker`)
+    );
+    expect(fs.existsSync(fs.realpathSync(dest) + ADOPTED_SUFFIX)).toBe(false);
+  });
+
+  it("never adopts a copy with an edited file nested below a matching SKILL.md (#2831)", async () => {
+    skill(dest, "nightgauge-retro");
+    fs.mkdirSync(path.join(dest, "nightgauge-retro", "refs"));
+    fs.writeFileSync(path.join(dest, "nightgauge-retro", "refs", "x.md"), "edited");
+    const { copySkillsTree } = await import("../../src/services/bundledSkills");
+    const result = await copySkillsTree(source, dest, vi.fn(), { prune: false });
+    expect(result.adopted).toBe(0);
+    expect(fs.readFileSync(path.join(dest, "nightgauge-retro", "refs", "x.md"), "utf8")).toBe(
+      "edited"
+    );
+  });
+
+  it("never adopts through a linked skills directory, even a matching copy (#2831)", async () => {
+    const checkout = path.join(tmpRoot, "checkout-skills");
+    skill(checkout, "nightgauge-retro");
+    const linked = path.join(tmpRoot, "linked-skills");
+    fs.symlinkSync(checkout, linked);
+    const { copySkillsTree } = await import("../../src/services/bundledSkills");
+    const result = await copySkillsTree(source, linked, vi.fn(), { prune: false });
+    expect(result.adopted).toBe(0);
+    expect(fs.existsSync(path.join(checkout, "nightgauge-retro", ".nightgauge-installed"))).toBe(
+      false
+    );
+  });
+
+  it("orders adopted before removed in the summary, as the script does", async () => {
+    const { formatSkillCopySummary } = await import("../../src/services/bundledSkills");
+    expect(
+      formatSkillCopySummary({ installed: 3, total: 3, skipped: 0, adopted: 1, removed: 2 })
+    ).toBe("installed 3 of 3, skipped 0, adopted 1, removed 2");
+  });
+
+  it("never adopts a marker-less directory holding a symlink or no file (#2831)", async () => {
+    skill(dest, "nightgauge-retro");
+    fs.symlinkSync(
+      path.join(source, "nightgauge-retro", "SKILL.md"),
+      path.join(dest, "nightgauge-retro", "link.md")
+    );
+    fs.mkdirSync(path.join(dest, "nightgauge-issue-create", "empty"), { recursive: true });
+    const { copySkillsTree } = await import("../../src/services/bundledSkills");
+    const result = await copySkillsTree(source, dest, vi.fn(), { prune: false });
+    expect(result).toEqual({ installed: 0, total: 2, skipped: 2, adopted: 0, removed: 0 });
+    expect(fs.lstatSync(path.join(dest, "nightgauge-retro", "link.md")).isSymbolicLink()).toBe(
+      true
+    );
+    expect(fs.existsSync(path.join(dest, "nightgauge-issue-create", "empty"))).toBe(true);
   });
 
   it("warns with the count and withholds success when a skill was skipped", async () => {
@@ -191,7 +278,7 @@ describe("copySkillsTree counts and retired skills (#2739)", () => {
     const output = { appendLine: vi.fn() } as unknown as import("vscode").OutputChannel;
     const complete = reportSkillCopy(
       "Codex",
-      { installed: 1, total: 2, skipped: 1, removed: 0 },
+      { installed: 1, total: 2, skipped: 1, adopted: 0, removed: 0 },
       output
     );
     expect(complete).toBe(false);
@@ -205,7 +292,11 @@ describe("copySkillsTree counts and retired skills (#2739)", () => {
     const { reportSkillCopy } = await import("../../src/services/bundledSkills");
     const output = { appendLine: vi.fn() } as unknown as import("vscode").OutputChannel;
     expect(
-      reportSkillCopy("Grok", { installed: 2, total: 2, skipped: 0, removed: 0 }, output)
+      reportSkillCopy(
+        "Grok",
+        { installed: 2, total: 2, skipped: 0, adopted: 0, removed: 0 },
+        output
+      )
     ).toBe(true);
     expect(vscode.window.showWarningMessage).not.toHaveBeenCalled();
   });
@@ -233,7 +324,7 @@ describe("copySkillsTree counts and retired skills (#2739)", () => {
     const warn = vi.fn();
     const { copySkillsTree } = await import("../../src/services/bundledSkills");
     const result = await copySkillsTree(source, dest, warn, { prune: false });
-    expect(result).toEqual({ installed: 2, total: 2, skipped: 0, removed: 0 });
+    expect(result).toEqual({ installed: 2, total: 2, skipped: 0, adopted: 0, removed: 0 });
     expect(fs.readdirSync(dest).sort()).toEqual(["nightgauge-issue-create", "nightgauge-retro"]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("issue-create is not a Nightgauge"));
   });
@@ -527,7 +618,7 @@ describe("copySkillsTree containment and ownership", () => {
     expect(present(path.join(checkoutSkills, "_shared", INSTALL_MARKER))).toBe(false);
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining(
-        `${path.join(agentSkills, "nightgauge-issue-create")} is not a directory Nightgauge installed`
+        `${path.join(agentSkills, "nightgauge-issue-create")} has no install marker`
       )
     );
   });

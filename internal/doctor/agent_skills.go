@@ -157,7 +157,10 @@ func agentSkillFinding(agent, dir, name string, marked bool, roots []string) *Fi
 		return finding(label+" has no install marker",
 			fmt.Sprintf("every install skips %s, so it stays at version %s (build %s)",
 				dir, agentSkillVersionText(installed), agentSkillVersionText(build)),
-			agentSkillsInstallRemedy("adopt", " --adopt", "Or remove the directory and install again"))
+			manualRemedy("adopt", "Adopt the unmodified copy", agentSkillsCheck,
+				"Reinstall the skills from the VS Code extension, which adopts a copy whose every file matches the build it ships",
+				"From a primary checkout, run `bash scripts/install-agent-skills.sh --adopt`",
+				"Or remove the directory and install again"))
 	case installed != build:
 		return finding(label+" differs from this build",
 			fmt.Sprintf("%s is version %s, this build ships %s",
