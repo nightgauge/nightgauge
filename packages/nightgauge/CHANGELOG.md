@@ -9,6 +9,10 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Installing Codex or Grok skills from the VS Code extension now adopts a skill directory that has no install marker when every file in it matches the running build: the old copy moves to `<skills>.nightgauge-adopted/<UTC-stamp>/<name>` and the skill is reinstalled, and the summary reports `adopted N`. A directory with local edits is still skipped, with a warning naming it. `nightgauge doctor` (NGD112) now tells extension users to reinstall from the extension and offers `install-agent-skills.sh --adopt` only for a checkout (#2831).
+
 ### Fixed
 
 - After pr-create stops on a secret scan, the retry no longer opens a fallback PR around the stop, even when HEAD moved: the stop is re-judged by the deterministic runner, which keeps it while the flagged commit is in the branch history and clears it only when gitleaks and the diff scan are both clean. A stop that still holds fails pr-create with a `[pr-create-gate-stop] security_scan` error (#3419).

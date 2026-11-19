@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- Installing Codex or Grok skills from the VS Code extension now adopts a skill directory that has no install marker when every file in it matches the running build: the old copy moves to `<skills>.nightgauge-adopted/<UTC-stamp>/<name>` and the skill is reinstalled, and the summary reports `adopted N`. A directory with local edits is still skipped, with a warning naming it. `nightgauge doctor` (NGD112) now tells extension users to reinstall from the extension and offers `install-agent-skills.sh --adopt` only for a checkout (#2831).
 - The adapter-canary workflow now runs `TestClaudeSkillsTreeLive` daily and on `workflow_dispatch` against the reviewed Claude Code pin, so the stage skills tree is proven readable and write-refused under the real CLI without someone remembering to run it. A skipped test fails the job; it is not a required check (#2824).
 - `nightgauge doctor` now reports stranded fork refs (`refs/nightgauge/stranded/<issue>`, NGD052), which a branch_forked run leaves behind and nothing else reclaimed. `doctor --fix` deletes one once its issue is closed; a ref whose issue is open is kept, and one whose issue state cannot be read is reported as unverifiable and never deleted (#2753).
 

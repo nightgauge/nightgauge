@@ -17,12 +17,14 @@
  *   copies a linked file only when the link resolves inside the source tree,
  *   never follows a linked directory, refuses a destination that overlaps the
  *   source, and replaces an existing destination directory only when it
- *   holds the install marker Nightgauge writes. It reports what it skipped,
+ *   holds the install marker Nightgauge writes, or adopts an unlinked
+ *   marker-less one whose every file is a byte copy of the running build's. It reports what it skipped,
  *   and removes marked directories whose skill has left a complete source.
  * - Each target records the extension version it was installed from
  *   (stampInstalledVersion), so an upgrade re-syncs it on activation.
  */
 
+import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
@@ -75,6 +77,8 @@ export interface SkillCopyResult {
   installed: number;
   total: number;
   skipped: number;
+  /** Marker-less copies of this build's files, moved aside and reinstalled. */
+  adopted: number;
   removed: number;
 }
 
@@ -298,6 +302,102 @@ async function holdsMarker(target: string): Promise<boolean> {
 }
 
 /**
+ * Suffix of the directory beside the skills root that adopted copies move
+ * into, `<root>.nightgauge-adopted/<UTC-stamp>/<name>`: the same layout
+ * scripts/lib/install_skill_tree.py move_aside() uses.
+ */
+export const ADOPTED_SUFFIX = ".nightgauge-adopted";
+
+/** SHA-256 hex digest of a file's bytes. */
+async function fileDigest(file: string): Promise<string> {
+  return createHash("sha256")
+    .update(await fs.promises.readFile(file))
+    .digest("hex");
+}
+
+/**
+ * Digests of every regular file reachable in `root` the way copyContained
+ * reaches them (links to files inside `root` count; linked directories do
+ * not). Paths do not matter, so a copy under any name matches.
+ */
+async function contentDigests(
+  root: string,
+  dir = root,
+  digests = new Set<string>()
+): Promise<Set<string>> {
+  for (const name of await fs.promises.readdir(dir)) {
+    const entry = await resolveContained(path.join(dir, name), root, () => {});
+    if (!entry) {
+      continue;
+    }
+    if (entry.stats.isDirectory()) {
+      await contentDigests(root, entry.realPath, digests);
+    } else {
+      digests.add(await fileDigest(entry.realPath));
+    }
+  }
+  return digests;
+}
+
+/**
+ * True when `target` is a real directory whose every entry, at any depth, is
+ * a real directory or a regular file whose bytes some source file has, and
+ * which holds at least one file. Fails closed: a symlink or any other entry
+ * kind anywhere means it is not a bundled copy.
+ */
+async function isBundledCopy(
+  target: string,
+  digests: () => Promise<Set<string>>
+): Promise<boolean> {
+  let files = 0;
+  const walk = async (dir: string): Promise<boolean> => {
+    for (const name of await fs.promises.readdir(dir)) {
+      const entry = path.join(dir, name);
+      const stats = await fs.promises.lstat(entry);
+      if (stats.isDirectory()) {
+        if (!(await walk(entry))) {
+          return false;
+        }
+      } else if (!stats.isFile() || !(await digests()).has(await fileDigest(entry))) {
+        return false;
+      } else {
+        files += 1;
+      }
+    }
+    return true;
+  };
+  return (await walk(target)) && files > 0;
+}
+
+/** `YYYYMMDDTHHMMSSZ` in UTC, the stamp install-agent-skills.sh uses. */
+function utcStamp(now = new Date()): string {
+  return now
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}/, "");
+}
+
+/** Rename `target` to `<asideRoot>/<name>`; throws when that path exists. */
+async function moveAside(target: string, name: string, asideRoot: string): Promise<string> {
+  await fs.promises.mkdir(asideRoot, { recursive: true });
+  const aside = path.join(asideRoot, name);
+  const existing = await fs.promises.lstat(aside).then(
+    () => true,
+    (error) => {
+      if (isMissing(error)) {
+        return false;
+      }
+      throw error;
+    }
+  );
+  if (existing) {
+    throw new Error(`Nightgauge will not adopt ${target}: ${aside} already exists.`);
+  }
+  await fs.promises.rename(target, aside);
+  return aside;
+}
+
+/**
  * Copy a real directory's contents; links to files inside `root` land as
  * regular files. The marker name belongs to copySkillsTree, so a source
  * entry by that name is never copied over it. `excluded(rel, isDir)`, when
@@ -341,13 +441,16 @@ async function copyContained(
  *
  * Refuses (throws) when the source and destination overlap. A skill is
  * installed only under a name Nightgauge owns and only where mayReplace()
- * allows, so every other destination entry is left untouched (with a
+ * allows or adoption (below) applies, so every other destination entry is left untouched (with a
  * warning) and counted as skipped. Each installed directory gets the install
  * marker before its content, so even a partial install is recognised as
  * Nightgauge's next time. With `prune`, a marked directory whose skill is not
- * in the source is removed, unless the source is empty. An extension has no
- * git history, so it cannot adopt a marker-less directory the way
- * `install-agent-skills.sh --adopt` does.
+ * in the source is removed, unless the source is empty.
+ *
+ * A marker-less real directory is adopted when every file in it is
+ * byte-identical to some file of the source tree (the bundle of the running
+ * build): it is moved to `<dest>.nightgauge-adopted/<UTC-stamp>/<name>` and
+ * reinstalled. One with any other content, a symlink or no file is skipped.
  */
 export async function copySkillsTree(
   sourceDir: string,
@@ -355,11 +458,17 @@ export async function copySkillsTree(
   warn: SkillCopyWarn,
   options: SkillCopyOptions
 ): Promise<SkillCopyResult> {
-  const { root } = await resolveInstallPaths(sourceDir, destDir);
+  const { root, realDest } = await resolveInstallPaths(sourceDir, destDir);
 
   await fs.promises.mkdir(destDir, { recursive: true });
   const sourceNames = new Set<string>();
-  const result: SkillCopyResult = { installed: 0, total: 0, skipped: 0, removed: 0 };
+  const result: SkillCopyResult = { installed: 0, total: 0, skipped: 0, adopted: 0, removed: 0 };
+  let digestSet: Promise<Set<string>> | undefined;
+  const digests = () => (digestSet ??= contentDigests(root));
+  const asideRoot = path.join(realDest + ADOPTED_SUFFIX, utcStamp());
+  // A linked skills directory is a checkout's working tree: never move its
+  // files, even when they match (mayReplace's warning).
+  const destLinked = (await fs.promises.lstat(destDir)).isSymbolicLink();
   for (const name of await fs.promises.readdir(root)) {
     const entryPath = path.join(root, name);
     const entry = await resolveContained(entryPath, root, warn);
@@ -380,12 +489,23 @@ export async function copySkillsTree(
     }
     result.total += 1;
     if (!(await mayReplace(target))) {
-      warn(
-        `Skipped ${entryPath}: ${target} is not a directory Nightgauge installed, so it is ` +
-          `left untouched. Remove it to let Nightgauge install ${name}.`
-      );
-      result.skipped += 1;
-      continue;
+      const isDir = (await fs.promises.lstat(target)).isDirectory();
+      if (isDir && !destLinked && (await isBundledCopy(target, digests))) {
+        const aside = await moveAside(target, name, asideRoot);
+        warn(`Adopted ${name}: old copy moved to ${aside}.`);
+        result.adopted += 1;
+      } else {
+        const reason = isDir
+          ? "has no install marker and is not a copy of this build (an edited file, a link, " +
+            "or an older release)"
+          : "is not a directory Nightgauge installed";
+        warn(
+          `Skipped ${entryPath}: ${target} ${reason}, so it is left untouched. ` +
+            `Remove it to let Nightgauge install ${name}.`
+        );
+        result.skipped += 1;
+        continue;
+      }
     }
     await fs.promises.rm(target, { recursive: true, force: true });
     await fs.promises.mkdir(target);
@@ -407,9 +527,15 @@ export async function copySkillsTree(
   return result;
 }
 
-/** `installed N of M, skipped K`, the same words the script installer prints. */
+/**
+ * `installed N of M, skipped K[, adopted A][, removed R]`, the same words and
+ * order the script installer prints. `installed` includes adopted ones.
+ */
 export function formatSkillCopySummary(result: SkillCopyResult): string {
-  const summary = `installed ${result.installed} of ${result.total}, skipped ${result.skipped}`;
+  let summary = `installed ${result.installed} of ${result.total}, skipped ${result.skipped}`;
+  if (result.adopted > 0) {
+    summary += `, adopted ${result.adopted}`;
+  }
   return result.removed > 0 ? `${summary}, removed ${result.removed}` : summary;
 }
 

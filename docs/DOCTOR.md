@@ -967,16 +967,18 @@ unmarked `update-docs` are not reported. The reference is the first
 `<root>/<name>/SKILL.md`, or its copy under the sibling
 `claude-plugins/nightgauge/skills/`, across the skill roots a run renders from.
 
-| Finding                                     | Remedy                              |
-| ------------------------------------------- | ----------------------------------- |
-| `metadata.version` differs or is missing    | Run the installer                   |
-| Current skill with no install marker        | Run the installer with `--adopt`    |
-| Retired skill holding the marker            | Run the installer, which removes it |
-| Retired `nightgauge-*` skill with no marker | Remove the directory by hand        |
+| Finding                                     | Remedy                                                                                    |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `metadata.version` differs or is missing    | Run the installer                                                                         |
+| Current skill with no install marker        | Reinstall from the VS Code extension, or run the installer with `--adopt` from a checkout |
+| Retired skill holding the marker            | Run the installer, which removes it                                                       |
+| Retired `nightgauge-*` skill with no marker | Remove the directory by hand                                                              |
 
 The installer is `bash scripts/install-agent-skills.sh` from the primary checkout.
-An extension install has no git history, so it cannot adopt: remove a marker-less
-directory by hand and reinstall.
+The extension adopts a marker-less directory whose every file matches its bundled
+build, moving the old copy to `<root>.nightgauge-adopted/<stamp>/`. It skips one
+with local edits, and an unmodified copy of an older release, which only `--adopt`
+from a checkout can prove: run that, or remove the directory by hand and reinstall.
 
 The check compares versions, not bytes, because installed copies legitimately
 differ from the build's mirror (`name:`, `disable-model-invocation`, rebased
