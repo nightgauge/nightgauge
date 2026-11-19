@@ -34,6 +34,13 @@ name: adapter-canary
 # receive no secret: `latest` from npm is unreviewed code, and it runs with
 # nothing to exfiltrate. report holds `issues: write`, runs no CLI and no
 # model, and reads only the canary-summary.json artifact those jobs upload.
+#
+# claude-skills-live (#2824) is the one job that holds a secret:
+# CLAUDE_CODE_OAUTH_TOKEN, on its run step only. It runs only on schedule and
+# workflow_dispatch, never on pull_request or merge_group, and is not a
+# required check. It installs Claude Code at its reviewed pin
+# (adapter-cli-pin.sh claude-headless), never npm `latest`, and runs
+# TestClaudeSkillsTreeLive; a SKIP fails it.
 
 on:
   schedule:
@@ -267,6 +274,57 @@ jobs:
           rc=0
           [ "${{ steps.opencode_leg.outcome }}" = "success" ] || { echo "::error::the opencode-canary leg failed"; rc=1; }
           exit "$rc"
+
+  claude-skills-live:
+    name: Claude skills-tree live test
+    # No `needs: changed` and not in report's needs: it runs on every
+    # schedule/dispatch and its own red run is the signal.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # No Go cache: this job runs a model-driven CLI before go test; its
+          # caches must not reach the key ci.yml and release.yml restore.
+          cache: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      - name: Install Claude Code at its reviewed pin
+        run: |
+          set -euo pipefail
+          scripts/install-npm-cli.sh --global "$(scripts/adapter-cli-pin.sh claude-headless)" claude
+
+      - name: Run TestClaudeSkillsTreeLive
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+            echo "::error title=Live test unrun::CLAUDE_CODE_OAUTH_TOKEN is not set; TestClaudeSkillsTreeLive could not run."
+            exit 1
+          fi
+          command -v claude >/dev/null || { echo "::error::claude is not on PATH"; exit 1; }
+          LOG="$RUNNER_TEMP/claude-live.log"
+          go test -v -count=1 -tags claude_integration -run TestClaudeSkillsTreeLive ./internal/execution/adapters/ 2>&1 | tee "$LOG"
+          if grep -q -- '--- SKIP: TestClaudeSkillsTreeLive' "$LOG"; then
+            echo "::error::TestClaudeSkillsTreeLive skipped; a skip proves nothing here"
+            exit 1
+          fi
+          grep -q -- '--- PASS: TestClaudeSkillsTreeLive' "$LOG" || {
+            echo "::error::no PASS line for TestClaudeSkillsTreeLive (renamed, or no tests ran)"
+            exit 1
+          }
 
   report:
     name: File or update the drift issue

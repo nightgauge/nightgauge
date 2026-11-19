@@ -1633,9 +1633,14 @@ vi.mocked(execAsync).mockResolvedValue({
 the installed `claude`, so it proves what no argv test can: the stage skills tree
 is readable under default permissions and refuses file-tool writes. It spends a
 few Haiku turns and needs an authenticated CLI, so it carries its own
-`claude_integration` build tag and no routine target compiles it: not
-`go test ./...`, `scripts/ci-local.sh` or `make test-integration`. Run it after
-changing those flags or upgrading Claude Code:
+`claude_integration` build tag and no PR or local gate target compiles it: not
+`go test ./...`, `scripts/ci-local.sh` or `make test-integration`. The
+`claude-skills-live` job in `.github/workflows/adapter-canary.yml` runs it daily
+and on `workflow_dispatch`, with Claude Code at its reviewed pin
+(`scripts/adapter-cli-pin.sh claude-headless`) and `CLAUDE_CODE_OAUTH_TOKEN` on
+that step alone. The job fails when the test skips or reports no `PASS`, and it
+is not a required check. Run it by hand after changing those flags or upgrading
+Claude Code:
 
 ```bash
 go test -tags claude_integration -run TestClaudeSkillsTreeLive ./internal/execution/adapters/
