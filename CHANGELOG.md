@@ -30,6 +30,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `scripts/install-agent-skills.sh` now installs Codex and Grok skills into
+  `$CODEX_HOME/skills` and `$GROK_HOME/skills` when those variables are set, the
+  homes `nightgauge doctor` NGD112 and the VS Code extension check, instead of
+  always `~/.codex` and `~/.grok` (#2832).
+
 - A sharded Go test step killed by a signal now says so: `scripts/go-test-shard.py` names the signal and the tests still running and exits `128+N` (143 for SIGTERM) instead of the opaque `241`. The `internal/ipc` end-to-end tests start `nightgauge serve` in its own process group and kill that group on cleanup, so a group signal from the daemon side can no longer terminate the gate's `go test` (#3443).
 - Backlog promotion no longer moves an issue to Ready when one of its blockers is missing from the dependency graph (off the board, or in a repository the graph did not load). Such a blocker's state is unknown, so the issue stays in Backlog and the promotion tally records `unresolved-blocker`, matching the dispatch-time dependency check. An issue whose only blocker is off-board and already closed now needs a manual move to Ready (#2744).
 - A raw GraphQL document that holds a query and a mutation (`query A { ... } mutation B { ... }`) now drops the cached board snapshots: the board cache classifies every operation in the document instead of only the first, so a write selected by `operationName` can no longer leave a stale board. A fragment beside a query is now a read (#2732).

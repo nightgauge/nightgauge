@@ -306,6 +306,10 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
+      # Arm (ch6) builds nightgauge to run doctor NGD112 against the install.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
       - name: Install
         run: npm ci
       - name: Agent-skill install target regression suite

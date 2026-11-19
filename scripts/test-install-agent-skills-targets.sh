@@ -93,6 +93,11 @@ filter_path() {
 }
 SAFE_PATH="$(filter_path)"
 
+# The installer honours CODEX_HOME and GROK_HOME (#2832). An operator who
+# exports either would make every arm below, which only overrides HOME, write
+# into their real Codex or Grok home. Unset both; the (ch*) arms set them.
+unset CODEX_HOME GROK_HOME
+
 # Path, inode, mtime, ctime and size of every entry in the checkout's committed
 # mirror. The installer regenerates the mirror by deleting and recreating each
 # skill directory, so any installer run against this checkout changes the
@@ -1082,6 +1087,139 @@ elif grep -q 'marketplace remove' "$CM_CALLS"; then
   nope "(m3) repointed add: called marketplace remove"
 else
   ok "(m3) a verified repoint reinstalls the plugins"
+fi
+
+# --- (ch*) CODEX_HOME and GROK_HOME, as doctor NGD112 resolves them (#2832) -
+SKILL_REL="skills/nightgauge-issue-create/SKILL.md"
+
+# (ch1) CODEX_HOME wins over ~/.codex.
+HOME_CH1="$TMP/home-ch1"
+CODEX_CH1="$TMP/codex-ch1"
+mkdir -p "$HOME_CH1/.codex" "$CODEX_CH1"
+if CODEX_HOME="$CODEX_CH1" HOME="$HOME_CH1" PATH="$SAFE_PATH" bash "$INSTALLER" --codex-only \
+  >/dev/null 2>"$TMP/ch1.err" && [ -f "$CODEX_CH1/$SKILL_REL" ] && [ ! -e "$HOME_CH1/.codex/skills" ]; then
+  ok "(ch1) --codex-only writes \$CODEX_HOME/skills, not ~/.codex/skills"
+else
+  nope "(ch1) --codex-only ignored CODEX_HOME"
+  sed 's/^/    /' "$TMP/ch1.err"
+fi
+
+# (ch2) GROK_HOME wins over ~/.grok; no grok CLI, so the skip check sees GROK_HOME.
+HOME_CH2="$TMP/home-ch2"
+GROK_CH2="$TMP/grok-ch2"
+mkdir -p "$HOME_CH2/.grok" "$GROK_CH2"
+if GROK_HOME="$GROK_CH2" HOME="$HOME_CH2" PATH="$SAFE_PATH" bash "$INSTALLER" --grok-only \
+  >/dev/null 2>"$TMP/ch2.err" && [ -f "$GROK_CH2/$SKILL_REL" ] && [ ! -e "$HOME_CH2/.grok/skills" ]; then
+  ok "(ch2) --grok-only writes \$GROK_HOME/skills, not ~/.grok/skills"
+else
+  nope "(ch2) --grok-only ignored GROK_HOME"
+  sed 's/^/    /' "$TMP/ch2.err"
+fi
+
+# (ch3) the skip check reads the resolved home: a missing override skips even
+# though ~/.codex and ~/.grok exist, names it, and creates nothing.
+HOME_CH3="$TMP/home-ch3"
+mkdir -p "$HOME_CH3/.codex" "$HOME_CH3/.grok"
+if CODEX_HOME="$TMP/missing-codex" HOME="$HOME_CH3" PATH="$SAFE_PATH" \
+  bash "$INSTALLER" --codex-only >"$TMP/ch3c.out" 2>&1 &&
+  GROK_HOME="$TMP/missing-grok" HOME="$HOME_CH3" PATH="$SAFE_PATH" \
+    bash "$INSTALLER" --grok-only >"$TMP/ch3g.out" 2>&1 &&
+  grep -qF "Codex: $TMP/missing-codex not found — skipping" "$TMP/ch3c.out" &&
+  grep -qF "nor $TMP/missing-grok found — skipping" "$TMP/ch3g.out" &&
+  [ ! -e "$TMP/missing-codex" ] && [ ! -e "$TMP/missing-grok" ] &&
+  [ ! -e "$HOME_CH3/.codex/skills" ] && [ ! -e "$HOME_CH3/.grok/skills" ]; then
+  ok "(ch3) a missing CODEX_HOME/GROK_HOME skips, naming it, and writes nothing"
+else
+  nope "(ch3) skip check did not use the resolved home"
+  sed 's/^/    /' "$TMP/ch3c.out" "$TMP/ch3g.out"
+fi
+
+# (ch4) unset falls back to ~/.codex and ~/.grok; (ch5) empty means unset, as in Go.
+for arm in ch4 ch5; do
+  HOME_CH="$TMP/home-$arm"
+  mkdir -p "$HOME_CH/.codex" "$HOME_CH/.grok"
+  if [ "$arm" = ch4 ]; then
+    envset=(env -u CODEX_HOME -u GROK_HOME)
+    what="unset CODEX_HOME/GROK_HOME fall back to ~/.codex and ~/.grok"
+  else
+    envset=(env CODEX_HOME= GROK_HOME=)
+    what="empty CODEX_HOME/GROK_HOME behave as unset"
+  fi
+  if "${envset[@]}" HOME="$HOME_CH" PATH="$SAFE_PATH" bash "$INSTALLER" --codex-only \
+    >/dev/null 2>"$TMP/$arm.err" &&
+    "${envset[@]}" HOME="$HOME_CH" PATH="$SAFE_PATH" bash "$INSTALLER" --grok-only \
+      >/dev/null 2>>"$TMP/$arm.err" &&
+    [ -f "$HOME_CH/.codex/$SKILL_REL" ] && [ -f "$HOME_CH/.grok/$SKILL_REL" ]; then
+    ok "($arm) $what"
+  else
+    nope "($arm) $what: skills missing"
+    sed 's/^/    /' "$TMP/$arm.err"
+  fi
+done
+
+# (ch6) round trip: doctor NGD112 finds no drift in the overridden homes the
+# installer just wrote. (ch6-neg) plants an unmarked old skill in CODEX_HOME
+# and proves doctor reads that home, so the clean result is not vacuous.
+NG_BIN="$TMP/nightgauge"
+if ! (cd "$REPO_ROOT" && go build -o "$NG_BIN" ./cmd/nightgauge) >"$TMP/ch6-build.err" 2>&1; then
+  echo "HARNESS ERROR: go build ./cmd/nightgauge failed; (ch6) could not run"
+  sed 's/^/    /' "$TMP/ch6-build.err"
+  nope "(ch6) could not build nightgauge"
+else
+  # ngd112_count <home> <codex_home> <grok_home>: NGD112 findings, or "error".
+  # Runs from the sandbox so doctor compares against its skills/ tree.
+  ngd112_count() {
+    (cd "$SANDBOX" && HOME="$1" CODEX_HOME="$2" GROK_HOME="$3" \
+      "$NG_BIN" doctor --only NGD112 --json 2>"$TMP/ngd112.err") |
+      python3 -c 'import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    print("error")
+    sys.exit()
+print(sum(1 for f in d.get("findings") or [] if f.get("code") == "NGD112"))'
+  }
+  HOME_CH6="$TMP/home-ch6"
+  CH6C="$TMP/codex-ch6"
+  CH6G="$TMP/grok-ch6"
+  mkdir -p "$HOME_CH6" "$CH6C" "$CH6G"
+  CODEX_HOME="$CH6C" GROK_HOME="$CH6G" HOME="$HOME_CH6" PATH="$SAFE_PATH" \
+    bash "$INSTALLER" --codex-only >/dev/null 2>"$TMP/ch6.err"
+  CODEX_HOME="$CH6C" GROK_HOME="$CH6G" HOME="$HOME_CH6" PATH="$SAFE_PATH" \
+    bash "$INSTALLER" --grok-only >/dev/null 2>>"$TMP/ch6.err"
+  N="$(ngd112_count "$HOME_CH6" "$CH6C" "$CH6G")"
+  if [ "$N" = error ]; then
+    echo "HARNESS ERROR: doctor --json output did not parse; (ch6) could not run"
+    sed 's/^/    /' "$TMP/ngd112.err"
+    nope "(ch6) doctor output unreadable"
+  elif [ "$N" = 0 ] && [ -f "$CH6C/$SKILL_REL" ] && [ -f "$CH6G/$SKILL_REL" ]; then
+    ok "(ch6) doctor NGD112 reports no drift after installing into overridden homes"
+  else
+    nope "(ch6) doctor NGD112 reported $N finding(s) after install"
+    sed 's/^/    /' "$TMP/ch6.err"
+  fi
+
+  # One stale skill per home, the other home empty, so each half can go red.
+  for agent in codex grok; do
+    HOME_NEG="$TMP/home-ch6neg-$agent"
+    NEG_C="$TMP/codex-ch6neg-$agent"
+    NEG_G="$TMP/grok-ch6neg-$agent"
+    mkdir -p "$HOME_NEG" "$NEG_C" "$NEG_G"
+    if [ "$agent" = codex ]; then planted="$NEG_C"; else planted="$NEG_G"; fi
+    mkdir -p "$planted/skills/nightgauge-issue-create"
+    printf -- '---\nname: nightgauge-issue-create\nmetadata:\n  version: 0.0.0\n---\nold\n' \
+      >"$planted/$SKILL_REL"
+    N="$(ngd112_count "$HOME_NEG" "$NEG_C" "$NEG_G")"
+    if [ "$N" = error ]; then
+      echo "HARNESS ERROR: doctor --json output did not parse; (ch6-neg-$agent) could not run"
+      sed 's/^/    /' "$TMP/ngd112.err"
+      nope "(ch6-neg-$agent) doctor output unreadable"
+    elif [ "$N" -ge 1 ]; then
+      ok "(ch6-neg-$agent) doctor NGD112 reports a stale skill planted in the overridden home"
+    else
+      nope "(ch6-neg-$agent) doctor did not report the stale skill in the overridden home"
+    fi
+  done
 fi
 
 # --- (g) the suite never wrote the checkout it runs in ----------------------
