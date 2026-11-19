@@ -937,6 +937,9 @@ type AttentionConfig struct {
 }
 
 type Config struct {
+	// Commands overrides commands the deterministic layer runs (#3449).
+	Commands *CommandsConfig `json:"commands,omitempty" yaml:"commands,omitempty"`
+
 	// GitHub settings
 	Owner         string         `json:"owner"`
 	OwnerType     string         `json:"ownerType"` // "org" (default) or "user"
@@ -2277,6 +2280,7 @@ type yamlConfigNested struct {
 	UI               *UIConfig                    `yaml:"ui,omitempty"`
 	Attention        *AttentionConfig             `yaml:"attention,omitempty"`
 	Preflight        *PreflightConfig             `yaml:"preflight,omitempty"`
+	Commands         *CommandsConfig              `yaml:"commands,omitempty"`
 	Forges           map[string]*ForgeConfigEntry `yaml:"forges,omitempty"`
 	Notifications    *NotificationsConfig         `yaml:"notifications,omitempty"`
 	Notifiers        *NotifiersConfig             `yaml:"notifiers,omitempty"`
@@ -2319,6 +2323,7 @@ type yamlConfigFlat struct {
 	UI               *UIConfig                    `yaml:"ui,omitempty"`
 	Attention        *AttentionConfig             `yaml:"attention,omitempty"`
 	Preflight        *PreflightConfig             `yaml:"preflight,omitempty"`
+	Commands         *CommandsConfig              `yaml:"commands,omitempty"`
 	Forges           map[string]*ForgeConfigEntry `yaml:"forges,omitempty"`
 	Notifications    *NotificationsConfig         `yaml:"notifications,omitempty"`
 	Notifiers        *NotifiersConfig             `yaml:"notifiers,omitempty"`
@@ -2549,6 +2554,7 @@ func parseYAMLNested(data []byte) (*Config, error) {
 	cfg.Cadence = nested.Cadence
 	cfg.Attention = nested.Attention
 	cfg.Preflight = nested.Preflight
+	cfg.Commands = nested.Commands
 	if len(nested.Project.SizeToEstimate) > 0 {
 		cfg.SizeToEstimate = nested.Project.SizeToEstimate
 	}
@@ -2661,6 +2667,7 @@ func parseYAMLFlat(data []byte) (*Config, error) {
 	cfg.Cadence = flat.Cadence
 	cfg.Attention = flat.Attention
 	cfg.Preflight = flat.Preflight
+	cfg.Commands = flat.Commands
 	if len(flat.SizeToEstimate) > 0 {
 		cfg.SizeToEstimate = flat.SizeToEstimate
 	}
@@ -2935,4 +2942,11 @@ func (p *PipelineConfig) FeatureDevSubSessionsEnabled() bool {
 		return true
 	}
 	return *p.FeatureDevSubSessions
+}
+
+// CommandsConfig holds command overrides read by the Go layer.
+type CommandsConfig struct {
+	// Analyze replaces the Flutter analyze command run by `nightgauge build
+	// run` and listed by ci discovery (#3449).
+	Analyze string `json:"analyze,omitempty" yaml:"analyze,omitempty"`
 }

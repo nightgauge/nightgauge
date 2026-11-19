@@ -589,3 +589,29 @@ func TestListWorkflowSteps_KeepsEveryStepOfPRWorkflows(t *testing.T) {
 		t.Errorf("runner-bound multi-line test step not kept: %+v", got[1])
 	}
 }
+
+func TestFallbackCommands_FlutterAnalyze(t *testing.T) {
+	bare := t.TempDir()
+	if got := fallbackCommands(bare, "flutter"); got[1] != "flutter analyze" {
+		t.Errorf("neither: got %v", got)
+	}
+	withScript := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(withScript, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(withScript, "scripts", "flutter-analyze.sh"), []byte("exit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := fallbackCommands(withScript, "flutter"); got[1] != "bash scripts/flutter-analyze.sh" {
+		t.Errorf("script: got %v", got)
+	}
+	if err := os.MkdirAll(filepath.Join(withScript, ".nightgauge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(withScript, ".nightgauge", "config.yaml"), []byte("commands:\n  analyze: make analyze\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := fallbackCommands(withScript, "flutter"); got[1] != "make analyze" {
+		t.Errorf("config: got %v", got)
+	}
+}

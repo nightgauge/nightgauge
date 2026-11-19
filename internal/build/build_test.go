@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -174,5 +175,94 @@ func TestGoModTakesPrecedenceOverPackageJSON(t *testing.T) {
 	// go.mod takes precedence
 	if len(result.Commands) == 0 || result.Commands[0] != "go build ./..." {
 		t.Errorf("expected go.mod to take precedence, got commands=%v", result.Commands)
+	}
+}
+
+func flutterDir(t *testing.T, script, configYAML string) string {
+	t.Helper()
+	return flutterDirMode(t, script, configYAML, 0o755)
+}
+
+func flutterDirMode(t *testing.T, script, configYAML string, mode os.FileMode) string {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "pubspec.yaml"), []byte("name: demo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if script != "" {
+		if err := os.MkdirAll(filepath.Join(dir, "scripts"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "scripts", "flutter-analyze.sh"), []byte(script), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if configYAML != "" {
+		if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".nightgauge", "config.yaml"), []byte(configYAML), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestRunBuild_Flutter_RunsRepoAnalyzeScript(t *testing.T) {
+	dir := flutterDir(t, "#!/bin/sh\necho script-ran\nexit 0\n", "")
+	result, err := RunBuild(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "passed" || len(result.Commands) != 1 || result.Commands[0] != "bash scripts/flutter-analyze.sh" {
+		t.Fatalf("got status=%s commands=%v output=%q", result.Status, result.Commands, result.Output)
+	}
+	if !strings.Contains(result.Output, "script-ran") {
+		t.Errorf("script did not run: %q", result.Output)
+	}
+}
+
+func TestRunBuild_Flutter_NonExecutableScriptStillRuns(t *testing.T) {
+	dir := flutterDirMode(t, "echo script-ran\nexit 0\n", "", 0o644)
+	result, err := RunBuild(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "passed" || !strings.Contains(result.Output, "script-ran") {
+		t.Fatalf("got status=%s output=%q", result.Status, result.Output)
+	}
+}
+
+func TestRunBuild_Flutter_ScriptFailureFails(t *testing.T) {
+	dir := flutterDir(t, "#!/bin/sh\nexit 3\n", "")
+	result, err := RunBuild(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "failed" {
+		t.Errorf("status = %s, want failed", result.Status)
+	}
+}
+
+func TestRunBuild_Flutter_ConfiguredAnalyzeWins(t *testing.T) {
+	dir := flutterDir(t, "#!/bin/sh\nexit 3\n", "owner: demo\ncommands:\n  analyze: echo configured-ran\n")
+	result, err := RunBuild(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "passed" || result.Commands[0] != "echo configured-ran" || !strings.Contains(result.Output, "configured-ran") {
+		t.Fatalf("got status=%s commands=%v output=%q", result.Status, result.Commands, result.Output)
+	}
+}
+
+func TestRunBuild_Flutter_BrokenConfigFails(t *testing.T) {
+	dir := flutterDir(t, "#!/bin/sh\nexit 0\n", "commands: [unterminated\n")
+	result, err := RunBuild(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "failed" {
+		t.Errorf("status = %s, want failed on broken config", result.Status)
 	}
 }
