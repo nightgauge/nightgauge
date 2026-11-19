@@ -2116,6 +2116,26 @@ func (s *Server) registerMethods() {
 		return CancelActiveForNetworkOutageResult{CancelledIssues: cancelled}, nil
 	}
 
+	// pipeline.cancelForOperatorStop (#1848): the extension calls this BEFORE it
+	// kills a stage on an operator Stop, so the stage's context carries
+	// ErrOperatorStop and the run books operator_stop — not a pipeline failure
+	// charged to the issue's lifetime cap.
+	//ipc:method pipelineCancelForOperatorStop params:CancelForOperatorStopParams result:CancelForOperatorStopResult
+	s.methods["pipeline.cancelForOperatorStop"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p CancelForOperatorStopParams
+		if len(params) > 0 {
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("invalid params: %w", err)
+			}
+		}
+		if s.scheduler == nil {
+			return CancelForOperatorStopResult{CancelledIssues: nil}, nil
+		}
+		return CancelForOperatorStopResult{
+			CancelledIssues: s.scheduler.CancelForOperatorStop(p.Repo, p.IssueNumber),
+		}, nil
+	}
+
 	// The issues come back without their relationship lists (#1707): its one
 	// consumer, the epic dashboard's per-repository progress, reads number,
 	// title, labels and state, and a sub-issue or blocker list it would
@@ -4285,8 +4305,7 @@ func (s *Server) registerMethods() {
 				// (#3269): the closed-issue guard's message carries no marker.
 				kind := terminalKindForStartRefusal(p.StartRefusal)
 				if kind == "" {
-					kind = orchestrator.ResolveTerminalKind(gateRan, gateTerminalKind,
-						snap.StageHostSlept[string(snap.Stage)], errMsg)
+					kind = orchestrator.ResolveSnapshotTerminalKind(snap, gateRan, gateTerminalKind, errMsg)
 				}
 				if kind == orchestrator.TerminalKindGatePluginMissing {
 					orchestrator.RaiseGatePluginMissing(s.attentionStore(), recordRepo, p.IssueNumber, runID, string(snap.Stage), errMsg)
@@ -4418,6 +4437,8 @@ func (s *Server) registerMethods() {
 			}
 			// #2756: an architecture-approval hold is a non-failure too.
 			orchestrator.ApplyNonFailureOutcome(&record)
+			// #1848: a record still booked failed names its stage and reason.
+			orchestrator.EnsureFailureAttribution(&record, string(snap.Stage), errMsg)
 			// #304: derive the learning/calibration outcome from the SAME
 			// record about to be written. Until this, the outcome corpus
 			// (.git/nightgauge/pipeline/history/outcomes.jsonl — the input to the

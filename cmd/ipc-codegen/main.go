@@ -391,6 +391,7 @@ func collectImportTypes(methods []MethodDef) []string {
 		"GitHubAuthCheckResult":              true,
 		"GitHubGraphQLRawResult":             true, // Issue #1913
 		"CancelActiveForNetworkOutageResult": true, // Issue #3296
+		"CancelForOperatorStopResult":        true, // Issue #1848
 		"CostAnalyticsResult":                true, // Issue #3317
 		"AnalyticsHealthResult":              true, // Issue #3318
 		"AnalyticsRunsResult":                true, // Issue #3319

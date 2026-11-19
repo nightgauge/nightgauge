@@ -275,7 +275,11 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 		}
 
 		return &orchestrator.StageRunResult{
-			ExitCode:           exitCode,
+			ExitCode: exitCode,
+			// #1848: the extension's Stop cancels the stage context with
+			// ErrOperatorStop before it kills the process, so a result that
+			// arrives after that cancel is the stop's own SIGTERM exit.
+			Cancelled:          !result.Success && orchestrator.IsOperatorStop(ctx),
 			InputTokens:        result.InputTokens,
 			OutputTokens:       result.OutputTokens,
 			CacheReadTokens:    result.CacheReadTokens,
@@ -332,7 +336,12 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 			IssueNumber: params.IssueNumber,
 			Reason:      "context_cancelled",
 		})
-		return &orchestrator.StageRunResult{ExitCode: 1}, ctx.Err()
+		// #1848: a cancel whose cause is an operator stop is not a failure of
+		// the stage. Read the cause structurally, never from the error text.
+		return &orchestrator.StageRunResult{
+			ExitCode:  1,
+			Cancelled: orchestrator.IsOperatorStop(ctx),
+		}, ctx.Err()
 	}
 }
 

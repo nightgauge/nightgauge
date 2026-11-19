@@ -150,6 +150,56 @@ func TestWriteStageExitRecord_FailureClassifiesTerminalKind(t *testing.T) {
 	}
 }
 
+// TestWriteStageExitRecord_OperatorStopDistinctFromHang pins #1848 AC2/AC3:
+// an operator-stopped stage and a zero-output hang produce identical timing and
+// token shapes, and only the structural Cancelled flag tells them apart. The
+// stopped record must name operator_stop (and the operator as signal source);
+// the hang record must not.
+func TestWriteStageExitRecord_OperatorStopDistinctFromHang(t *testing.T) {
+	t.Parallel()
+
+	s := newSchedulerForDeterministicTest()
+	stageStart := time.Now().Add(-3 * time.Minute)
+	write := func(cancelled bool) diagnostics.StageExitRecord {
+		root := layouttest.Repo(t)
+		runtime := state.NewRuntimeState("nightgauge/nightgauge", 1848, "item-id", testRunID())
+		item := types.BoardItem{Number: 1848, Repo: "nightgauge/nightgauge"}
+		result := &StageRunResult{
+			ExitCode:     143,
+			ElapsedMs:    180000,
+			IdleMsAtExit: 170000,
+			Cancelled:    cancelled,
+		}
+		s.writeStageExitRecord(item, state.StagePRMerge, runtime, result,
+			143, errors.New("exit status 143"), 0, "sonnet-4-5", 0, 0, 0, stageStart, root, "", "")
+		recs := readExitRecords(t, root)
+		if len(recs) != 1 {
+			t.Fatalf("expected 1 record, got %d", len(recs))
+		}
+		return recs[0]
+	}
+
+	stopped := write(true)
+	hang := write(false)
+
+	if stopped.TerminalKind != TerminalKindOperatorStop {
+		t.Errorf("stopped TerminalKind = %q, want %q", stopped.TerminalKind, TerminalKindOperatorStop)
+	}
+	if stopped.SignalSource != SignalSourceOperator {
+		t.Errorf("stopped SignalSource = %q, want %q", stopped.SignalSource, SignalSourceOperator)
+	}
+	if hang.TerminalKind == TerminalKindOperatorStop {
+		t.Errorf("hang TerminalKind = %q, must not be operator_stop", hang.TerminalKind)
+	}
+	if hang.SignalSource == SignalSourceOperator {
+		t.Errorf("hang SignalSource = operator, want empty")
+	}
+	if stopped.ElapsedMs != hang.ElapsedMs || stopped.IdleMsAtExit != hang.IdleMsAtExit {
+		t.Fatalf("fixture drift: timing differs (%d/%d vs %d/%d)",
+			stopped.ElapsedMs, stopped.IdleMsAtExit, hang.ElapsedMs, hang.IdleMsAtExit)
+	}
+}
+
 // TestWriteStageExitRecord_ForwardsTSDiagnosticFields verifies that diagnostic
 // fields populated by the TS SkillRunner (signal, signal_source, stderr_tail,
 // last_bash_command, stop_hook_errored, session_id, idle_ms_at_exit) round-trip

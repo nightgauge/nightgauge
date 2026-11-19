@@ -95,9 +95,14 @@ const gitComposeBranchName = vi.fn(
   }
 );
 
+const { mockPipelineCancelForOperatorStop } = vi.hoisted(() => ({
+  mockPipelineCancelForOperatorStop: vi.fn().mockResolvedValue({ cancelledIssues: [] }),
+}));
+
 vi.mock("../../src/services/IpcClient", () => ({
   IpcClient: {
     getInstance: () => ({
+      pipelineCancelForOperatorStop: mockPipelineCancelForOperatorStop,
       gitComposeBranchName,
     }),
   },
@@ -248,7 +253,7 @@ describe("ConcurrentPipelineManager — slot identity (#2403)", () => {
     expect(runs[1].orchestrator.stop).not.toHaveBeenCalled();
 
     expect(manager.abortSlot(21, APP)).toBe(true);
-    expect(runs[1].orchestrator.stop).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(runs[1].orchestrator.stop).toHaveBeenCalledTimes(1));
     expect(runs[0].orchestrator.stop).not.toHaveBeenCalled();
   });
 
@@ -284,6 +289,6 @@ describe("ConcurrentPipelineManager — slot identity (#2403)", () => {
     await manager.fillSlots();
     expect(manager.isRunning(42)).toBe(true);
     expect(manager.abortSlot(42)).toBe(true);
-    expect(runs[0].orchestrator.stop).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(runs[0].orchestrator.stop).toHaveBeenCalledTimes(1));
   });
 });

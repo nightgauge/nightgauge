@@ -232,6 +232,13 @@ type RuntimeState struct {
 	// resolution reads this verdict, so agent output echoing the marker
 	// cannot reclassify a real failure as infrastructure.
 	StageHostSlept map[string]bool `json:"stageHostSlept,omitempty"`
+	// StageOperatorStopped is the scheduler's structured verdict that a
+	// stage's most recent attempt was stopped by the operator (#1848), with
+	// the same current-attempt contract as StageHostSlept. Only
+	// SetStageOperatorStoppedError sets it; SetStageError and the StageErrors
+	// clear site delete it. Every terminal-kind resolver reads it ahead of the
+	// error text, which for a SIGTERM'd stage says nothing about why it died.
+	StageOperatorStopped map[string]bool `json:"stageOperatorStopped,omitempty"`
 
 	// Pause state (persisted to runtime-{issue}-{runId}.json for reload recovery)
 	Paused bool `json:"paused,omitempty"`
@@ -1246,6 +1253,7 @@ func (rs *RuntimeState) completeStageInternalLocked(exitCode, inputTokens, outpu
 	if exitCode == 0 {
 		delete(rs.StageErrors, string(rs.Stage))
 		delete(rs.StageHostSlept, string(rs.Stage))
+		delete(rs.StageOperatorStopped, string(rs.Stage))
 		// THE CLEAR SITE for the phase-verdict contract (#1850): a phase
 		// cannot report `failed` on a stage whose exit code is 0 and whose
 		// StageErrors entry is empty — which, one line up, is exactly the
@@ -2014,6 +2022,21 @@ func (rs *RuntimeState) SetStageError(stage PipelineStage, errMsg string) {
 	defer rs.mu.Unlock()
 	rs.StageErrors[string(stage)] = errMsg
 	delete(rs.StageHostSlept, string(stage))
+	delete(rs.StageOperatorStopped, string(stage))
+}
+
+// SetStageOperatorStoppedError records a stage error together with the
+// scheduler's verdict that the operator stopped the stage (#1848). It is the
+// only writer of StageOperatorStopped; a later SetStageError clears it.
+func (rs *RuntimeState) SetStageOperatorStoppedError(stage PipelineStage, errMsg string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.StageErrors[string(stage)] = errMsg
+	delete(rs.StageHostSlept, string(stage))
+	if rs.StageOperatorStopped == nil {
+		rs.StageOperatorStopped = make(map[string]bool)
+	}
+	rs.StageOperatorStopped[string(stage)] = true
 }
 
 // SetStageHostSleptError records a stage error together with the scheduler's
@@ -3390,6 +3413,13 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 	snap.StageErrors = make(map[string]string, len(rs.StageErrors))
 	for k, v := range rs.StageErrors {
 		snap.StageErrors[k] = v
+	}
+	snap.StageOperatorStopped = nil
+	if len(rs.StageOperatorStopped) > 0 {
+		snap.StageOperatorStopped = make(map[string]bool, len(rs.StageOperatorStopped))
+		for k, v := range rs.StageOperatorStopped {
+			snap.StageOperatorStopped[k] = v
+		}
 	}
 	snap.StageHostSlept = nil
 	if len(rs.StageHostSlept) > 0 {

@@ -388,6 +388,9 @@ function buildHandlers(state) {
     "knowledge.relatedToIssue": (p) => ({
       hits: knowledgeHits(state.knowledge).slice(0, (p && p.limit) || undefined),
     }),
+    // Stop on a running slot (#1848): the demo runs no real stage, so there is
+    // nothing to signal.
+    "pipeline.cancelForOperatorStop": () => ({ cancelledIssues: [] }),
     "pipeline.getMaxConcurrent": () => ({ maxConcurrent: 2, persisted: true }),
     "pipeline.runningSummary": () => ({
       count: state.activeRuns.length,

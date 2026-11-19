@@ -1809,6 +1809,16 @@ export interface CancelActiveForNetworkOutageResult {
   cancelledIssues: number[];
 }
 
+/**
+ * Result from pipeline.cancelForOperatorStop (#1848).
+ *
+ * The issue numbers whose stage contexts the Go scheduler cancelled with the
+ * operator-stop cause, one entry per run. Empty when no matching stage ran.
+ */
+export interface CancelForOperatorStopResult {
+  cancelledIssues: number[];
+}
+
 /** Result from focus.show, focus.set, focus.clear — current focus state. */
 export interface FocusShowResult {
   activeLens: string;

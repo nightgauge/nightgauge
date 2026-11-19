@@ -35,6 +35,7 @@ import type {
   KnowledgeMetricsResult,
   KnowledgeRelatedToIssueResult,
   KnowledgeSearchResult,
+  CancelForOperatorStopResult,
   PipelineMaxConcurrentResult,
   PlatformStatus,
   PullRequestDetail,
@@ -262,6 +263,8 @@ const guards: Record<string, (v: unknown) => boolean> = {
       hits: (x) => arrOf(x, isRecallHit),
       total_hits: num,
     }),
+  "pipeline.cancelForOperatorStop": (v): v is CancelForOperatorStopResult =>
+    has(v, { cancelledIssues: (x) => arrOf(x, num) }),
   "pipeline.getMaxConcurrent": (v): v is PipelineMaxConcurrentResult =>
     has(v, { maxConcurrent: num, persisted: bool }),
   "pipeline.runningSummary": (v): v is RunningPipelinesResult =>

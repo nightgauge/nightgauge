@@ -2025,12 +2025,17 @@ sidebar tree view or the `nightgauge.stopPipeline` command.
 
 **Cancellation steps:**
 
-1. `HeadlessOrchestrator.stop()` is called:
+1. The extension calls `pipeline.cancelForOperatorStop` first and waits at
+   most one second for it (#1848). Go cancels the matching stage contexts with
+   the `ErrOperatorStop` cause, so the stage is booked `operator_stop` rather
+   than a pipeline failure, before its process is killed. The call is best
+   effort: the stop goes ahead if Go does not answer.
+2. `HeadlessOrchestrator.stop()` is called:
    - `abortController.abort()` signals the running stage to stop
    - `killAllActiveProcesses()` terminates any orphaned skill subprocesses
-2. `stopPipeline` command sets `outcome_type: 'cancelled'` in the pipeline
+3. `stopPipeline` command sets `outcome_type: 'cancelled'` in the pipeline
    state, which the Go side records in the run's `runtime-{issue}-{runId}.json`
-3. `resetGitHubStatus()` reverts the GitHub Project board Status field back to
+4. `resetGitHubStatus()` reverts the GitHub Project board Status field back to
    "Ready" (non-blocking — failures are logged but don't prevent UI cleanup)
 
 **After cancellation**, the run's durable record is preserved. The user can resume or

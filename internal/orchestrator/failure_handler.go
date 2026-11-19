@@ -45,6 +45,62 @@ const OutcomeTypeAwaitingApproval = "awaiting_approval"
 // failed run in the dashboard's or exit-records' failure totals.
 const OutcomeTypeIssueClosed = "issue_closed"
 
+// OutcomeTypeOperatorStopped is the run outcome_type for a run an operator
+// stopped (#1848): an operator Stop, a cancel that tore the run down, or a
+// pr-merge hand-back interrupted by an admission stop. Nothing about the issue
+// failed, so the run books as "cancelled" and never enters failure totals. The
+// terminal kind stays operator_stop. It is deliberately NOT a
+// IsNonFailureTerminalKind kind: that predicate also decides the live
+// pipeline_done success flag, and an interrupted run did not succeed.
+const OutcomeTypeOperatorStopped = "operator_stopped"
+
+// UnclassifiedFailureReason is the failure detail EnsureFailureAttribution
+// writes when a failed run left neither a stage error nor a terminal kind
+// (#1848). It is a visible classifier gap, never a silent blank.
+const UnclassifiedFailureReason = "unclassified failure: no stage error recorded"
+
+// UnknownFailureStage is the failure_stage EnsureFailureAttribution writes
+// when a failed run's runtime names no current stage (#1848).
+const UnknownFailureStage = "unknown"
+
+// RunOutcomeFailed is the V2 run record's failed outcome value.
+const RunOutcomeFailed = "failed"
+
+// SignalSourceOperator is the stage exit record's signal_source for a stage
+// the operator stopped, when the producer named no delivering closure (#1848).
+const SignalSourceOperator = "operator"
+
+// EnsureFailureAttribution guarantees that a failed run record names its
+// failure stage (failure_stage) and its reason (terminal_failure_detail)
+// (#1848). A run booked failed with both empty leaves nothing to triage. An
+// empty stage is filled from fallbackStage (the runtime's current stage), else
+// "unknown"; an empty reason from fallbackReason (the stage's error), then the
+// terminal kind, then UnclassifiedFailureReason. A record whose outcome is not
+// "failed" is left untouched. Both run-record writers call it after
+// ApplyNonFailureOutcome, which is what lets an operator stop leave as
+// "cancelled" without a failure attribution.
+func EnsureFailureAttribution(rec *state.V2RunRecord, fallbackStage, fallbackReason string) {
+	if rec == nil || rec.Outcome != RunOutcomeFailed {
+		return
+	}
+	if rec.FailureStage == "" {
+		rec.FailureStage = fallbackStage
+		if rec.FailureStage == "" {
+			rec.FailureStage = UnknownFailureStage
+		}
+	}
+	if rec.TerminalFailureDetail == "" {
+		switch {
+		case fallbackReason != "":
+			rec.TerminalFailureDetail = fallbackReason
+		case rec.TerminalFailureKind != "":
+			rec.TerminalFailureDetail = rec.TerminalFailureKind
+		default:
+			rec.TerminalFailureDetail = UnclassifiedFailureReason
+		}
+	}
+}
+
 // IsNonFailureTerminalKind reports whether a terminal kind is not a failure —
 // a deliberate human hold (#2756) or a stop on an already-closed issue (#3081)
 // — so every surface (run record, run state, live pipeline_done event) books
@@ -68,6 +124,8 @@ func ApplyNonFailureOutcome(rec *state.V2RunRecord) {
 		rec.OutcomeType = OutcomeTypeAwaitingApproval
 	case TerminalKindIssueClosed:
 		rec.OutcomeType = OutcomeTypeIssueClosed
+	case TerminalKindOperatorStop:
+		rec.OutcomeType = OutcomeTypeOperatorStopped
 	default:
 		return
 	}
@@ -942,6 +1000,23 @@ func ResolveTerminalKind(gateRan bool, gateTerminalKind string, hostSlept bool, 
 		return gateTerminalKind
 	}
 	return ClassifyTerminalKind(strings.ReplaceAll(errorText, HostSleptMarker, ""))
+}
+
+// ResolveSnapshotTerminalKind resolves the terminal kind of a runtime
+// snapshot's current (failed) stage. The scheduler's structured operator-stop
+// verdict (RuntimeState.StageOperatorStopped, #1848) outranks everything: a
+// stopped stage's error text is whatever a SIGTERM'd process last said, and the
+// stop must not be re-derived from it. Otherwise it is ResolveTerminalKind over
+// the stage's host-sleep verdict and errorText.
+func ResolveSnapshotTerminalKind(snap *state.RuntimeState, gateRan bool, gateTerminalKind, errorText string) string {
+	if snap == nil {
+		return ResolveTerminalKind(gateRan, gateTerminalKind, false, errorText)
+	}
+	stage := string(snap.Stage)
+	if snap.StageOperatorStopped[stage] {
+		return TerminalKindOperatorStop
+	}
+	return ResolveTerminalKind(gateRan, gateTerminalKind, snap.StageHostSlept[stage], errorText)
 }
 
 // OutcomeTypeForTerminalFailure maps a terminal failure's error text to a

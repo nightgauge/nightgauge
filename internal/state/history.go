@@ -189,6 +189,10 @@ type V2RunRecord struct {
 	// is the field that makes a `subagent_crash` (the generic "matched no
 	// classifier" fallback) readable without the output channel.
 	TerminalFailureDetail string `json:"terminal_failure_detail,omitempty"`
+	// FailureStage names the stage a failed run failed at (#1848). Set on
+	// every failed record by orchestrator.EnsureFailureAttribution, so a run is
+	// never booked failed without saying where. Absent on any other outcome.
+	FailureStage string `json:"failure_stage,omitempty"`
 	// RecoveryEvents records each Recovery Dialog interaction during a run
 	// (Issue #3239). Empty/omitted on runs that did not surface recovery.
 	// Additive — schema_version is not bumped.

@@ -107,6 +107,7 @@ var contractTestedMethods = map[string]bool{
 	"doctor.history":     true,
 	// Pipeline
 	"pipeline.cancelActiveForNetworkOutage": true,
+	"pipeline.cancelForOperatorStop":        true,
 	"pipeline.getState":                     true,
 	"pipeline.recoveryClaim":                true,
 	"pipeline.recoveryExecute":              true,
@@ -781,6 +782,12 @@ func TestContract_Pipeline(t *testing.T) {
 		h.bind(t)
 		id := h.sendRequest("pipeline.cancelActiveForNetworkOutage", nil)
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "pipeline.cancelActiveForNetworkOutage")
+	})
+
+	t.Run("pipeline.cancelForOperatorStop/registered", func(t *testing.T) {
+		h.bind(t)
+		id := h.sendRequest("pipeline.cancelForOperatorStop", map[string]interface{}{"repo": "o/r", "issueNumber": 1})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "pipeline.cancelForOperatorStop")
 	})
 
 	t.Run("pipeline.recoveryClaim/registered", func(t *testing.T) {

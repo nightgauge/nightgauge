@@ -81,9 +81,14 @@ const gitComposeBranchName = vi.fn(
   }
 );
 
+const { mockPipelineCancelForOperatorStop } = vi.hoisted(() => ({
+  mockPipelineCancelForOperatorStop: vi.fn().mockResolvedValue({ cancelledIssues: [] }),
+}));
+
 vi.mock("../../src/services/IpcClient", () => ({
   IpcClient: {
     getInstance: () => ({
+      pipelineCancelForOperatorStop: mockPipelineCancelForOperatorStop,
       gitComposeBranchName,
       autonomousStatus: mockAutonomousStatus,
       autonomousPause: mockAutonomousPause,
@@ -179,23 +184,24 @@ function buildManager(issueNumbers: number[]) {
   const onSlotFailed = vi.fn();
   const onSlotCompleted = vi.fn();
 
+  const logger = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    getChannel: vi.fn(),
+  };
   const manager = new ConcurrentPipelineManager(
     "/test-repo",
     queueService as any,
     controllable.factory,
-    {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-      getChannel: vi.fn(),
-    } as any,
+    logger as any,
     { maxConcurrent: issueNumbers.length }
   );
 
   manager.setCallbacks({ onSlotFailed, onSlotCompleted });
 
-  return { manager, queueService, controllable, onSlotFailed, onSlotCompleted };
+  return { manager, queueService, controllable, onSlotFailed, onSlotCompleted, logger };
 }
 
 describe("ConcurrentPipelineManager — user-initiated cancellation (#3396)", () => {
@@ -210,9 +216,15 @@ describe("ConcurrentPipelineManager — user-initiated cancellation (#3396)", ()
     await manager.fillSlots();
     // User clicks Stop on the running slot.
     expect(manager.abortSlot(885)).toBe(true);
-    // The orchestrator's stop() got called.
+    // The orchestrator's stop() got called — after Go was told it is an
+    // operator stop, so the stage's context carries the stop before its
+    // process dies (#1848).
     const stopMock = controllable.stopMockFor(885);
-    expect(stopMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(stopMock).toHaveBeenCalledTimes(1));
+    expect(mockPipelineCancelForOperatorStop).toHaveBeenCalledWith(undefined, 885);
+    expect(mockPipelineCancelForOperatorStop.mock.invocationCallOrder[0]).toBeLessThan(
+      stopMock!.mock.invocationCallOrder[0]
+    );
     // The orchestrator unwinds and reports success=false (typical of a stopped run).
     controllable.finishWith(885, {
       success: false,
@@ -230,9 +242,11 @@ describe("ConcurrentPipelineManager — user-initiated cancellation (#3396)", ()
     // onSlotFailed fires (so UI bookkeeping clears the slot), but with the
     // cancellation message — never the misleading "Pipeline failed at X".
     expect(onSlotFailed).toHaveBeenCalledTimes(1);
-    const [, , err] = onSlotFailed.mock.calls[0];
+    const [, , err, , , terminalKind] = onSlotFailed.mock.calls[0];
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toBe("Cancelled by user");
+    // #1848: the stop is named structurally, so Go never classifies the text.
+    expect(terminalKind).toBe("operator_stop");
     expect((err as Error).message).not.toContain("Pipeline failed");
 
     // Autonomous must NOT be paused — the user already chose to stop. Pausing
@@ -259,11 +273,91 @@ describe("ConcurrentPipelineManager — user-initiated cancellation (#3396)", ()
     await manager.settleForTest(7000);
 
     expect(onSlotFailed).toHaveBeenCalledTimes(1);
-    const [, , err] = onSlotFailed.mock.calls[0];
+    const [, , err, , , terminalKind] = onSlotFailed.mock.calls[0];
     expect((err as Error).message).toContain("Pipeline failed at feature-dev");
+    expect(terminalKind).not.toBe("operator_stop");
     expect((err as Error).message).not.toBe("Cancelled by user");
 
     // Real failure → autonomous IS paused so the user can triage.
     expect(mockAutonomousPause).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ConcurrentPipelineManager — operator stop reaches Go first (#1848)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    mockAutonomousStatus.mockResolvedValue({ status: "running" });
+    mockPipelineCancelForOperatorStop.mockResolvedValue({ cancelledIssues: [] });
+  });
+
+  it("still stops the slot when Go rejects the notice, and logs it", async () => {
+    const { manager, controllable, logger } = buildManager([11]);
+    await manager.fillSlots();
+    mockPipelineCancelForOperatorStop.mockRejectedValueOnce(new Error("ipc down"));
+
+    expect(manager.abortSlot(11)).toBe(true);
+    await vi.waitFor(() => expect(controllable.stopMockFor(11)).toHaveBeenCalledTimes(1));
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Operator stop was not delivered to the Go scheduler",
+      expect.objectContaining({ issueNumber: 11, error: "ipc down" })
+    );
+  });
+
+  it("still stops the slot when the IPC client throws synchronously", async () => {
+    const { manager, controllable, logger } = buildManager([12]);
+    await manager.fillSlots();
+    mockPipelineCancelForOperatorStop.mockImplementationOnce(() => {
+      throw new Error("not connected");
+    });
+
+    expect(manager.abortSlot(12)).toBe(true);
+    await vi.waitFor(() => expect(controllable.stopMockFor(12)).toHaveBeenCalledTimes(1));
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Operator stop was not delivered to the Go scheduler",
+      expect.objectContaining({ issueNumber: 12, error: "not connected" })
+    );
+  });
+
+  it("does not wait on Go past the bound when the notice never settles", async () => {
+    const { manager, controllable } = buildManager([13]);
+    await manager.fillSlots();
+    vi.useFakeTimers();
+    try {
+      mockPipelineCancelForOperatorStop.mockReturnValueOnce(new Promise(() => {}));
+      expect(manager.abortSlot(13)).toBe(true);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(controllable.stopMockFor(13)).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2);
+      expect(controllable.stopMockFor(13)).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Stop All tells Go about every run before any slot is stopped", async () => {
+    const { manager, controllable } = buildManager([21, 22]);
+    await manager.fillSlots();
+
+    const aborting = manager.abortAll();
+    await vi.waitFor(() => {
+      expect(controllable.stopMockFor(21)).toHaveBeenCalledTimes(1);
+      expect(controllable.stopMockFor(22)).toHaveBeenCalledTimes(1);
+    });
+
+    expect(mockPipelineCancelForOperatorStop).toHaveBeenCalledWith(undefined, undefined);
+    const notified = mockPipelineCancelForOperatorStop.mock.invocationCallOrder[0];
+    for (const n of [21, 22]) {
+      expect(notified).toBeLessThan(controllable.stopMockFor(n)!.mock.invocationCallOrder[0]);
+      controllable.finishWith(n, {
+        success: false,
+        completedStages: [],
+        skippedStages: [],
+        deferredStages: [],
+        failedStage: "feature-dev",
+        totalDurationMs: 10,
+      });
+    }
+    await aborting;
   });
 });
