@@ -161,6 +161,7 @@ the current scan).
 | `stash.sweep`         | NGD019                 | Restores only the named stash onto its landed branch, clean tree          |
 | `branch.delete`       | NGD018                 | Compare-and-delete at the scanned tip                                     |
 | `wip.prune`           | NGD020                 | Prunes a preserved-WIP ref whose content has landed                       |
+| `stranded_ref.prune`  | NGD052                 | Compare-and-delete a stranded fork ref once its issue is closed           |
 | `process.terminate`   | NGD021                 | SIGTERM to the single pid, re-verified as your nightgauge binary          |
 | `serve_lease.reclaim` | NGD022                 | Stops the wedged pid holding the scheduler lease                          |
 | `compose.cleanup`     | NGD016                 | Tears down the orphaned compose stack                                     |
@@ -709,6 +710,19 @@ never touched.
 
 The WIP ref is the only anchor for that work. `confirm` `prune` removes it once
 its content has landed; manual `salvage` lists it with `nightgauge wip list`.
+
+#### NGD052
+
+**A stranded fork ref.** `stranded_refs` · `housekeeping`.
+
+A branch_forked run pins its tip at `refs/nightgauge/stranded/<issue>`, outside
+`refs/heads/`, so branch cleanup never sees it. When the issue is closed, `auto`
+`prune` deletes the ref, after re-reading that the issue is still closed and that
+the ref still points at the scanned commit. A ref whose issue is open is kept and
+only counted in the check detail. When the issue state cannot be read (no GitHub
+client, a non-GitHub origin, an API error, a state other than open or closed,
+or a suffix that is not an issue number), the finding carries `state: unverifiable` and only a manual `review`
+remedy; the ref is never pruned.
 
 #### NGD021
 

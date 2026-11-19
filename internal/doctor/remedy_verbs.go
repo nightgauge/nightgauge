@@ -34,10 +34,11 @@ import (
 
 // verbDeps are the process-level effects a verb has, injectable for tests.
 type verbDeps struct {
-	lookup   processLookup           // nil → ps
-	signal   func(pid int) error     // nil → SIGTERM to the single pid
-	exitWait time.Duration           // how long terminate waits for the pid to go
-	teardown func(name string) error // nil → dockercompose.TeardownProject
+	lookup      processLookup           // nil → ps
+	signal      func(pid int) error     // nil → SIGTERM to the single pid
+	exitWait    time.Duration           // how long terminate waits for the pid to go
+	teardown    func(name string) error // nil → dockercompose.TeardownProject
+	issueStates issueStateFactory       // nil → issueStateDoor over the doctor client
 }
 
 // defaultExitWait bounds how long a terminate verb waits for its pid to exit
@@ -75,6 +76,7 @@ func builtinVerbs(env *Env, deps verbDeps) *VerbRegistry {
 	must(verbStashSweep, v.stashPrecondition, v.stashApply)
 	must(verbBranchDelete, v.branchPrecondition, v.branchApply)
 	must(verbWipPrune, v.wipPrecondition, v.wipApply)
+	must(verbStrandedRefPrune, v.strandedRefPrecondition, v.strandedRefApply)
 	must(verbProcessTerminate, v.terminatePrecondition, v.terminateApply)
 	must(verbServeLeaseReclaim, v.leasePrecondition, v.leaseApply)
 	must(verbComposeCleanup, v.composePrecondition, v.composeApply)

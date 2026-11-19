@@ -191,6 +191,28 @@ func (s *IssueService) GetIssueState(ctx context.Context, owner, repo string, nu
 	return "", fmt.Errorf("get issue state for %s/%s#%d: unexpected state %q", owner, repo, number, resp.State)
 }
 
+// NewIssueStateLookupForRoot builds an issue-state lookup for the repository
+// whose origin is repoRoot's `origin` remote, mirroring
+// NewMergedPRLookupForRoot. It returns nil, the closed door, when there is no
+// client or the origin is not a GitHub remote.
+func NewIssueStateLookupForRoot(ctx context.Context, clientFn func() (*Client, error), repoRoot string) func(issue int) (string, error) {
+	if clientFn == nil || repoRoot == "" {
+		return nil
+	}
+	owner, repo, ok := originSlug(repoRoot)
+	if !ok {
+		return nil
+	}
+	client, err := clientFn()
+	if err != nil || client == nil {
+		return nil
+	}
+	svc := NewIssueService(client)
+	return func(issue int) (string, error) {
+		return svc.GetIssueState(ctx, owner, repo, issue)
+	}
+}
+
 // GetIssueWithRelations is GetIssue for a caller that uses only some of an
 // issue's relationships. Only the connections in rels are read to their end
 // and returned. SubIssues, BlockedBy and Blocking are empty for the others,
