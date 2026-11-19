@@ -4,8 +4,8 @@
 # the same skills you edit here are usable in *any* project you open with:
 #
 #   - Claude Code (standalone)  -> /nightgauge:<name>   (plugin marketplace)
-#   - OpenAI Codex              -> $nightgauge-<name>    (~/.codex/skills)
-#   - Grok Build TUI            -> /nightgauge-<name>    (~/.grok/skills)
+#   - OpenAI Codex              -> $nightgauge-<name>    (${CODEX_HOME:-~/.codex}/skills)
+#   - Grok Build TUI            -> /nightgauge-<name>    (${GROK_HOME:-~/.grok}/skills)
 #   - OpenCode (on request)     -> /nightgauge-<name>    (~/.config/opencode)
 #
 # The VS Code extension is handled separately by dev-install.sh, which bundles
@@ -15,8 +15,8 @@
 # Usage:
 #   ./scripts/install-agent-skills.sh                 # refresh Claude + Codex + Grok
 #   ./scripts/install-agent-skills.sh --claude-only   # only Claude Code plugins
-#   ./scripts/install-agent-skills.sh --codex-only    # only Codex ~/.codex/skills
-#   ./scripts/install-agent-skills.sh --grok-only     # only Grok ~/.grok/skills (+ plugin)
+#   ./scripts/install-agent-skills.sh --codex-only    # only Codex ${CODEX_HOME:-~/.codex}/skills
+#   ./scripts/install-agent-skills.sh --grok-only     # only Grok ${GROK_HOME:-~/.grok}/skills (+ plugin)
 #   ./scripts/install-agent-skills.sh --opencode-only [--opencode-project <dir>] [--with-plugin] [--yes]
 #                                     # only OpenCode (never part of the default run)
 #   ./scripts/install-agent-skills.sh --adopt         # also take over old copies proven shipped
@@ -309,15 +309,18 @@ install_home_skills() {
 }
 
 # ---------------------------------------------------------------------------
-# Codex: copy every skill (a dir containing SKILL.md) into ~/.codex/skills/.
+# Codex: copy every skill (a dir containing SKILL.md) into $CODEX_HOME/skills/
+# (~/.codex when CODEX_HOME is unset or empty, as nightgauge doctor NGD112 and
+# the VS Code extension resolve it).
 # Codex reads skill instructions straight from these SKILL.md files and exposes
 # them as `$<skill-name>`. _shared/ ships too, so the pipeline skills'
 # `<!-- include: ../_shared/... -->` directives resolve.
 # ---------------------------------------------------------------------------
 install_codex() {
-  local dest_root="$HOME/.codex/skills"
-  if [ ! -d "$HOME/.codex" ]; then
-    echo "==> Codex: ~/.codex not found — skipping (Codex CLI not installed?)."
+  local codex_home="${CODEX_HOME:-$HOME/.codex}"
+  local dest_root="$codex_home/skills"
+  if [ ! -d "$codex_home" ]; then
+    echo "==> Codex: $codex_home not found — skipping (Codex CLI not installed?)."
     return 0
   fi
   echo "==> Codex: syncing skills into $dest_root ..."
@@ -388,14 +391,14 @@ remove_dead_grok_entries() {
 
 # ---------------------------------------------------------------------------
 # Grok Build TUI: copy every skill (a dir containing SKILL.md) into
-# ~/.grok/skills/ under the canonical directory names (nightgauge-issue-create,
-# etc.), matching Codex. Grok discovers user-scoped skills there and exposes
+# $GROK_HOME/skills/ (~/.grok when GROK_HOME is unset or empty) under the
+# canonical directory names (nightgauge-issue-create, etc.), matching Codex. Grok discovers user-scoped skills there and exposes
 # them as /nightgauge-<name>. Canonical skills stay tool-agnostic — this copy
 # never injects disable-model-invocation (DMI is Claude-plugin-only).
 #
-# Skip when neither the `grok` CLI nor ~/.grok exists (same shape as Codex
-# skipping when ~/.codex is missing). `grok` on PATH is sufficient even if
-# ~/.grok has not been created yet: mkdir -p the dest. Plugin install is
+# Skip when neither the `grok` CLI nor the Grok home exists (same shape as Codex
+# skipping when its home is missing). `grok` on PATH is sufficient even if
+# the Grok home has not been created yet: mkdir -p the dest. Plugin install is
 # best-effort and must not fail the script.
 # ---------------------------------------------------------------------------
 install_grok() {
@@ -403,12 +406,13 @@ install_grok() {
   if command -v grok >/dev/null 2>&1; then
     grok_cli=1
   fi
-  if [ "$grok_cli" -eq 0 ] && [ ! -d "$HOME/.grok" ]; then
-    echo "==> Grok: neither 'grok' CLI nor ~/.grok found — skipping."
+  local grok_home="${GROK_HOME:-$HOME/.grok}"
+  if [ "$grok_cli" -eq 0 ] && [ ! -d "$grok_home" ]; then
+    echo "==> Grok: neither 'grok' CLI nor $grok_home found — skipping."
     return 0
   fi
 
-  local dest_root="$HOME/.grok/skills"
+  local dest_root="$grok_home/skills"
   echo "==> Grok: syncing skills into $dest_root ..."
   install_home_skills Grok "$dest_root"
 

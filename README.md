@@ -199,7 +199,7 @@ claude plugin update nightgauge@nightgauge-plugins
 ### Grok Build TUI
 
 ```bash
-# Home copy (~/.grok/skills) plus grok plugin install
+# Home copy ($GROK_HOME/skills, default ~/.grok/skills) plus grok plugin install
 ./scripts/install-agent-skills.sh --grok-only
 ```
 
@@ -211,7 +211,7 @@ VS Code extension activate path install the same tree.
 
 Codex support is available through skills and the unified stage runner.
 
-Install Codex skills into `~/.codex/skills/` from a checkout, or with
+Install Codex skills into `$CODEX_HOME/skills/` (default `~/.codex/skills/`) from a checkout, or with
 `Nightgauge: Setup Codex Skills` in VS Code (both install the same tree):
 
 ```bash
