@@ -36,7 +36,14 @@ func TestExecuteGraphQLInvalidatesOnlyAfterAWrite(t *testing.T) {
 		{"named query", `query Repo($owner: String!) { repository(owner: $owner) { id } }`, nil, false},
 		{"query shorthand", `{ viewer { login } }`, nil, false},
 		{"comment then query", "# read the id\n  query { viewer { login } }", nil, false},
-		{"fragment first", `fragment F on Repository { id } query { viewer { login } }`, nil, true},
+		{"fragment beside a query cannot write", `fragment F on Repository { id } query { viewer { login } }`, nil, false},
+		{"fragment beside a mutation", `fragment F on R { id } mutation { x }`, nil, true},
+		{"query then mutation", `query A { a } mutation B { b }`, nil, true},
+		{"query then subscription", `query A { a } subscription S { s }`, nil, true},
+		{"shorthand then mutation", `{ a } mutation { b }`, nil, true},
+		{"subscription only", `subscription { s }`, nil, true},
+		{"unnamed query", `query { a }`, nil, false},
+		{"two queries", `query A { a } query B { b }`, nil, false},
 		{"query-prefixed name is not the keyword", `queryish { x }`, nil, true},
 		{"empty document", ``, nil, true},
 	} {
@@ -62,6 +69,44 @@ func TestExecuteGraphQLInvalidatesOnlyAfterAWrite(t *testing.T) {
 			}
 			if _, cached := c.Peek("acme", 3, "open"); cached == tc.dropped {
 				t.Errorf("snapshot cached = %v after %q, want %v", cached, tc.doc, !tc.dropped)
+			}
+		})
+	}
+}
+
+// #2732: every definition is classified, and brackets or keywords inside
+// strings and comments do not move the scan.
+func TestIsReadDocument(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		doc  string
+		read bool
+	}{
+		{"brace and keyword in a string", `query { a(x: "} mutation { b }") }`, true},
+		{"brace and keyword in a block string", `query { a(x: """} \""" mutation { b }""") }`, true},
+		{"escaped quote in a string", `query { a(x: "\"}") }`, true},
+		{"comment inside a selection set", "query {\n  a # } mutation { b }\n}", true},
+		{"object default in variables", `query Q($x: In = {a: 1}) { a(x: $x) }`, true},
+		{"directive with args", `query Q @cached(ttl: 60) { a }`, true},
+		{"mutation after a string with a brace", `query { a(x: "{") } mutation { b }`, false},
+		{"unbalanced brace", `query { a { b }`, false},
+		{"unterminated string", `query { a(x: "oops) }`, false},
+		{"unterminated block string", `query { a(x: """oops) }`, false},
+		{"stray top-level brace", `query { a } }`, false},
+		{"mismatched bracket", `query { a(x: 1} }`, false},
+		{"header with no selection set", `query Q`, false},
+		{"unbalanced variable parens", `query Q($x: Int { a }`, false},
+		{"string in a header", `query Q "x" { a }`, false},
+		{"stray bracket in a header", `query Q ] { a }`, false},
+		{"newline inside a string", "query { a(x: \"oops\n\") } mutation { b }", false},
+		{"selection set left open before a comment", "query { a  # tail", false},
+		{"empty", ``, false},
+		{"comment only", "# nothing here", false},
+		{"BOM and commas then query", "\ufeff,, query { a }", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isReadDocument(tc.doc); got != tc.read {
+				t.Errorf("isReadDocument(%q) = %v, want %v", tc.doc, got, tc.read)
 			}
 		})
 	}

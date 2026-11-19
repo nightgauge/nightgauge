@@ -52,9 +52,11 @@ func (c *cachedClient) Project() forge.ProjectService { return c.project }
 // after the call returns, on success or failure. One Cache holds several boards
 // (the attention sweep wraps each repository's against the same one), so
 // dropping only the bound board would leave the one actually written stale.
-// Only a document whose first operation is `query` or the `{ ... }` shorthand
-// counts as a read; anything else, including a document that cannot be
-// classified, is treated as a write. Misclassifying a read costs one refetch;
+// A document counts as a read only when every operation in it is a `query` or
+// the `{ ... }` shorthand (fragments may sit beside them): the server runs the
+// operation operationName selects, which this wrapper cannot see, so one
+// mutation anywhere makes the call a write (#2732). A document that cannot be
+// classified is treated as a write. Misclassifying a read costs one refetch;
 // letting a write through would serve this process a board it has already
 // changed.
 func (c *cachedClient) ExecuteGraphQL(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
@@ -64,30 +66,165 @@ func (c *cachedClient) ExecuteGraphQL(ctx context.Context, query string, variabl
 	return forge.ForwardGraphQL(ctx, c.ForgeClient, query, variables)
 }
 
-// isReadDocument reports whether a GraphQL document's first definition is a
-// query operation: the `query` keyword or the `{` shorthand, after the
-// ignored tokens the spec allows (whitespace, commas, a BOM, `#` comments).
+// isReadDocument reports whether every top-level definition of a GraphQL
+// document is a query operation (the `query` keyword or the `{` shorthand) or
+// a fragment. A mutation, a subscription, any other definition, an empty
+// document, or one the scan cannot follow (an unterminated string, unbalanced
+// brackets, a stray token) is not a read. The scan is lexical: it skips the
+// ignored tokens the spec allows (whitespace, commas, a BOM, `#` comments) and
+// string and block-string literals, so a bracket or keyword inside one does
+// not change the classification.
 func isReadDocument(doc string) bool {
-	rest := doc
-	for {
-		rest = strings.TrimLeft(rest, " \t\r\n,\ufeff")
-		if !strings.HasPrefix(rest, "#") {
-			break
+	defs := 0
+	i := skipIgnored(doc, 0)
+	for i < len(doc) {
+		if doc[i] != '{' {
+			j := i
+			for j < len(doc) && isNameChar(doc[j]) {
+				j++
+			}
+			if kw := doc[i:j]; kw != "query" && kw != "fragment" {
+				return false
+			}
+			var ok bool
+			if i, ok = skipHeader(doc, j); !ok {
+				return false
+			}
 		}
-		nl := strings.IndexAny(rest, "\r\n")
-		if nl < 0 {
+		end, ok := skipBalanced(doc, i)
+		if !ok {
 			return false
 		}
-		rest = rest[nl:]
+		defs++
+		i = skipIgnored(doc, end)
 	}
-	if strings.HasPrefix(rest, "{") {
-		return true
+	return defs > 0
+}
+
+// skipIgnored returns the index of the first byte at or after i that is not
+// whitespace, a comma, a BOM or part of a `#` comment.
+func skipIgnored(doc string, i int) int {
+	for i < len(doc) {
+		switch c := doc[i]; {
+		case c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ',':
+			i++
+		case strings.HasPrefix(doc[i:], "\ufeff"):
+			i += len("\ufeff")
+		case c == '#':
+			for i < len(doc) && doc[i] != '\n' && doc[i] != '\r' {
+				i++
+			}
+		default:
+			return i
+		}
 	}
-	if !strings.HasPrefix(rest, "query") {
-		return false
+	return i
+}
+
+// skipHeader skips an operation or fragment header (name, variable
+// definitions, `on Type`, directives) and returns the index of the `{` that
+// opens its selection set.
+func skipHeader(doc string, i int) (int, bool) {
+	for {
+		i = skipIgnored(doc, i)
+		if i >= len(doc) {
+			return 0, false
+		}
+		switch c := doc[i]; {
+		case c == '{':
+			return i, true
+		case c == '(':
+			end, ok := skipBalanced(doc, i)
+			if !ok {
+				return 0, false
+			}
+			i = end
+		case isNameChar(c) || c == '@':
+			i++
+		default:
+			return 0, false
+		}
 	}
-	after := rest[len("query"):]
-	return after == "" || !isNameChar(after[0])
+}
+
+// skipBalanced takes the index of a `{` or `(` and returns the index just past
+// its matching closer, skipping strings and comments on the way.
+func skipBalanced(doc string, i int) (int, bool) {
+	var stack []byte
+	for i < len(doc) {
+		i = skipIgnored(doc, i)
+		if i >= len(doc) {
+			break
+		}
+		switch c := doc[i]; c {
+		case '{', '(', '[':
+			stack = append(stack, c)
+			i++
+		case '}', ')', ']':
+			if len(stack) == 0 || closerOf(stack[len(stack)-1]) != c {
+				return 0, false
+			}
+			stack = stack[:len(stack)-1]
+			i++
+			if len(stack) == 0 {
+				return i, true
+			}
+		case '"':
+			end, ok := skipString(doc, i)
+			if !ok {
+				return 0, false
+			}
+			i = end
+		default:
+			i++
+		}
+	}
+	return 0, false
+}
+
+// closerOf returns the byte that closes the bracket open.
+func closerOf(open byte) byte {
+	switch open {
+	case '{':
+		return '}'
+	case '(':
+		return ')'
+	}
+	return ']'
+}
+
+const (
+	blockQuote        = `"""`
+	escapedBlockQuote = `\"""`
+)
+
+// skipString takes the index of a `"` and returns the index just past the
+// string or block string it opens.
+func skipString(doc string, i int) (int, bool) {
+	if strings.HasPrefix(doc[i:], blockQuote) {
+		for j := i + len(blockQuote); j < len(doc); {
+			switch {
+			case strings.HasPrefix(doc[j:], escapedBlockQuote):
+				j += len(escapedBlockQuote)
+			case strings.HasPrefix(doc[j:], blockQuote):
+				return j + len(blockQuote), true
+			default:
+				j++
+			}
+		}
+		return 0, false
+	}
+	for j := i + 1; j < len(doc); j++ {
+		switch doc[j] {
+		case '\\':
+			j++
+		case '"':
+			return j + 1, true
+		case '\n', '\r':
+			return 0, false
+		}
+	}
+	return 0, false
 }
 
 func isNameChar(b byte) bool {
