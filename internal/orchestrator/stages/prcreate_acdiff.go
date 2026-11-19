@@ -2008,7 +2008,7 @@ func acTokens(c acClause, named, inherited []string, d *ACDiff) acResult {
 		} else {
 			missing = append(missing, tok)
 			skipped = skipped || unread ||
-				acGoFieldUndecided(tok, scope, d) || acGoFieldUndecided(tok, wide, d)
+				acGoFieldUndecided(tok, scope, d) || acGoFieldWideUndecided(tok, wide, d)
 		}
 	}
 	// A prose #NNN ref is context the criterion names, never text the diff
@@ -2326,16 +2326,60 @@ func acAddedToken(tok string, scope []string, d *ACDiff) (string, bool) {
 	return "", false
 }
 
-// acGoFieldUndecided reports that a Go field span may be set positionally
-// in a scope file whose struct field order cannot be resolved (#3424): its
-// absence is then not evidence, so the clause is not verifiable, never unmet.
+// acGoFieldUndecided reports that no scope file can decide a missing Go
+// field span `name: value` (#3424), so its absence is not evidence and the
+// clause is not verifiable, never unmet. Only the files the clause names
+// (its scope) decide: an unrelated changed file in wide scope never turns a
+// named Markdown or TypeScript file into a decider. A scope file decides the
+// span when the diff deletes it (it cannot set the field), when it is a Go
+// file that reads, parses and resolves every positional literal on an added
+// line, when it is a Go file whose matcher does not read tok as a field
+// value (its text decides), or when it is a YAML file (its key-path rule
+// decides). The span is
+// undecided when any scope Go file is unresolved or unreadable, or when no
+// scope file decides it: Markdown, JSON or TypeScript carry no field order.
+// The field-span guard keeps every other token on today's verdict.
 func acGoFieldUndecided(tok string, scope []string, d *ACDiff) bool {
+	if !acIsFieldSpan(tok) {
+		return false
+	}
+	decides := false
 	for _, p := range scope {
+		if f := d.Files[p]; f != nil && f.Status == "deleted" {
+			decides = true
+		} else if g, ok := d.goFieldValue(tok, p); ok {
+			if g.undecided {
+				return true
+			}
+			decides = true
+		} else if acIsYAMLPath(p) || strings.HasSuffix(p, ".go") {
+			// YAML keeps its key-path rule; a Go file the matcher does not
+			// read as a field span (`On: a:b`) is judged by its text.
+			decides = true
+		}
+	}
+	return !decides
+}
+
+// acGoFieldWideUndecided reports that a changed Go file outside the named
+// scope may set the field span positionally under a type it cannot resolve
+// (#3424). Wide files never decide a span, so they can only make it
+// undecided; a file the diff deletes has no content and is skipped.
+func acGoFieldWideUndecided(tok string, wide []string, d *ACDiff) bool {
+	for _, p := range wide {
+		if f := d.Files[p]; f != nil && f.Status == "deleted" {
+			continue
+		}
 		if g, ok := d.goFieldValue(tok, p); ok && g.undecided {
 			return true
 		}
 	}
 	return false
+}
+
+// acIsYAMLPath reports that p is a YAML file, judged by the key-path rule.
+func acIsYAMLPath(p string) bool {
+	return strings.HasSuffix(p, ".yml") || strings.HasSuffix(p, ".yaml")
 }
 
 // acYAMLKeyRE parses a YAML key-path span `a: b`: `:` only, so `a=b` stays
@@ -2349,7 +2393,7 @@ var acYAMLKeyRE = regexp.MustCompile(`^["']?([A-Za-z_][A-Za-z0-9_.\-]*)["']?\s*:
 // p does not parse (the line matcher then stands alone).
 func (d *ACDiff) yamlKeyPath(tok, p string) ([]int, bool) {
 	m := acYAMLKeyRE.FindStringSubmatch(tok)
-	if m == nil || !(strings.HasSuffix(p, ".yml") || strings.HasSuffix(p, ".yaml")) {
+	if m == nil || !acIsYAMLPath(p) {
 		return nil, false
 	}
 	if d.yaml == nil {
