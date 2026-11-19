@@ -463,11 +463,17 @@ plan() {
 # exports GIT_DIR to a hook that runs in a linked worktree; without this, every
 # git call the checker makes would read the real checkout instead of the
 # commit under test.
+#
+# Every variable `git rev-parse --local-env-vars` lists is cleared, not a
+# hand-picked subset: an inherited GIT_SHALLOW_FILE or GIT_GRAFT_FILE would
+# truncate the history the checker walks to find its diff base (#3430).
+# GIT_NAMESPACE is outside git's list, so it is named.
 scratch_env() {
-  unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
-    GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE GIT_PREFIX \
-    GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
+  # shellcheck disable=SC2046 # word-splitting the variable names is intended
+  unset $(git rev-parse --local-env-vars) GIT_NAMESPACE
   export GIT_DIR="$TREE/.git" GIT_WORK_TREE="$TREE"
+  # The local-env list includes it; transfer ignores refs/replace/*, so must this.
+  export GIT_NO_REPLACE_OBJECTS=1
   # The verdict must not depend on this machine's git config; CI has none.
   export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 }
@@ -855,6 +861,9 @@ checkout() {
 run_checker() {
   (
     scratch_env
+    # The pinned base is the only base: CI's steering variables, inherited from
+    # whatever ran this push, must not add candidates (#3430).
+    unset GITHUB_BASE_REF GITHUB_EVENT_NAME
     export NG_BOUNDARY_DIFF_BASE="$1" PYTHONDONTWRITEBYTECODE=1
     cd "$TREE" && exec python3 "$WORK/rules/${CHECKER##*/}"
   ) >"$WORK/checker.log" 2>&1 &

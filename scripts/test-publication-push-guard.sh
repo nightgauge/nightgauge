@@ -37,10 +37,15 @@ REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 
 # Hermetic git. A global core.hooksPath, commit signing or a missing identity
 # would change what these pushes do, and a GIT_DIR inherited from a calling hook
-# would point every command below at the wrong repository.
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
-  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX GIT_CONFIG_PARAMETERS \
-  GIT_CONFIG_COUNT
+# would point every command below at the wrong repository. Clear every variable
+# `git rev-parse --local-env-vars` lists (an inherited GIT_SHALLOW_FILE or
+# GIT_GRAFT_FILE truncates the history the checker walks), and the checker's own
+# base-steering variables, so a run under `nightgauge ci gate-run` or a hook sees
+# what a standalone run sees (#3430).
+# shellcheck disable=SC2046 # word-splitting the variable names is intended
+# GIT_NAMESPACE is outside git's list, so it is named.
+unset $(git rev-parse --local-env-vars) GIT_NAMESPACE
+unset NG_BOUNDARY_DIFF_BASE GITHUB_BASE_REF GITHUB_EVENT_NAME NG_BOUNDARY_JOBS
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com
 export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
@@ -180,6 +185,25 @@ bad() {
   fails=$((fails + 1))
 }
 
+# base_unresolved <name>: a checker that could not resolve its diff base inside
+# a fixture asserted nothing about the case, so it is a harness error, never a
+# pass or an ordinary FAIL (#3430).
+# The two messages are the checker's own (publication-boundary-check.py,
+# resolve_diff_base and its caller); the suite refuses to start if either is
+# reworded, so this detection cannot go quiet.
+NO_BASE_MSG="cannot resolve a base commit"
+BAD_BASE_MSG="does not resolve to a commit"
+for msg in "$NO_BASE_MSG" "$BAD_BASE_MSG"; do
+  grep -qF -- "$msg" "$REPO/scripts/publication-boundary-check.py" ||
+    harness "the checker no longer prints '$msg'; update base_unresolved"
+done
+base_unresolved() {
+  if grep -qF -- "$NO_BASE_MSG" "$LOG" || grep -qF -- "$BAD_BASE_MSG" "$LOG"; then
+    sed 's/^/       | /' "$LOG"
+    harness "$1: the checker could not resolve a diff base in the fixture"
+  fi
+}
+
 # push <dir> <name> <git push args...>: sets RC and LOG.
 push() {
   local dir="$1" name="$2"
@@ -187,6 +211,7 @@ push() {
   LOG="$tmp/$name.log"
   git -C "$dir" push "$@" >"$LOG" 2>&1
   RC=$?
+  base_unresolved "$name"
 }
 
 commit_file() { # commit_file <dir> <path> <content> <message>
@@ -1140,6 +1165,7 @@ push2() { # push2 <name> <branch>
   LOG="$tmp/$1.log"
   git -C "$work2" push origin "$2" >"$LOG" 2>&1
   RC=$?
+  base_unresolved "$1"
 }
 remote2_ref() { git --git-dir="$public2" rev-parse --verify --quiet "$1" 2>/dev/null; }
 
@@ -1488,6 +1514,45 @@ if [ "$rc" -eq 2 ] && ! kill -0 "$checker_pid" 2>/dev/null &&
 else
   kill "$checker_pid" 2>/dev/null
   bad "a scan stops, and stops its checker, when the git push it serves has exited (exit $rc)"
+fi
+
+# ── 29. The checker sees only the pinned base, whatever ran the push ─────────
+#    The suite scrubs its own environment, so this case re-exports what a hook
+#    or `nightgauge ci gate-run` may pass down and calls run_checker with a
+#    stand-in that records the environment it was given (#3430).
+envc="$tmp/envc"
+{
+  mkdir -p "$envc/tree" "$envc/work/rules" &&
+    cat >"$envc/work/rules/publication-boundary-check.py" <<'PY'
+import os
+
+keys = ("GITHUB_BASE_REF", "GITHUB_EVENT_NAME", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE",
+        "GIT_REPLACE_REF_BASE", "GIT_NAMESPACE", "GIT_NO_REPLACE_OBJECTS",
+        "NG_BOUNDARY_DIFF_BASE")
+with open(os.path.join(os.environ["ENVC_DIR"], "env.txt"), "w") as f:
+    for k in keys:
+        if k in os.environ:
+            f.write(f"{k}={os.environ[k]}\n")
+PY
+} || harness "could not build the environment-recording checker"
+(
+  export ENVC_DIR="$envc" GITHUB_BASE_REF=main GITHUB_EVENT_NAME=push \
+    GIT_GRAFT_FILE=/dev/null GIT_SHALLOW_FILE=/dev/null GIT_REPLACE_REF_BASE=refs/x/ \
+    GIT_NAMESPACE=leak GIT_NO_REPLACE_OBJECTS=
+  TREE="$envc/tree" WORK="$envc/work" GIT_PID=""
+  run_checker 0123456789abcdef0123456789abcdef01234567
+  exit "$RC"
+) >"$envc/guard.log" 2>&1
+rc=$?
+LOG="$envc/guard.log"
+if [ "$rc" -eq 0 ] && [ -f "$envc/env.txt" ] &&
+  [ "$(sort "$envc/env.txt")" = "$(printf '%s\n' \
+    GIT_NO_REPLACE_OBJECTS=1 \
+    NG_BOUNDARY_DIFF_BASE=0123456789abcdef0123456789abcdef01234567)" ]; then
+  ok "the checker sees only the pinned base, not the pusher's git or CI environment"
+else
+  [ -f "$envc/env.txt" ] && sed 's/^/       | env: /' "$envc/env.txt"
+  bad "the checker sees only the pinned base, not the pusher's git or CI environment (exit $rc)"
 fi
 
 LOG=""
