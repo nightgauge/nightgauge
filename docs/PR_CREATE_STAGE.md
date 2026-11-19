@@ -285,10 +285,19 @@ keyed (`name: value`) or positional, the position taken from the struct
 type's field order with `go/ast` on the branch content. Inline struct types,
 the elided element types of slice, array and map literals, and named types
 declared in the same file resolve. When a positional literal on an added line
-has a type declared elsewhere, or the file does not parse, the span is
-`❔ not verifiable`, never `❌ unmet`. A resolved field set to another value
-stays unmet. A YAML file keeps its key-path rule, and any other file is
-matched as text.
+has a type declared elsewhere, or the file cannot be read or parsed, the span
+is `❔ not verifiable`, never `❌ unmet`. A resolved field set to another value
+stays unmet. A YAML file keeps its key-path rule. Any other file (Markdown,
+JSON, TypeScript) is matched as text and carries no field order, so a span
+only such files could answer is `❔ not verifiable` when the text is absent,
+never `❌ unmet`. Only the files the criterion names decide this: an
+unrelated changed Go file never turns it into `❌ unmet`, and a file the diff
+deletes counts as deciding, since it cannot set the field. A field span is a Go
+identifier, a colon, whitespace, then a value: a span containing `://` or a
+colon with no whitespace after it (`https://x.io/a`, `localhost:8080`) is no
+field span and keeps the text-match verdict, so a missing one stays unmet. A
+span the Go matcher does not read as one literal value (`On: a:b`) is judged
+in a named Go file by its text.
 
 A criterion naming a CI check (`` `integration-tests` passes ``) cannot be
 decided here, because the check runs only once the PR exists. pr-merge judges

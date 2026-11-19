@@ -15,8 +15,24 @@ import (
 const acGoTypeDepth = 16
 
 // acGoFieldRE parses a Go field-value span `name: value` (#3424): name is a
-// Go identifier, value one literal or identifier.
-var acGoFieldRE = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(\S+)$`)
+// Go identifier, whitespace follows the colon (gofmt), and value is one
+// quoted literal or an unquoted token that contains no colon and does not
+// start with `/`, a quote or a backtick, so URL and host:port spans are no
+// field spans. It is narrower than acFieldSpanRE: a span the guard accepts
+// but this rejects (`On: a:b`) is judged in a Go file by its text.
+var acGoFieldRE = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*):\s+("[^"]*"|` + "`[^`]*`" + `|[^\s:/"` + "`" + `][^\s:]*)$`)
+
+// acFieldSpanRE recognises a field span for the not-verifiable guard
+// (#3424): a Go identifier, a colon, at least one whitespace character, then
+// a value. acIsFieldSpan also rejects any span containing `://`, so a URL or
+// a host:port span keeps its text-match judgement.
+var acFieldSpanRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*:\s+\S`)
+
+// acIsFieldSpan reports that tok is a `name: value` field span.
+func acIsFieldSpan(tok string) bool {
+	tok = strings.Trim(tok, " ")
+	return !strings.Contains(tok, "://") && acFieldSpanRE.MatchString(tok)
+}
 
 // acGoFile is one Go file parsed for field-value spans; f is nil when the
 // file could not be read or parsed.
@@ -44,7 +60,7 @@ type acGoFieldMatch struct {
 // order with go/ast on the branch content. Types resolved: inline struct
 // types, elided element types of slice, array and map literals, and named
 // types declared in the same file. ok=false when tok is no field span or p
-// is not a Go file.
+// is not a Go file; an unreadable or unparsable Go file is undecided.
 func (d *ACDiff) goFieldValue(tok, p string) (acGoFieldMatch, bool) {
 	m := acGoFieldRE.FindStringSubmatch(strings.Trim(tok, " "))
 	if m == nil || !strings.HasSuffix(p, ".go") {
@@ -67,10 +83,8 @@ func (d *ACDiff) goFieldValue(tok, p string) (acGoFieldMatch, bool) {
 // matchGoField is goFieldValue's uncached walk for field name and value want.
 func (d *ACDiff) matchGoField(name, want, p string) (acGoFieldMatch, bool) {
 	g := d.goFile(p)
-	if g == nil {
-		return acGoFieldMatch{}, false
-	}
-	if g.f == nil {
+	if g == nil || g.f == nil {
+		// An unreadable or unparsable file cannot show the field order.
 		return acGoFieldMatch{undecided: true}, true
 	}
 	added := map[int]bool{}
