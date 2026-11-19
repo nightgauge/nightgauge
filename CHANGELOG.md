@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- The adapter-canary workflow now runs `TestClaudeSkillsTreeLive` daily and on `workflow_dispatch` against the reviewed Claude Code pin, so the stage skills tree is proven readable and write-refused under the real CLI without someone remembering to run it. A skipped test fails the job; it is not a required check (#2824).
 - `nightgauge doctor` now reports stranded fork refs (`refs/nightgauge/stranded/<issue>`, NGD052), which a branch_forked run leaves behind and nothing else reclaimed. `doctor --fix` deletes one once its issue is closed; a ref whose issue is open is kept, and one whose issue state cannot be read is reported as unverifiable and never deleted (#2753).
 
 ### Changed

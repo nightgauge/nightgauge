@@ -567,6 +567,29 @@ check "the concurrency group is per-ref, so schedule/dispatch share one group on
   str_contains "$CONCURRENCY_GROUP" 'github.ref'
 
 echo ""
+echo "=== 6d. claude-skills-live runs the live test on schedule only (#2824) ==="
+LIVE_IF="$(yq -r '.jobs["claude-skills-live"].if' "$WORKFLOW")"
+check "claude-skills-live runs on schedule" str_contains "$LIVE_IF" "'schedule'"
+check "claude-skills-live runs on workflow_dispatch" str_contains "$LIVE_IF" "'workflow_dispatch'"
+check "claude-skills-live never runs on pull_request or merge_group" \
+  sh -c 'case "$1" in *pull_request*|*merge_group*) exit 1 ;; esac' _ "$LIVE_IF"
+LIVE_RUN="$(yq -r '.jobs["claude-skills-live"].steps[] | select(.name == "Run TestClaudeSkillsTreeLive") | .run' "$WORKFLOW")"
+check "the live step runs the tagged test" str_contains "$LIVE_RUN" \
+  "-tags claude_integration -run TestClaudeSkillsTreeLive ./internal/execution/adapters/"
+check "the live step fails on a SKIP" str_contains "$LIVE_RUN" "--- SKIP: TestClaudeSkillsTreeLive"
+check "the live step requires a PASS line" str_contains "$LIVE_RUN" "--- PASS: TestClaudeSkillsTreeLive"
+LIVE_TOKEN="$(yq -r '.jobs["claude-skills-live"].steps[] | select(.name == "Run TestClaudeSkillsTreeLive") | .env.CLAUDE_CODE_OAUTH_TOKEN' "$WORKFLOW")"
+check "the live step receives CLAUDE_CODE_OAUTH_TOKEN" str_contains "$LIVE_TOKEN" "secrets.CLAUDE_CODE_OAUTH_TOKEN"
+LIVE_INSTALL="$(yq -r '.jobs["claude-skills-live"].steps[].run // ""' "$WORKFLOW")"
+check "claude-skills-live installs the reviewed pin" str_contains "$LIVE_INSTALL" "adapter-cli-pin.sh claude-headless"
+OTHER_SECRETS="$(yq -o=json '.jobs | to_entries | map(select(.key != "claude-skills-live")) | .[].value' "$WORKFLOW" | grep -c 'secrets\.' || true)"
+check "no other adapter-canary job references a secret" [ "$OTHER_SECRETS" = "0" ]
+LIVE_SECRET_STEPS="$(yq -o=json '.jobs["claude-skills-live"].steps | map(select(tostring | test("secrets\\."))) | length' "$WORKFLOW")"
+check "only one claude-skills-live step references a secret" [ "$LIVE_SECRET_STEPS" = "1" ]
+check "no adapter-canary job is a required check" \
+  sh -c '! jq -r ".. | .context? // empty" "$1" | grep -qiE "claude skills-tree live|claude-skills-live"' _ "$REPO_ROOT/.github/rulesets/main-branch.json"
+
+echo ""
 echo "=== 6c. installer pins come from the compat manifests (#3300) ==="
 # --- installer pins (#3300): adapter-canary reads each vendor installer's
 # sha256 from its compat manifest, the one pin Go and the SDK also read, and
