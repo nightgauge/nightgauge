@@ -1867,7 +1867,11 @@ autonomous run` start and every `serve` daemon start
 Both scans gate candidates through the same `isTriagedAndUnblocked`
 predicate: `BoardStatus == "Backlog"`, `State == "OPEN"`, a non-empty
 `Priority`, a trusted author (see Author Trust Gate above), a `type:*` label
-that isn't `type:epic`, and no open `blockedBy` dependency. Extending the
+that isn't `type:epic`, and no open `blockedBy` dependency. A blocker missing
+from the dependency graph (off the board, or in a repository the graph did not
+load) also holds the issue, even if it is closed: promotion cannot resolve its
+state, so it fails closed like `evaluateDeps` at dispatch (#306). Move such an
+issue to Ready by hand (#2744). Extending the
 candidate set to cover independent Backlog nodes costs no extra GitHub
 calls in either path — the graph is already built for other reasons.
 
@@ -1881,6 +1885,10 @@ one-line summary, e.g.:
 ```
 autonomous: promoteUnblockedOnStartup: considered=25 eligible=6 promoted=6 top_rejections=[not-backlog:12 no-priority:5 open-blocker:2]
 ```
+
+`open-blocker` means a blocker in the graph is still open. `unresolved-blocker`
+means a blocker is missing from the graph, so its state is unknown: add it to
+the board or move the dependent to Ready by hand (#2744).
 
 **`nightgauge autonomous status`** uses `LastPromotionEligible` to
 distinguish two conditions that otherwise look identical

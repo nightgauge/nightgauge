@@ -303,6 +303,54 @@ func TestPromotion_OpenDoneBlockerHoldsItsDependent(t *testing.T) {
 	}
 }
 
+// TestPromotion_BlockerMissingFromGraphHoldsItsDependent (#2744): both promotion
+// paths hold a dependent whose blocker the graph does not hold, even when an
+// in-graph blocker listed first is closed. The off-board blocker is CLOSED in
+// reality, but promotion cannot know that, so it fails closed. The test fails
+// if either caller goes back to Graph.Adjacency, which drops the dangling edge.
+//
+// Serial: newAutonomousForCascadeTest calls t.Setenv.
+func TestPromotion_BlockerMissingFromGraphHoldsItsDependent(t *testing.T) {
+	const repo = "nightgauge/nightgauge"
+	paths := map[string]func(as *AutonomousScheduler){
+		"cascade": func(as *AutonomousScheduler) { as.promoteUnblockedToReady(as.backgroundContext(), repo, 2684) },
+		"startup": func(as *AutonomousScheduler) { as.promoteUnblockedOnStartup(context.Background()) },
+	}
+	for name, promote := range paths {
+		t.Run(name, func(t *testing.T) {
+			as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
+			closedBlocker := &depgraph.Node{Repo: repo, Number: 2684, State: "CLOSED", BoardStatus: "Done"}
+			// Deliberately left out of the graph: only its ID is used.
+			offBoard := depgraph.NodeID{Repo: repo, Number: 2690}
+			dependent := &depgraph.Node{
+				Repo: repo, Number: 2703, State: "OPEN", BoardStatus: "Backlog",
+				Priority: "P1", Labels: []string{"type:bug"}, AuthorLogin: "maintainer",
+			}
+			independent := &depgraph.Node{
+				Repo: repo, Number: 2702, State: "OPEN", BoardStatus: "Backlog",
+				Priority: "P1", Labels: []string{"type:bug"}, AuthorLogin: "maintainer",
+			}
+			edges := []depgraph.Edge{
+				{From: dependent.ID(), To: closedBlocker.ID()},
+				{From: dependent.ID(), To: offBoard},
+			}
+			as.buildGraphFn = func(_ context.Context) (*depgraph.Graph, error) {
+				return buildTestGraph([]*depgraph.Node{closedBlocker, dependent, independent}, edges), nil
+			}
+
+			promote(as)
+			as.drainBackground()
+
+			if as.state.LastPromotionEligible != 1 {
+				t.Errorf("LastPromotionEligible = %d, want 1: only the independent node may promote", as.state.LastPromotionEligible)
+			}
+			if got := as.state.LastPromotionRejectionReasons["unresolved-blocker"]; got != 1 {
+				t.Errorf("unresolved-blocker rejections = %d, want 1: %v", got, as.state.LastPromotionRejectionReasons)
+			}
+		})
+	}
+}
+
 func TestIsTriagedAndUnblocked_OpenBlockerBlocksWhateverItsStatus(t *testing.T) {
 	t.Parallel()
 
