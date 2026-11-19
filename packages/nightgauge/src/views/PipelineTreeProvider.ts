@@ -184,6 +184,7 @@ export class PipelineTreeProvider
   private idleIndicatorSeconds = DEFAULT_IDLE_INDICATOR_SECONDS;
   private teamSection: TeamSectionTreeItem = new TeamSectionTreeItem();
   private subscriptionSection: SubscriptionSectionTreeItem = new SubscriptionSectionTreeItem();
+  private licensePreflight: LicensePreflight | null = null;
   private workspaceSyncSidebarItem: WorkspaceSyncSidebarItem = new WorkspaceSyncSidebarItem();
   private tierGate: TierGate | null = null;
   private currentTier: Tier = "community";
@@ -471,22 +472,10 @@ export class PipelineTreeProvider
    * @see Issue #4156 - License enforcement integrity + tier-gating correctness
    */
   setLicensePreflight(sessionManager: SessionManager, preflight: LicensePreflight): void {
+    this.licensePreflight = preflight;
     const disposable = sessionManager.onSessionChanged(async (evt) => {
       if (evt.current === "authenticated") {
-        try {
-          const result = await preflight.validate();
-          this.subscriptionSection.update({
-            tier: result.tier,
-            status: result.status,
-            expiresAt: result.expiresAt,
-            offline: result.offline,
-            lastUpdated: new Date(),
-            machineBound: result.machineBound,
-            machineCount: result.machineCount,
-          });
-        } catch {
-          // Network failure — subscription section keeps stale data (no change)
-        }
+        await this.updateSubscriptionFrom(preflight);
       } else {
         // Signed out or error — reset to unauthenticated state
         this.subscriptionSection.update(null);
@@ -494,6 +483,34 @@ export class PipelineTreeProvider
       this.refresh(this.subscriptionSection);
     });
     this.disposables.push(disposable);
+  }
+
+  /**
+   * Re-validate and redraw the subscription section — after a device key is
+   * issued, so the paid tier shows without a reload (#1883).
+   */
+  async refreshSubscription(): Promise<void> {
+    if (!this.licensePreflight) return;
+    this.licensePreflight.clearCache();
+    await this.updateSubscriptionFrom(this.licensePreflight);
+    this.refresh(this.subscriptionSection);
+  }
+
+  private async updateSubscriptionFrom(preflight: LicensePreflight): Promise<void> {
+    try {
+      const result = await preflight.validate();
+      this.subscriptionSection.update({
+        tier: result.tier,
+        status: result.status,
+        expiresAt: result.expiresAt,
+        offline: result.offline,
+        lastUpdated: new Date(),
+        machineBound: result.machineBound,
+        machineCount: result.machineCount,
+      });
+    } catch {
+      // Network failure — subscription section keeps stale data (no change)
+    }
   }
 
   /**

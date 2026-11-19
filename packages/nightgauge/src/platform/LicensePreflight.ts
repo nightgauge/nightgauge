@@ -64,6 +64,19 @@ export class LicensePreflight {
     private readonly getTierOverride?: () => Tier | undefined
   ) {}
 
+  private rejectionListener:
+    ((status: LicenseStatus | "community", licenseKey: string) => void) | null = null;
+
+  /**
+   * Called when the platform reports the current key revoked, suspended or
+   * expired (#1883), so a key this machine was issued can be replaced.
+   */
+  setRejectionListener(
+    listener: ((status: LicenseStatus | "community", licenseKey: string) => void) | null
+  ): void {
+    this.rejectionListener = listener;
+  }
+
   /** Clear cached result — call at start of each pipeline run. */
   clearCache(): void {
     this.cached = null;
@@ -101,7 +114,16 @@ export class LicensePreflight {
         ),
         LicensePreflight.PREFLIGHT_TIMEOUT_MS
       );
-      return this.cacheResult(this.interpretResult(response));
+      const result = this.cacheResult(this.interpretResult(response));
+      if (
+        !result.allowed &&
+        (result.status === "revoked" ||
+          result.status === "suspended" ||
+          result.status === "expired")
+      ) {
+        this.rejectionListener?.(result.status, licenseKey);
+      }
+      return result;
     } catch (err) {
       return this.cacheResult(this.handleError(err));
     }

@@ -297,6 +297,13 @@ type Server struct {
 	// reload method returns an error so the TS-side caller can surface it.
 	notificationReloader func(*config.Config) error
 
+	// licenseReloader is invoked by the platform.reloadLicense IPC method
+	// (#1883) to re-resolve the stored license key into the running daemon
+	// and attach the Action Center bridge. Optional — when nil the method
+	// returns an error. A closure for the same reason as notificationReloader:
+	// the resolver and the bridge wiring live in cmd/.
+	licenseReloader LicenseReloader
+
 	// authorizeCommandFn is invoked by the notifications.checkAuthorization IPC
 	// method. Returns (allowed, mappedIdentity, reason). Optional — when nil the
 	// method returns an error. Stored as a closure so internal/ipc does not
@@ -1140,6 +1147,17 @@ func WithUserClientFactory(fn func(user string, suppressWarning bool) (*gh.Clien
 func WithNotificationReloader(fn func(*config.Config) error) ServerOption {
 	return func(s *Server) {
 		s.notificationReloader = fn
+	}
+}
+
+// LicenseReloader re-resolves the stored license key into the daemon's
+// platform client pc and attaches whatever needs a key (#1883).
+type LicenseReloader func(ctx context.Context, pc *platform.Client) (*PlatformReloadLicenseResult, error)
+
+// WithLicenseReloader registers the callback platform.reloadLicense invokes.
+func WithLicenseReloader(fn LicenseReloader) ServerOption {
+	return func(s *Server) {
+		s.licenseReloader = fn
 	}
 }
 
@@ -2358,6 +2376,38 @@ func (s *Server) registerMethods() {
 		// is never logged here. A typed *platform.TrialError (NOT_ELIGIBLE / 401 /
 		// transport) propagates to the TS command for a precise message.
 		return s.getLicenseSvc().StartTrial(ctx, p.AccessToken)
+	}
+
+	//ipc:method platformRequestDeviceKey params:PlatformRequestDeviceKeyParams result:DeviceKeyResult
+	s.methods["platform.requestDeviceKey"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
+		// Linking this machine to the signed-in account is an explicit
+		// account action (#2398), like a trial.
+		if _, err := s.accountActionClient(ctx); err != nil {
+			return nil, err
+		}
+		var p PlatformRequestDeviceKeyParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		// A typed *platform.DeviceKeyError leads its message with the platform
+		// code, which is all the TS caller needs to pick its message.
+		return s.getLicenseSvc().RequestDeviceKey(ctx, p.AccessToken, platform.MachineInfo{
+			MachineID: p.MachineID,
+			Hostname:  p.Hostname,
+			Platform:  p.Platform,
+		})
+	}
+
+	//ipc:method platformReloadLicense params:none result:PlatformReloadLicenseResult
+	s.methods["platform.reloadLicense"] = func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
+		if s.licenseReloader == nil {
+			return nil, fmt.Errorf("platform.reloadLicense: not available in this daemon")
+		}
+		pc, err := s.ensurePlatformClient()
+		if err != nil {
+			return nil, fmt.Errorf("platform client: %w", err)
+		}
+		return s.licenseReloader(ctx, pc)
 	}
 
 	//ipc:method platformSubmitAnalytics params:PlatformSubmitAnalyticsParams result:StatusOK

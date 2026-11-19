@@ -250,6 +250,16 @@ operations:
     security: user_jwt
     upstream: declared
 
+  # Per-device license key for the signed-in user (#1883, platform ADR 015).
+  # JWT-only (jwtMiddleware): the caller has no license key yet, which is the
+  # whole point. The JWT is the per-call bearer, never the client's session.
+  - id: license.issueDeviceKey
+    go_name: OpLicenseIssueDeviceKey
+    method: POST
+    path: /v1/license/device-key
+    security: user_jwt
+    upstream: declared
+
   - id: pipeline-ingestEvent
     go_name: OpPipelineIngestEvent
     method: POST

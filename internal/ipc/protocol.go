@@ -971,6 +971,33 @@ type PlatformStartTrialParams struct {
 	AccessToken string `json:"accessToken"`
 }
 
+// PlatformRequestDeviceKeyParams are parameters for platform.requestDeviceKey
+// (#1883).
+type PlatformRequestDeviceKeyParams struct {
+	// AccessToken is the signed-in user's session JWT, applied as a per-call
+	// bearer (the device-key endpoint is JWT-only). Never logged.
+	AccessToken string `json:"accessToken"`
+	// MachineID, Hostname and Platform are the same machine fields the editor
+	// sends to platform.validateLicense; empty ones are filled from this host.
+	MachineID string `json:"machineId,omitempty"`
+	Hostname  string `json:"hostname,omitempty"`
+	Platform  string `json:"platform,omitempty"`
+}
+
+// PlatformReloadLicenseResult is the result of platform.reloadLicense (#1883):
+// what the running daemon holds after re-resolving the stored license key.
+type PlatformReloadLicenseResult struct {
+	// LicensePresent is true when the daemon's platform client holds a key.
+	LicensePresent bool `json:"licensePresent"`
+	// Adopted is true when this call installed a key the daemon lacked.
+	Adopted bool `json:"adopted"`
+	// Source names where the re-resolved key came from (keychain, config,
+	// flag/env), or "absent".
+	Source string `json:"source"`
+	// BridgeAttached is true when the Action Center platform bridge is active.
+	BridgeAttached bool `json:"bridgeAttached"`
+}
+
 // PlatformSubmitAnalyticsParams are parameters for platform.submitAnalytics.
 type PlatformSubmitAnalyticsParams struct {
 	EventType string                 `json:"eventType"`

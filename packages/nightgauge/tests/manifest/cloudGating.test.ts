@@ -41,6 +41,7 @@ const CLOUD_COMMANDS = [
   "nightgauge.openSubscriptionUrl",
   "nightgauge.showMachineBinding",
   "nightgauge.editTeamConfig",
+  "nightgauge.linkMachine",
 ];
 
 /**

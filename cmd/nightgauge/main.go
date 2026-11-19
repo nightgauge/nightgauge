@@ -5669,6 +5669,9 @@ func serveCmd() *cobra.Command {
 			// cfg.LicenseKey are silently ignored and both the remote-command
 			// poller (below) and the #330 Action Center bridge stay dormant
 			// in the product's primary deployment mode.
+			// The flag/env values before resolution, for platform.reloadLicense
+			// to re-resolve with the same precedence (#1883).
+			flagPlatformURL, flagAPIKey, flagLicenseKey := platformURL, apiKey, licenseKey
 			resolvedPlatform := resolvePlatformConfig(platformURL, apiKey, licenseKey, cfg, newLicenseStore().ResolveLicenseKey)
 			// The user's own account actions (sign-in, license activation, a
 			// trial) build a client on demand when there is none, and go to
@@ -5725,6 +5728,17 @@ func serveCmd() *cobra.Command {
 				authSvc := platform.NewAuthService(pc)
 				opts = append(opts, ipc.WithAuthService(authSvc))
 			}
+
+			// A device key the editor obtains after this daemon started reaches
+			// it through platform.reloadLicense (#1883): re-resolve the stored
+			// key, adopt it when the client holds none, and attach the Action
+			// Center bridge. The bridge's attach step is bound below, once the
+			// scheduler and the server exist.
+			acBridge := &actionCenterBridge{}
+			opts = append(opts, ipc.WithLicenseReloader(newLicenseReloader(func() resolvedPlatformConfig {
+				return resolvePlatformConfig(flagPlatformURL, flagAPIKey, flagLicenseKey,
+					reloadServeConfig(workspaceRoot, cfg), newLicenseStore().ResolveLicenseKey)
+			}, acBridge)))
 
 			// Wire the inbound webhook receiver's reloader option BEFORE
 			// constructing the IPC server, so notifications.reloadTokens
@@ -6103,45 +6117,63 @@ func serveCmd() *cobra.Command {
 			// extension's, which hands it over through agent.queueAdd. One
 			// handler serves both, so a command is acted on once; it adds the
 			// issue to this daemon's queue and acknowledges the command.
-			var queueAdds platform.AgentCommandHandler
-			if platformClient != nil {
+			newQueueAdds := func(pc *platform.Client) platform.AgentCommandHandler {
 				window := agentworkspace.WindowFolders(os.Getenv)
 				h := cloudqueue.New(ctx, cloudqueue.Config{
 					Queue: server,
-					Acks:  platform.NewCommandService(platformClient),
+					Acks:  platform.NewCommandService(pc),
 					Served: func() ([]platform.AgentRepo, error) {
 						decl, err := agentworkspace.ResolveServed(window, workspaceRoot)
 						return decl.Repos, err
 					},
 				})
-				queueAdds = h.HandleCommand
-				server.SetQueueAddHandler(queueAdds)
+				server.SetQueueAddHandler(h.HandleCommand)
+				return h.HandleCommand
+			}
+			var queueAdds platform.AgentCommandHandler
+			if platformClient != nil {
+				queueAdds = newQueueAdds(platformClient)
 			}
 
-			if autoSched != nil && platformClient != nil && licenseKey != "" {
-				if store := autoSched.Attention(); store != nil {
-					// Attach the sync uploader immediately in MIRROR-ONLY mode: the
-					// body omits `agent_id` until the daemon registers as a platform
-					// agent. The machine id is NOT a registered agent, and sending it
-					// as `agent_id` violates the platform's decision_requests → agents
-					// FK and 500s every sweep (#341). Mirroring (machine-id scoped)
-					// works and never 500s in this mode.
-					attnSync := platform.NewAttentionSyncService(platformClient)
-					attnSync.Attach(ctx, store)
-					log.Printf("[nightgauge] Action Center platform bridge active (attention sync attached; mirror-only until agent registration succeeds)")
-
-					// Register in the background with retry/backoff, then late-bind
-					// the platform-assigned agent id onto the sync + command poller +
-					// heartbeat. Runs in a goroutine so an offline start self-heals
-					// without blocking IPC startup.
-					//
-					// The agent follows the workspace throttle, which is unread,
-					// not unknown, from before the socket serves until a read
-					// under the registered agent succeeds (#2352).
-					dispatchThrottle.MarkUnread()
-					go runDaemonPlatformAgent(ctx, platformClient, attnSync, server, version, workspaceRoot,
-						agentworkspace.WindowFolders(os.Getenv), dispatchThrottle, queueAdds)
+			// The Action Center bridge attaches at most once per daemon: here
+			// when a key resolved at startup, or from platform.reloadLicense
+			// when the editor obtains a device key later (#1883).
+			acBridge.Bind(func(pc *platform.Client) bool {
+				if autoSched == nil {
+					return false
 				}
+				store := autoSched.Attention()
+				if store == nil {
+					return false
+				}
+				if queueAdds == nil {
+					queueAdds = newQueueAdds(pc)
+				}
+				// Attach the sync uploader immediately in MIRROR-ONLY mode: the
+				// body omits `agent_id` until the daemon registers as a platform
+				// agent. The machine id is NOT a registered agent, and sending it
+				// as `agent_id` violates the platform's decision_requests → agents
+				// FK and 500s every sweep (#341). Mirroring (machine-id scoped)
+				// works and never 500s in this mode.
+				attnSync := platform.NewAttentionSyncService(pc)
+				attnSync.Attach(ctx, store)
+				log.Printf("[nightgauge] Action Center platform bridge active (attention sync attached; mirror-only until agent registration succeeds)")
+
+				// Register in the background with retry/backoff, then late-bind
+				// the platform-assigned agent id onto the sync + command poller +
+				// heartbeat. Runs in a goroutine so an offline start self-heals
+				// without blocking IPC startup.
+				//
+				// The agent follows the workspace throttle, which is unread,
+				// not unknown, from before the socket serves until a read
+				// under the registered agent succeeds (#2352).
+				dispatchThrottle.MarkUnread()
+				go runDaemonPlatformAgent(ctx, pc, attnSync, server, version, workspaceRoot,
+					agentworkspace.WindowFolders(os.Getenv), dispatchThrottle, queueAdds)
+				return true
+			})
+			if platformClient != nil && licenseKey != "" {
+				acBridge.Attach(platformClient)
 			}
 
 			// Start the inbound webhook receiver alongside the IPC server.

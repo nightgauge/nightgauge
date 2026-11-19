@@ -40,6 +40,9 @@ export interface SessionData {
   userRole: TeamRole | null; // Team role, null for non-team or unauthenticated users
 }
 
+/** The onSessionChanged reason for a session restored on activation. */
+export const SESSION_RESTORED_REASON = "session restored from storage";
+
 /** Payload emitted by onSessionChanged. */
 export interface SessionStateEvent {
   previous: SessionState;
@@ -129,7 +132,7 @@ export class SessionManager implements vscode.Disposable {
     if (this._disposed) return;
     const accessToken = await this.tokenStorage.retrieve("accessToken");
     if (accessToken !== null) {
-      this._transition("authenticated", "session restored from storage");
+      this._transition("authenticated", SESSION_RESTORED_REASON);
     } else {
       this.logger.debug("[SessionManager] No persisted tokens — starting unauthenticated");
     }

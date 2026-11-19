@@ -285,6 +285,15 @@ var OpInquiryScorecard = Operation{
 	Upstream: UpstreamDeclared,
 }
 
+// OpLicenseIssueDeviceKey is POST /v1/license/device-key.
+var OpLicenseIssueDeviceKey = Operation{
+	ID:       "license.issueDeviceKey",
+	Method:   "POST",
+	Path:     "/v1/license/device-key",
+	Security: SecurityUserJWT,
+	Upstream: UpstreamDeclared,
+}
+
 // OpPipelineIngestEvent is POST /v1/pipelines/events.
 var OpPipelineIngestEvent = Operation{
 	ID:       "pipeline-ingestEvent",
@@ -358,6 +367,7 @@ var Operations = []Operation{
 	OpAuditRetentionUpdate,
 	OpBillingPortalSession,
 	OpInquiryScorecard,
+	OpLicenseIssueDeviceKey,
 	OpPipelineIngestEvent,
 	OpPipelinesGetStatusByIssue,
 	OpQueueSync,

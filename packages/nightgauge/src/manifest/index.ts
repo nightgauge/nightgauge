@@ -717,6 +717,11 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(rocket)",
     },
     {
+      command: "nightgauge.linkMachine",
+      title: "Nightgauge: Link This Machine to Your Account",
+      icon: "$(link)",
+    },
+    {
       command: "nightgauge.openUpgradeUrl",
       title: "Nightgauge: Upgrade to Pro",
       icon: "$(rocket)",
@@ -946,6 +951,10 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       },
       {
         command: "nightgauge.startTrial",
+        when: "nightgauge.cloudEnabled",
+      },
+      {
+        command: "nightgauge.linkMachine",
         when: "nightgauge.cloudEnabled",
       },
       {
