@@ -185,10 +185,7 @@ func startHarness(t *testing.T, spec *cmdSpec) *ipcTestHarness {
 
 	t.Cleanup(func() {
 		stdinPipe.Close()
-		if cmd.Process != nil {
-			cmd.Process.Signal(os.Interrupt)
-			cmd.Wait()
-		}
+		stopDaemon(cmd)
 	})
 
 	return h
@@ -215,6 +212,7 @@ func newCmd(workDir string) *exec.Cmd {
 		// based and satisfied by writeGatePassingSkillOutput.
 		"NIGHTGAUGE_DISABLE_GATES=pr-create,pr-merge",
 	)
+	isolateProcessGroup(cmd)
 	return cmd
 }
 
@@ -901,10 +899,7 @@ func TestE2E_QueueSurvivesRestart(t *testing.T) {
 
 	// Kill first binary
 	stdinPipe1.Close()
-	if cmd1.Process != nil {
-		cmd1.Process.Signal(os.Interrupt)
-		cmd1.Wait()
-	}
+	stopDaemon(cmd1)
 
 	// Drain any remaining lines from closed channel
 	for range h1.lines {
@@ -935,10 +930,7 @@ func TestE2E_QueueSurvivesRestart(t *testing.T) {
 
 	t.Cleanup(func() {
 		stdinPipe2.Close()
-		if cmd2.Process != nil {
-			cmd2.Process.Signal(os.Interrupt)
-			cmd2.Wait()
-		}
+		stopDaemon(cmd2)
 	})
 
 	h2.awaitReady()

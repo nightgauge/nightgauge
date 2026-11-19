@@ -1540,6 +1540,9 @@ record` merges the plain events into `go-test.json` and checks that every
 - **Buckets.** A test goes in shard `crc32(name) % N + 1`, so a new test is
   placed automatically. The plan step fails when a test is in no shard or in
   two, and the finalize step fails when a planned test ran zero times or twice.
+- **Killed shards.** A shard whose `go test` is killed by a signal exits `128+N`
+  (143 for SIGTERM) and prints the signal and the top-level tests still running.
+  That is a kill, not a test failure: look for who sent the signal (#3443).
 - **Adding a package.** Add a `shard <import path> <N>` line, slowest first,
   then refresh `scripts/ci-local-steps.txt` with `--list-steps`. Before you do,
   look for state that two processes of the package would share: a fixed port, a
