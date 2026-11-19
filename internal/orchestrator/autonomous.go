@@ -7441,6 +7441,11 @@ func (as *AutonomousScheduler) orphanIssueClosed(ctx context.Context, owner, rep
 // has no `blockedBy` dependencies or every dependency is closed. Used by
 // both startup and cascade promotion paths so the rules stay consistent.
 //
+// A dependency missing from graph.Nodes (off-board, or in a repo the graph
+// build missed) holds the issue: promotion has no state resolver, so an
+// unknown blocker is never treated as satisfied (#2744). This matches the
+// dispatch gate evaluateDeps (#306).
+//
 // Pre-#3253 the startup path silently skipped Backlog items with no
 // `blockedBy` on the rationale "no dependencies — should already be Ready
 // if triaged" — but Priority + type label is itself a triage signal. The
@@ -7479,7 +7484,9 @@ func isTriagedAndUnblocked(node *depgraph.Node, graph *depgraph.Graph, adj map[s
 	}
 	for _, depKey := range adj[node.ID().String()] {
 		depNode, exists := graph.Nodes[depKey]
-		if exists && strings.EqualFold(depNode.State, "OPEN") {
+		// A blocker absent from the graph has an unknown state: fail closed,
+		// as evaluateDeps does at dispatch (#306, #2744).
+		if !exists || strings.EqualFold(depNode.State, "OPEN") {
 			return false
 		}
 	}
@@ -7487,7 +7494,8 @@ func isTriagedAndUnblocked(node *depgraph.Node, graph *depgraph.Graph, adj map[s
 }
 
 // triageRejectionReason mirrors isTriagedAndUnblocked's checks in order and
-// returns the first failing reason, or "" if the node is eligible. Used only
+// returns the first failing reason, or "" if the node is eligible. A blocker
+// missing from the graph reports "unresolved-blocker" (#2744). Used only
 // to populate the LastPromotionRejectionReasons tally (#288) — it is a
 // read-only diagnostic helper and must never be used for gating, so
 // isTriagedAndUnblocked stays the single source of truth for the rule itself.
@@ -7519,7 +7527,10 @@ func triageRejectionReason(node *depgraph.Node, graph *depgraph.Graph, adj map[s
 	}
 	for _, depKey := range adj[node.ID().String()] {
 		depNode, exists := graph.Nodes[depKey]
-		if exists && strings.EqualFold(depNode.State, "OPEN") {
+		if !exists {
+			return "unresolved-blocker"
+		}
+		if strings.EqualFold(depNode.State, "OPEN") {
 			return "open-blocker"
 		}
 	}
@@ -7550,7 +7561,9 @@ func (as *AutonomousScheduler) promoteUnblockedOnStartup(ctx context.Context) {
 	}
 	logIncompleteGraph(graph)
 
-	adj := graph.Adjacency()
+	// rawAdjacency keeps edges to blockers missing from the graph, so
+	// promotion holds on them instead of reading them as satisfied (#2744).
+	adj := rawAdjacency(graph)
 	promoted := 0
 	considered := len(graph.Nodes)
 	eligible := 0
@@ -7649,7 +7662,8 @@ func (as *AutonomousScheduler) promoteUnblockedToReady(parent context.Context, c
 	// Edge semantics: From depends on To. So revAdj[To] = []From.
 	completedKey := fmt.Sprintf("%s#%d", completedRepo, completedIssue)
 	revAdj := graph.ReverseAdjacency()
-	adj := graph.Adjacency()
+	// rawAdjacency keeps dangling blocker edges for the fail-closed check (#2744).
+	adj := rawAdjacency(graph)
 
 	downstreamKeys := revAdj[completedKey]
 

@@ -134,6 +134,23 @@ func TestIsTriagedAndUnblocked_AcceptsItemsWithAllClosedBlockers(t *testing.T) {
 	}
 }
 
+// TestIsTriagedAndUnblocked_RejectsBlockerMissingFromGraph pins #2744: a
+// blocker the graph does not hold (off-board, or a repo the build missed) has
+// an unknown state, so promotion fails closed, matching evaluateDeps (#306).
+// The callers pass rawAdjacency, which keeps the dangling edge that
+// Graph.Adjacency drops.
+func TestIsTriagedAndUnblocked_RejectsBlockerMissingFromGraph(t *testing.T) {
+	t.Parallel()
+
+	offBoard := makeNode(100, "", "", nil, "OPEN") // never added to the graph: state unknown
+	blocked := makeNode(3216, "Backlog", "P1", []string{"type:bug"}, "OPEN")
+	g := graphWith(blocked)
+	g.Edges = []depgraph.Edge{{From: blocked.ID(), To: offBoard.ID()}}
+	if isTriagedAndUnblocked(blocked, g, rawAdjacency(g), vouchedByMaintainer) {
+		t.Error("item whose blocker is missing from the graph must NOT be promoted")
+	}
+}
+
 func TestIsTriagedAndUnblocked_AcceptsAllPriorityLevels(t *testing.T) {
 	t.Parallel()
 
@@ -238,6 +255,16 @@ func TestTriageRejectionReason_MirrorsIsTriagedAndUnblocked(t *testing.T) {
 		adj := g.Adjacency()
 		if got := triageRejectionReason(blocked, g, adj, vouchedByMaintainer); got != "open-blocker" {
 			t.Errorf("open blocker: got %q, want %q", got, "open-blocker")
+		}
+	})
+
+	t.Run("missing blocker", func(t *testing.T) {
+		offBoard := makeNode(100, "", "", nil, "OPEN") // never added to the graph: state unknown
+		blocked := makeNode(3216, "Backlog", "P1", []string{"type:bug"}, "OPEN")
+		g := graphWith(blocked)
+		g.Edges = []depgraph.Edge{{From: blocked.ID(), To: offBoard.ID()}}
+		if got := triageRejectionReason(blocked, g, rawAdjacency(g), vouchedByMaintainer); got != "unresolved-blocker" {
+			t.Errorf("missing blocker: got %q, want %q", got, "unresolved-blocker")
 		}
 	})
 
