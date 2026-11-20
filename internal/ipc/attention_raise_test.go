@@ -182,6 +182,7 @@ func onlyOpenRequest(t *testing.T, s *Server) attention.DecisionRequest {
 // in internal/orchestrator pins the other half — that the scheduler call site
 // really is that builder and nothing else.
 func TestAttentionRaiseProducesTheGoPathCard(t *testing.T) {
+	layouttest.StateHome(t)
 	const (
 		repo  = "octocat/acme"
 		issue = 4242
@@ -241,6 +242,7 @@ func TestAttentionRaiseProducesTheGoPathCard(t *testing.T) {
 // updates one card in place. Without dedup, a between-stage ceiling check that
 // fires on a re-dispatch would stack cards for one overrun.
 func TestAttentionRaiseDedupesOnIdempotencyKey(t *testing.T) {
+	layouttest.StateHome(t)
 	s := newAttentionTestServer(t)
 	recordRunSpend(t, s, "octocat/acme", 7, 20)
 	p := AttentionRaiseParams{
@@ -300,6 +302,7 @@ func TestAttentionRaiseDedupesOnIdempotencyKey(t *testing.T) {
 // identically. (The card's options are both noops now — see
 // TestAbandonedDispatchCardIsInformationalNotARetry.)
 func TestAbandonedDispatchReRaisesAfterAHumanResolution(t *testing.T) {
+	layouttest.StateHome(t)
 	s := newAttentionTestServer(t)
 	p := AttentionRaiseParams{
 		Producer: ProducerAbandonedDispatch, Repo: "octocat/acme", Issue: 9,
@@ -340,6 +343,7 @@ func TestAbandonedDispatchReRaisesAfterAHumanResolution(t *testing.T) {
 // is re-queued, and wedges again is one thing to deal with, not a card per
 // attempt.
 func TestAttentionRaiseCollapsesRepeatForceClearsOntoOneCard(t *testing.T) {
+	layouttest.StateHome(t)
 	s := newAttentionTestServer(t)
 	p := AttentionRaiseParams{
 		Producer: ProducerAbandonedDispatch, Repo: "octocat/acme", Issue: 9,
@@ -450,6 +454,7 @@ func TestNoRaiseableProducerIsStandingWithoutRetraction(t *testing.T) {
 // security boundary. A surface may name a CONDITION; it may never describe a
 // card, and it may never name a producer the daemon has no builder for.
 func TestAttentionRaiseRejectsUnknownProducer(t *testing.T) {
+	layouttest.StateHome(t)
 	s := newAttentionTestServer(t)
 	for _, producer := range []string{"", "issue-close-everything", "human-gate", "terminal-failure"} {
 		raw := raiseParams(t, AttentionRaiseParams{Producer: producer, Repo: "octocat/acme", Issue: 1})
@@ -470,6 +475,7 @@ func TestAttentionRaiseRejectsUnknownProducer(t *testing.T) {
 // Admitting auth-preflight here would add a raiseable producer with no caller
 // whose primary option clears failures and rescans.
 func TestAttentionRaiseRejectsAuthPreflight(t *testing.T) {
+	layouttest.StateHome(t)
 	s := newAttentionTestServer(t)
 	raw := raiseParams(t, AttentionRaiseParams{Producer: "auth-preflight", Repo: "octocat/acme", Issue: 1})
 	if _, err := s.handleAttentionRaise(context.Background(), raw); err == nil {
@@ -511,6 +517,7 @@ func TestAttentionRaiseParamsCarryNoExecutableSurface(t *testing.T) {
 // extension sent prose instead, the same block would render two different cards
 // depending on which path observed it, and every test would still pass.
 func TestAttentionRaiseBranchProtectionClassifiesDaemonSide(t *testing.T) {
+	layouttest.StateHome(t)
 	cases := []struct {
 		name       string
 		params     AttentionRaiseParams
@@ -655,6 +662,7 @@ func TestAttentionRaiseBranchProtectionClassifiesDaemonSide(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			layouttest.StateHome(t)
 			s := newAttentionTestServer(t)
 			p := tc.params
 			p.Producer = ProducerBranchProtection
@@ -749,6 +757,7 @@ func TestAttentionRaiseRequiresProducerFields(t *testing.T) {
 
 // TestAttentionRaiseRejectsUnconfiguredRepo — the first step of the chain.
 func TestAttentionRaiseRejectsUnconfiguredRepo(t *testing.T) {
+	layouttest.StateHome(t)
 	s := newAttentionTestServer(t)
 	for _, repo := range []string{"victim/repo", "attacker/anything", "octocat/not-registered"} {
 		_, err := s.handleAttentionRaise(context.Background(), raiseParams(t, AttentionRaiseParams{
@@ -772,6 +781,7 @@ func TestAttentionRaiseRejectsUnconfiguredRepo(t *testing.T) {
 // state dictates, and its raiseCeiling arg is exactly
 // ProposedCeilingUSD(PipelineBudgetCeilingUSD(root), recordedSpend).
 func TestBudgetCeilingNumbersAreNotCallerControlled(t *testing.T) {
+	layouttest.StateHome(t)
 	typ := reflect.TypeOf(AttentionRaiseParams{})
 	for i := 0; i < typ.NumField(); i++ {
 		name := strings.ToLower(typ.Field(i).Name)
@@ -832,6 +842,7 @@ func TestBudgetCeilingNumbersAreNotCallerControlled(t *testing.T) {
 // resolution writes budget-override.json. Nothing that could execute a
 // workspace-wide write is offered on a report nothing corroborates.
 func TestBudgetCeilingWithoutCorroboratedSpendOffersNoRaise(t *testing.T) {
+	layouttest.StateHome(t)
 	s := newAttentionTestServer(t) // no recorded runtime, no persisted runtime-N.json
 
 	got := mustRaise(t, s, AttentionRaiseParams{
@@ -855,6 +866,7 @@ func TestBudgetCeilingWithoutCorroboratedSpendOffersNoRaise(t *testing.T) {
 // bare issue number (#370's re-keying target), so a live run of repo B's issue
 // #7 must not corroborate a raise naming repo A's issue #7.
 func TestBudgetCeilingSpendComesFromTheRunsOwnRepo(t *testing.T) {
+	layouttest.StateHome(t)
 	s := newAttentionTestServer(t)
 	recordRunSpend(t, s, "o/r", 7, 99) // a DIFFERENT repo's run, same issue number
 
@@ -881,6 +893,7 @@ func TestBudgetCeilingSpendComesFromTheRunsOwnRepo(t *testing.T) {
 // handler persists on every repo-carrying transition — and the live entry is
 // then dropped so only the persisted arm can answer.
 func TestBudgetCeilingSpendFallsBackToThePersistedRuntime(t *testing.T) {
+	layouttest.StateHome(t)
 	const (
 		repo  = "octocat/acme"
 		issue = 21
@@ -926,6 +939,7 @@ func TestBudgetCeilingSpendFallsBackToThePersistedRuntime(t *testing.T) {
 // The raise is computed for the run currently in flight, whose snapshot is the
 // newest non-terminal one; the older one is an orphan of the prior dispatch.
 func TestBudgetCeilingSpendUsesTheNewestLiveRunOfAReRunIssue(t *testing.T) {
+	layouttest.StateHome(t)
 	const (
 		repo      = "octocat/acme"
 		issue     = 22
@@ -1191,6 +1205,7 @@ func TestRaisedCardsMatchCapturedEnvelopeGrammar(t *testing.T) {
 // card still goes up (silence is the hole #305 closes), it carries NO remedy,
 // and resolving what it does offer writes no override.
 func TestOneCallMintedRunCannotCorroborateARaise(t *testing.T) {
+	layouttest.StateHome(t)
 	const (
 		repo  = "octocat/acme"
 		issue = 4242
@@ -1261,6 +1276,7 @@ func TestOneCallMintedRunCannotCorroborateARaise(t *testing.T) {
 // omit. Omitting one field therefore corroborated a raise for EVERY configured
 // repo carrying that issue number.
 func TestUnattributedRuntimeCorroboratesNothing(t *testing.T) {
+	layouttest.StateHome(t)
 	const issue = 99
 	s := newAttentionTestServer(t)
 	unattributed := newTestRunID()
@@ -1295,6 +1311,7 @@ func TestUnattributedRuntimeCorroboratesNothing(t *testing.T) {
 // remedy move the enforced ceiling. Without this, "tighten corroboration" could
 // be satisfied by refusing everything.
 func TestNotifyRaiseResolveMovesTheCeilingForARealRun(t *testing.T) {
+	layouttest.StateHome(t)
 	const (
 		repo  = "octocat/acme"
 		issue = 42
@@ -1332,6 +1349,7 @@ func TestNotifyRaiseResolveMovesTheCeilingForARealRun(t *testing.T) {
 // workspace the override landed wherever they were looking. It must land under
 // the CARD's repo, and nowhere else.
 func TestBudgetOverrideIsWrittenUnderTheCardsRepoRoot(t *testing.T) {
+	layouttest.StateHome(t)
 	s := newAttentionTestServer(t)
 	repoA, repoB := "octocat/acme", "o/r"
 	rootA, rootB := layouttest.Repo(t), layouttest.Repo(t)
@@ -1375,6 +1393,7 @@ func TestBudgetOverrideIsWrittenUnderTheCardsRepoRoot(t *testing.T) {
 // one-click fix vanished with no signal, and any local process could do it on
 // purpose to a card the Go scheduler had raised.
 func TestUncorroboratedRaiseCannotStripARemedyFromAnOpenCard(t *testing.T) {
+	layouttest.StateHome(t)
 	const (
 		repo  = "octocat/acme"
 		issue = 42
@@ -1441,6 +1460,7 @@ func TestUncorroboratedRaiseCannotStripARemedyFromAnOpenCard(t *testing.T) {
 // (*Scheduler).raiseBudgetCeilingHit does, so what the IPC verb must not be
 // able to do is downgrade a card the SCHEDULER put up.
 func TestRemedyPreservationProtectsTheGoPathsCardToo(t *testing.T) {
+	layouttest.StateHome(t)
 	const (
 		repo  = "octocat/acme"
 		issue = 77
@@ -1508,6 +1528,7 @@ func TestStandingSweepProducersAreNotRaiseable(t *testing.T) {
 // naming each credential and its re-entry command, a key independent of input
 // order, and a closed credential enum.
 func TestMissingCredentialsRaise(t *testing.T) {
+	layouttest.StateHome(t)
 	const repo = "octocat/acme"
 	s := newAttentionTestServer(t)
 	got := mustRaise(t, s, AttentionRaiseParams{Producer: ProducerMissingCredentials, Repo: repo,
@@ -1548,6 +1569,7 @@ func TestMissingCredentialsLegacyWording(t *testing.T) {
 }
 
 func TestMissingCredentialsRejectsBadInput(t *testing.T) {
+	layouttest.StateHome(t)
 	s := newAttentionTestServer(t)
 	cases := map[string]AttentionRaiseParams{
 		"unknown id":     {Producer: ProducerMissingCredentials, Repo: "octocat/acme", Credentials: []string{"github-token"}},
@@ -1570,6 +1592,7 @@ func TestMissingCredentialsRejectsBadInput(t *testing.T) {
 // write reaches the Action Center through the closed allowlist, carrying the
 // stage it was observed in and nothing else.
 func TestBoardStatusWriteFailedRaisesOverIPC(t *testing.T) {
+	layouttest.StateHome(t)
 	s := newAttentionTestServer(t)
 	raw := raiseParams(t, AttentionRaiseParams{Producer: ProducerBoardStatusWriteFailed,
 		Repo: "octocat/acme", Issue: 7, RunID: "run-1", Stage: "feature-validate"})
@@ -1589,6 +1612,7 @@ func TestBoardStatusWriteFailedRaisesOverIPC(t *testing.T) {
 // on the card come from the daemon's own read; a remainder that is not pending
 // raises nothing, and a failed read is an error, not a card.
 func TestPartialDeliveryCloseRefusedIsDaemonDerived(t *testing.T) {
+	layouttest.StateHome(t)
 	s := newAttentionTestServer(t)
 	status := hooks.PartialDeliveryStatus{}
 	var readErr error

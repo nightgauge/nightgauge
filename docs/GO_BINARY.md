@@ -342,9 +342,10 @@ differently from two windows that disagree. A service that predates the field
 ignores it.
 
 The registration also carries `workspace_key` (#1421): the key of the
-workspace root the daemon serves, whose `.nightgauge/attention` store it
-resolves relayed cards against. The service keys the agent row on the machine
-id and this key, so one machine running daemons for two workspaces registers
+workspace root the daemon serves, against whose scheduler and repositories it
+executes relayed resolves. Each daemon reads its own workspace's
+`STATE/attention/<workspace-key>` store (#3453); this key scopes the command
+stream. The service keys the agent row on the machine id and this key, so one machine running daemons for two workspaces registers
 two agents with two command streams, and a resolve of a card raised in one
 workspace reaches that workspace's daemon and no other (ADR-019). The key is
 the HMAC-SHA256 of the root in canonical form (absolute, symlinks resolved,
@@ -3736,7 +3737,7 @@ checkout; a linked worktree has its own under
 holds every unkeyed singleton — `current-run.json`, `run-state.json`,
 `batch-state.json`, `queue-state.json`, the hooks' `PLAN.md` fallback, the
 serve lease `serve.lock` and `go-backend.log` — and the per-checkout runtime
-state: `attention/`, `attention-coverage.json`, `autonomous/`, `health/`,
+state: `attention-coverage.json`, `autonomous/`, `health/`,
 `graph/`, `containment/`, `notifications/`, `skills/`, `triage/`,
 `focus.yaml`, `performance-mode.yaml`, `careful.lock` — and the rest of the
 unkeyed runtime files: `.refresh-trigger`, `complexity-model.yaml` and its
@@ -3871,9 +3872,14 @@ inferred.
 _ADR 015 (DecisionRequests) · Epic #88 (repo-scoped attention)._
 
 Readers and lifecycle operations over the Action Center's local-first
-`DecisionRequest` store at `.git/nightgauge-worktree/attention/`
-(`nightgauge layout path checkout attention`) — the record the pipeline
-creates when it needs a human decision at a dead end that is otherwise silent
+`DecisionRequest` store at `STATE/attention/<workspace-key>/` — one store per
+workspace, shared by every checkout of it (the manifest root, the repositories
+its `.vscode/nightgauge-workspace.yaml` lists, and their linked and pipeline
+worktrees), so the daemon's platform bridge syncs a card whichever checkout
+raised it, and never a card from another workspace on the same machine (#3453).
+The key is a hash of the canonical workspace root, never the path. A
+per-checkout store an older build left in `.git/nightgauge-worktree/attention/`
+is migrated into it on first use. It is the record the pipeline creates when it needs a human decision at a dead end that is otherwise silent
 or one-way. The Go binary is the single authoritative writer; surfaces never
 write these files directly.
 
@@ -3895,6 +3901,9 @@ nightgauge attention unmute <id>
 nightgauge attention sweep --repo octocat/acme-web
 nightgauge attention sweep --repo octocat/acme-web --json
 nightgauge attention sweep --repo octocat/acme-web --strict
+
+# Print this workspace's store directory, STATE/attention/<workspace-key> (#3453)
+nightgauge attention path
 ```
 
 **CLI `resolve`/`show` reach a co-located daemon over a workspace-scoped Unix

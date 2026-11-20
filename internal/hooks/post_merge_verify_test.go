@@ -440,6 +440,7 @@ func TestBuildMainRedCard_RequiredFailureIsBlockingFleet(t *testing.T) {
 // Raise → refresh → update → retract, through the real store: the properties
 // the AC asks for are properties of the diff, not of the builder.
 func TestReportMainChecks_RedRaisesGreenRetracts(t *testing.T) {
+	layouttest.StateHome(t)
 	store := attention.New(layouttest.Repo(t))
 	failing := FailingCheck{Name: "e2e", Conclusion: "failure"}
 

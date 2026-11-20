@@ -53,7 +53,7 @@ func openRequests(t *testing.T, as *AutonomousScheduler) []attention.DecisionReq
 func newAttentionProducerRunScheduler(t *testing.T) *Scheduler {
 	t.Helper()
 	s := &Scheduler{}
-	s.SetAttention(attention.New(layouttest.Repo(t)))
+	s.SetAttention(newAttentionStore(layouttest.Repo(t)))
 	if s.attention == nil {
 		t.Fatal("attention store not wired")
 	}
@@ -1557,7 +1557,7 @@ func TestAuthFailureTriggersCoalesce(t *testing.T) {
 func TestGatePluginMissingRaisesOneCard(t *testing.T) {
 	t.Parallel()
 
-	store := attention.New(layouttest.Repo(t))
+	store := newAttentionStore(layouttest.Repo(t))
 	s := &Scheduler{attention: store}
 	detail := "stderr tail\nexit 1: [gate-plugin-missing] stopped before any work: system/init lists no nightgauge plugin\nmore tail"
 

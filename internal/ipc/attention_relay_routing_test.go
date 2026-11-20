@@ -4,9 +4,11 @@ package ipc
 //
 // Every other attention test in this package stands up ONE server. That is
 // structurally blind to the defect this file covers: the platform addresses a
-// relayed resolve to an agent identity that is per-MACHINE, while the attention
-// store is per-WORKSPACE, so on a machine running daemons for several
-// workspaces the command can be handed to a daemon that does not hold the card.
+// relayed resolve to an agent identity, and the command can be handed to a
+// daemon that does not hold the card. The store is per workspace
+// (STATE/attention/<workspace-key>, #3453), so two daemons on one machine
+// share a machine-state root yet hold separate stores; twoDaemons models
+// exactly that.
 // A single-daemon test always delivers the command to the owner and therefore
 // always passes.
 //
@@ -47,8 +49,14 @@ func budgetOverridePath(t *testing.T, root string) string {
 // twoDaemons builds two independent daemons rooted at two different workspaces,
 // each with its own attention store, and both serving the same repo slug — the
 // #1421 shape, where a repo slug cannot disambiguate which workspace owns a card.
+//
+// Both daemons share ONE machine-state root, as on a real machine (#3453): the
+// workspace-keyed store, not a separate STATE, is what keeps the cards apart.
+// A machine-wide store would hand daemon B every card daemon A raised, and the
+// containment assertions below would fail.
 func twoDaemons(t *testing.T) (owner, other *Server) {
 	t.Helper()
+	layouttest.StateHome(t)
 	owner = newAttentionTestServer(t)
 	other = newAttentionTestServer(t)
 	if owner.workspaceRoot == other.workspaceRoot {
@@ -79,6 +87,7 @@ func raiseResolvableCard(t *testing.T, s *Server, repo string, issue int) (atten
 // containment half: the non-owner must not apply the resolution, and must not
 // silently report a rejection when the real fault is addressing.
 func TestRelayedResolveIsNotAppliedByADaemonThatDoesNotOwnTheCard(t *testing.T) {
+	layouttest.StateHome(t)
 	ctx := context.Background()
 	daemonA, daemonB := twoDaemons(t)
 	card, optionID := raiseResolvableCard(t, daemonA, "octocat/acme", 7)
@@ -130,6 +139,7 @@ func TestRelayedResolveIsNotAppliedByADaemonThatDoesNotOwnTheCard(t *testing.T) 
 // (ADR-019 § Amendment). If a future change makes the ack conditional, this
 // test is the one that must be argued with.
 func TestMisroutedRelayedResolveIsStillAcknowledgedOnce(t *testing.T) {
+	layouttest.StateHome(t)
 	ctx := context.Background()
 	daemonA, daemonB := twoDaemons(t)
 	card, optionID := raiseResolvableCard(t, daemonA, "octocat/acme", 7)
@@ -167,6 +177,7 @@ func TestMisroutedRelayedResolveIsStillAcknowledgedOnce(t *testing.T) {
 // prove nothing about routing. Same card, same option, same actor — only the
 // daemon differs, which is the whole of #1421.
 func TestTheOwningDaemonAppliesTheSameRelayedResolve(t *testing.T) {
+	layouttest.StateHome(t)
 	ctx := context.Background()
 	daemonA, daemonB := twoDaemons(t)
 	card, optionID := raiseResolvableCard(t, daemonA, "octocat/acme", 7)

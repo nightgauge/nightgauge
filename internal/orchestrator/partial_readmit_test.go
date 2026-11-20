@@ -9,7 +9,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/gittest"
@@ -24,7 +23,7 @@ import (
 func readmitTestScheduler(t *testing.T, read func(context.Context, string, int) (hooks.PartialDeliveryStatus, error)) (*AutonomousScheduler, string, *[]string) {
 	t.Helper()
 	as := heldTestScheduler(t)
-	as.attention = attention.New(layouttest.Repo(t))
+	as.attention = newAttentionStore(layouttest.Repo(t))
 	as.state.Completed = []CompletedItem{{Repo: "acme/app", Number: 3160, Title: "remainder", CompletedAt: "2026-11-10T12:00:00Z"}}
 	mainRoot := t.TempDir()
 	var mu sync.Mutex

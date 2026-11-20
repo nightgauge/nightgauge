@@ -90,13 +90,13 @@ func TestCheckoutSymlinksRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(outside, filepath.Join(dir, CheckoutAttention)); err != nil {
+	if err := os.Symlink(outside, filepath.Join(dir, CheckoutHealth)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CheckoutPath(root2, CheckoutAttention); !errors.Is(err, ErrUnsafeCloneDir) {
+	if _, err := CheckoutPath(root2, CheckoutHealth); !errors.Is(err, ErrUnsafeCloneDir) {
 		t.Errorf("CheckoutPath(symlinked entry) err = %v, want ErrUnsafeCloneDir", err)
 	}
-	if _, err := WriteCheckoutFile(root2, "attention/card.json", strings.NewReader("{}")); err == nil {
+	if _, err := WriteCheckoutFile(root2, "health/card.json", strings.NewReader("{}")); err == nil {
 		t.Error("WriteCheckoutFile followed a symlinked directory out of CHECKOUT")
 	}
 	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
@@ -127,7 +127,7 @@ func TestCheckoutWriteAppendAndSubdir(t *testing.T) {
 	if got, _ := os.ReadFile(trends); string(got) != "a\nb\n" {
 		t.Errorf("appended = %q", got)
 	}
-	dir, err := CheckoutSubdir(root, CheckoutAttention)
+	dir, err := CheckoutSubdir(root, CheckoutTriage)
 	if err != nil {
 		t.Fatal(err)
 	}

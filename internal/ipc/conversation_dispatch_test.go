@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"strings"
 	"testing"
 
@@ -56,6 +57,7 @@ func proposal() ConversationRunProposal {
 // A teammate's request becomes one card for the operator: queue it here or
 // dismiss it, dismissed on expiry, naming the poster and nothing they wrote.
 func TestRaiseConversationRunProposal_RaisesOneCard(t *testing.T) {
+	layouttest.StateHome(t)
 	s := newAttentionTestServer(t)
 	id, err := s.RaiseConversationRunProposal(proposal())
 	if err != nil {
@@ -99,6 +101,7 @@ func TestRaiseConversationRunProposal_RaisesOneCard(t *testing.T) {
 // Dismissing it from anywhere is allowed, and the operator's own resolve on
 // this machine reaches the verb.
 func TestRelayedResolve_NeverStartsAProposedRun(t *testing.T) {
+	layouttest.StateHome(t)
 	s := newAttentionTestServer(t)
 	id, err := s.RaiseConversationRunProposal(proposal())
 	if err != nil {

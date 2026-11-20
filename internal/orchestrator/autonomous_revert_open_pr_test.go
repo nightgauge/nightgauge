@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
@@ -589,7 +588,7 @@ func TestRevertAndRecovery_ParkedCardOnlyWhenInReviewWriteLands(t *testing.T) {
 		for _, site := range []string{"revert", "recovery"} {
 			t.Run(site+"/"+tc.name, func(t *testing.T) {
 				as, _, _ := revertFixture(t, tc.pages...)
-				as.attention = attention.New(layouttest.Repo(t))
+				as.attention = newAttentionStore(layouttest.Repo(t))
 				as.inReviewMoveStatus = func(context.Context, string, string, int, gh.OwnerType, int) error { return tc.moveErr }
 				want := "run ended with its PR open"
 				if site == "revert" {
@@ -616,7 +615,7 @@ func TestRevertAndRecovery_ParkedCardOnlyWhenInReviewWriteLands(t *testing.T) {
 // Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestOnPipelineComplete_SuccessRetractsParkedCard(t *testing.T) {
 	as := heldTestScheduler(t)
-	as.attention = attention.New(layouttest.Repo(t))
+	as.attention = newAttentionStore(layouttest.Repo(t))
 	as.raiseAttention(BuildPrMergeParkedBlock("O/app", 900, 42, "", "x"))
 	as.raiseAttention(BuildPrMergeParkedBlock("O/app", 901, 43, "", "x"))
 	addRunning(as, "O/app", 900, "x")
@@ -637,7 +636,7 @@ func TestOnPipelineComplete_SuccessRetractsParkedCard(t *testing.T) {
 // Serial: swaps package var reconcileExecGh (via heldTestScheduler).
 func TestPrMergeParkedCard_ReAlertsAfterRetraction(t *testing.T) {
 	as := heldTestScheduler(t)
-	as.attention = attention.New(layouttest.Repo(t))
+	as.attention = newAttentionStore(layouttest.Repo(t))
 	as.raiseAttention(BuildPrMergeParkedBlock("O/app", 900, 42, "", "x"))
 	as.retractPrMergeParked("O/app", 900)
 	if n := parkedCount(t, as, "O/app", 900); n != 0 {

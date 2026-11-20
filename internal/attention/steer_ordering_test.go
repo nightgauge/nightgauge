@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-
-	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // The steer must reach disk BEFORE the verb runs (#1410).
@@ -37,7 +35,7 @@ func (o *orderRecorder) steerWriter(*DecisionRequest, string) error {
 }
 
 func TestResolveWritesTheSteerBeforeRunningTheVerb(t *testing.T) {
-	s := New(layouttest.Repo(t))
+	s := newTestStore(t)
 	rec := &orderRecorder{}
 	s.SetSteerWriter(rec.steerWriter)
 
@@ -60,7 +58,7 @@ func TestResolveWritesTheSteerBeforeRunningTheVerb(t *testing.T) {
 // TestResolveSkipsTheSteerWhenThereIsNone: the ordering change must not make
 // the steer writer fire for a resolve that carried no text.
 func TestResolveSkipsTheSteerWhenThereIsNone(t *testing.T) {
-	s := New(layouttest.Repo(t))
+	s := newTestStore(t)
 	rec := &orderRecorder{}
 	s.SetSteerWriter(rec.steerWriter)
 
@@ -80,7 +78,7 @@ func TestResolveSkipsTheSteerWhenThereIsNone(t *testing.T) {
 // TestResolveStillReportsASteerError: SteerErr is part of the result contract
 // and must survive the move.
 func TestResolveStillReportsASteerError(t *testing.T) {
-	s := New(layouttest.Repo(t))
+	s := newTestStore(t)
 	boom := errors.New("disk full")
 	s.SetSteerWriter(func(*DecisionRequest, string) error { return boom })
 

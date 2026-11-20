@@ -167,6 +167,13 @@ func expiryFromNow(d time.Duration) string {
 // exactly this role.
 func standingExpiry() string { return expiryFromNow(attention.StandingExpiry) }
 
+// newAttentionStore opens the scheduler's DecisionRequest store: the store of
+// the workspace the scheduler serves, STATE/attention/<workspace-key> (#3453).
+// A seam so this package's parallel tests, which cannot move the
+// machine-state root with t.Setenv, each get a store of their own (see
+// TestMain).
+var newAttentionStore = attention.New
+
 // Attention returns the DecisionRequest store (nil when unconfigured).
 func (as *AutonomousScheduler) Attention() *attention.Store {
 	if as == nil {

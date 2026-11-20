@@ -134,7 +134,7 @@ func TestSafetyRailKind_FingerprintsAreStable(t *testing.T) {
 func TestRaiseSafetyRailTrip_RaisesABlockingFleetCard(t *testing.T) {
 	t.Parallel()
 
-	store := attention.New(layouttest.Repo(t))
+	store := newAttentionStore(layouttest.Repo(t))
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	as.trustGateOverride = allWritersGate()
 	as.attention = store

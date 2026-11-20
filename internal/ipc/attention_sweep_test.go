@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"io"
 	"strings"
 	"testing"
@@ -171,6 +172,7 @@ func listOpen(t *testing.T, s *Server) []attention.DecisionRequest {
 // and the card carries no run and no issue — the shape the extension had never
 // had to render before #93.
 func TestAttentionSweepRaisesRepoScopedCard(t *testing.T) {
+	layouttest.StateHome(t)
 	s := sweepServer(t, redMain())
 
 	res := runSweep(t, s, sweepTestRepo)
@@ -210,6 +212,7 @@ func TestAttentionSweepRaisesRepoScopedCard(t *testing.T) {
 // Repeated sweeps over an unchanged condition produce no duplicate requests —
 // the property that makes the four invocation points safe (epic #88 AC).
 func TestAttentionSweepIsIdempotentOverAnUnchangedCondition(t *testing.T) {
+	layouttest.StateHome(t)
 	s := sweepServer(t, redMain())
 
 	first := runSweep(t, s, sweepTestRepo)
@@ -228,6 +231,7 @@ func TestAttentionSweepIsIdempotentOverAnUnchangedCondition(t *testing.T) {
 
 // The card disappears with no operator action once the branch goes green.
 func TestAttentionSweepAutoResolvesWhenTheConditionClears(t *testing.T) {
+	layouttest.StateHome(t)
 	forgeClient := redMain()
 	s := sweepServer(t, forgeClient)
 	runSweep(t, s, sweepTestRepo)
@@ -250,6 +254,7 @@ func TestAttentionSweepAutoResolvesWhenTheConditionClears(t *testing.T) {
 // A green PR blocked on a review raises a card that names the PR but still has
 // no run and no issue.
 func TestAttentionSweepCardsAGreenPRWaitingOnAHuman(t *testing.T) {
+	layouttest.StateHome(t)
 	forgeClient := greenMain()
 	forgeClient.prs.prs = []types.PullRequest{{
 		Number:           42,
@@ -365,6 +370,7 @@ func TestAttentionSweepDeduplicatesRepoSpecs(t *testing.T) {
 // Muting silences a card without removing it: it stays in attention.list at its
 // severity, and unmute restores alerting.
 func TestAttentionMuteKeepsTheCardInTheInbox(t *testing.T) {
+	layouttest.StateHome(t)
 	s := sweepServer(t, redMain())
 	runSweep(t, s, sweepTestRepo)
 	card := listOpen(t, s)[0]

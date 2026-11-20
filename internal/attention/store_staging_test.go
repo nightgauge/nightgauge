@@ -66,6 +66,7 @@ func occupyLegacyName(t *testing.T, target string) func() {
 // perfectly happy. This test goes through the public API, so the call site is
 // what is under test.
 func TestMaterializedWriteStagesOffTheSharedName(t *testing.T) {
+	layouttest.StateHome(t)
 	root := layouttest.Repo(t)
 	s := New(root)
 	id := mustID(t)
@@ -111,7 +112,7 @@ func TestMaterializedWriteStagesOffTheSharedName(t *testing.T) {
 // it — the shared-staging-name blast radius is wider here than for cards, not
 // narrower.
 func TestStreakWriteStagesOffTheSharedName(t *testing.T) {
-	s := New(layouttest.Repo(t))
+	s := newTestStore(t)
 	check := occupyLegacyName(t, s.streakPath())
 
 	if n, err := s.IncrementStreak("cond:staging"); err != nil || n != 1 {
@@ -169,7 +170,7 @@ func TestResolveBoundsTheVerbInsideTheLock(t *testing.T) {
 	verbTimeout = 150 * time.Millisecond
 	t.Cleanup(func() { verbTimeout = prev })
 
-	s := New(layouttest.Repo(t))
+	s := newTestStore(t)
 	id := mustID(t)
 	if _, _, err := s.Raise(validRequest(id, "cond:verbbound")); err != nil {
 		t.Fatalf("Raise: %v", err)
@@ -212,7 +213,7 @@ func TestVerbTimeoutKeepsTheHoldBelowTheWait(t *testing.T) {
 // verbs after releasing, so its verbs need no ceiling — and must not acquire
 // one by being moved back inside the section.
 func TestSweepRunsVerbsOutsideTheLock(t *testing.T) {
-	s := New(layouttest.Repo(t))
+	s := newTestStore(t)
 	id := mustID(t)
 	req := validRequest(id, "cond:sweepbound")
 	req.ExpiresAt = time.Now().UTC().Add(-time.Hour).Format(tsLayout)

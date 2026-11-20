@@ -80,7 +80,7 @@ func TestDependencyCycle_OneCardNotReraisedClearedOnEdgeRemoval(t *testing.T) {
 	t.Parallel()
 
 	root := layouttest.Repo(t)
-	store := attention.New(root)
+	store := newAttentionStore(root)
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{},
 		workspaceRoot: root, attention: store}
 	edges := []depgraph.Edge{

@@ -173,7 +173,7 @@ func failedKind(t *testing.T, as *AutonomousScheduler, repo string, number int) 
 // Serial: swaps package var reconcileExecGh (via newBlockedQuotaScheduler).
 func TestEmptyPlanGateVerdictParksWithoutCharging(t *testing.T) {
 	as := newBlockedQuotaScheduler(t)
-	as.attention = attention.New(layouttest.Repo(t))
+	as.attention = newAttentionStore(layouttest.Repo(t))
 	as.trustGateOverride = allWritersGate()
 	addRunning(as, "acme/core", 124, "empty plan")
 	detail := "Stage feature-planning gate failed: [not-pipeline-actionable] plan lists no files " +

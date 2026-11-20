@@ -334,7 +334,7 @@ func newBranchForkScheduler(t *testing.T, root, branch string) (*Scheduler, *bra
 		budgetRetries:  make(map[string]int),
 		workspaceRoot:  root,
 		prCreateRunner: alwaysPuntPRCreateRunner{},
-		attention:      attention.New(layouttest.Repo(t)),
+		attention:      newAttentionStore(layouttest.Repo(t)),
 	}, runner
 }
 

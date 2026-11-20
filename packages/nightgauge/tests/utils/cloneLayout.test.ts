@@ -107,8 +107,8 @@ describe("cloneLayout", () => {
       expect(checkoutPath(wt, "currentRun")).toBe(
         path.join(common, "worktrees", "wt", "nightgauge-worktree", "current-run.json")
       );
-      expect(checkoutPath(root, "attention", "cards", "x.json")).toBe(
-        path.join(common, "nightgauge-worktree", "attention", "cards", "x.json")
+      expect(checkoutPath(root, "health", "cards", "x.json")).toBe(
+        path.join(common, "nightgauge-worktree", "health", "cards", "x.json")
       );
       expect(pipelineStateDir(wt)).toBe(pipelineStateDir(root));
       expect(CHECKOUT_DISPLAY).toBe(".git/nightgauge-worktree");

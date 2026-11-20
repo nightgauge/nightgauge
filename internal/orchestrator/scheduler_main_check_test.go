@@ -46,7 +46,7 @@ func TestVerifyPRMergeForStage_ObservesMainAndRecordsTheVerdict(t *testing.T) {
 	s := newBreadcrumbScheduler(t, launchRoot, targetRoot)
 	reader := &redMainReader{}
 	s.mainCheckReaderFn = func(*gh.Client) hooks.MainCheckReader { return reader }
-	s.SetAttention(attention.New(layouttest.Repo(t)))
+	s.SetAttention(newAttentionStore(layouttest.Repo(t)))
 
 	runtime := state.NewRuntimeState(breadcrumbTargetRepo, breadcrumbIssue, "item-441", testRunID())
 	runtime.SetPrUrl(breadcrumbPRURL)

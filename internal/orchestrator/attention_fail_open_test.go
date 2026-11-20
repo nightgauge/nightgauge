@@ -23,7 +23,7 @@ func (f verbExecutorFunc) ExecuteVerb(ctx context.Context, _ *attention.Decision
 // Serial: redirects the standard logger (via withCapturedLog).
 func TestScanEntryPointsFailOpenBehindABusyStore(t *testing.T) {
 	buf := withCapturedLog(t)
-	store := attention.New(layouttest.Repo(t))
+	store := newAttentionStore(layouttest.Repo(t))
 	store.SetProducerLockWait(50 * time.Millisecond)
 	as := &AutonomousScheduler{attention: store, state: &AutonomousState{}}
 

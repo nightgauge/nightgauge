@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
@@ -235,7 +234,7 @@ func TestArchitectureApproval_NoPRSidelinedIssueBlocksDependent(t *testing.T) {
 func approvalCardScheduler(t *testing.T) *AutonomousScheduler {
 	t.Helper()
 	as := heldTestScheduler(t)
-	as.attention = attention.New(layouttest.Repo(t))
+	as.attention = newAttentionStore(layouttest.Repo(t))
 	return as
 }
 

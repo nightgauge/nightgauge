@@ -3,7 +3,7 @@
  * extension reads it (ADR-024 § 7, #2037).
  *
  * Per-clone data (`pipeline`, `plans`, `retros`, `logs`) lives in the clone's
- * git directory, per-checkout data (`health/`, `attention/`, `focus.yaml`, ...)
+ * git directory, per-checkout data (`health/`, `triage/`, `focus.yaml`, ...)
  * in the checkout's own git directory, and nothing under `.git/` can be
  * committed. So the committed demo workspace (`demo/workspace/`) keeps that
  * data under `.nightgauge/<class>/` and `.nightgauge/<entry>`. Those paths are

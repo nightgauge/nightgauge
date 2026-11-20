@@ -2,17 +2,23 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
-	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
+	"github.com/nightgauge/nightgauge/internal/platform"
 )
 
 // TestRaisePostMergeFailureCard_IsAcceptedByTheStore is the guard that the card
@@ -25,6 +31,7 @@ import (
 // request would be rejected, logged to stderr, and produce exactly the silence
 // this issue is about. Nothing else would ever notice.
 func TestRaisePostMergeFailureCard_IsAcceptedByTheStore(t *testing.T) {
+	layouttest.StateHome(t)
 	root := layouttest.Repo(t)
 
 	raisePostMergeFailureCard(root, "nightgauge", "nightgauge", 206, hooks.PostMergeResult{
@@ -68,6 +75,7 @@ func TestRaisePostMergeFailureCard_IsAcceptedByTheStore(t *testing.T) {
 // TestRaisePostMergeFailureCard_IsIdempotentPerIssue stops a re-run of the hook
 // from stacking duplicate cards on the same issue.
 func TestRaisePostMergeFailureCard_IsIdempotentPerIssue(t *testing.T) {
+	layouttest.StateHome(t)
 	root := layouttest.Repo(t)
 	res := hooks.PostMergeResult{Reason: "auto_close_error", EpicReason: "check_failed", Failed: true}
 
@@ -104,6 +112,7 @@ func TestPostMergeReportSuffixes(t *testing.T) {
 // red main observed here must land as a card in the store rooted at --workdir,
 // and a later green merge must retract it.
 func TestReportMainChecks_RedMergeReachesTheActionCenter(t *testing.T) {
+	layouttest.StateHome(t)
 	root := layouttest.Repo(t)
 	red := hooks.PostMergeResult{
 		BaseRef:         "main",
@@ -163,19 +172,20 @@ func TestReportMainChecks_RedMergeReachesTheActionCenter(t *testing.T) {
 // sits until it expires. Every other producer supplies a button, and this
 // asserts that this one does too.
 func TestPostMergeCardIsActionable(t *testing.T) {
+	layouttest.StateHome(t)
 	dir := layouttest.Repo(t)
 	raisePostMergeFailureCard(dir, "octocat", "acme", 4242, hooks.PostMergeResult{
 		Reason: "the board sync failed",
 	})
 
-	entries, err := os.ReadDir(layouttest.CheckoutPath(t, dir, layout.CheckoutAttention))
+	entries, err := os.ReadDir(attention.New(dir).Dir())
 	if err != nil {
 		t.Fatalf("the producer raised no card at all: %v", err)
 	}
 	var raw []byte
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), "dr_") && strings.HasSuffix(e.Name(), ".json") {
-			raw, err = os.ReadFile(filepath.Join(layouttest.CheckoutPath(t, dir, layout.CheckoutAttention), e.Name()))
+			raw, err = os.ReadFile(filepath.Join(attention.New(dir).Dir(), e.Name()))
 			if err != nil {
 				t.Fatalf("read card: %v", err)
 			}
@@ -238,5 +248,77 @@ func TestReportSurvivalFinalized(t *testing.T) {
 				t.Errorf("stderr = %q, want %q", got, tt.wantStderr)
 			}
 		})
+	}
+}
+
+// TestPostMergeCardFromAnotherCheckoutReachesThePlatform is #3453 AC 1 on the
+// CLI path: `nightgauge hook post-merge` run in a sibling repository of the
+// workspace raises its card, and the bridge of a daemon serving the workspace's
+// manifest root uploads it.
+// Before #3453 each checkout had its own store and the daemon synced only its
+// own, so this card never left the second checkout.
+func TestPostMergeCardFromAnotherCheckoutReachesThePlatform(t *testing.T) {
+	layouttest.StateHome(t)
+	repos := layouttest.WorkspaceRepos(t, 2)
+	daemonCheckout, otherCheckout := repos[0], repos[1]
+
+	var mu sync.Mutex
+	uploaded := map[string]bool{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/health":
+			fmt.Fprint(w, `{"status":"ok"}`)
+		case "/v1/attention/sync":
+			var body struct {
+				Requests []attention.DecisionRequest `json:"requests"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			for _, req := range body.Requests {
+				uploaded[req.ID] = true
+			}
+			mu.Unlock()
+			// Echo every card in items: items is the acknowledgement set.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"synced": len(body.Requests), "items": body.Requests, "rejected": []any{},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	raisePostMergeFailureCard(otherCheckout, "nightgauge", "nightgauge", 3453, hooks.PostMergeResult{
+		Reason: "auto_close_error",
+		Error:  "GraphQL: rate limit exceeded",
+		Failed: true,
+	})
+	open, err := attention.New(otherCheckout).List(attention.ListFilter{})
+	if err != nil || len(open) != 1 {
+		t.Fatalf("precondition: the hook raised %d card(s) (err %v), want 1", len(open), err)
+	}
+
+	pc, err := platform.NewClient(platform.Config{
+		BaseURL:      srv.URL,
+		APIKey:       "test-key",
+		PollInterval: time.Hour,
+		AgentID:      "00000000-0000-4000-8000-000000000001",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if !pc.ProbeHealth(context.Background()) {
+		t.Fatal("precondition: the client must read online")
+	}
+	svc := platform.NewAttentionSyncService(pc)
+	if err := svc.SyncAll(context.Background(), attention.New(daemonCheckout)); err != nil {
+		t.Fatalf("SyncAll: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !uploaded[open[0].ID] {
+		t.Fatalf("the daemon's bridge did not upload %s, raised by the hook in another checkout (uploaded %v)",
+			open[0].ID, uploaded)
 	}
 }

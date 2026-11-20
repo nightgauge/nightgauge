@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/flock"
+	"github.com/nightgauge/nightgauge/internal/hometest"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
@@ -40,7 +41,13 @@ func TestMain(m *testing.M) {
 		holdStoreAndBlock(root)
 		return
 	}
-	os.Exit(m.Run())
+	// The store is machine state (STATE/attention, #3453): no test may write
+	// the operator's. Tests that need a store of their own call
+	// layouttest.StateHome; the holder inherits the test's STATE through env.
+	cleanup := hometest.Isolate()
+	code := m.Run()
+	cleanup()
+	os.Exit(code)
 }
 
 // holdStoreAndBlock resolves one card with a verb that deliberately dawdles.
@@ -120,6 +127,7 @@ func TestStoreSerialisesMutationsAcrossProcesses(t *testing.T) {
 	if !flock.Supported {
 		t.Skip("no advisory file lock on this platform")
 	}
+	layouttest.StateHome(t)
 	root := layouttest.Repo(t)
 	s := New(root)
 
@@ -218,6 +226,7 @@ func TestMaterializedTempPathIsUniquePerWriter(t *testing.T) {
 // per-writer temp file that is never renamed or removed accumulates one
 // carcass per write in a directory the sweep walks on every tick.
 func TestWritesLeaveNoTempResidue(t *testing.T) {
+	layouttest.StateHome(t)
 	root := layouttest.Repo(t)
 	s := New(root)
 	id := mustID(t)

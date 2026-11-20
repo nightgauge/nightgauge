@@ -34,8 +34,14 @@ const (
 	// CheckoutBackendLog is the daemon's log.
 	CheckoutBackendLog = "go-backend.log"
 
+	// LegacyCheckoutAttention is where the Action Center store sat before it
+	// moved to the machine-state root (STATE/attention/<workspace-key>,
+	// StateAttention, #3453). It is not a CheckoutEntry: internal/attention
+	// migrates its cards into the workspace store and removes it. Kept only
+	// as that migration's source.
+	LegacyCheckoutAttention = "attention"
+
 	// Per-checkout runtime state that sat in the working tree's .nightgauge/.
-	CheckoutAttention         = "attention"
 	CheckoutAttentionCoverage = "attention-coverage.json"
 	CheckoutAutonomous        = "autonomous"
 	CheckoutHealth            = "health"
@@ -122,7 +128,6 @@ var CheckoutEntries = []CheckoutEntry{
 	{Name: CheckoutQueueState, Legacy: ".nightgauge/pipeline/queue-state.json", CloneLegacyClass: ClassPipeline},
 	{Name: CheckoutPlan, Legacy: ".nightgauge/pipeline/PLAN.md", CloneLegacyClass: ClassPipeline},
 	{Name: CheckoutBackendLog, Legacy: ".nightgauge/logs/go-backend.log", CloneLegacyClass: ClassLogs},
-	{Name: CheckoutAttention, Dir: true, Legacy: ".nightgauge/attention"},
 	{Name: CheckoutAttentionCoverage, Legacy: ".nightgauge/attention-coverage.json"},
 	{Name: CheckoutAutonomous, Dir: true, Legacy: ".nightgauge/autonomous"},
 	{Name: CheckoutHealth, Dir: true, Legacy: ".nightgauge/health"},
@@ -236,7 +241,7 @@ func CheckoutPath(root, name string) (string, error) {
 
 // CheckoutSubdir is CheckoutPath for a directory entry, created with mode
 // 0700 when absent. Use it for a writer that owns a per-checkout directory
-// (attention/, health/, ...).
+// (health/, triage/, ...).
 func CheckoutSubdir(root, name string) (string, error) {
 	p, err := CheckoutPath(root, name)
 	if err != nil {

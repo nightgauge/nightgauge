@@ -1608,13 +1608,13 @@ func NewAutonomousScheduler(
 	}
 
 	// Wire the Action Center DecisionRequest store (ADR 015). The store is the
-	// single authoritative writer for the checkout's attention/; producers raise
-	// through it and resolutions execute registry verbs. The steer writer pins
+	// single authoritative writer for the workspace's
+	// STATE/attention/<workspace-key> (#3453); producers raise through it and resolutions execute registry verbs. The steer writer pins
 	// operator steer text as next-stage context; the trace listener audits every
 	// terminal transition of a run-scoped request into the ADR-013 decision
 	// trace.
 	if workspaceRoot != "" {
-		as.attention = attention.New(workspaceRoot)
+		as.attention = newAttentionStore(workspaceRoot)
 		as.attention.SetSteerWriter(func(req *attention.DecisionRequest, steerText string) error {
 			// The steer must land where the RUN will read it (#1407). The
 			// reader is runPipeline, which resolves its root per repo via

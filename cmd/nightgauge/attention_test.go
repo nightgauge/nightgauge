@@ -123,7 +123,57 @@ func TestAttentionListTable(t *testing.T) {
 	}
 }
 
+// TestAttentionListIsTheSameFromEveryCheckout is #3453 AC 3: a card raised in
+// one checkout of a workspace is listed by `nightgauge attention list` run from
+// any checkout of it, because every checkout opens the workspace's one
+// STATE/attention/<workspace-key> store.
+func TestAttentionListIsTheSameFromEveryCheckout(t *testing.T) {
+	layouttest.StateHome(t)
+	repos := layouttest.WorkspaceRepos(t, 2)
+	repoA, repoB := repos[0], repos[1]
+	seedRequest(t, repoB, "k:from-b", "Raised in repo B", attention.SeverityBlockingRun)
+
+	for name, dir := range map[string]string{"repo A": repoA, "repo B": repoB} {
+		cmd := attentionListCmd()
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetArgs([]string{"--workdir", dir})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("%s: execute: %v", name, err)
+		}
+		if !strings.Contains(buf.String(), "Raised in repo B") {
+			t.Errorf("attention list from %s does not show the card raised in repo B:\n%s", name, buf.String())
+		}
+	}
+}
+
+// `nightgauge attention path` prints the one store every checkout of the
+// workspace opens (#3453), so scripts need not derive the workspace key.
+func TestAttentionPathIsTheWorkspaceStore(t *testing.T) {
+	layouttest.StateHome(t)
+	repos := layouttest.WorkspaceRepos(t, 2)
+	for _, dir := range repos {
+		cmd := attentionPathCmd()
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetArgs([]string{"--workdir", dir})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("%s: execute: %v", dir, err)
+		}
+		if got, want := strings.TrimSpace(buf.String()), attention.New(repos[0]).Dir(); got != want {
+			t.Errorf("attention path from %s = %q, want the workspace store %q", dir, got, want)
+		}
+	}
+	cmd := attentionPathCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--workdir", t.TempDir()})
+	if err := cmd.Execute(); err == nil {
+		t.Error("attention path outside a git checkout: want an error")
+	}
+}
+
 func TestAttentionListEmpty(t *testing.T) {
+	layouttest.StateHome(t)
 	cmd := attentionListCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
@@ -137,6 +187,7 @@ func TestAttentionListEmpty(t *testing.T) {
 }
 
 func TestAttentionResolveCLI(t *testing.T) {
+	layouttest.StateHome(t)
 	dir := layouttest.Repo(t)
 	id := seedRequest(t, dir, "k1", "Choose", attention.SeverityFYI)
 
@@ -168,6 +219,7 @@ func TestAttentionResolveCLI(t *testing.T) {
 // exit non-zero, name the verb and its retryability, and leave the request
 // open on disk (#235).
 func TestAttentionResolveCLI_NoDaemonLeavesCardOpen(t *testing.T) {
+	layouttest.StateHome(t)
 	dir := layouttest.Repo(t)
 	store := attention.New(dir)
 	id, err := attention.NewID()
@@ -463,6 +515,7 @@ func TestCliVerbExecutor_DoctorVerbsRunWithoutADaemon(t *testing.T) {
 // that matches nothing must name the filter and the fleet-wide total, not
 // print the bare "All clear" message used for a genuinely empty store.
 func TestAttentionListRootCommand_FilteredToZero(t *testing.T) {
+	layouttest.StateHome(t)
 	dir := chdirTemp(t)
 	writeBareRepoConfig(t, dir)
 	seedRequest(t, dir, "k1", "Fleet stopped", attention.SeverityBlockingFleet)
