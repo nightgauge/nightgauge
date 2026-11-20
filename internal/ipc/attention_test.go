@@ -64,6 +64,7 @@ func splitSlug(slug string) (owner, name string) {
 }
 
 func TestAttentionIPCRoundTrip(t *testing.T) {
+	layouttest.StateHome(t)
 	s := newAttentionTestServer(t)
 	store := s.attentionStore()
 

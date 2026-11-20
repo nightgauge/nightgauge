@@ -5,13 +5,51 @@
 package layouttest
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/workspacemanifest"
 )
+
+// WorkspaceRepos returns n fresh git repositories (n >= 1) that form one
+// multi-repository workspace: they are siblings in one temp directory, and the
+// first holds the workspace manifest listing itself (`path: .`) and the others
+// (`path: ../r<i>`), the shape of a real Nightgauge workspace. The Action Center
+// store is keyed by workspace (#3453), so these repositories share one store
+// while a repository from Repo has a store of its own.
+func WorkspaceRepos(t testing.TB, n int) []string {
+	t.Helper()
+	if n < 1 {
+		t.Fatalf("WorkspaceRepos: n = %d, want at least 1", n)
+	}
+	base := t.TempDir()
+	repos := make([]string, n)
+	manifest := "version: 1\nrepositories:\n"
+	for i := range repos {
+		name, rel := fmt.Sprintf("r%d", i), fmt.Sprintf("../r%d", i)
+		if i == 0 {
+			rel = "."
+		}
+		dir := filepath.Join(base, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		repos[i] = gittest.InitRepo(t, dir, "-q")
+		manifest += fmt.Sprintf("  - name: %s\n    path: %s\n    role: primary\n", name, rel)
+	}
+	path := workspacemanifest.ManifestPath(repos[0])
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return repos
+}
 
 // Repo returns a fresh, empty git repository in a temp directory.
 func Repo(t testing.TB) string {
@@ -153,5 +191,19 @@ func mk(t testing.TB, dir string) string {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("layouttest: %v", err)
 	}
+	return dir
+}
+
+// StateHome points the machine-state root (layout.EnvStateHome) at a fresh
+// temp directory for the rest of t and returns it. The Action Center store is
+// machine state (STATE/attention/<workspace-key>, #3453), so two tests that
+// raise cards in one workspace would otherwise share one store. It uses
+// t.Setenv, so the test must not be parallel; its package's TestMain must call
+// hometest.Isolate so HOME moves with STATE (#2311), which internal/hometest's
+// lint enforces.
+func StateHome(t testing.TB) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv(layout.EnvStateHome, dir)
 	return dir
 }

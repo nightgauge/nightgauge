@@ -168,7 +168,7 @@ func TestOnPipelineComplete_PrMergeUnmerged_RaisesParkedCard(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			as := heldTestScheduler(t)
-			as.attention = attention.New(layouttest.Repo(t))
+			as.attention = newAttentionStore(layouttest.Repo(t))
 			stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 				if ghArgsContain(args, "list") {
 					return []byte(tc.prList), nil
@@ -222,7 +222,7 @@ func TestOnPipelineComplete_FailedRunWithOpenPR_RaisesParkedCard(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			as := heldTestScheduler(t)
-			as.attention = attention.New(layouttest.Repo(t))
+			as.attention = newAttentionStore(layouttest.Repo(t))
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
 				w.Header().Set("Content-Type", "application/json")
@@ -285,7 +285,7 @@ func TestReconcilePrMergeParkedCards(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			as := heldTestScheduler(t)
-			as.attention = attention.New(layouttest.Repo(t))
+			as.attention = newAttentionStore(layouttest.Repo(t))
 			as.raiseAttention(BuildPrMergeParkedBlock("O/app", 900, 42, "", "x"))
 			as.raiseAttention(BuildPrMergeParkedBlock("O/app", 901, 43, "", "x"))
 			g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{

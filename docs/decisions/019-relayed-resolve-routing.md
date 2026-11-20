@@ -8,6 +8,13 @@
 
 ---
 
+> **Store location (2026-11-19, #3453).** `attention.New(rootDir)` no longer binds
+> `<rootDir>/.nightgauge/attention`. It binds `STATE/attention/<workspace-key>/`, the one store
+> of the workspace `rootDir`'s main checkout belongs to (see the
+> [ADR-024 amendment](024-data-and-state-layout.md)). The boundary this ADR relies on holds per
+> workspace, not per checkout: checkouts of one workspace share a store, and a daemon for another
+> workspace on the same machine still does not hold the card, so `ErrRequestNotFound` still fires.
+
 ## Amendment (2026-10-12, #1421) — per-workspace agent identity
 
 The routing half deferred below has landed as option (a) of #1421: the

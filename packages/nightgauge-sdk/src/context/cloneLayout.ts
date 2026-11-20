@@ -49,7 +49,6 @@ export const CHECKOUT_ENTRIES = {
   plan: "PLAN.md",
   serveLock: "serve.lock",
   backendLog: "go-backend.log",
-  attention: "attention",
   attentionCoverage: "attention-coverage.json",
   autonomous: "autonomous",
   health: "health",
@@ -273,7 +272,7 @@ export function cloneClassDir(cls: CloneClass, cwd: string = process.cwd()): str
 }
 
 /**
- * The path of a per-checkout entry (`current-run.json`, `attention`, ...) for
+ * The path of a per-checkout entry (`current-run.json`, `health`, ...) for
  * the checkout containing `cwd` (default: the process working directory):
  * `<git-dir>/nightgauge-worktree/<entry>`. Throws
  * {@link NotAGitRepositoryError} outside a git repository.

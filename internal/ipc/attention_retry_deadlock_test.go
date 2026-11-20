@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"os"
 	"runtime"
 	"testing"
@@ -17,6 +18,7 @@ import (
 // daemon. On the unfixed code ResumeRepo's reconcile, or Resume's safety-rail
 // retraction, re-enters that lock and Resolve never returns.
 func TestResumeVerbsDoNotDeadlockTheStore(t *testing.T) {
+	layouttest.StateHome(t)
 	const repo, issue = "octocat/acme", 2750
 	key := fmt.Sprintf("%s#%d", repo, issue)
 	cases := []struct {
@@ -41,6 +43,7 @@ func TestResumeVerbsDoNotDeadlockTheStore(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			state := haltedState()
 			state.PausedRepos = map[string]*orchestrator.RepoPauseRecord{repo: {}}
+			layouttest.StateHome(t)
 			server, as, ctx := newHaltedServer(t, state)
 			store := as.Attention()
 			if store == nil {

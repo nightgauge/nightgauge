@@ -1,6 +1,7 @@
 // Package attention implements the local-first DecisionRequest store — the
-// single authoritative writer for the checkout's attention directory (ADR 015,
-// ADR-024 § 7).
+// single authoritative writer for a workspace's attention directory
+// (STATE/attention/<workspace-key>, ADR 015, #3453), shared by every checkout
+// of that workspace and by no other.
 //
 // A DecisionRequest is a durable, mutable record any pipeline component raises
 // when it needs a human decision at a dead-end that is otherwise silent or

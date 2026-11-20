@@ -136,6 +136,7 @@ func newSweeper(t *testing.T, client forge.ForgeClient, producers ...Producer) (
 	// A repository: the decision trace lives in the clone's pipeline state
 	// directory, which only a git repository has (ADR-024 § 7).
 	root := layouttest.Repo(t)
+	layouttest.StateHome(t)
 	store := attention.New(root)
 	reg := NewRegistry()
 	for _, p := range producers {

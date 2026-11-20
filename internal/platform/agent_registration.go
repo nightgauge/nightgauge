@@ -92,9 +92,12 @@ func wireInstanceID(id string) string {
 }
 
 // The workspace key (#1421). A machine runs one daemon per workspace it
-// serves, and the attention store each daemon resolves a card against is the
-// workspace's own (<root>/.nightgauge/attention), so the agent a relayed
-// resolve is addressed to has to be the workspace's too. A registration that
+// serves, and each daemon executes a relayed resolve against its own
+// workspace (its scheduler, its repositories), so the agent a relayed resolve
+// is addressed to has to be the workspace's too. Each daemon reads its own
+// workspace's attention store, STATE/attention/<workspace-key> (#3453), and
+// this registration key (an HMAC of the machine id and the root, distinct
+// from the store's key) scopes the command stream. A registration that
 // carries `workspace_key` is its own agent row on the hosted service, keyed on
 // (account, machine_id, workspace_key), and a command addressed to it reaches
 // only that workspace's command stream. One without it keeps the machine's

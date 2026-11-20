@@ -251,7 +251,7 @@ func TestCoverage_RoundTripAndMissingRecord(t *testing.T) {
 
 	// It must NOT live inside the attention directory, where Store.List parses
 	// every *.json as a DecisionRequest.
-	if _, err := os.Stat(filepath.Join(layouttest.CheckoutPath(t, root, layout.CheckoutAttention), layout.CheckoutAttentionCoverage)); err == nil {
+	if _, err := os.Stat(filepath.Join(attention.New(root).Dir(), layout.CheckoutAttentionCoverage)); err == nil {
 		t.Error("coverage record must not sit inside the attention store directory")
 	}
 	if _, err := os.Stat(layouttest.CheckoutPath(t, root, layout.CheckoutAttentionCoverage)); err != nil {
@@ -295,6 +295,7 @@ func coverageCard(repo string) attention.DecisionRequest {
 func workspaceSweeper(t *testing.T, p WorkspaceProducer) (*Sweeper, *attention.Store, string) {
 	t.Helper()
 	root := layouttest.Repo(t)
+	layouttest.StateHome(t)
 	store := attention.New(root)
 	reg := NewRegistry()
 	reg.RegisterWorkspace(p)
@@ -453,6 +454,7 @@ repositories:
 	cap := &captureProducer{}
 	reg := NewRegistry()
 	reg.RegisterWorkspace(cap)
+	layouttest.StateHome(t)
 	s := &Sweeper{Store: attention.New(root), Registry: reg, WorkspaceRoot: root}
 
 	// Sweeping ONE repo must not imply the others are unconfigured.
@@ -477,6 +479,7 @@ func TestSweepWorkspace_NoConfig_FallsBackToInvocationList(t *testing.T) {
 	cap := &captureProducer{}
 	reg := NewRegistry()
 	reg.RegisterWorkspace(cap)
+	layouttest.StateHome(t)
 	s := &Sweeper{Store: attention.New(root), Registry: reg, WorkspaceRoot: root}
 
 	if _, err := s.SweepWorkspace(context.Background(), []string{"acme/web"}); err != nil {
@@ -556,6 +559,7 @@ repositories:
 	cap := &captureProducer{}
 	reg := NewRegistry()
 	reg.RegisterWorkspace(cap)
+	layouttest.StateHome(t)
 	s := &Sweeper{Store: attention.New(member), Registry: reg, WorkspaceRoot: member, ManifestRoot: core}
 	if _, err := s.SweepWorkspace(context.Background(), nil); err != nil {
 		t.Fatalf("SweepWorkspace: %v", err)

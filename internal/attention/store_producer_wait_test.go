@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // TestProducerWaitOutlastsAVerb keeps a healthy Resolve from costing a producer
@@ -21,7 +19,7 @@ func TestProducerWaitOutlastsAVerb(t *testing.T) {
 // no producer parks forever, because the scan loop is the goroutine that would
 // park (#2750).
 func TestProducersGiveUpOnAWedgedStore(t *testing.T) {
-	s := New(layouttest.Repo(t))
+	s := newTestStore(t)
 	validID := raiseTestCard(t, s, "wedged:producer")
 	s.SetProducerLockWait(50 * time.Millisecond)
 

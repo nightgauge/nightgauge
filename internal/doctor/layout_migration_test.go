@@ -633,14 +633,14 @@ func TestLayoutMigrationPerCheckout(t *testing.T) {
 	writeLayoutFile(t, filepath.Join(r.newRoot, "logs", "go-backend.log"), "v1 daemon\n", 0o600)
 	moves := map[string]string{ // legacy -> new
 		filepath.Join(nd, "pipeline", "queue-state.json"):        filepath.Join(mainCheckout, "queue-state.json"),
-		filepath.Join(nd, "attention", "cards", "c1.json"):       filepath.Join(mainCheckout, "attention", "cards", "c1.json"),
+		filepath.Join(nd, "triage", "cards", "c1.json"):          filepath.Join(mainCheckout, "triage", "cards", "c1.json"),
 		filepath.Join(nd, "health", "trends.jsonl"):              filepath.Join(mainCheckout, "health", "trends.jsonl"),
 		filepath.Join(nd, "focus.yaml"):                          filepath.Join(mainCheckout, "focus.yaml"),
 		filepath.Join(r.newRoot, "pipeline", "batch-state.json"): filepath.Join(mainCheckout, "batch-state.json"),
 		filepath.Join(r.newRoot, "logs", "go-backend.log"):       filepath.Join(mainCheckout, "go-backend.log"),
 		filepath.Join(wnd, "pipeline", "run-state.json"):         filepath.Join(wtCheckout, "run-state.json"),
 		filepath.Join(wnd, "performance-mode.yaml"):              filepath.Join(wtCheckout, "performance-mode.yaml"),
-		filepath.Join(wnd, "attention", "cards", "c2.json"):      filepath.Join(wtCheckout, "attention", "cards", "c2.json"),
+		filepath.Join(wnd, "triage", "cards", "c2.json"):         filepath.Join(wtCheckout, "triage", "cards", "c2.json"),
 		filepath.Join(wnd, "plans", "issue-9.md"):                filepath.Join(r.newRoot, "plans", "issue-9.md"),
 		filepath.Join(wnd, "pipeline", "context-9.json"):         filepath.Join(r.newRoot, "pipeline", "context-9.json"),
 	}
@@ -702,7 +702,7 @@ func TestLayoutMigrationPerCheckoutConflict(t *testing.T) {
 	writeLayoutFile(t, legacy, "lens: old\n", 0o644)
 	writeLayoutFile(t, target, "lens: new\n", 0o600)
 	// A movable file beside it: the migration stops for the whole root.
-	card := filepath.Join(r.root, ".nightgauge", "attention", "c.json")
+	card := filepath.Join(r.root, ".nightgauge", "triage", "c.json")
 	writeLayoutFile(t, card, "{}\n", 0o644)
 	m := r.migrator("")
 	m.checkoutEntries = allCheckoutEntries

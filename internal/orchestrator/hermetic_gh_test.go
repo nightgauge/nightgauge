@@ -10,10 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/attention"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/hometest"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -50,6 +52,11 @@ func TestMain(m *testing.M) {
 	// TestScheduler_NonTerminalReconcile_OwnRunPrOpen_FailurePreserved in CI.
 	gittest.IsolateProcess()
 	reconcileExecGh = refuseUnstubbedGh
+	// The Action Center store is machine state (#3453), so every scheduler in
+	// this binary would share one, and most tests here are parallel, which
+	// rules out a per-test t.Setenv of the state root. Each workspace root gets
+	// a store of its own inside its checkout instead.
+	newAttentionStore = isolatedAttentionStore
 	// The pre-planning ac-reconcile regeneration (#3228) reads the issue body
 	// and may post a no-criteria note. A test that does not say what the
 	// issue holds gets a body with no criteria, and no note is posted.
@@ -197,4 +204,15 @@ func stubSurvivalSweepNoForge(t *testing.T) {
 // logs a skipped refresh and continues on the tree as found.
 func refuseUnstubbedRefresh(context.Context, string, int) (pmstages.BaseRefresh, error) {
 	return pmstages.BaseRefresh{}, fmt.Errorf("refreshResumedBase not stubbed in this test")
+}
+
+// isolatedAttentionStore opens a store private to the checkout root is in. A
+// root outside a git checkout falls through to attention.New, which reports
+// the same resolution error production would.
+func isolatedAttentionStore(root string) *attention.Store {
+	dir, err := layout.CheckoutPath(root, "attention-test")
+	if err != nil {
+		return attention.New(root)
+	}
+	return attention.NewAt(dir)
 }

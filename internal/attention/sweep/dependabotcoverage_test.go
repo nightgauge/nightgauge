@@ -580,6 +580,7 @@ func TestDependabotCoverage_RegisteredInTheDefaultWorkspaceRegistry(t *testing.T
 func coverageSweeper(t *testing.T, p WorkspaceProducer) (*Sweeper, *attention.Store) {
 	t.Helper()
 	root := layouttest.Repo(t)
+	layouttest.StateHome(t)
 	store := attention.New(root)
 	reg := NewRegistry()
 	reg.RegisterWorkspace(p)

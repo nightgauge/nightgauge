@@ -21,8 +21,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // raiseTestCard puts one open, resolvable card in the store.
@@ -56,7 +54,7 @@ func raiseTestCard(t *testing.T, s *Store, key string) string {
 // mutating path may block indefinitely. A holder that never releases stands in
 // for the wedged stdio write that caused the incident.
 func TestMutationsGiveUpOnAWedgedStore(t *testing.T) {
-	s := New(layouttest.Repo(t))
+	s := newTestStore(t)
 	id := raiseTestCard(t, s, "wedged:1")
 
 	// Wedge the directory: taken and never released for the test's duration.
@@ -118,7 +116,7 @@ func TestMutationsGiveUpOnAWedgedStore(t *testing.T) {
 // arbitrary code — the daemon's writes to a pipe — and running it inside the
 // critical section makes an unread pipe wedge every writer on the machine.
 func TestListenersRunOutsideTheDirectoryLock(t *testing.T) {
-	s := New(layouttest.Repo(t))
+	s := newTestStore(t)
 	id := raiseTestCard(t, s, "fanout:1")
 
 	lockFree := make(chan bool, 1)
@@ -158,7 +156,7 @@ func TestListenersRunOutsideTheDirectoryLock(t *testing.T) {
 // not stop anybody resolving a card — not the next resolve, and not the one
 // whose own transition the stuck listener is sitting on.
 func TestASlowListenerDoesNotBlockAMutation(t *testing.T) {
-	s := New(layouttest.Repo(t))
+	s := newTestStore(t)
 	first := raiseTestCard(t, s, "slow:1")
 	second := raiseTestCard(t, s, "slow:2")
 
@@ -202,7 +200,7 @@ func TestASlowListenerDoesNotBlockAMutation(t *testing.T) {
 // two-character actor, so a card resolved with one can never sync. Refusing it
 // here means an unsyncable card is never created.
 func TestTooShortActorIsRefusedLocally(t *testing.T) {
-	s := New(layouttest.Repo(t))
+	s := newTestStore(t)
 	id := raiseTestCard(t, s, "actor:1")
 
 	if _, err := s.Resolve(context.Background(), id, "go", "po", "", "", nil); err == nil {

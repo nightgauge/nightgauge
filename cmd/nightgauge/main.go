@@ -6095,7 +6095,8 @@ func serveCmd() *cobra.Command {
 			}
 
 			// Action Center platform bridge (ADR 015 §C/§E, #330). The local
-			// attention store (the checkout's attention/) is the single authoritative writer;
+			// attention store (the workspace's STATE/attention/<workspace-key>,
+			// #3453) is the single authoritative writer;
 			// this is the additive client↔platform sync #330 identified as missing.
 			// Gated on a configured platform + license key and offline-safe (each
 			// service no-ops while the client is offline), so a fully local

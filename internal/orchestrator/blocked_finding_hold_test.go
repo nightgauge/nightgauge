@@ -42,7 +42,7 @@ func TestBlockedFindingDeferral_RaisesCardWhenNoneIsOpen(t *testing.T) {
 	t.Parallel()
 
 	root := layouttest.Repo(t)
-	store := attention.New(root)
+	store := newAttentionStore(root)
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{},
 		workspaceRoot: root, attention: store}
 	writeBlockedFindingFile(t, root, 1255, validFinding1255)
@@ -93,7 +93,7 @@ func TestBlockedFinding_ClearedWhenEveryNativeBlockerIsClosed(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			root := layouttest.Repo(t)
-			store := attention.New(root)
+			store := newAttentionStore(root)
 			as := &AutonomousScheduler{config: AutonomousConfig{}, workspaceRoot: root, attention: store,
 				state: &AutonomousState{Failed: []FailedItem{{
 					Repo: "O/app", Number: 1255, Kind: TerminalKindNotPipelineActionable, AttemptCount: 1,
@@ -128,7 +128,7 @@ func TestUnvalidatedDependency_RaisesCardNamingTheDependency(t *testing.T) {
 	t.Parallel()
 
 	root := layouttest.Repo(t)
-	store := attention.New(root)
+	store := newAttentionStore(root)
 	validated := false
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{},
 		workspaceRoot: root, attention: store,

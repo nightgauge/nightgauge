@@ -11,9 +11,10 @@ import (
 )
 
 // stateOverrideNeedles are the ways a test file points the machine-state root
-// somewhere: the two environment variables and layout's name for the first.
-// Any of them in a package's tests means that package overrides STATE.
-var stateOverrideNeedles = []string{"NIGHTGAUGE_STATE_HOME", "XDG_STATE_HOME", "EnvStateHome"}
+// somewhere: the two environment variables, layout's name for the first, and
+// layouttest's helper that sets it. Any of them in a package's tests means
+// that package overrides STATE.
+var stateOverrideNeedles = []string{"NIGHTGAUGE_STATE_HOME", "XDG_STATE_HOME", "EnvStateHome", "layouttest.StateHome("}
 
 // isolateNeedle is the call that isolates HOME for a whole test binary.
 // Assembled from two pieces so a file that merely quotes it is not mistaken

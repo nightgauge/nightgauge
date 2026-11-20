@@ -9,7 +9,8 @@
 [ADR-020](020-value-adding-features-default-on.md) (§ 12 records the footprint reason for the
 knowledge default)
 **Amends (location only):** ADR-013 (the run trace moves with the pipeline-state class) and
-[ADR-015](015-decision-requests.md) (the attention store is per-checkout runtime state)
+[ADR-015](015-decision-requests.md) (the attention store is per-checkout runtime state; moved to
+machine state by the 2026-11-19 amendment, #3453)
 
 ---
 
@@ -166,14 +167,14 @@ default when the variable is unset. A `NIGHTGAUGE_*` override beats the XDG vari
 | Issue- and run-keyed pipeline data (`history/`, contexts, results, ADR-013 traces, `runtime-{issue}-{runId}.json`)                                | `CLONE/pipeline/`                                                       | none                                          | never                      | Go orchestrator and CLI · `internal/layout`                                   | history: `pipeline.logs.history_retention_days` (90) | #2033–#2037                             |
 | Per-checkout run control (`current-run.json`, `run-state.json`, `batch-state.json`, `queue-state.json`, `PLAN.md`, serve lease, `go-backend.log`) | `CHECKOUT/`                                                             | none                                          | never                      | the checkout's orchestrator and daemon · `internal/layout`                    | deleted with the checkout                            | #2033–#2037                             |
 | Plans and retros                                                                                                                                  | `CLONE/plans/`, `CLONE/retros/`                                         | none                                          | never                      | stages, through a `nightgauge` command · `internal/layout`                    | kept with the clone                                  | #2033–#2037                             |
-| Other per-checkout runtime files (`attention/`, `autonomous/`, `health/`, `graph/`, `focus.yaml`, …)                                              | `CHECKOUT/<name>`                                                       | none                                          | never                      | their current writers                                                         | per writer                                           | #2037                                   |
+| Other per-checkout runtime files (`autonomous/`, `health/`, `graph/`, `focus.yaml`, …)                                                            | `CHECKOUT/<name>`                                                       | none                                          | never                      | their current writers                                                         | per writer                                           | #2037                                   |
 | Per-clone logs (Go-consumed: `*_session.log`, `github-api.jsonl`, `sanitization.log`)                                                             | `CLONE/logs/`                                                           | none                                          | never                      | Go binary; extension's Go-consumed writers via one helper                     | 200 MB and 30 days, never an unfinished run's logs   | #2029, #2030, #2035, #2037              |
 | Extension-only logs (including `automations.log`)                                                                                                 | VS Code `ExtensionContext.logUri`                                       | none (VS Code's)                              | never                      | the extension                                                                 | VS Code's session rotation                           | #2030                                   |
 | Extension-only data                                                                                                                               | mementos, `storageUri`, `globalStorageUri`                              | none                                          | never                      | the extension                                                                 | VS Code-managed                                      | settled                                 |
 | Worktrees                                                                                                                                         | `WTBASE/<repo>-issue-<N>`                                               | `pipeline.worktree_base` (machine/local tier) | never                      | `internal/execution` · `internal/layout.WorktreeBase`                         | removed by pipeline cleanup and reclaim              | #2038                                   |
 | Daemon socket                                                                                                                                     | `RUNTIME/<key>.sock`                                                    | `NIGHTGAUGE_RUNTIME_DIR`, `XDG_RUNTIME_DIR`   | never                      | `nightgauge serve` · `internal/ipc` over `internal/layout`                    | daemon lifetime                                      | #2039                                   |
 | Machine state (serve sidecar, `rate-limit.json`, `ratelimit-gitlab-<host>.json`, `machine-id`, `telemetry-notice-v1`)                             | `STATE/`                                                                | `NIGHTGAUGE_STATE_HOME`, `XDG_STATE_HOME`     | never                      | Go binary · `internal/layout.StateHome`                                       | kept; rate-limit files are cold-start hints          | #2031                                   |
-| Machine state (`usage/`, `opencode/runs`, `opencode/last-dispatch.json`, machine logs)                                                            | `STATE/usage/`, `STATE/opencode/`, `STATE/logs/`                        | `NIGHTGAUGE_STATE_HOME`, `XDG_STATE_HOME`     | never                      | Go binary; extension reads `usage/` via the binary · `internal/layout`        | logs: 200 MB and 30 days; others per writer          | #2029, #2032                            |
+| Machine state (`usage/`, `attention/`, `opencode/runs`, `opencode/last-dispatch.json`, machine logs)                                              | `STATE/usage/`, `STATE/attention/`, `STATE/opencode/`, `STATE/logs/`    | `NIGHTGAUGE_STATE_HOME`, `XDG_STATE_HOME`     | never                      | Go binary; extension reads `usage/` via the binary · `internal/layout`        | logs: 200 MB and 30 days; others per writer          | #2029, #2032                            |
 | Operator-installed tools (OpenCode pin)                                                                                                           | `~/.nightgauge/tools/` (unchanged)                                      | the absolute `opencode.binary` value          | never                      | the operator (`npm i --prefix`)                                               | operator-managed                                     | none (exception, § 9)                   |
 | Layout-version marker and migration lock                                                                                                          | `CLONE/`, `CHECKOUT/`, `STATE/` (`layout-version`, `.migrate.lock`)     | follows its root                              | never                      | the migration · `internal/doctor`                                             | kept                                                 | #2040, #2041                            |
 
@@ -293,7 +294,7 @@ orchestrators is a collision. So:
 - `CHECKOUT/` holds every unkeyed singleton: `current-run.json`, `run-state.json`,
   `batch-state.json`, `queue-state.json`, the hooks' `PLAN.md` fallback, the serve lease,
   `go-backend.log`, and the other per-checkout runtime files the current template ignores one by
-  one (`attention/`, `autonomous/`, `health/`, `graph/`, `containment/`, `notifications/`,
+  one (`autonomous/`, `health/`, `graph/`, `containment/`, `notifications/`,
   `skills/`, `triage/`, `focus.yaml`, `performance-mode.yaml`, `careful.lock` and the rest).
   #2037 moves them together with the four main classes.
 
@@ -672,6 +673,21 @@ override, as `config.MachineConfigDir` already does for config.
   is confined to regular files inside the resolved root.
 - Secrets are never passed on argv and never written to a log; files holding a secret or the
   device identity are mode 0600.
+
+> **Amendment (2026-11-19, #3453): the attention store is per-workspace machine state.** The
+> Action Center store moves from `CHECKOUT/attention/` to `STATE/attention/<workspace-key>/`, one
+> store per workspace shared by every checkout of it. Per checkout, the daemon's platform bridge
+> synced only its own checkout's store, so a card raised in a sibling repository or a linked
+> worktree never reached the platform. The key is the first 16 hex characters of the SHA-256 of
+> the canonical workspace root: the directory whose `.vscode/nightgauge-workspace.yaml` sits in
+> the main checkout, or above it, or in a sibling directory, and lists it; otherwise the main
+> checkout itself. A linked or pipeline worktree resolves through its main checkout. The store is
+> not one per machine: two workspace daemons on one machine must not resolve, expire or upload
+> each other's cards (ADR-019), and separate directories keep that boundary with no per-card
+> owner field. The store migrates an older build's `CHECKOUT/attention/` into the workspace store
+> on first open, under the store lock, and removes it; a failed migration is reported and retried
+> on the next open without closing the store. `attention/` is no longer a per-checkout entry. The
+> pre-ADR-024 `.nightgauge/attention/` is not migrated: it is repository content.
 
 ## Consequences
 

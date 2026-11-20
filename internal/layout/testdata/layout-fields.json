@@ -19,7 +19,6 @@
     "plan": "PLAN.md",
     "serveLock": "serve.lock",
     "backendLog": "go-backend.log",
-    "attention": "attention",
     "attentionCoverage": "attention-coverage.json",
     "autonomous": "autonomous",
     "health": "health",

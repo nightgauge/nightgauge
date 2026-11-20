@@ -16,6 +16,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Action Center cards raised in any checkout now reach the phone and dashboard.
+  Each checkout used to keep its own card store, and the daemon uploaded only its
+  own, so a card raised from a sibling repository or a linked worktree never
+  synced. Every checkout of a workspace (the repositories its workspace manifest
+  lists and their worktrees) now shares one store under the machine state
+  directory, and another workspace on the same machine keeps its own, so its
+  daemon never uploads or resolves your cards. `nightgauge attention list` shows
+  the same cards from every checkout of the workspace, cards an older build
+  left in a checkout are moved into it on first use, and the daemon uploads
+  waiting cards as soon as its platform bridge starts instead of after its
+  first 30-second sweep. `nightgauge attention path` prints the workspace's
+  store directory (#3453).
 - Stopping a run is no longer booked as a pipeline failure. A Stop from the extension (one slot, Stop All, or a platform cancel) now tells the Go scheduler first, over the new `pipeline.cancelForOperatorStop` IPC method, so the stage ends `operator_stop` instead of a bare `pipeline failure`. It does not count toward the issue's lifetime failure cap. The run record books it `cancelled` / `operator_stopped`, and the stage exit record carries `terminal_kind: operator_stop` and `signal_source: operator`, so a stop no longer looks like a zero-output hang. A pr-merge hand-back interrupted by an admission stop ends the same way and resumes into pr-merge for its open PR. A run still booked `failed` now always names its `failure_stage` and a `terminal_failure_detail` (#1848).
 - The Flutter build check now runs the repository's analyze entry point: `commands.analyze`,
   then `bash scripts/flutter-analyze.sh`, then `flutter analyze`; ci discovery lists the same command.

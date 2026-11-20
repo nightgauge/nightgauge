@@ -53,8 +53,8 @@
 #   scripts/capture-attention-fixture.sh [SOURCE_STORE_DIR] [OUT_FILE]
 #
 # Defaults:
-#   SOURCE_STORE_DIR  this checkout's attention store, <git-dir>/nightgauge-worktree/attention
-#                     (ADR-024 § 7; `nightgauge layout path checkout attention`)
+#   SOURCE_STORE_DIR  this workspace's attention store,
+#                     STATE/attention/<workspace-key> (#3453; `nightgauge attention path`)
 #   OUT_FILE          internal/attention/testdata/captured-envelopes.json
 set -euo pipefail
 
@@ -62,10 +62,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 default_store() {
   local p=""
   if command -v nightgauge >/dev/null 2>&1; then
-    p="$(nightgauge layout path checkout attention --workdir "$REPO_ROOT" 2>/dev/null || true)"
+    p="$(nightgauge attention path --workdir "$REPO_ROOT" 2>/dev/null || true)"
   fi
   if [[ -z "$p" ]]; then
-    p="$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir 2>/dev/null)/nightgauge-worktree/attention"
+    echo "capture-attention-fixture: cannot resolve the attention store without nightgauge; pass SOURCE_STORE_DIR" >&2
+    exit 1
   fi
   printf '%s\n' "$p"
 }

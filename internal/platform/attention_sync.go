@@ -18,8 +18,8 @@ import (
 
 // The Action Center platform bridge — client → platform mirror (ADR 015 §C/§E,
 // nightgauge/nightgauge#330). The Go binary's local attention store (the
-// checkout's .git/nightgauge-worktree/attention) is the single authoritative
-// writer and source of truth; this uploader is
+// workspace's STATE/attention/<workspace-key>, shared by every checkout of
+// the workspace, #3453) is the single authoritative writer and source of truth; this uploader is
 // additive: it pushes open + resolved DecisionRequests to
 // PUT /v1/attention/sync (idempotent by `id`) so multi-device surfaces (the
 // dashboard) mirror the same queue. It rides the telemetry-uploader pattern:
@@ -176,9 +176,11 @@ func (s *AttentionSyncService) SetAgentID(agentID string) {
 }
 
 // Attach subscribes the uploader to the store's transition stream (push each
-// raise/resolve/expire immediately) and starts the periodic reconciliation
-// sweep. This is the single wiring entry point; it re-uses the store's existing
-// listener fan-out — it never adds a second event emitter (ADR 015 §D).
+// raise/resolve/expire immediately) and starts the reconciliation sweep, which
+// runs immediately and then every attentionSyncInterval, so a card raised while
+// no bridge ran is uploaded as soon as the bridge starts (#3453). This is the
+// single wiring entry point; it re-uses the store's existing listener fan-out —
+// it never adds a second event emitter (ADR 015 §D).
 func (s *AttentionSyncService) Attach(ctx context.Context, store AttentionLister) {
 	if s == nil || store == nil {
 		return
@@ -210,13 +212,18 @@ func (s *AttentionSyncService) OnTransition(ctx context.Context, req *attention.
 	}()
 }
 
-// StartPeriodicSync runs a background reconciliation sweep every
-// attentionSyncInterval until ctx is cancelled.
+// StartPeriodicSync runs a background reconciliation sweep immediately and then
+// every attentionSyncInterval until ctx is cancelled. The first sweep uploads
+// the cards raised while no bridge ran (#3453); while offline it is a no-op and
+// the next tick retries, because the watermark advances only on success.
 func (s *AttentionSyncService) StartPeriodicSync(ctx context.Context, store AttentionLister) {
 	if s == nil || store == nil {
 		return
 	}
 	go func() {
+		if err := s.SyncAll(ctx, store); err != nil {
+			log.Printf("attention sync: initial sweep failed: %v", err)
+		}
 		ticker := time.NewTicker(attentionSyncInterval)
 		defer ticker.Stop()
 		for {

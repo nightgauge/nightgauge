@@ -3,6 +3,7 @@ package attention
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/history"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
+	"github.com/nightgauge/nightgauge/internal/workspacemanifest"
 )
 
 // journalFile is the append-only lifecycle audit within the store directory.
@@ -36,13 +38,13 @@ var idPattern = regexp.MustCompile(`^dr_[A-Za-z0-9-]{8,80}$`)
 // directory. It is a routing fact, not a rejection.
 //
 // The distinction is load-bearing on the platform-relayed path. A card id is
-// only ever a filename under one checkout's attention directory
-// (pathFor), while the platform addresses a relayed resolve to an agent
-// identity that is per-MACHINE — so a daemon can be handed a resolve for a
-// card that is valid, open, and owned by a different workspace on the same
-// machine (#1421, ADR-019). "I do not hold this card" and "this card refused
-// the resolution" are different answers with different remedies, and a
-// formatted string cannot carry that difference across a package boundary.
+// only ever a filename under one workspace's attention directory (pathFor,
+// #3453), while the platform addresses a relayed resolve to an agent identity,
+// so a daemon can be handed a resolve for a card that is valid, open, and held
+// by a store it does not open (#1421, ADR-019). "I do not hold this card" and
+// "this card refused the resolution" are different answers with different
+// remedies, and a formatted string cannot carry that difference across a
+// package boundary.
 //
 // The wrapped message text is unchanged, so callers matching on the string
 // still match.
@@ -406,16 +408,18 @@ type TransitionListener func(entry JournalEntry, req *DecisionRequest)
 // the resolution.
 type SteerWriter func(req *DecisionRequest, steerText string) error
 
-// Store is the single authoritative writer for the checkout's attention
-// directory (layout.CheckoutDisplay("attention"), ADR-024 § 7). All
-// mutations route through one Store type with its serialization discipline;
-// surfaces never write the files directly (ADR-015 §C).
+// Store is the single authoritative writer for a workspace's attention
+// directory (STATE/attention/<workspace-key>, layout.StateAttention, #3453).
+// Every checkout of the workspace reads and writes that one directory, so the
+// daemon's platform bridge syncs every card whichever checkout raised it. All mutations route
+// through one Store type with its serialization discipline; surfaces never
+// write the files directly (ADR-015 §C).
 type Store struct {
 	rootDir string
 	dir     string
-	// err is why the store directory could not be resolved (rootDir is not
-	// inside a git checkout, or the entry is unsafe). Every operation returns
-	// it; the store never falls back into the working tree.
+	// err is why the store could not be opened (rootDir is not inside a git
+	// checkout, or the workspace store directory is unsafe). Every operation
+	// returns it; the store never falls back into the working tree.
 	err error
 	now func() time.Time // injectable clock for tests
 
@@ -434,22 +438,122 @@ type Store struct {
 // reported instead of accumulating without bound.
 const emitQueueDepth = 1024
 
-// New constructs a Store for the checkout rootDir is in. The store lives in
-// the checkout's CHECKOUT/attention (ADR-024 § 7). When that cannot be
-// resolved (rootDir is not in a git checkout, or the entry is a symlink) the
-// store is still returned and every operation reports the error.
+// New constructs the Store for the workspace rootDir's checkout belongs to.
+// The store is STATE/attention/<workspace-key> (#3453): every checkout of one
+// workspace (the manifest root, the repositories its manifest lists, and any
+// linked or pipeline worktree of them) opens the same directory, so a card
+// raised in any of them reaches the daemon serving that workspace and shows in
+// `attention list` from every one. A different workspace on the same machine
+// opens a different directory, so one workspace's daemon can never resolve,
+// expire or upload another's cards (the boundary ApplyRelayedResolve,
+// SweepExpired and AttentionSyncService.SyncAll rely on, ADR-019).
+//
+// rootDir must be inside a git checkout. That checkout's per-checkout store
+// from an older build is migrated into the workspace store on first use
+// (migrateCheckoutStore). A migration failure is reported on stderr and does
+// not close the store: the cards already in it stay usable, and the next New
+// retries the migration.
+//
+// When the store cannot be opened (rootDir is not in a git checkout, or the
+// store directory is a symlink or not a directory) the store is still
+// returned and every operation reports the error.
 func New(rootDir string) *Store {
 	s := &Store{rootDir: rootDir, now: time.Now}
-	dir, err := layout.CheckoutPath(rootDir, layout.CheckoutAttention)
+	dir, err := workspaceStoreDir(rootDir)
 	if err != nil {
 		s.err = fmt.Errorf("attention: resolve the store directory: %w", err)
 		return s
+	}
+	if err := migrateCheckoutStore(rootDir, dir); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"attention: %v (the store is open; the migration is retried on the next open)\n", err)
 	}
 	s.dir = dir
 	return s
 }
 
-// Err reports why the store directory could not be resolved, or nil.
+// NewAt constructs a Store over the explicit directory dir instead of the
+// workspace store, migrating nothing. It exists for tests that run in parallel
+// and so cannot move the machine-state root with t.Setenv: each opens a store
+// of its own. Production callers use New, so that every checkout of a
+// workspace shares one store.
+func NewAt(dir string) *Store {
+	s := &Store{now: time.Now}
+	if dir == "" || !filepath.IsAbs(dir) {
+		s.err = fmt.Errorf("attention: store directory %q is not absolute", dir)
+		return s
+	}
+	s.dir = filepath.Clean(dir)
+	return s
+}
+
+// ErrUnsafeStoreDir reports a store directory, the workspace store or a legacy
+// per-checkout one being migrated, that is a symlink or not a directory.
+var ErrUnsafeStoreDir = errors.New("unsafe store directory")
+
+// workspaceKeyLen is how many hex characters of the workspace root's SHA-256
+// name its store directory: 64 bits, collision-free for the handful of
+// workspaces one machine holds, short enough to read in a path.
+const workspaceKeyLen = 16
+
+// workspaceStoreDir returns STATE/attention/<workspace-key> for the checkout
+// rootDir is in, created with mode 0700. The key is a hash of the canonical
+// workspace root (workspacemanifest.RootOf of the main checkout), so the local
+// path never leaves the machine and every checkout of the workspace agrees on
+// it. A linked worktree maps to its main checkout (the parent of the git
+// common dir) first: a pipeline worktree lives under STATE/worktrees, which
+// says nothing about its workspace.
+//
+// A symlink or a non-directory in place of STATE/attention or of the
+// workspace directory is refused: the store never follows a link out of the
+// machine-state root (ADR-024 § 17).
+func workspaceStoreDir(rootDir string) (string, error) {
+	if rootDir == "" || !filepath.IsAbs(rootDir) {
+		return "", fmt.Errorf("%w: resolving the workspace from %q", layout.ErrRootNotAbsolute, rootDir)
+	}
+	common, err := layout.GitCommonDir(filepath.Clean(rootDir))
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %w", layout.ErrNotGitRepository, rootDir, err)
+	}
+	root := workspacemanifest.RootOf(filepath.Dir(common))
+	sum := sha256.Sum256([]byte(root))
+	key := hex.EncodeToString(sum[:])[:workspaceKeyLen]
+
+	parent, err := layout.StateDir(layout.StateAttention)
+	if err != nil {
+		return "", err
+	}
+	if err := safeMkdir(parent); err != nil {
+		return "", err
+	}
+	dir := filepath.Join(parent, key)
+	if err := safeMkdir(dir); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// safeMkdir creates dir with mode 0700 and refuses a symlink or a
+// non-directory in its place.
+func safeMkdir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: %s is a symlink; remove it", ErrUnsafeStoreDir, dir)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%w: %s is not a directory; remove it", ErrUnsafeStoreDir, dir)
+	}
+	return nil
+}
+
+// Err reports why the store could not be opened (its directory could not be
+// resolved or is unsafe), or nil.
 func (s *Store) Err() error { return s.err }
 
 // Subscribe registers a transition listener. Safe to call concurrently;

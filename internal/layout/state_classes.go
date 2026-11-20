@@ -17,6 +17,14 @@ const (
 	// StateLogs is the machine log directory, pruned by internal/logretention
 	// (ADR-024 § 11).
 	StateLogs = "logs"
+	// StateAttention is the parent of the per-workspace Action Center stores
+	// (#3453): STATE/attention/<workspace-key>, one per workspace, keyed by a
+	// hash of the workspace root. Every checkout of a workspace raises into its
+	// workspace's store and that workspace's daemon syncs it, so a card raised
+	// in any checkout reaches the platform, while another workspace's daemon on
+	// the same machine never sees it. It replaced the per-checkout
+	// CHECKOUT/attention, whose cards internal/attention migrates.
+	StateAttention = "attention"
 )
 
 // StateDir returns <StateHome>/name, creating the machine-state root (mode

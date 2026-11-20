@@ -37,6 +37,7 @@ func newSocketTestServer(t *testing.T) (*Server, string) {
 }
 
 func TestDialClientRoundTrip(t *testing.T) {
+	layouttest.StateHome(t)
 	_, sockPath := newSocketTestServer(t)
 
 	ctx := context.Background()

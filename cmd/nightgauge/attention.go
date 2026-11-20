@@ -2,8 +2,8 @@ package main
 
 // `nightgauge attention list|show|resolve` — the local CLI surface over the
 // Action Center DecisionRequest store (ADR 015). It reads and mutates the same
-// store the daemon writes (the checkout's .git/nightgauge-worktree/attention),
-// through the one Store type
+// store the daemon writes (the workspace's STATE/attention/<workspace-key>,
+// #3453), through the one Store type
 // (single-writer discipline: atomic temp+rename + terminal-state CAS make a
 // standalone CLI resolve safe against a concurrent daemon writer).
 //
@@ -70,6 +70,35 @@ and resolve it — each option maps to a deterministic, audited verb.`,
 	cmd.AddCommand(attentionMuteCmd())
 	cmd.AddCommand(attentionUnmuteCmd())
 	cmd.AddCommand(attentionSweepCmd())
+	cmd.AddCommand(attentionPathCmd())
+	return cmd
+}
+
+// attentionPathCmd prints the store directory of the workspace --workdir
+// belongs to: STATE/attention/<workspace-key> (#3453). The key is a hash of
+// the workspace root, so a script cannot derive it; it asks.
+func attentionPathCmd() *cobra.Command {
+	var workdir string
+	cmd := &cobra.Command{
+		Use:          "path",
+		Short:        "Print this workspace's attention store directory",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		Example:      `  ls "$(nightgauge attention path)"`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			root, err := resolveAttentionWorkdir(workdir)
+			if err != nil {
+				return err
+			}
+			store := attention.New(root)
+			if err := store.Err(); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), store.Dir())
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Project root (default: current working directory)")
 	return cmd
 }
 

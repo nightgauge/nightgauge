@@ -63,6 +63,7 @@ func TestCredentialCard_IdentityIsTheOwner(t *testing.T) {
 // AC3: a sweep where every repo fails on 401 raises ONE card, not one per repo
 // and not none; the next 401 sweep refreshes it; a clean sweep retracts it.
 func TestReconcileCredentialCards_OneCardPerOwnerUntilItSweepsCleanly(t *testing.T) {
+	layouttest.StateHome(t)
 	store := attention.New(layouttest.Repo(t))
 	repos := []string{"acme/web", "acme/api", "acme/jobs"}
 
@@ -102,6 +103,7 @@ func TestReconcileCredentialCards_OneCardPerOwnerUntilItSweepsCleanly(t *testing
 // Owners are independent: a dead credential for one does not raise or hold a
 // card for another.
 func TestReconcileCredentialCards_OwnersAreIndependent(t *testing.T) {
+	layouttest.StateHome(t)
 	store := attention.New(layouttest.Repo(t))
 	obs := append(unauthorized("acme/web"), evaluated("octo/site")...)
 	if _, err := ReconcileCredentialCards(store, obs); err != nil {

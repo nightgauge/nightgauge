@@ -104,6 +104,7 @@ func TestAttentionSweepRaisesAndIsIdempotent(t *testing.T) {
 }
 
 func TestAttentionSweepJSONReportsTheReconciliation(t *testing.T) {
+	layouttest.StateHome(t)
 	dir := layouttest.Repo(t)
 	withRegisteredProducer(t, cliObservation("k:branch", "f1", "default branch is red"))
 
