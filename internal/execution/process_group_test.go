@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -377,5 +378,79 @@ func TestSignalProcessTree_ReapedLeaderStillReachesSurvivors(t *testing.T) {
 	}
 	if !processGroupGone(pgid, 2*time.Second) {
 		t.Errorf("survivor %d of reaped leader %d's group was not signalled", child, pgid)
+	}
+}
+
+// TestSignalProcessTree_StaleProcessUnderForkLoadSparesOwnGroup (#3443) guards
+// the #3454 predicates under the fork load of a concurrent gate. It is not a
+// reproduction of the exit 241: kill(-pid) reaches only the group whose ID is
+// pid, and a live group ID is never reused, so a stale leader cannot alias the
+// caller's group. What it pins is the explicit refusal: the caller's own group
+// and pid 1 are never accepted for a group signal (removing that check in
+// leadsForeignGroup fails this test), a reaped leader with an empty group is
+// not signalled while pids churn, and a live foreign leader still is (the
+// positive control, so the guard cannot simply disable group signals). SIGTERM
+// is caught so any stray group signal is reported instead of killing the
+// binary.
+func TestSignalProcessTree_StaleProcessUnderForkLoadSparesOwnGroup(t *testing.T) {
+	caught := make(chan os.Signal, 16)
+	signal.Notify(caught, syscall.SIGTERM)
+	t.Cleanup(func() { signal.Stop(caught) })
+
+	stop := make(chan struct{})
+	churned := make(chan struct{})
+	go func() {
+		defer close(churned)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = exec.Command("true").Run()
+			}
+		}
+	}()
+	t.Cleanup(func() { close(stop); <-churned })
+
+	own := syscall.Getpgrp()
+	if ownProc, err := os.FindProcess(own); err == nil {
+		if leadsForeignGroup(ownProc) || orphanedForeignGroup(ownProc) {
+			t.Error("the caller's own process group was accepted for a group signal")
+		}
+	}
+	if init, err := os.FindProcess(1); err == nil {
+		if leadsForeignGroup(init) || orphanedForeignGroup(init) {
+			t.Error("pid 1 was accepted; kill(-1) would broadcast")
+		}
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for i := 0; i < 200 && time.Now().Before(deadline); i++ {
+		stale := exec.Command("true")
+		stale.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := stale.Run(); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if signalProcessTree(stale.Process, syscall.SIGTERM) {
+			t.Fatalf("iteration %d: a reaped leader with an empty group was signalled", i)
+		}
+	}
+
+	leader := startGroupLeader(t)
+	exited := make(chan struct{})
+	go func() { _ = leader.Wait(); close(exited) }()
+	if !signalProcessTree(leader.Process, syscall.SIGTERM) {
+		t.Fatal("a live foreign group leader was not signalled under fork load")
+	}
+	select {
+	case <-exited:
+	case <-time.After(2 * time.Second):
+		t.Error("the live leader survived SIGTERM")
+	}
+
+	select {
+	case sig := <-caught:
+		t.Errorf("%v reached the test's own process group", sig)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
