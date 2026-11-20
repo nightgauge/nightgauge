@@ -1532,9 +1532,10 @@ func signalProcessTree(proc *os.Process, sig syscall.Signal) bool {
 	// startProcess made the child a group leader, and only while it still is
 	// (#3443): once the leader is reaped its pid number can be reused under
 	// fork load, and kill(-pid) would then hit whatever group that number now
-	// leads, or the caller's own group (a `go test` binary running the daemon
-	// in-process). So group-signal only a live process that leads a group
-	// other than ours; otherwise signal the pid alone, a no-op once reaped.
+	// leads. So group-signal only a live process that leads a group other than
+	// ours; otherwise signal the pid alone, a no-op once reaped. Refusing our
+	// own group is defensive: a live group ID is never reused, so no known path
+	// aliases it, and the exit-241 sender is unidentified (#3446).
 	if leadsForeignGroup(proc) || orphanedForeignGroup(proc) {
 		if err := syscall.Kill(-proc.Pid, sig); err == nil {
 			return true

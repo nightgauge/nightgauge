@@ -10,9 +10,13 @@ import (
 )
 
 // isolateProcessGroup starts the serve daemon as the leader of its own process
-// group (#3443). In the test binary's group, which is also go test's and the
-// gate's shard wrapper's, any group signal resolved on the daemon side would
-// SIGTERM the whole shard: exit 241 under concurrent gate load.
+// group (#3443). Exit 241 is the gate's shard wrapper reporting that a SIGTERM
+// killed go test; the sender is unidentified (#3446). No daemon path that
+// signals the test binary's group was found: kill(-pid) reaches only the group
+// whose ID is pid, and a live group ID is never reused, so signalProcessTree
+// cannot alias the caller's group (see
+// TestSignalProcessTree_StaleProcessUnderForkLoadSparesOwnGroup). Isolation is
+// defence in depth: any group signal the daemon sends stays in its own group.
 func isolateProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
