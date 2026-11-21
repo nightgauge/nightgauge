@@ -3884,6 +3884,19 @@ func (s *Server) registerMethods() {
 			}
 		}
 
+		// The run's pull request (#3455): pr-create wrote pr-<N>.json, and the
+		// platform run events carry it from here on, pipeline_done included.
+		// The scheduler records its own runs' PR after the same stage.
+		if stage == state.StagePRCreate && p.Status == "complete" && !res.schedulerOwned {
+			if u := orchestrator.LoadPrUrl(rt.Snapshot().WorktreeDir, p.IssueNumber); u != "" {
+				rt.SetPrUrl(u)
+			} else if root := s.repoRoot(repo); root != "" {
+				if u := orchestrator.LoadPrUrl(root, p.IssueNumber); u != "" {
+					rt.SetPrUrl(u)
+				}
+			}
+		}
+
 		// Emit stateChanged event. The envelope carries the RESOLVED run identity
 		// (Decision 6) so PipelineStateService and PipelineSlotsTracker can route
 		// by run rather than by issue number — the filter that closes F19.
@@ -3904,7 +3917,7 @@ func (s *Server) registerMethods() {
 		// stage_completed event too (#233), so it carries the real totals that
 		// reconcile the live stage_progress estimate. Zero for non-complete
 		// transitions (buildStageTelemetryEvent only writes them on "complete").
-		s.emitStageTelemetry(runID, repo, p.IssueNumber, p.Stage, p.Status, p.Error, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd, rt)
+		s.emitStageTelemetry(runID, repo, p, rt)
 
 		return map[string]string{"status": "ok"}, nil
 	}
@@ -3947,7 +3960,7 @@ func (s *Server) registerMethods() {
 
 		// Emit the live in-stage token/cost estimate as a stage_progress event.
 		// Skipped internally (no runID / bookend stage) rather than erroring.
-		s.emitStageProgressTelemetry(runID, repo, p.IssueNumber, p.Stage, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd, res.rs.RunVisibility())
+		s.emitStageProgressTelemetry(runID, repo, p.IssueNumber, p.Stage, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd, res.rs)
 
 		return map[string]string{"status": "ok"}, nil
 	}
@@ -4209,7 +4222,7 @@ func (s *Server) registerMethods() {
 		}
 
 		// STEP 2 — the work, UNLOCKED, against the snapshot.
-		s.emitPipelineDoneTelemetry(runID, p, approvalHold && !p.Success, snap.Visibility)
+		s.emitPipelineDoneTelemetry(runID, p, approvalHold && !p.Success, snap)
 
 		// Write the authoritative interactive RunRecord (#232). notifyComplete
 		// is the interactive-only terminal funnel — the Go scheduler path emits
@@ -4805,6 +4818,23 @@ func (s *Server) registerMethods() {
 			// that is exactly how a whole vocabulary went missing without any
 			// surface reporting a problem. Say so rather than answering ok.
 			return nil, fmt.Errorf("pipeline.notifyPhaseTransition: unknown eventType %q (want start|complete|passed|skip|unreported|observed|fail)", p.EventType)
+		}
+
+		// The platform's live run view (#3455). One emitter per run owner: a
+		// scheduler-owned run's phases are sent by the scheduler, which saw
+		// this same transition through RecordPhase*ForRun above.
+		if !res.schedulerOwned {
+			index, total := p.Index, p.Total
+			if p.EventType == "complete" && total <= 0 {
+				if i, t, ok := rt.PhasePosition(stage, p.Name); ok {
+					index, total = i, t
+				}
+			}
+			repo := rt.TargetRepo()
+			if repo == "" {
+				repo = p.Repo
+			}
+			s.emitPhaseTelemetry(runID, repo, p.IssueNumber, p.Stage, p.Name, index, total, p.EventType, rt)
 		}
 
 		return map[string]string{"status": "ok"}, nil

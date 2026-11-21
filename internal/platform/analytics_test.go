@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1387,5 +1388,255 @@ func TestCostAnalyticsAgainstContractEnforcingServer(t *testing.T) {
 				t.Fatalf("response decoded wrong: %+v", res)
 			}
 		})
+	}
+}
+
+// wireKeys returns the sorted key set of a wire map.
+func wireKeys(w map[string]interface{}) []string {
+	keys := make([]string, 0, len(w))
+	for k := range w {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// TestBuildEventWire_LegacyStageProgress_KeySetUnchanged pins that a
+// stage_progress with none of the #3455 fields set keeps its pre-#3455 shape.
+func TestBuildEventWire_LegacyStageProgress_KeySetUnchanged(t *testing.T) {
+	w := buildEventWire(PipelineEvent{EventType: "stage_progress", RunID: "r", Stage: "feature-dev", Timestamp: time.Now()})
+	got := strings.Join(wireKeys(w), ",")
+	want := "cacheReadTokens,costUsd,inputTokens,message,outputTokens,runId,stage,timestamp,type"
+	if got != want {
+		t.Fatalf("keys = %s, want %s", got, want)
+	}
+}
+
+func TestBuildEventWire_StageProgress_CarriesPhase(t *testing.T) {
+	w := buildEventWire(PipelineEvent{
+		EventType: "stage_progress", RunID: "r", Stage: "feature-dev", Timestamp: time.Now(),
+		Phase: PhaseFromZeroBased("implementation", 7, 17, "start"),
+	})
+	ph, ok := w["phase"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("phase missing: %v", w)
+	}
+	if ph["name"] != "implementation" || ph["index"] != 8 || ph["total"] != 17 || ph["status"] != "started" {
+		t.Errorf("phase = %v, want implementation 8/17 started", ph)
+	}
+	if w["message"] != "implementation (8/17) started" {
+		t.Errorf("message = %q, want the phase label", w["message"])
+	}
+}
+
+func TestBuildEventWire_Phase_ExplicitMessageWinsAndIsCapped(t *testing.T) {
+	long := strings.Repeat("x", 500)
+	w := buildEventWire(PipelineEvent{
+		EventType: "stage_progress", RunID: "r", Stage: "feature-dev", Timestamp: time.Now(),
+		Metadata: map[string]interface{}{"message": long},
+		Phase:    PhaseFromZeroBased("testing", 0, 3, "complete"),
+	})
+	if m := w["message"].(string); len(m) != 200 {
+		t.Errorf("message length = %d, want 200", len(m))
+	}
+}
+
+func TestBuildEventWire_Phase_InvalidOmittedNotDropped(t *testing.T) {
+	cases := map[string]*PipelinePhase{
+		"index zero":       {Name: "a", Index: 0, Total: 3, Status: "started"},
+		"index past total": {Name: "a", Index: 4, Total: 3, Status: "started"},
+		"total too big":    {Name: "a", Index: 1, Total: 1001, Status: "started"},
+		"empty name":       {Name: "", Index: 1, Total: 3, Status: "started"},
+		"bad status":       {Name: "a", Index: 1, Total: 3, Status: "running"},
+	}
+	for name, ph := range cases {
+		w := buildEventWire(PipelineEvent{EventType: "stage_progress", RunID: "r", Stage: "feature-dev", Timestamp: time.Now(), Phase: ph})
+		if w == nil {
+			t.Fatalf("%s: event dropped", name)
+		}
+		if _, has := w["phase"]; has {
+			t.Errorf("%s: invalid phase sent: %v", name, w["phase"])
+		}
+		if w["message"] != "" {
+			t.Errorf("%s: message = %q, want empty", name, w["message"])
+		}
+	}
+}
+
+func TestBuildEventWire_Phase_NameTruncatedTo120(t *testing.T) {
+	w := buildEventWire(PipelineEvent{
+		EventType: "stage_progress", RunID: "r", Stage: "feature-dev", Timestamp: time.Now(),
+		Phase: &PipelinePhase{Name: strings.Repeat("n", 300), Index: 1, Total: 1, Status: "skipped"},
+	})
+	if n := w["phase"].(map[string]interface{})["name"].(string); len(n) != 120 {
+		t.Errorf("name length = %d, want 120", len(n))
+	}
+}
+
+func TestBuildEventWire_Phase_OnlyOnStageProgress(t *testing.T) {
+	ph := &PipelinePhase{Name: "a", Index: 1, Total: 2, Status: "started"}
+	for _, typ := range []string{"stage_started", "stage_completed", "stage_error", "pipeline_done"} {
+		w := buildEventWire(PipelineEvent{EventType: typ, RunID: "r", Stage: "feature-dev", Timestamp: time.Now(), Phase: ph})
+		if _, has := w["phase"]; has {
+			t.Errorf("%s carries phase; the platform 400s on it", typ)
+		}
+	}
+}
+
+func TestBuildEventWire_PR_OnEveryTypeWhenSet(t *testing.T) {
+	for _, typ := range []string{"stage_started", "stage_progress", "stage_completed", "stage_error", "pipeline_done"} {
+		w := buildEventWire(PipelineEvent{
+			EventType: typ, RunID: "r", Stage: "pr-create", Timestamp: time.Now(),
+			PRNumber: 12, PRURL: "https://github.com/o/r/pull/12",
+		})
+		if w["prNumber"] != 12 || w["prUrl"] != "https://github.com/o/r/pull/12" {
+			t.Errorf("%s: pr = %v/%v", typ, w["prNumber"], w["prUrl"])
+		}
+		w = buildEventWire(PipelineEvent{EventType: typ, RunID: "r", Stage: "pr-create", Timestamp: time.Now()})
+		if _, has := w["prNumber"]; has {
+			t.Errorf("%s: absent prNumber sent", typ)
+		}
+		if _, has := w["prUrl"]; has {
+			t.Errorf("%s: absent prUrl sent", typ)
+		}
+	}
+}
+
+func TestBuildEventWire_PR_BadURLOmitted(t *testing.T) {
+	for _, u := range []string{"http://github.com/o/r/pull/1", "github.com/o/r/pull/1", "https://x/" + strings.Repeat("a", 2048)} {
+		w := buildEventWire(PipelineEvent{EventType: "pipeline_done", RunID: "r", Timestamp: time.Now(), PRURL: u})
+		if _, has := w["prUrl"]; has {
+			t.Errorf("prUrl %q sent; want omitted", u)
+		}
+	}
+}
+
+func TestBuildEventWire_Estimate_StageStartedOnly(t *testing.T) {
+	cost := 3.25
+	w := buildEventWire(PipelineEvent{
+		EventType: "stage_started", RunID: "r", Stage: "issue-pickup", Timestamp: time.Now(),
+		EstimatedCostUsd: &cost, EstimateBasis: strings.Repeat("b", 60),
+	})
+	if w["estimatedCostUsd"] != 3.25 {
+		t.Errorf("estimatedCostUsd = %v, want 3.25", w["estimatedCostUsd"])
+	}
+	if b := w["estimateBasis"].(string); len(b) != 40 {
+		t.Errorf("estimateBasis length = %d, want 40", len(b))
+	}
+	for _, typ := range []string{"stage_progress", "stage_completed", "stage_error", "pipeline_done"} {
+		w := buildEventWire(PipelineEvent{EventType: typ, RunID: "r", Stage: "feature-dev", Timestamp: time.Now(), EstimatedCostUsd: &cost, EstimateBasis: "historical"})
+		if _, has := w["estimatedCostUsd"]; has {
+			t.Errorf("%s carries estimatedCostUsd; the platform 400s on it", typ)
+		}
+		if _, has := w["estimateBasis"]; has {
+			t.Errorf("%s carries estimateBasis", typ)
+		}
+	}
+}
+
+func TestBuildEventWire_Estimate_AbsentOrOutOfRangeOmitted(t *testing.T) {
+	over := 2500.0
+	neg := -1.0
+	for _, c := range []*float64{nil, &over, &neg} {
+		w := buildEventWire(PipelineEvent{EventType: "stage_started", RunID: "r", Stage: "issue-pickup", Timestamp: time.Now(), EstimatedCostUsd: c})
+		if _, has := w["estimatedCostUsd"]; has {
+			t.Errorf("estimate %v sent; want omitted", c)
+		}
+		if _, has := w["estimateBasis"]; has {
+			t.Error("empty estimateBasis sent")
+		}
+	}
+}
+
+func TestPhaseStatusFor(t *testing.T) {
+	cases := map[string]string{"start": "started", "complete": "completed", "passed": "completed",
+		"fail": "failed", "failed": "failed", "skip": "skipped", "skipped": "skipped"}
+	for in, want := range cases {
+		if got, ok := PhaseStatusFor(in); !ok || got != want {
+			t.Errorf("PhaseStatusFor(%q) = %q,%v want %q", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"unreported", "observed", "superseded", "running", ""} {
+		if _, ok := PhaseStatusFor(in); ok {
+			t.Errorf("PhaseStatusFor(%q) reported; want not sent", in)
+		}
+	}
+}
+
+func TestPRNumberFromURL(t *testing.T) {
+	if n := PRNumberFromURL("https://github.com/o/r/pull/3455"); n != 3455 {
+		t.Errorf("got %d, want 3455", n)
+	}
+	for _, u := range []string{
+		"", "https://github.com/o/r/issues/1", "https://github.com/o/r/pull/0",
+		"http://github.com/o/r/pull/1", "https://evil.example/o/r/pull/1",
+		"https://evil.example/x?u=/pull/1", "https://github.com/o/r/pull/1/files",
+		"https://user@github.com/o/r/pull/1", "https://github.com/o/r/pull/1#frag",
+	} {
+		if n := PRNumberFromURL(u); n != 0 {
+			t.Errorf("PRNumberFromURL(%q) = %d, want 0", u, n)
+		}
+	}
+}
+
+func TestStampPR(t *testing.T) {
+	var e PipelineEvent
+	StampPR(&e, "")
+	if e.PRURL != "" || e.PRNumber != 0 {
+		t.Fatalf("empty url stamped %+v", e)
+	}
+	StampPR(&e, "https://github.com/nightgauge/nightgauge/pull/3460")
+	if e.PRURL != "https://github.com/nightgauge/nightgauge/pull/3460" || e.PRNumber != 3460 {
+		t.Fatalf("got url=%q number=%d", e.PRURL, e.PRNumber)
+	}
+	var phish PipelineEvent
+	StampPR(&phish, "https://evil.example/o/r/pull/1")
+	if phish.PRURL != "" || phish.PRNumber != 0 {
+		t.Fatalf("non-GitHub url stamped %+v", phish)
+	}
+	StampPR(nil, "https://github.com/o/r/pull/1") // must not panic
+}
+
+func TestPhaseProgressEvent(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	ev, ok := PhaseProgressEvent("run-1", "o/r", 7, "feature-dev", "implementation", 7, 17, "start", now)
+	if !ok {
+		t.Fatal("start on feature-dev must map to an event")
+	}
+	if ev.EventType != "stage_progress" || ev.RunID != "run-1" || ev.Repo != "o/r" || ev.IssueNumber != 7 || ev.Stage != "feature-dev" {
+		t.Fatalf("unexpected event %+v", ev)
+	}
+	want := PipelinePhase{Name: "implementation", Index: 8, Total: 17, Status: "started"}
+	if ev.Phase == nil || *ev.Phase != want {
+		t.Fatalf("phase = %+v, want %+v (1-based)", ev.Phase, want)
+	}
+	for _, tc := range []struct {
+		name, runID, stage, transition string
+		index, total                   int
+	}{
+		{"no run id", "", "feature-dev", "start", 0, 3},
+		{"bookend stage", "run-1", "pipeline-start", "start", 0, 3},
+		{"unreported", "run-1", "feature-dev", "unreported", 0, 3},
+		{"observed", "run-1", "feature-dev", "observed", 0, 3},
+		{"superseded", "run-1", "feature-dev", "superseded", 0, 3},
+		{"index past total", "run-1", "feature-dev", "start", 3, 3},
+		{"no total", "run-1", "feature-dev", "complete", 0, 0},
+	} {
+		if _, ok := PhaseProgressEvent(tc.runID, "o/r", 7, tc.stage, "p", tc.index, tc.total, tc.transition, now); ok {
+			t.Errorf("%s: want no event", tc.name)
+		}
+	}
+}
+
+func TestIsPipelineStage(t *testing.T) {
+	for _, s := range []string{"issue-pickup", "feature-planning", "feature-dev", "feature-validate", "pr-create", "pr-merge"} {
+		if !IsPipelineStage(s) {
+			t.Errorf("%s must be a platform stage", s)
+		}
+	}
+	for _, s := range []string{"", "init", "pipeline-start", "pipeline-finish", "spike-materialize"} {
+		if IsPipelineStage(s) {
+			t.Errorf("%q must not be a platform stage", s)
+		}
 	}
 }

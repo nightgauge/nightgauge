@@ -2151,22 +2151,27 @@ func (s *Scheduler) IsRunLive(runID string) bool {
 // its runtimes in the IPC server's own registry instead), and equally a no-op
 // for an id this scheduler does not own — which is the guard's old job, now
 // done by the lookup itself.
-func (s *Scheduler) RecordPhaseStartForRun(runID string, _ int, stage, name string, index, total int) {
+func (s *Scheduler) RecordPhaseStartForRun(runID string, issue int, stage, name string, index, total int) {
 	rt := s.LookupRunByID(runID)
 	if rt == nil {
 		return
 	}
 	rt.BeginPhase(state.PipelineStage(stage), name, index, total)
+	// The IPC server never emits a scheduler-owned run's phases (#3455).
+	s.emitPhaseTelemetry(rt, rt.TargetRepo(), issue, stage, name, index, total, "start")
 }
 
 // RecordPhaseCompleteForRun is RecordPhaseStartForRun's complete arm. It
 // resolves by identity for the same reason.
-func (s *Scheduler) RecordPhaseCompleteForRun(runID string, _ int, stage, name string) {
+func (s *Scheduler) RecordPhaseCompleteForRun(runID string, issue int, stage, name string) {
 	rt := s.LookupRunByID(runID)
 	if rt == nil {
 		return
 	}
 	rt.CompletePhase(state.PipelineStage(stage), name)
+	if index, total, ok := rt.PhasePosition(state.PipelineStage(stage), name); ok {
+		s.emitPhaseTelemetry(rt, rt.TargetRepo(), issue, stage, name, index, total, "complete")
+	}
 }
 
 // RunIDForIssue returns the identity of the scheduler-owned run for repo's
@@ -5834,7 +5839,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if !snap.StartedAt.IsZero() {
 				totalDurationMs = int(time.Since(snap.StartedAt).Milliseconds())
 			}
-			s.telemetrySvc.EmitPipelineEvent(context.Background(), platform.PipelineEvent{
+			s.emitRunEvent(context.Background(), snap, platform.PipelineEvent{
 				RunID:           snap.RunID,
 				Visibility:      snap.Visibility,
 				IssueNumber:     item.Number,
@@ -6064,7 +6069,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				} else {
 					log.Printf("#%d: %s", item.Number, describeShippedBranchCleanup(branchName, res))
 				}
-			case loadPrUrl(stageWorkspace(runtime, workspaceRoot), item.Number) != "":
+			case LoadPrUrl(stageWorkspace(runtime, workspaceRoot), item.Number) != "":
 				log.Printf("#%d: run failed but PR exists — keeping origin/%s (the PR holds the work), dropping local ref only",
 					item.Number, branchName)
 				_, _ = s.execMgr.CleanupLocalBranch(item.Repo, branchName)
@@ -7386,7 +7391,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			s.onStageStart(item.Repo, item.Number, string(stage), item.Title)
 		}
 		if s.telemetrySvc != nil && s.telemetryEnabled {
-			s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+			s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 				RunID:       runtime.RunID,
 				Visibility:  runtime.RunVisibility(),
 				IssueNumber: item.Number,
@@ -7420,6 +7425,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// Build phase event callback for this stage — always record in runtime
 		phaseEventFn := func(pStage, pName string, pIndex, pTotal int) {
 			recordPhaseProgress(runtime, workspaceRoot, item.Number, stage, pName, pIndex, pTotal, false)
+			s.emitPhaseTelemetry(runtime, item.Repo, item.Number, string(stage), pName, pIndex, pTotal, "start")
 			if s.onPhaseDetected != nil {
 				s.onPhaseDetected(item.Repo, item.Number, pStage, pName, pIndex, pTotal)
 			}
@@ -7429,6 +7435,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// onPhaseDetected's "a phase started" channel.
 		phasePassedFn := func(pStage, pName string, pIndex, pTotal int) {
 			recordPhaseProgress(runtime, workspaceRoot, item.Number, stage, pName, pIndex, pTotal, true)
+			s.emitPhaseTelemetry(runtime, item.Repo, item.Number, string(stage), pName, pIndex, pTotal, "passed")
 			if s.onPhaseSettled != nil {
 				s.onPhaseSettled(item.Repo, item.Number, pStage, pName, pIndex, pTotal, "passed")
 			}
@@ -7712,7 +7719,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			log.Printf("#%d: stage %s — claude CLI model_refusal_fallback: %s → %s (category %q); attributing served model (#91)",
 				item.Number, stage, result.RefusalFallbackFrom, result.RefusalFallbackTo, result.RefusalFallbackCategory)
 			if s.telemetrySvc != nil && s.telemetryEnabled {
-				s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+				s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 					RunID:       runtime.RunID,
 					Visibility:  runtime.RunVisibility(),
 					IssueNumber: item.Number,
@@ -7839,7 +7846,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				}
 			}
 		case state.StagePRCreate:
-			if u := loadPrUrl(stageWorkspace(runtime, workspaceRoot), item.Number); u != "" {
+			if u := LoadPrUrl(stageWorkspace(runtime, workspaceRoot), item.Number); u != "" {
 				runtime.SetPrUrl(u)
 				s.emitStateChanged(item.Repo, item.Number, runtime)
 			}
@@ -7965,7 +7972,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						log.Printf("#%d: Anomaly: LLM run on atomic-eligible stage stage=%s cost=$%.4f predicate=%q",
 							item.Number, stage, anomaly.StageCostUSD, anomaly.DeterministicPredicate)
 						if s.telemetrySvc != nil && s.telemetryEnabled {
-							s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+							s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 								RunID:       runtime.RunID,
 								Visibility:  runtime.RunVisibility(),
 								IssueNumber: item.Number,
@@ -8107,7 +8114,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					err = nil
 					exitCode = 0
 					if s.telemetrySvc != nil && s.telemetryEnabled {
-						s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+						s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 							RunID:         runtime.RunID,
 							Visibility:    runtime.RunVisibility(),
 							IssueNumber:   item.Number,
@@ -8208,7 +8215,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				reconciledNonTerminal = true
 				reconciledArm = arm
 				if s.telemetrySvc != nil && s.telemetryEnabled {
-					s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+					s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 						RunID:       runtime.RunID,
 						Visibility:  runtime.RunVisibility(),
 						IssueNumber: item.Number,
@@ -8353,7 +8360,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				log.Printf("#%d: stage %s aborted by network-outage circuit breaker — no retry, no escalation",
 					item.Number, stage)
 				if s.telemetrySvc != nil && s.telemetryEnabled {
-					s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+					s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 						RunID:       runtime.RunID,
 						Visibility:  runtime.RunVisibility(),
 						IssueNumber: item.Number,
@@ -8390,7 +8397,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				log.Printf("#%d: stage %s deferred — GitHub rate limit; no LLM fallback, will retry after bucket reset [#3976]",
 					item.Number, stage)
 				if s.telemetrySvc != nil && s.telemetryEnabled {
-					s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+					s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 						RunID:       runtime.RunID,
 						Visibility:  runtime.RunVisibility(),
 						IssueNumber: item.Number,
@@ -8637,7 +8644,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 							log.Printf("#%d: %s — stall-kill in %s, rewinding to %s (signal=%s)",
 								item.Number, StallRetriedOutcome, stage, decision.TargetStage, signal.SignalType)
 							if s.telemetrySvc != nil && s.telemetryEnabled {
-								s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+								s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 									RunID:       runtime.RunID,
 									Visibility:  runtime.RunVisibility(),
 									IssueNumber: item.Number,
@@ -8687,7 +8694,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					runtime.SetStageError(stage, terminalFailureReason(exitCode, err, stallErrMsg))
 					s.emitStateChanged(item.Repo, item.Number, runtime)
 					if s.telemetrySvc != nil && s.telemetryEnabled {
-						s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+						s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 							RunID:       runtime.RunID,
 							Visibility:  runtime.RunVisibility(),
 							IssueNumber: item.Number,
@@ -8788,7 +8795,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						log.Printf("#%d: failed to persist state after recovery attempt: %v", item.Number, persistErr)
 					}
 					if s.telemetrySvc != nil && s.telemetryEnabled {
-						s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+						s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 							RunID:       runtime.RunID,
 							Visibility:  runtime.RunVisibility(),
 							IssueNumber: item.Number,
@@ -9166,7 +9173,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// unchanged) (#4072 review).
 			log.Printf("#%d: stage %s failed (exit %d): %s", item.Number, stage, exitCode, terminalReason)
 			if s.telemetrySvc != nil && s.telemetryEnabled {
-				s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+				s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 					RunID:       runtime.RunID,
 					Visibility:  runtime.RunVisibility(),
 					IssueNumber: item.Number,
@@ -9242,7 +9249,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			s.emitStateChanged(item.Repo, item.Number, runtime)
 			log.Printf("#%d: %s", item.Number, stageFailReason)
 			if s.telemetrySvc != nil && s.telemetryEnabled {
-				s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+				s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 					RunID:       runtime.RunID,
 					Visibility:  runtime.RunVisibility(),
 					IssueNumber: item.Number,
@@ -9330,7 +9337,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		}
 
 		if s.telemetrySvc != nil && s.telemetryEnabled {
-			s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+			s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 				RunID:       runtime.RunID,
 				Visibility:  runtime.RunVisibility(),
 				IssueNumber: item.Number,
@@ -10379,7 +10386,7 @@ func (s *Scheduler) gateRelaxContext(ctx context.Context, stage state.PipelineSt
 
 	relaxed, class := gates.RelaxDecision(changedFilesAgainstBase(stageWorkspace(runtime, workspaceRoot)), relaxClasses)
 	if s.telemetrySvc != nil && s.telemetryEnabled {
-		s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+		s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 			RunID:       runtime.RunID,
 			Visibility:  runtime.RunVisibility(),
 			IssueNumber: item.Number,
@@ -10914,10 +10921,11 @@ func loadGateResults(workspaceRoot string, issueNumber int) []state.GateResult {
 	return results
 }
 
-// loadPrUrl reads the PR URL from the pr-create stage's output context
+// LoadPrUrl reads the PR URL from the pr-create stage's output context
 // (pr-<N>.json — prefix "pr", matching stageOutputContextType[StagePRCreate]
-// and loadPRNumberForRecovery, not "pr-create").
-func loadPrUrl(workspaceRoot string, issueNumber int) string {
+// and loadPRNumberForRecovery, not "pr-create"). Exported for the IPC server,
+// whose extension-owned runs record the PR the same way (#3455).
+func LoadPrUrl(workspaceRoot string, issueNumber int) string {
 	path, err := stagecontext.ContextPath(workspaceRoot, issueNumber, "pr")
 	if err != nil {
 		return ""
@@ -11989,7 +11997,7 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 		s.emitStateChanged(item.Repo, item.Number, runtime)
 		log.Printf("#%d: pr-merge stage produced no verified merge — failing pipeline (%s)", item.Number, label)
 		if s.telemetrySvc != nil && s.telemetryEnabled {
-			s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+			s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 				RunID:       runtime.RunID,
 				Visibility:  runtime.RunVisibility(),
 				IssueNumber: item.Number,
@@ -12230,7 +12238,7 @@ func (s *Scheduler) tryDeterministicPRMerge(
 		log.Printf("#%d: pr-merge deterministic path: %s (PR #%d, %s, %dms)",
 			item.Number, detResult.Path, detResult.PRNumber, detResult.Reason, detResult.DurationMs)
 		if s.telemetrySvc != nil && s.telemetryEnabled {
-			s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+			s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 				RunID:       runtime.RunID,
 				Visibility:  runtime.RunVisibility(),
 				IssueNumber: item.Number,
@@ -12527,7 +12535,7 @@ func (s *Scheduler) tryDeterministicPRCreate(
 		log.Printf("#%d: pr-create deterministic path: %s (PR #%d, %s, %dms)",
 			item.Number, detResult.Path, detResult.PRNumber, detResult.Reason, detResult.DurationMs)
 		if s.telemetrySvc != nil && s.telemetryEnabled {
-			s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+			s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 				RunID:       runtime.RunID,
 				Visibility:  runtime.RunVisibility(),
 				IssueNumber: item.Number,
@@ -12609,7 +12617,7 @@ func (s *Scheduler) emitStagePunt(ctx context.Context, runtime *state.RuntimeSta
 	if s.telemetrySvc == nil || !s.telemetryEnabled {
 		return
 	}
-	s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
+	s.emitRunEvent(ctx, runtime, platform.PipelineEvent{
 		RunID:       runtime.RunID,
 		Visibility:  runtime.RunVisibility(),
 		IssueNumber: issueNumber,

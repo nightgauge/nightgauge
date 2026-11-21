@@ -587,6 +587,11 @@ export class PipelineStateService implements vscode.Disposable {
    */
   private remoteRunId: string | undefined;
   /**
+   * Whether this run's pre-flight estimate already rode a `running`
+   * transition (#3455). Reset by {@link beginRun} so each run sends it once.
+   */
+  private preFlightEstimateSent = false;
+  /**
    * "private" when the active run was started private (#2400), installed by
    * {@link beginRun}. Sent on every transition and on the completion notice,
    * so Go marks the run private before its first platform event and keeps
@@ -995,6 +1000,7 @@ export class PipelineStateService implements vscode.Disposable {
     this.visibility = visibility === "private" ? "private" : undefined;
     this.privateConfirmation = undefined;
     this.bookedStageUsage.clear();
+    this.preFlightEstimateSent = false;
   }
 
   /**
@@ -1222,6 +1228,7 @@ export class PipelineStateService implements vscode.Disposable {
           stage,
           status: "running",
           ...(stagePid ? { stagePid } : {}),
+          ...this.preFlightEstimateOnce(),
           runId,
           ...(this.remoteRunId ? { remoteRunId: this.remoteRunId } : {}),
           ...this.visibilityParam(),
@@ -1746,6 +1753,27 @@ export class PipelineStateService implements vscode.Disposable {
     } catch (err) {
       console.debug("[PipelineStateService] notifyPrMerged failed (best-effort)", err);
     }
+  }
+
+  /**
+   * The run's pre-flight estimate (#3455), returned for the FIRST `running`
+   * transition only so Go copies it onto the run's first `stage_started`
+   * platform event exactly once. Empty when no estimate was computed or the
+   * run is unpriced: an absent estimate is omitted, never sent as 0.
+   */
+  private preFlightEstimateOnce(): Pick<
+    NotifyStageTransitionParams,
+    "estimatedCostUsd" | "estimateBasis"
+  > {
+    if (this.preFlightEstimateSent) return {};
+    const meta = this._lastState?.pipeline_meta;
+    const cost = meta?.budget_estimate_usd;
+    const basis = meta?.budget_estimate_source;
+    if (cost === undefined || !Number.isFinite(cost) || !basis || basis === "unpriced") {
+      return {};
+    }
+    this.preFlightEstimateSent = true;
+    return { estimatedCostUsd: cost, estimateBasis: basis.slice(0, 40) };
   }
 
   setMeta(meta: Partial<PipelineMeta>): void {

@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,6 +86,174 @@ type PipelineEvent struct {
 	OutputTokens    int
 	CacheReadTokens int
 	CostUsd         float64
+
+	// Phase is the in-stage phase transition a stage_progress event reports
+	// (#3455, platform #1797). Sent only on stage_progress and only when it is
+	// inside the contract; nil on every other event.
+	Phase *PipelinePhase
+
+	// PRNumber/PRURL report the run's pull request on any event type once
+	// pr-create has opened or reused one (#3455, platform #1799). Zero/empty
+	// until then; an omitted value never clears the stored one.
+	PRNumber int
+	PRURL    string
+
+	// EstimatedCostUsd/EstimateBasis carry the pre-flight estimate on the
+	// run's first stage_started only (#3455). nil/empty when no estimate was
+	// computed (scheduler-driven runs have none).
+	EstimatedCostUsd *float64
+	EstimateBasis    string
+}
+
+// PipelinePhase is one in-stage phase transition (#3455). Index is 1-based,
+// matching the platform contract (`index >= 1`, `total >= index`); emitters
+// convert the tree's 0-based phase indexes with PhaseFromZeroBased.
+type PipelinePhase struct {
+	Name   string
+	Index  int
+	Total  int
+	Status string // started | completed | failed | skipped
+}
+
+// Platform contract bounds for the optional run-fact fields (#3455).
+const (
+	phaseNameMaxLen     = 120
+	phaseIndexMax       = 1000
+	progressMessageMax  = 200
+	prURLMaxLen         = 2048
+	estimateMaxUsd      = 2000
+	estimateBasisMaxLen = 40
+)
+
+// phaseStatuses is the platform's phase status enum.
+var phaseStatuses = map[string]bool{
+	"started": true, "completed": true, "failed": true, "skipped": true,
+}
+
+// PhaseStatusFor maps a local phase transition onto the platform's phase
+// status. Only start, completion, failure and skip are reported; the
+// evidence-only transitions (unreported, observed, superseded) return false.
+func PhaseStatusFor(transition string) (string, bool) {
+	switch transition {
+	case "start":
+		return "started", true
+	case "complete", "passed":
+		return "completed", true
+	case "fail", "failed":
+		return "failed", true
+	case "skip", "skipped":
+		return "skipped", true
+	}
+	return "", false
+}
+
+// PhaseFromZeroBased builds the wire phase from a 0-based phase index, the
+// convention of skill markers and PhaseReporter. Returns nil when the
+// transition is not reported or the result would fall outside the contract,
+// so the caller sends nothing rather than an event the platform rejects.
+func PhaseFromZeroBased(name string, index, total int, transition string) *PipelinePhase {
+	status, ok := PhaseStatusFor(transition)
+	if !ok {
+		return nil
+	}
+	p := &PipelinePhase{Name: name, Index: index + 1, Total: total, Status: status}
+	if !p.valid() {
+		return nil
+	}
+	return p
+}
+
+// valid reports whether the phase satisfies the platform contract.
+func (p *PipelinePhase) valid() bool {
+	return p != nil && p.Name != "" && phaseStatuses[p.Status] &&
+		p.Index >= 1 && p.Index <= p.Total && p.Total <= phaseIndexMax
+}
+
+// Label renders the phase as the run's latest-activity line, e.g.
+// "implementation (8/17) started".
+func (p *PipelinePhase) Label() string {
+	return fmt.Sprintf("%s (%d/%d) %s", p.Name, p.Index, p.Total, p.Status)
+}
+
+// prPathRE is the path of a GitHub pull request page: /<owner>/<repo>/pull/<N>.
+var prPathRE = regexp.MustCompile(`^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/([1-9][0-9]*)$`)
+
+// PRNumberFromURL parses the pull request number from a GitHub PR URL, or 0
+// when prURL is not one: https, host github.com, path /<owner>/<repo>/pull/<N>.
+// The URL comes from the agent-written pr-<N>.json, so anything else is
+// refused rather than shown as a link on the hosted run view.
+func PRNumberFromURL(prURL string) int {
+	u, err := url.Parse(prURL)
+	if err != nil || u.Scheme != "https" || u.Host != "github.com" ||
+		u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return 0
+	}
+	m := prPathRE.FindStringSubmatch(u.Path)
+	if m == nil {
+		return 0
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// StampPR puts the run's pull request on event (#3455): the URL and the number
+// parsed from it. A URL that is not a GitHub pull request page leaves the
+// event untouched, so every emitter can call it unconditionally.
+func StampPR(event *PipelineEvent, prURL string) {
+	if event == nil {
+		return
+	}
+	n := PRNumberFromURL(prURL)
+	if n == 0 {
+		return
+	}
+	event.PRURL = prURL
+	event.PRNumber = n
+}
+
+// pipelineStages is the exact stage set the platform's /v1/pipelines/events
+// contract accepts (Zod `z.enum(PIPELINE_STAGES)`). Bookend and internal stages
+// (init, pipeline-start, pipeline-finish, spike-materialize) are excluded:
+// sending one fails the platform's enum validation and drops the event.
+var pipelineStages = map[string]bool{
+	string(state.StageIssuePickup):     true,
+	string(state.StageFeaturePlanning): true,
+	string(state.StageFeatureDev):      true,
+	string(state.StageFeatureValidate): true,
+	string(state.StagePRCreate):        true,
+	string(state.StagePRMerge):         true,
+}
+
+// IsPipelineStage reports whether the platform's stage enum accepts stage.
+func IsPipelineStage(stage string) bool { return pipelineStages[stage] }
+
+// PhaseProgressEvent builds the stage_progress event for one in-stage phase
+// transition (#3455). index is 0-based, as skill markers and PhaseReporter
+// number phases; the wire is 1-based. Returns false when there is nothing to
+// send: no run id, a stage outside the platform enum, a transition the
+// platform does not record (unreported, observed, superseded), or a phase
+// outside the contract.
+func PhaseProgressEvent(runID, repo string, issue int, stage, name string, index, total int, transition string, now time.Time) (PipelineEvent, bool) {
+	if runID == "" || !IsPipelineStage(stage) {
+		return PipelineEvent{}, false
+	}
+	phase := PhaseFromZeroBased(name, index, total, transition)
+	if phase == nil {
+		return PipelineEvent{}, false
+	}
+	return PipelineEvent{
+		RunID:         runID,
+		Repo:          repo,
+		IssueNumber:   issue,
+		EventType:     "stage_progress",
+		Stage:         stage,
+		Timestamp:     now,
+		SchemaVersion: "1",
+		Phase:         phase,
+	}, true
 }
 
 // QueueSyncItem is one entry in a machine's queue snapshot pushed to
@@ -138,6 +307,11 @@ type AnalyticsService struct {
 	// record is sent or flushed: the editor's pipeline-run stream. See
 	// SetRunGate.
 	runGate atomic.Pointer[func() bool]
+
+	// phases coalesces phase-bearing stage_progress events per run (#3455);
+	// created on first use by phaseCoalescer.
+	phasesOnce sync.Once
+	phases     *phaseCoalescer
 }
 
 type bufferedBatch struct {
@@ -617,11 +791,32 @@ func (s *AnalyticsService) dropRejectedEvent(err error, status int) {
 
 // EmitPipelineEvent sends a real-time pipeline event to POST /v1/pipelines/events.
 // Fire-and-forget: launches a goroutine, logs errors, does not block the caller.
-// Buffers the event for retry when offline or on HTTP failure.
+// Buffers the event for retry when offline or on HTTP failure. A phase-bearing
+// stage_progress event goes through the per-run coalescer (#3455): it may be
+// held for up to a second and replaced by a later phase of the same run.
 func (s *AnalyticsService) EmitPipelineEvent(ctx context.Context, event PipelineEvent) {
 	if !s.sendAllowed() {
 		return
 	}
+	// A phase transition is coalesced per run (#3455): at most one POST per
+	// second, the latest state winning. Every other event goes straight out.
+	if event.EventType == "stage_progress" && event.Phase != nil {
+		s.phaseCoalescer().submit(ctx, event)
+		return
+	}
+	// A stage boundary supersedes a phase still held for the run, so a late
+	// phase can never trail its stage's or run's terminal event. Token-only
+	// stage_progress events leave it alone: the latest phase still wins.
+	switch event.EventType {
+	case "stage_started", "stage_completed", "stage_failed", "pipeline_done":
+		s.phaseCoalescer().discard(event.RunID)
+	}
+	s.emitAsync(ctx, event)
+}
+
+// emitAsync is EmitPipelineEvent's send path: a goroutine that POSTs, buffering
+// for retry when offline or on a transient failure.
+func (s *AnalyticsService) emitAsync(ctx context.Context, event PipelineEvent) {
 	go func() {
 		if !s.client.IsOnline() {
 			s.enqueueEvent(event)
@@ -675,6 +870,15 @@ func buildEventWire(e PipelineEvent) map[string]interface{} {
 	if e.Visibility == state.VisibilityPrivate {
 		w["visibility"] = state.VisibilityPrivate
 	}
+	// The run's pull request rides every event type once known (#3455). An
+	// over-long URL, or one that is not a GitHub pull request page, is
+	// omitted, never cut: a truncated URL is a wrong link.
+	if e.PRNumber > 0 {
+		w["prNumber"] = e.PRNumber
+	}
+	if PRNumberFromURL(e.PRURL) > 0 && len(e.PRURL) <= prURLMaxLen {
+		w["prUrl"] = e.PRURL
+	}
 	switch e.EventType {
 	case "stage_started":
 		w["stage"] = e.Stage
@@ -697,9 +901,30 @@ func buildEventWire(e PipelineEvent) map[string]interface{} {
 		if e.Mode != "" {
 			w["mode"] = e.Mode
 		}
+		// The pre-flight estimate (#3455): stage_started only, per contract.
+		if e.EstimatedCostUsd != nil && *e.EstimatedCostUsd >= 0 && *e.EstimatedCostUsd <= estimateMaxUsd {
+			w["estimatedCostUsd"] = *e.EstimatedCostUsd
+		}
+		if e.EstimateBasis != "" {
+			w["estimateBasis"] = truncate(e.EstimateBasis, estimateBasisMaxLen)
+		}
 	case "stage_progress":
 		w["stage"] = e.Stage
-		w["message"] = truncate(metaString(e.Metadata, "message"), 1000)
+		// The run's latest-activity line (#3455): a phase transition describes
+		// itself when the emitter left the message empty. Capped at 200.
+		msg := metaString(e.Metadata, "message")
+		if msg == "" && e.Phase.valid() {
+			msg = e.Phase.Label()
+		}
+		w["message"] = truncate(msg, progressMessageMax)
+		if e.Phase.valid() {
+			w["phase"] = map[string]interface{}{
+				"name":   truncate(e.Phase.Name, phaseNameMaxLen),
+				"index":  e.Phase.Index,
+				"total":  e.Phase.Total,
+				"status": e.Phase.Status,
+			}
+		}
 		// Live in-stage token/cost estimate (#233). Cumulative snapshot for the
 		// in-flight stage: input/cacheRead latest-wins, output summed, cost
 		// pricing-table-computed. Reconciled by the authoritative stage_completed

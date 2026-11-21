@@ -17,6 +17,8 @@ import (
 //     empty durable record.
 //   - the live callbacks — what the tree view renders WHILE the stage runs.
 //     This is the half that was showing 0/14.
+//   - the platform's live run view (#3455), through emitPhaseTelemetry.
+//     Supersede is not sent: the platform has no status for it.
 //
 // One reporter per run: it closes over the run's runtime, so a phase can never
 // be attributed to another issue's PhaseHistory the way a field on the shared
@@ -30,6 +32,7 @@ type deterministicPhaseReporter struct {
 
 func (p *deterministicPhaseReporter) PhaseStart(stage, name string, index, total int) {
 	p.rt.BeginPhase(state.PipelineStage(stage), name, index, total)
+	p.sched.emitPhaseTelemetry(p.rt, p.repo, p.issue, stage, name, index, total, "start")
 	if p.sched.onPhaseDetected != nil {
 		p.sched.onPhaseDetected(p.repo, p.issue, stage, name, index, total)
 	}
@@ -41,11 +44,13 @@ func (p *deterministicPhaseReporter) PhaseComplete(stage, name string) {
 	// live event does not — the extension's consumers key on them — so the
 	// position is re-resolved from the registry rather than published as -1.
 	idx, total := pmstages.PhasePosition(stage, name)
+	p.sched.emitPhaseTelemetry(p.rt, p.repo, p.issue, stage, name, idx, total, "complete")
 	p.settled(stage, name, idx, total, "complete")
 }
 
 func (p *deterministicPhaseReporter) PhaseFail(stage, name string, index, total int) {
 	p.rt.FailPhase(state.PipelineStage(stage), name, index, total)
+	p.sched.emitPhaseTelemetry(p.rt, p.repo, p.issue, stage, name, index, total, "fail")
 	p.settled(stage, name, index, total, "failed")
 }
 
@@ -56,6 +61,7 @@ func (p *deterministicPhaseReporter) PhaseSupersede(stage, name string, index, t
 
 func (p *deterministicPhaseReporter) PhaseSkip(stage, name string, index, total int) {
 	p.rt.SkipPhase(state.PipelineStage(stage), name, index, total)
+	p.sched.emitPhaseTelemetry(p.rt, p.repo, p.issue, stage, name, index, total, "skip")
 	p.settled(stage, name, index, total, "skipped")
 }
 

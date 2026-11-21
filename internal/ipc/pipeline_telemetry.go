@@ -9,20 +9,6 @@ import (
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
-// platformPipelineStages is the exact set of stages the platform's
-// /v1/pipelines/events contract accepts (Zod `z.enum(PIPELINE_STAGES)`).
-// Bookend/internal stages (init, pipeline-start, pipeline-finish,
-// spike-materialize) are intentionally excluded — emitting them would fail the
-// platform's enum validation and drop the event.
-var platformPipelineStages = map[string]bool{
-	string(state.StageIssuePickup):     true,
-	string(state.StageFeaturePlanning): true,
-	string(state.StageFeatureDev):      true,
-	string(state.StageFeatureValidate): true,
-	string(state.StagePRCreate):        true,
-	string(state.StagePRMerge):         true,
-}
-
 // extensionTelemetryOrigin marks runs as executing on the user's machine,
 // mirroring the Go scheduler's "local_cli". The platform's origin enum only
 // accepts 'local_cli' | 'cloud'; the VSCode extension is a local execution.
@@ -33,7 +19,7 @@ const extensionTelemetryOrigin = "local_cli"
 func filterPlatformStages(stages []string) []string {
 	out := make([]string, 0, len(stages))
 	for _, s := range stages {
-		if platformPipelineStages[s] {
+		if platform.IsPipelineStage(s) {
 			out = append(out, s)
 		}
 	}
@@ -55,7 +41,7 @@ func filterPlatformStages(stages []string) []string {
 // reconciles the live stage_progress estimate against the real totals on
 // completion. Zero for running/failed transitions (not applicable there).
 func buildStageTelemetryEvent(runID, repo string, issueNumber int, stage, status, errMsg string, durationMs, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, now time.Time) (platform.PipelineEvent, bool) {
-	if runID == "" || !platformPipelineStages[stage] {
+	if runID == "" || !platform.IsPipelineStage(stage) {
 		return platform.PipelineEvent{}, false
 	}
 
@@ -107,7 +93,7 @@ func buildStageTelemetryEvent(runID, repo string, issueNumber int, stage, status
 // latest-wins, output summed, cost pricing-table-computed); the authoritative
 // stage_completed totals reconcile them at stage end.
 func buildStageProgressEvent(runID, repo string, issueNumber int, stage string, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, now time.Time) (platform.PipelineEvent, bool) {
-	if runID == "" || !platformPipelineStages[stage] {
+	if runID == "" || !platform.IsPipelineStage(stage) {
 		return platform.PipelineEvent{}, false
 	}
 	return platform.PipelineEvent{
@@ -159,10 +145,11 @@ func buildPipelineDoneEvent(runID string, p PipelineNotifyCompleteParams, heldFo
 // Fire-and-forget: AnalyticsService.EmitPipelineEvent launches its own
 // goroutine and buffers on failure, so this never blocks the IPC handler.
 //
-// inputTokens/outputTokens/cacheReadTokens/costUsd are the authoritative
-// per-stage totals for a "complete" transition (#233), threaded from the notify
-// params #227 populates; they are 0 (and unused) for running/failed.
-func (s *Server) emitStageTelemetry(runID, repo string, issueNumber int, stage, status, errMsg string, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, rt *state.RuntimeState) {
+// p's token/cost fields are the authoritative per-stage totals for a
+// "complete" transition (#233); its pre-flight estimate rides the
+// stage_started event it was sent with (#3455), which the extension does on
+// the run's first "running" transition only.
+func (s *Server) emitStageTelemetry(runID, repo string, p PipelineNotifyStageTransitionParams, rt *state.RuntimeState) {
 	if s.analyticsSvc == nil || !s.TelemetryAllowed() {
 		return
 	}
@@ -170,13 +157,18 @@ func (s *Server) emitStageTelemetry(runID, repo string, issueNumber int, stage, 
 	if rt != nil {
 		durationMs = rt.LastStageDurationMs()
 	}
-	event, ok := buildStageTelemetryEvent(runID, repo, issueNumber, stage, status, errMsg, durationMs, inputTokens, outputTokens, cacheReadTokens, costUsd, time.Now())
+	event, ok := buildStageTelemetryEvent(runID, repo, p.IssueNumber, p.Stage, p.Status, p.Error, durationMs, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd, time.Now())
 	if !ok {
 		return
+	}
+	if event.EventType == "stage_started" {
+		event.EstimatedCostUsd = p.EstimatedCostUsd
+		event.EstimateBasis = p.EstimateBasis
 	}
 	// A private run says so on every event (#2400), its first stage_started
 	// included: the transition handler raised rt before calling here.
 	event.Visibility = rt.RunVisibility()
+	platform.StampPR(&event, rt.PRURL())
 	s.analyticsSvc.EmitPipelineEvent(context.Background(), event)
 }
 
@@ -184,8 +176,9 @@ func (s *Server) emitStageTelemetry(runID, repo string, issueNumber int, stage, 
 // platform as a stage_progress event (#233). Mirrors emitStageTelemetry:
 // fire-and-forget through the same proven AnalyticsService, so it never blocks
 // the IPC handler. Best-effort — a missing runID or bookend stage is skipped by
-// buildStageProgressEvent rather than emitted.
-func (s *Server) emitStageProgressTelemetry(runID, repo string, issueNumber int, stage string, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, visibility string) {
+// buildStageProgressEvent rather than emitted. Its message is the stage's
+// latest phase (#3455), so the run's activity line says where the stage is.
+func (s *Server) emitStageProgressTelemetry(runID, repo string, issueNumber int, stage string, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, rt *state.RuntimeState) {
 	if s.analyticsSvc == nil || !s.TelemetryAllowed() {
 		return
 	}
@@ -193,13 +186,36 @@ func (s *Server) emitStageProgressTelemetry(runID, repo string, issueNumber int,
 	if !ok {
 		return
 	}
-	event.Visibility = visibility
+	if msg := rt.LatestPhaseLabel(state.PipelineStage(stage)); msg != "" {
+		event.Metadata = map[string]interface{}{"message": msg}
+	}
+	event.Visibility = rt.RunVisibility()
+	platform.StampPR(&event, rt.PRURL())
+	s.analyticsSvc.EmitPipelineEvent(context.Background(), event)
+}
+
+// emitPhaseTelemetry emits one in-stage phase transition as a stage_progress
+// event (#3455). Called for extension-owned runs only: a scheduler-owned run's
+// phases are emitted by the scheduler, and a second emitter would double them.
+// index is 0-based, as the transition carries it; a transition the
+// platform does not record (unreported, observed, superseded) sends nothing.
+func (s *Server) emitPhaseTelemetry(runID, repo string, issueNumber int, stage, name string, index, total int, transition string, rt *state.RuntimeState) {
+	if s.analyticsSvc == nil || !s.TelemetryAllowed() {
+		return
+	}
+	event, ok := platform.PhaseProgressEvent(runID, repo, issueNumber, stage, name, index, total, transition, time.Now())
+	if !ok {
+		return
+	}
+	event.Visibility = rt.RunVisibility()
+	platform.StampPR(&event, rt.PRURL())
 	s.analyticsSvc.EmitPipelineEvent(context.Background(), event)
 }
 
 // emitPipelineDoneTelemetry emits the terminal pipeline_done event so the live
 // Pipelines view transitions the run from 'running' to 'complete'/'failed'.
-func (s *Server) emitPipelineDoneTelemetry(runID string, p PipelineNotifyCompleteParams, heldForApproval bool, visibility string) {
+// snap is the claimed terminal snapshot; its PR URL rides the event (#3455).
+func (s *Server) emitPipelineDoneTelemetry(runID string, p PipelineNotifyCompleteParams, heldForApproval bool, snap *state.RuntimeState) {
 	if s.analyticsSvc == nil || !s.TelemetryAllowed() {
 		return
 	}
@@ -207,7 +223,10 @@ func (s *Server) emitPipelineDoneTelemetry(runID string, p PipelineNotifyComplet
 	if !ok {
 		return
 	}
-	event.Visibility = visibility
+	if snap != nil {
+		event.Visibility = snap.Visibility
+	}
+	platform.StampPR(&event, snap.PRURL())
 	s.analyticsSvc.EmitPipelineEvent(context.Background(), event)
 }
 

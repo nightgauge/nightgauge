@@ -54,7 +54,7 @@ func TestScheduler_PRMerge_PhantomSuccess_FailsPipeline(t *testing.T) {
 		writeSkillFile(t, root, dir)
 	}
 
-	// Pre-write the pr-create context so loadPrUrl populates runtime.PrUrl —
+	// Pre-write the pr-create context so LoadPrUrl populates runtime.PrUrl —
 	// the post-stage verifyPRMerged checkpoint only runs when a PR URL is known.
 	pcDir := filepath.Join(layouttest.PipelineDir(t, root), "issue-9100")
 	if err := os.MkdirAll(pcDir, 0755); err != nil {

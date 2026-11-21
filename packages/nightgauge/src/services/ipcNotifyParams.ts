@@ -97,6 +97,12 @@ export interface NotifyStageTransitionParams {
   peakStepInputTokens?: number;
   contextWindowTokens?: number;
   compactionCount?: number;
+  /**
+   * The run's pre-flight estimate (#3455), on the run's FIRST `running`
+   * transition only. Go copies it onto that stage_started platform event.
+   */
+  estimatedCostUsd?: number;
+  estimateBasis?: string;
 }
 
 /** Mirrors `PipelineNotifyStageProgressParams` (internal/ipc/protocol.go). */

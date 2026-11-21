@@ -1902,6 +1902,60 @@ func (rs *RuntimeState) SetPrUrl(url string) {
 	rs.PrUrl = url
 }
 
+// PRURL returns the run's pull request URL under the run's lock, or "" when
+// none is recorded (or rs is nil). The platform run events read it (#3455).
+func (rs *RuntimeState) PRURL() string {
+	if rs == nil {
+		return ""
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.PrUrl
+}
+
+// LatestPhaseLabel describes the stage's most recent phase record as a short
+// activity line, "<name> (<index+1>/<total>) <status>", or "" when the stage
+// has none (#3455), or "<name> <status>" when the record has no total.
+// Indexes are stored 0-based; the label is 1-based. Status is the runtime's
+// own word (running, complete, skipped, ...), not the platform phase enum.
+func (rs *RuntimeState) LatestPhaseLabel(stage PipelineStage) string {
+	if rs == nil {
+		return ""
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for i := len(rs.PhaseHistory) - 1; i >= 0; i-- {
+		p := rs.PhaseHistory[i]
+		if p.Stage != stage || p.Name == "" {
+			continue
+		}
+		if p.Total > 0 {
+			return fmt.Sprintf("%s (%d/%d) %s", p.Name, p.Index+1, p.Total, p.Status)
+		}
+		return fmt.Sprintf("%s %s", p.Name, p.Status)
+	}
+	return ""
+}
+
+// PhasePosition returns the 0-based index and total of the stage's most recent
+// record for the named phase, or ok=false when there is none (#3455). A
+// "complete" phase transition that carries no position of its own reads the
+// one its "start" recorded for its platform event.
+func (rs *RuntimeState) PhasePosition(stage PipelineStage, name string) (index, total int, ok bool) {
+	if rs == nil {
+		return 0, 0, false
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for i := len(rs.PhaseHistory) - 1; i >= 0; i-- {
+		p := rs.PhaseHistory[i]
+		if p.Stage == stage && p.Name == name {
+			return p.Index, p.Total, true
+		}
+	}
+	return 0, 0, false
+}
+
 // SetMergeOutcome records the post-merge ground-truth breadcrumb (#4133): the
 // merge commit SHA and ISO-8601 merge timestamp captured by the post-merge
 // hook. Empty values are ignored so a non-blocking breadcrumb-fetch failure
