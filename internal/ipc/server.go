@@ -3888,7 +3888,13 @@ func (s *Server) registerMethods() {
 		// platform run events carry it from here on, pipeline_done included.
 		// The scheduler records its own runs' PR after the same stage.
 		if stage == state.StagePRCreate && p.Status == "complete" && !res.schedulerOwned {
-			if u := orchestrator.LoadPrUrl(rt.Snapshot().WorktreeDir, p.IssueNumber); u != "" {
+			// An extension run without a worktree has WorktreeDir "": skip
+			// straight to the repo root rather than resolving "" (#3473).
+			var u string
+			if wt := rt.Snapshot().WorktreeDir; wt != "" {
+				u = orchestrator.LoadPrUrl(wt, p.IssueNumber)
+			}
+			if u != "" {
 				rt.SetPrUrl(u)
 			} else if root := s.repoRoot(repo); root != "" {
 				if u := orchestrator.LoadPrUrl(root, p.IssueNumber); u != "" {
