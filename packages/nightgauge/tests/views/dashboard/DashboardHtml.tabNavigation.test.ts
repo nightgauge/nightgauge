@@ -7,7 +7,11 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { getDashboardHtml } from "../../../src/views/dashboard/DashboardHtml";
+import {
+  getDashboardHtml,
+  getTabScript,
+  VALID_TABS,
+} from "../../../src/views/dashboard/DashboardHtml";
 import type {
   DashboardAggregates,
   PipelineRunSummary,
@@ -290,5 +294,74 @@ describe("Tab navigation (Issue #1539)", () => {
       const html = renderWithTab();
       expect(html).toContain("type: 'selectTab'");
     });
+  });
+});
+
+// #3025 Part B: the host owns the active tab and renders it into the markup.
+// The load script used to restore the tab from vscode.getState(), which can be
+// older than the host's choice, and reported that stale tab back as selectTab,
+// reverting the host. Runs the real script against a minimal fake DOM.
+describe("Tab script on load (#3025)", () => {
+  class FakeClassList {
+    constructor(private readonly set: Set<string>) {}
+    contains(c: string) {
+      return this.set.has(c);
+    }
+    toggle(c: string, on: boolean) {
+      if (on) this.set.add(c);
+      else this.set.delete(c);
+    }
+  }
+  function fakeElement(classes: string[], props: Record<string, unknown>) {
+    const set = new Set(classes);
+    return {
+      classes: set,
+      classList: new FakeClassList(set),
+      setAttribute: () => undefined,
+      addEventListener: () => undefined,
+      ...props,
+    };
+  }
+
+  function load(renderedActive: string | null, savedState: unknown) {
+    const buttons = VALID_TABS.map((id) =>
+      fakeElement(id === renderedActive ? ["tab-btn", "active"] : ["tab-btn"], {
+        dataset: { tab: id },
+      })
+    );
+    const panels = VALID_TABS.map((id) => fakeElement(["tab-panel"], { id: `tab-panel-${id}` }));
+    const document = {
+      querySelector: (sel: string) =>
+        sel === ".tab-btn.active" ? (buttons.find((b) => b.classes.has("active")) ?? null) : null,
+      querySelectorAll: (sel: string) =>
+        sel === ".tab-btn" ? buttons : sel === ".tab-panel" ? panels : [],
+    };
+    const posted: unknown[] = [];
+    const vscode = {
+      getState: () => savedState,
+      setState: () => undefined,
+      postMessage: (m: unknown) => posted.push(m),
+    };
+    new Function("document", "vscode", getTabScript())(document, vscode);
+    const active = panels
+      .filter((p) => p.classes.has("active"))
+      .map((p) => (p as unknown as { id: string }).id);
+    return { posted, active };
+  }
+
+  it("activates and reports the host-rendered tab when webview state disagrees", () => {
+    const { posted, active } = load("history", { activeTab: "pipeline" });
+    expect(active).toEqual(["tab-panel-history"]);
+    expect(posted).toEqual([{ type: "selectTab", tab: "history" }]);
+  });
+
+  it("falls back to webview state only when the markup has no active tab", () => {
+    const { posted, active } = load(null, { activeTab: "pipeline" });
+    expect(active).toEqual(["tab-panel-pipeline"]);
+    expect(posted).toEqual([{ type: "selectTab", tab: "pipeline" }]);
+  });
+
+  it("falls back to overview with neither", () => {
+    expect(load(null, undefined).posted).toEqual([{ type: "selectTab", tab: "overview" }]);
   });
 });

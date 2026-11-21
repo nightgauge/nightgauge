@@ -425,6 +425,22 @@ export class Dashboard implements vscode.Disposable {
   private savedScrollY: number | undefined;
   /** Active tab for tabbed navigation (Issue #1539) */
   private activeTab: string = "overview";
+  /**
+   * Whether the current webview document has posted anything since the last
+   * `webview.html` assignment (#3025). A full re-render replaces the document,
+   * and a message VS Code accepted for the old one (`postMessage` resolves
+   * true) is gone with it. Every document posts `selectTab` as it loads, so
+   * the first inbound message proves a live document.
+   */
+  private webviewLoaded = false;
+  /**
+   * `activateTab` posts held back while no document was loaded (#3025). Each
+   * distinct tab is posted once on load, in the order it was last selected,
+   * so each step that chose a different tab gets its own post→`selectTab`
+   * reply and the last one leaves the tab the host chose. A tab selected again
+   * moves to the end, which bounds the queue by the number of tabs.
+   */
+  private pendingActivateTabs: string[] = [];
   /** Number of history items currently displayed — incremented by "Load More" (Issue #983) */
   private historyDisplayCount: number = 20;
   /**
@@ -1519,8 +1535,36 @@ export class Dashboard implements vscode.Disposable {
   selectTab(tab: string): boolean {
     if (!(VALID_TABS as readonly string[]).includes(tab)) return false;
     this.activeTab = tab;
-    void this.panel?.webview.postMessage({ type: "activateTab", tab });
+    if (!this.panel) return true;
+    if (!this.webviewLoaded) {
+      // A post now would reach a document being replaced, or none. Hold it
+      // until the next document reports in (#3025).
+      this.pendingActivateTabs = this.pendingActivateTabs.filter((t) => t !== tab);
+      this.pendingActivateTabs.push(tab);
+      return true;
+    }
+    void this.panel.webview.postMessage({ type: "activateTab", tab });
     return true;
+  }
+
+  /**
+   * An inbound webview message proves a document is loaded and listening.
+   * Post the `activateTab`s held back while none was, once each, in order
+   * (#3025). Called after the message is handled: the load-time `selectTab`
+   * reports the tab the document rendered, and the pending tabs must win.
+   *
+   * A message the replaced document sent before the html assignment but that
+   * arrives after it also counts, and then the flushed post can still be lost.
+   * That case heals itself: the new document renders the host's tab and its
+   * load-time `selectTab` reports that tab back.
+   */
+  private markWebviewLoaded(): void {
+    this.webviewLoaded = true;
+    if (!this.panel || this.pendingActivateTabs.length === 0) return;
+    const tabs = this.pendingActivateTabs;
+    this.pendingActivateTabs = [];
+    this.activeTab = tabs[tabs.length - 1];
+    for (const tab of tabs) void this.panel.webview.postMessage({ type: "activateTab", tab });
   }
 
   show(): void {
@@ -1581,7 +1625,11 @@ export class Dashboard implements vscode.Disposable {
 
     // Handle messages from the WebView
     this.panel.webview.onDidReceiveMessage(
-      (message: unknown) => this.handleMessage(message),
+      (message: unknown) => {
+        const handled = this.handleMessage(message);
+        this.markWebviewLoaded();
+        return handled;
+      },
       undefined,
       this.panelDisposables
     );
@@ -1754,6 +1802,9 @@ export class Dashboard implements vscode.Disposable {
       // Issue #3269 — budget vs actual stats
       const budgetVsActualStats = this.computeBudgetVsActualStats();
 
+      // The new document has not loaded yet: hold activateTab posts until it
+      // reports in (#3025).
+      this.webviewLoaded = false;
       this.panel.webview.html = getDashboardHtml(
         this.panel.webview,
         currentRun,
@@ -2576,6 +2627,8 @@ export class Dashboard implements vscode.Disposable {
    * only the TICKER that pushes its state into a webview is panel-scoped.
    */
   private disposePanelScoped(): void {
+    this.webviewLoaded = false;
+    this.pendingActivateTabs = [];
     if (this.updatePanelTimer) {
       clearTimeout(this.updatePanelTimer);
       this.updatePanelTimer = undefined;

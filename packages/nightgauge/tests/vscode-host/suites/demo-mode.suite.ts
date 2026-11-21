@@ -491,12 +491,39 @@ suite("demo mode", () => {
               (m as { type?: unknown }).type === "activateTab"
           )
           .map((m) => m.tab);
+      // The dashboard holds an activateTab back until the current document has
+      // loaded (#3025), so a missing post means no document reported in after
+      // the last re-render: say so, with the re-render and message timings.
+      // Whether a document reported in after the last re-render, the one
+      // question both failure reports answer.
+      const loadVerdict = () => {
+        const lastHtml = panel.htmlSetAt.at(-1);
+        const lastMessage = panel.receivedAt.at(-1);
+        if (!panel.htmlCaptured) return "html assignments were not captured";
+        if (lastHtml === undefined) return "no html assignment was recorded";
+        return lastMessage !== undefined && lastMessage >= lastHtml
+          ? "a document loaded after the last html assignment"
+          : "the webview never loaded a document after the last html assignment";
+      };
+      const documentLoads = () => {
+        const since = (at: number | undefined) =>
+          at === undefined ? "never" : `${Date.now() - at}ms ago`;
+        return (
+          `  html set ${panel.htmlSetAt.length} times, last ${since(panel.htmlSetAt.at(-1))}; ` +
+          `last webview message ${since(panel.receivedAt.at(-1))}: ${loadVerdict()}`
+        );
+      };
       await waitFor(
         () => (activated().length >= UI_TABS.length ? true : undefined),
         20_000,
         "four activateTab messages"
       ).catch(() => undefined);
-      assert.deepEqual(activated(), UI_TABS);
+      assert.deepEqual(
+        activated(),
+        UI_TABS,
+        `activateTab posts ${JSON.stringify(activated())}, expected ${JSON.stringify(UI_TABS)}\n` +
+          documentLoads()
+      );
       // The webview's own answer: it activated each tab the way a click does.
       // Each step waits for a selectTab naming its tab that arrived at or after
       // that step's own activateTab post, so a timeout names the step and says
@@ -535,10 +562,15 @@ suite("demo mode", () => {
           .map((m, i) => (isType(m, "selectTab") ? `${m.tab}@${offset(panel.receivedAt[i])}` : ""))
           .filter(Boolean);
         const lastMessage = panel.receivedAt.at(-1);
+        const lastHtml = panel.htmlSetAt.at(-1);
         return [
           ...steps,
           `  selectTab received: ${sequence.join(", ") || "none"}`,
           `  last webview message at ${lastMessage === undefined ? "never" : offset(lastMessage)}`,
+          `  html set ${panel.htmlSetAt.length} times, last at ${
+            lastHtml === undefined ? "never" : offset(lastHtml)
+          }`,
+          `  ${loadVerdict()}`,
           `  gave up at ${offset(gaveUpAt)}`,
         ].join("\n");
       };
