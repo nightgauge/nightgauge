@@ -24,7 +24,9 @@ context holding only the diff, the issue and the tree. Blockers and `correctness
 majors go to a fix loop of at most three catches per run, other majors become
 discovered work, and nitpicks are counted. Each finished round replaces the
 review's discovered work with its own, so only the last finished round's findings
-are filed, and two passes at one location stay two findings. A review that does
+are filed, and two passes at one location stay two findings. A reused verdict, or
+the cap, restores the discovered work stored with that round (the last catch, at
+the cap), so the capture always matches the verdict that stands. A review that does
 not finish records a `catch`, never a pass, and changes no discovered work. The
 sections below on comments and identity describe the manual workflow only.
 

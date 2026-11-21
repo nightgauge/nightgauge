@@ -244,8 +244,9 @@ type Outcome struct {
 	Summary string              `json:"summary,omitempty"`
 	Counts  state.FindingCounts `json:"counts"`
 	Fix     []Finding           `json:"fix"`
-	// Discovered lists what this round left in the capture as discovered work. It
-	// is not stored: a reused verdict records nothing new.
+	// Discovered lists what this round left in the capture as discovered work.
+	// It is stored with the verdict, so a reused or capped verdict restores its
+	// own round's records instead of leaving another round's in the capture.
 	Discovered []Finding `json:"discovered,omitempty"`
 	// Warnings names work that could not be recorded.
 	Warnings []string `json:"warnings,omitempty"`
@@ -285,9 +286,41 @@ type Session struct {
 	Now         time.Time
 }
 
-// stored is the part of an outcome the ledger keeps.
+// storedOutcome is the part of an outcome the ledger keeps. Discovered has no
+// omitempty: a round with none stores [], and an event written before the field
+// existed decodes to nil, which reuse reads as "unknown" and leaves the capture
+// alone.
+type storedOutcome struct {
+	Verdict    string              `json:"verdict"`
+	Summary    string              `json:"summary,omitempty"`
+	Counts     state.FindingCounts `json:"counts"`
+	Fix        []Finding           `json:"fix"`
+	Discovered []Finding           `json:"discovered"`
+}
+
+// stored encodes o as the ledger keeps it.
 func (o Outcome) stored() ([]byte, error) {
-	return json.Marshal(Outcome{Verdict: o.Verdict, Summary: o.Summary, Counts: o.Counts, Fix: o.Fix})
+	discovered := o.Discovered
+	if discovered == nil {
+		discovered = []Finding{}
+	}
+	return json.Marshal(storedOutcome{Verdict: o.Verdict, Summary: o.Summary, Counts: o.Counts,
+		Fix: o.Fix, Discovered: discovered})
+}
+
+// restore replaces the review's records in the capture with a stored round's
+// (recordDiscovered; a failure surfaces in Warnings). A nil list (an event from
+// before the field was stored) changes nothing.
+func (o *Outcome) restore(s Session) {
+	if o.Discovered == nil {
+		return
+	}
+	discovered := o.Discovered
+	o.Discovered = nil
+	o.recordDiscovered(s, discovered)
+	if o.Discovered == nil {
+		o.Discovered = []Finding{}
+	}
 }
 
 func (s Session) ledger(verdict string, started time.Time, out Outcome) error {
@@ -331,9 +364,10 @@ func (s Session) capped() (Outcome, error) {
 	if last != nil {
 		var caught Outcome
 		if err := json.Unmarshal(last.Review, &caught); err == nil && caught.Fix != nil {
-			out.Fix, out.Counts = caught.Fix, caught.Counts
+			out.Fix, out.Counts, out.Discovered = caught.Fix, caught.Counts, caught.Discovered
 		}
 	}
+	out.restore(s)
 	if err := s.row(out, time.Time{}); err != nil {
 		return out, err
 	}
@@ -395,6 +429,7 @@ func Consult(s Session) (Prepared, error) {
 	// the tree unchanged must still write the cap record (#2876). A stored pass
 	// is not capped, so it still reuses.
 	if reuse != nil && (catches < MaxRounds || reuse.Verdict == "pass") {
+		reuse.restore(s)
 		if err := s.row(*reuse, time.Time{}); err != nil {
 			return p, err
 		}

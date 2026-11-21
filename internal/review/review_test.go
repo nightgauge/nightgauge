@@ -905,3 +905,135 @@ func TestIssueContextWithoutAReportIsUnchanged(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+func summaries(recs []discoveredwork.Record) []string {
+	out := []string{}
+	for _, r := range recs {
+		if r.SourceStage == discoveredProducer {
+			out = append(out, r.Summary+"|"+strings.Join(r.Evidence, ";"))
+		}
+	}
+	return out
+}
+
+func claimed(pass, severity, claim string) string {
+	return strings.Replace(finding(pass, severity), pass+" "+severity, claim, 1)
+}
+
+// TestReuseRestoresThatRoundsDiscoveredWork: trees A, B, A leave A's records,
+// not B's (#2872).
+func TestReuseRestoresThatRoundsDiscoveredWork(t *testing.T) {
+	root := repo(t)
+	s := session(root, "A")
+	if _, err := Record(s, "A", writeFindings(t, claimed("security", "major", "claim X")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	want := summaries(filed(t, root))
+	s.Tree = "B"
+	if _, err := Record(s, "B", writeFindings(t, claimed("security", "major", "claim Y")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	s.Tree = "A"
+	p, err := Consult(s)
+	if err != nil || !p.Reusable {
+		t.Fatalf("%+v, %v", p, err)
+	}
+	got := summaries(filed(t, root))
+	if strings.Join(got, "\n") != strings.Join(want, "\n") || len(got) != 1 ||
+		!strings.Contains(got[0], "claim X") {
+		t.Fatalf("capture after reuse = %v, want %v", got, want)
+	}
+	if len(p.Result.Discovered) != 1 {
+		t.Fatalf("reused outcome must report its records: %+v", p.Result)
+	}
+}
+
+// TestReusedPassWithNoDiscoveredClearsAnotherRounds: a stored round with none
+// stores [] and restores an empty set.
+func TestReusedPassWithNoDiscoveredClearsAnotherRounds(t *testing.T) {
+	root := repo(t)
+	s := session(root, "A")
+	if _, err := Record(s, "A", writeFindings(t), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	s.Tree = "B"
+	if _, err := Record(s, "B", writeFindings(t, claimed("security", "major", "claim Y")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	s.Tree = "A"
+	if p, err := Consult(s); err != nil || !p.Reusable || p.Result.Verdict != "pass" {
+		t.Fatalf("%+v, %v", p, err)
+	}
+	if got := summaries(filed(t, root)); len(got) != 0 {
+		t.Fatalf("B's records survived A's reuse: %v", got)
+	}
+}
+
+// TestReusedCapRestoresTheLastCatchsDiscoveredWork: the cap carries the last
+// catch's records, as a fresh round on that tree leaves them.
+func TestReusedCapRestoresTheLastCatchsDiscoveredWork(t *testing.T) {
+	root := repo(t)
+	s := session(root, "")
+	for i, tree := range []string{"t0", "t1", "t2"} {
+		s.Tree = tree
+		claim := fmt.Sprintf("claim %d", i)
+		if _, err := Record(s, tree, writeFindings(t, finding("correctness", "blocker"),
+			claimed("security", "major", claim)), time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := summaries(filed(t, root))
+	dir, err := layout.PipelineStateDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := discoveredwork.ReplaceProducer(dir, 7, discoveredProducer, nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Consult(s)
+	if err != nil || !p.CapReached {
+		t.Fatalf("%+v, %v", p, err)
+	}
+	if got := summaries(filed(t, root)); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("cap capture = %v, want %v", got, want)
+	}
+	rec, err := LatestCap(root, s.Issue)
+	if err != nil || rec == nil || len(rec.Outcome.Discovered) != 1 {
+		t.Fatalf("the cap record must store its records: %+v, %v", rec, err)
+	}
+}
+
+// TestReuseOfAnEventWithoutDiscoveredLeavesTheCapture: an event written before
+// the field existed restores nothing, and an agent's record survives.
+func TestReuseOfAnEventWithoutDiscoveredLeavesTheCapture(t *testing.T) {
+	root := repo(t)
+	s := session(root, "B")
+	if _, err := Record(s, "B", writeFindings(t, claimed("security", "major", "claim Y")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := layout.PipelineStateDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := discoveredwork.Append(dir, discoveredwork.Record{
+		Summary: "agent note", Evidence: []string{"a.go:1"}, SourceStage: Stage, IssueNumber: 7,
+		SuggestedType: "bug", SuggestedPriority: "low", SuggestedSize: "S",
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := gateledger.Append(root, gateledger.Event{
+		RunID: "old", Event: gateledger.EventFinish, Kind: gateledger.KindReview, Tree: "A",
+		Verdict: gateledger.VerdictPass, Issue: 7, Stage: Stage,
+		Review: []byte(`{"verdict":"pass","counts":{},"fix":[]}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Tree = "A"
+	if p, err := Consult(s); err != nil || !p.Reusable {
+		t.Fatalf("%+v, %v", p, err)
+	}
+	got := filed(t, root)
+	if len(got) != 2 {
+		t.Fatalf("capture changed: %+v", got)
+	}
+}

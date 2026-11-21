@@ -26,20 +26,31 @@ type fakeFiler struct {
 	// are the parent's component labels.
 	open       []SubsystemCandidate
 	components []string
+	// sub, when set, is the Subsystem FindOpenInSubsystem picks with (its
+	// Parent and Files are filled per call).
+	sub *Subsystem
+	// closed are issue numbers whose state is closed; criteria are unchecked
+	// parent criteria by issue number.
+	closed   map[int]bool
+	criteria map[int][]string
 }
 
 func newFake() *fakeFiler {
 	return &fakeFiler{bodies: map[int]string{}, titles: map[string]int{}, comments: map[int][]string{}, next: 100}
 }
 
-func (f *fakeFiler) FindByMarker(_ context.Context, marker string) (int, string, error) {
+func (f *fakeFiler) FindByMarker(_ context.Context, marker string) (Found, error) {
 	f.calls++
 	for n, b := range f.bodies {
 		if strings.Contains(b, marker) {
-			return n, "", nil
+			return Found{Number: n, Closed: f.closed[n]}, nil
 		}
 	}
-	return 0, "", nil
+	return Found{}, nil
+}
+
+func (f *fakeFiler) ParentCriteria(_ context.Context, n int) ([]string, error) {
+	return f.criteria[n], nil
 }
 
 func (f *fakeFiler) FindOpenByTitle(_ context.Context, title string) (int, string, error) {
@@ -72,9 +83,19 @@ func (f *fakeFiler) CreateIssue(_ context.Context, title, body, typ, pri, size s
 	return f.next, "", nil
 }
 
-func (f *fakeFiler) FindOpenInSubsystem(_ context.Context, parent int, files []string) (int, string, error) {
+func (f *fakeFiler) FindOpenInSubsystem(_ context.Context, parent int, files []string, priority string) (int, string, error) {
 	f.calls++
-	n, url := PickSubsystemIssue(Subsystem{Parent: parent, Files: files, Components: f.components}, f.open)
+	sub := Subsystem{Components: f.components}
+	if f.sub != nil {
+		sub = *f.sub
+	}
+	sub.Parent, sub.Files = parent, files
+	n, url := PickSubsystemIssue(sub, f.open)
+	for _, c := range f.open {
+		if c.Number == n && Outranks(priority, c.Priority) {
+			return 0, "", nil
+		}
+	}
 	return n, url, nil
 }
 

@@ -34,8 +34,13 @@ const (
 
 // Filer is the forge surface the materializer needs.
 type Filer interface {
-	// FindByMarker returns an existing issue whose body carries marker, or 0.
-	FindByMarker(ctx context.Context, marker string) (int, string, error)
+	// FindByMarker returns an existing issue, open or closed, whose body
+	// carries marker, or a zero Found.
+	FindByMarker(ctx context.Context, marker string) (Found, error)
+	// ParentCriteria returns the unchecked "- [ ]" criteria in issue number's
+	// current body. Materialize treats an error as no criteria, so the record
+	// is filed.
+	ParentCriteria(ctx context.Context, number int) ([]string, error)
 	// FindOpenByTitle returns an open issue whose normalized title equals
 	// title's, or 0.
 	FindOpenByTitle(ctx context.Context, title string) (int, string, error)
@@ -49,11 +54,21 @@ type Filer interface {
 	CreateIssue(ctx context.Context, title, body, typ, priority, size string) (int, string, error)
 	// FindOpenInSubsystem returns an open issue in the same subsystem as a
 	// follow-up of parent touching files, chosen by PickSubsystemIssue, or 0
-	// (#3278).
-	FindOpenInSubsystem(ctx context.Context, parent int, files []string) (int, string, error)
+	// (#3278). A target whose board Priority is lower than priority is not
+	// returned: the follow-up is filed on its own instead (#2872).
+	FindOpenInSubsystem(ctx context.Context, parent int, files []string, priority string) (int, string, error)
 	// AppendPart appends rec to issue number as a new part (AppendPartToBody)
 	// and returns the part's label.
 	AppendPart(ctx context.Context, number int, rec discoveredwork.Record) (string, error)
+}
+
+// Found is an issue FindByMarker found; the zero value is none.
+type Found struct {
+	Number int
+	URL    string
+	// Closed is set for any state but open; the item's detail then reads
+	// "marker on closed #N".
+	Closed bool
 }
 
 // Outcome values for one record.
@@ -67,9 +82,10 @@ const (
 	OutcomeWouldFile     = "would-file"
 	OutcomeRefused       = "refused"
 	OutcomeInvalid       = "invalid"
-	// OutcomeTrackedByParent is a review record restating one of the issue's
-	// own acceptance criteria that this run's PR holds unmet: the parent
-	// already tracks it, so no issue is filed (#3186).
+	// OutcomeTrackedByParent is a record, from any producer, restating one of
+	// the issue's own acceptance criteria that this run's PR holds unmet or the
+	// issue's body leaves unchecked: the parent already tracks it, so no issue
+	// is filed (#3186, #2872).
 	OutcomeTrackedByParent = "tracked-by-parent"
 	// OutcomeDuplicate is a review record naming the gap another producer
 	// recorded for the same issue and run (#3186).
@@ -157,11 +173,67 @@ func runIDOf(rec discoveredwork.Record) string {
 	return *rec.RunID
 }
 
-// trackedByParent reports whether rec is a review record whose criterion this
-// run's PR holds unmet. Absent run ids match each other.
-func trackedByParent(rec discoveredwork.Record, t Tracking) bool {
-	return rec.SourceStage == reviewProducer && rec.Criterion != "" &&
-		runIDOf(rec) == t.RunID && t.Unmet[NormalizeTitle(rec.Criterion)]
+// trackedByParent reports why rec, from any producer, is already tracked by
+// its parent, or "". Its summary or criterion restates (see restates) a
+// criterion this run's PR holds unmet (absent run ids match each other), or an
+// unchecked criterion in the parent's current body.
+func trackedByParent(rec discoveredwork.Record, t Tracking, parentCriteria []string) string {
+	texts := []string{rec.Summary, rec.Criterion}
+	if runIDOf(rec) == t.RunID {
+		for c := range t.Unmet {
+			if restatesAny(texts, c) {
+				return fmt.Sprintf("criterion unmet on #%d; the PR says Refs", rec.IssueNumber)
+			}
+		}
+	}
+	for _, c := range parentCriteria {
+		if restatesAny(texts, c) {
+			return fmt.Sprintf("restates an unchecked criterion of #%d", rec.IssueNumber)
+		}
+	}
+	return ""
+}
+
+// minRestateLen is the shortest normalized text a containment match accepts;
+// shorter texts ("fix it") would match almost anything.
+const minRestateLen = 24
+
+// restates reports whether a and b say the same thing: equal once normalized,
+// or one containing the other when the shorter is at least minRestateLen
+// characters.
+func restates(a, b string) bool {
+	a, b = NormalizeTitle(a), NormalizeTitle(b)
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+	return len(a) >= minRestateLen && strings.Contains(b, a)
+}
+
+// restatesAny reports whether any of texts restates criterion.
+func restatesAny(texts []string, criterion string) bool {
+	for _, t := range texts {
+		if restates(t, criterion) {
+			return true
+		}
+	}
+	return false
+}
+
+var uncheckedRe = regexp.MustCompile(`(?m)^\s*[-*]\s+\[ \]\s+(.+?)\s*$`)
+
+// UncheckedCriteria returns the text of every unchecked "- [ ]" item in body.
+func UncheckedCriteria(body string) []string {
+	var out []string
+	for _, m := range uncheckedRe.FindAllStringSubmatch(body, -1) {
+		out = append(out, m[1])
+	}
+	return out
 }
 
 // Code identifiers (#3186): a backticked span, a path:line token, or a
@@ -335,10 +407,14 @@ func CommentBody(rec discoveredwork.Record) string {
 // it as a new part (folded), and at most gate.Cap issues are created: the rest
 // are refused and a *filing.CapError is returned with the result.
 //
-// Before any of that, in either mode, a review record is not filed when track
-// says this run's PR holds its criterion unmet (tracked-by-parent), or when it
-// restates a valid record another producer wrote for the same issue and run
-// (duplicate). Both are reported and consumed, never dropped silently (#3186).
+// Before any of that, in either mode, a record from any producer is not filed
+// when it restates a criterion this run's PR holds unmet or the parent's body
+// leaves unchecked (tracked-by-parent), and a review record is not filed when
+// it restates a valid record another producer wrote for the same issue and run
+// (duplicate). Both are reported and consumed, never dropped silently (#3186,
+// #2872). A marker on a closed issue, or in the parent's own body, is
+// already-exists; a record more urgent than the subsystem pick's board
+// Priority is filed instead of folded.
 func Materialize(ctx context.Context, capture *discoveredwork.Capture, gate filing.Gate, authorTrusted bool, track Tracking, f Filer) (*Result, error) {
 	res := &Result{Gate: gate, Items: []Item{}}
 	if capture == nil || len(capture.Records) == 0 {
@@ -360,6 +436,21 @@ func Materialize(ctx context.Context, capture *discoveredwork.Capture, gate fili
 		}
 	}
 
+	// The parent's own unchecked criteria, read once. An unreadable body tracks
+	// nothing, so the record is filed: the safe direction.
+	parentCriteria := map[int][]string{}
+	criteriaOf := func(n int) []string {
+		if f == nil || n <= 0 {
+			return nil
+		}
+		if c, ok := parentCriteria[n]; ok {
+			return c
+		}
+		c, _ := f.ParentCriteria(ctx, n)
+		parentCriteria[n] = c
+		return c
+	}
+
 	var toCreate []int // indexes into res.Items
 	recs := map[int]discoveredwork.Record{}
 	for _, rec := range capture.Records {
@@ -376,9 +467,9 @@ func Materialize(ctx context.Context, capture *discoveredwork.Capture, gate fili
 			res.Items = append(res.Items, it)
 			continue
 		}
-		if trackedByParent(rec, track) {
+		if why := trackedByParent(rec, track, criteriaOf(rec.IssueNumber)); why != "" {
 			it.Outcome = OutcomeTrackedByParent
-			it.Detail = fmt.Sprintf("criterion unmet on #%d; the PR says Refs", rec.IssueNumber)
+			it.Detail = why
 			res.Items = append(res.Items, it)
 			continue
 		}
@@ -394,16 +485,19 @@ func Materialize(ctx context.Context, capture *discoveredwork.Capture, gate fili
 		}
 
 		marker := Marker(rec)
-		num, url, err := f.FindByMarker(ctx, marker)
+		found, err := f.FindByMarker(ctx, marker)
 		if err != nil {
 			return res, fmt.Errorf("idempotency lookup for %s: %w", rec.ID, err)
 		}
-		if num != 0 {
-			it.Outcome, it.IssueNumber, it.URL = OutcomeAlreadyExists, num, url
+		if found.Number != 0 {
+			it.Outcome, it.IssueNumber, it.URL = OutcomeAlreadyExists, found.Number, found.URL
+			if found.Closed {
+				it.Detail = fmt.Sprintf("marker on closed #%d", found.Number)
+			}
 			res.Items = append(res.Items, it)
 			continue
 		}
-		num, url, err = f.FindOpenByTitle(ctx, rec.Summary)
+		num, url, err := f.FindOpenByTitle(ctx, rec.Summary)
 		if err != nil {
 			return res, fmt.Errorf("dedup lookup for %s: %w", rec.ID, err)
 		}
@@ -423,7 +517,7 @@ func Materialize(ctx context.Context, capture *discoveredwork.Capture, gate fili
 		}
 		// Fold into an open issue in the same subsystem before filing a new
 		// one (#3278). Folding creates no issue, so the cap does not count it.
-		num, url, err = f.FindOpenInSubsystem(ctx, rec.IssueNumber, rec.CandidateTargetFiles)
+		num, url, err = f.FindOpenInSubsystem(ctx, rec.IssueNumber, rec.CandidateTargetFiles, rec.SuggestedPriority)
 		if err != nil {
 			return res, fmt.Errorf("subsystem lookup for %s: %w", rec.ID, err)
 		}
@@ -483,80 +577,222 @@ type SubsystemCandidate struct {
 	Body        string
 	Labels      []string
 	BoardStatus string
+	// Parent is the candidate's parent issue (epic), 0 for none or unknown.
+	Parent int
+	// Priority is the candidate's board Priority (P0..P3), "" when unknown.
+	Priority string
 }
 
 // Subsystem identifies a follow-up's subsystem: the issue it was discovered
-// in, the files it names, and the parent's component:* labels.
+// in, the files it names, the parent's component:* and program:* labels, the
+// parent's own epic, and which component labels are too broad to say anything.
 type Subsystem struct {
 	Parent     int
 	Files      []string
 	Components []string
+	// Epic is the parent issue's parent, 0 for none.
+	Epic int
+	// Programs are the parent's program:* labels.
+	Programs []string
+	// Broad holds lower-cased component labels carried by so many open issues
+	// that sharing one says nothing about the subsystem.
+	Broad map[string]bool
 }
 
 // foldExcludedLabels mark an issue no follow-up may join: an epic is a
 // container, and a human-only issue is not pipeline work.
 var foldExcludedLabels = []string{"type:epic", "owner-action", "blocked"}
 
-// PickSubsystemIssue chooses the open issue a follow-up folds into, or 0.
-//
-// A candidate qualifies when its body names one of the follow-up's files or it
-// shares a component:* label with the parent. It is excluded when it is an
-// epic or human-only, or its board Status is In progress, In review or Done:
-// rewriting a body a running stage or an open PR was written against changes
-// work under its feet. A file match outranks a label match, the parent is
-// chosen only when no other issue qualifies, and the lowest number breaks
-// ties, so the choice is deterministic.
-func PickSubsystemIssue(s Subsystem, cands []SubsystemCandidate) (int, string) {
-	comps := map[string]bool{}
-	for _, c := range s.Components {
-		comps[strings.ToLower(c)] = true
+// ubiquitousFiles are basenames so many issues mention that naming one says
+// nothing about the subsystem: they never qualify a fold on their own.
+var ubiquitousFiles = map[string]bool{
+	"package-lock.json": true, "package.json": true, "yarn.lock": true, "pnpm-lock.yaml": true,
+	"go.sum": true, "go.mod": true, "cargo.lock": true, "poetry.lock": true,
+	"changelog.md": true, "readme.md": true,
+}
+
+// Ubiquitous reports whether f is one of ubiquitousFiles.
+func Ubiquitous(f string) bool {
+	return ubiquitousFiles[strings.ToLower(path.Base(strings.TrimSpace(f)))]
+}
+
+// namesPath reports whether body names f as a path token: bounded on the left
+// by the line start, whitespace, a backtick, "(" or "[", and on the right by
+// the line end, whitespace, a backtick, ":", ")", "]", "," or a sentence-final
+// ".". "b/a/x.go" does not name "a/x.go", and "x.go.bak" does not name "x.go".
+func namesPath(body, f string) bool {
+	if f == "" {
+		return false
 	}
-	const (
-		noMatch = iota
-		labelMatch
-		fileMatch
-	)
-	best, bestRank, bestURL, bestIsParent := 0, noMatch, "", false
-	better := func(n, rank int, isParent bool) bool {
-		switch {
-		case best == 0:
+	for i := 0; ; {
+		j := strings.Index(body[i:], f)
+		if j < 0 {
+			return false
+		}
+		at := i + j
+		end := at + len(f)
+		if leftBound(body, at) && rightBound(body, end) {
 			return true
-		case bestIsParent != isParent:
-			return bestIsParent
-		case rank != bestRank:
-			return rank > bestRank
-		default:
-			return n < best
+		}
+		i = at + 1
+	}
+}
+
+func leftBound(body string, at int) bool {
+	if at == 0 {
+		return true
+	}
+	switch body[at-1] {
+	case ' ', '\t', '\n', '\r', '`', '(', '[':
+		return true
+	}
+	return false
+}
+
+func rightBound(body string, end int) bool {
+	if end == len(body) {
+		return true
+	}
+	switch body[end] {
+	case ' ', '\t', '\n', '\r', '`', ':', ')', ']', ',':
+		return true
+	case '.':
+		// Sentence-final only: the next byte ends the text or the word.
+		return end+1 == len(body) || strings.ContainsRune(" \t\n\r`)]", rune(body[end+1]))
+	}
+	return false
+}
+
+// minSharedComponents is how many non-broad component:* labels a candidate
+// must share with the parent to qualify on labels alone. One shared label,
+// or any number of broad ones, never does (#2872).
+const minSharedComponents = 2
+
+// Qualification signals, strongest last.
+const (
+	noMatch = iota
+	labelMatch
+	programMatch
+	fileMatch
+)
+
+// statusRank orders board Status: Ready over Backlog over anything else.
+func statusRank(status string) int {
+	switch strings.ToLower(strings.Join(strings.Fields(status), " ")) {
+	case "ready":
+		return 2
+	case "backlog":
+		return 1
+	}
+	return 0
+}
+
+// qualify is the strongest signal tying c to s, and whether c is an open
+// sibling under the parent's epic.
+func qualify(s Subsystem, c SubsystemCandidate) (int, bool) {
+	sibling := s.Epic > 0 && c.Parent == s.Epic
+	rank := noMatch
+	for _, f := range s.Files {
+		if f = strings.TrimSpace(f); f != "" && !Ubiquitous(f) && namesPath(c.Body, f) {
+			rank = fileMatch
+			break
 		}
 	}
+	if rank == noMatch {
+		programs := lowerSet(s.Programs)
+		for _, l := range c.Labels {
+			if programs[strings.ToLower(l)] {
+				rank = programMatch
+				break
+			}
+		}
+	}
+	if rank == noMatch {
+		comps := lowerSet(s.Components)
+		shared := 0
+		for _, l := range c.Labels {
+			l = strings.ToLower(l)
+			if comps[l] && !s.Broad[l] {
+				shared++
+			}
+		}
+		if shared >= minSharedComponents {
+			rank = labelMatch
+		}
+	}
+	return rank, sibling
+}
+
+func lowerSet(xs []string) map[string]bool {
+	out := map[string]bool{}
+	for _, x := range xs {
+		out[strings.ToLower(x)] = true
+	}
+	return out
+}
+
+// PickSubsystemIssue chooses the open issue a follow-up folds into, or 0.
+//
+// A candidate qualifies when its body names one of the follow-up's files as a
+// path token (a ubiquitous file such as package-lock.json never counts), it is
+// an open sibling under the parent's epic, it shares a program:* label with
+// the parent, or it shares at least minSharedComponents non-broad component:*
+// labels with it. It is excluded when it is an epic or human-only, or its
+// board Status is In progress, In review or Done: rewriting a body a running
+// stage or an open PR was written against changes work under its feet.
+//
+// Among qualifying candidates the parent is chosen only when nothing else
+// qualifies; then an open sibling under the epic wins, then board Status Ready
+// over Backlog, then the stronger signal (file, program, labels), and the
+// lowest number decides only among equals, so the choice is deterministic.
+func PickSubsystemIssue(s Subsystem, cands []SubsystemCandidate) (int, string) {
+	type key struct {
+		notParent, sibling bool
+		status, signal     int
+	}
+	less := func(a, b key) bool { // a ranks below b
+		switch {
+		case a.notParent != b.notParent:
+			return b.notParent
+		case a.sibling != b.sibling:
+			return b.sibling
+		case a.status != b.status:
+			return a.status < b.status
+		default:
+			return a.signal < b.signal
+		}
+	}
+	best, bestURL := 0, ""
+	var bestKey key
 	for _, c := range cands {
 		if c.Number <= 0 || foldExcluded(c) {
 			continue
 		}
-		rank := noMatch
-		for _, f := range s.Files {
-			if f = strings.TrimSpace(f); f != "" && strings.Contains(c.Body, f) {
-				rank = fileMatch
-				break
-			}
-		}
-		if rank == noMatch {
-			for _, l := range c.Labels {
-				if comps[strings.ToLower(l)] {
-					rank = labelMatch
-					break
-				}
-			}
-		}
-		if rank == noMatch {
+		signal, sibling := qualify(s, c)
+		if signal == noMatch && !sibling {
 			continue
 		}
-		isParent := c.Number == s.Parent
-		if better(c.Number, rank, isParent) {
-			best, bestRank, bestURL, bestIsParent = c.Number, rank, c.URL, isParent
+		k := key{notParent: c.Number != s.Parent, sibling: sibling, status: statusRank(c.BoardStatus), signal: signal}
+		if best == 0 || less(bestKey, k) || (!less(k, bestKey) && c.Number < best) {
+			best, bestURL, bestKey = c.Number, c.URL, k
 		}
 	}
 	return best, bestURL
+}
+
+// priorityOrder ranks board Priority options, most urgent first.
+var priorityOrder = map[string]int{"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+
+// Outranks reports whether a record of priority (critical..low) is more urgent
+// than a target whose board Priority is board. An unknown board Priority is
+// never outranked; an unknown record priority counts as medium (P2), as
+// filing.PriorityToBoardOption maps it.
+func Outranks(priority, board string) bool {
+	b, ok := priorityOrder[strings.ToUpper(strings.TrimSpace(board))]
+	if !ok {
+		return false
+	}
+	return priorityOrder[filing.PriorityToBoardOption(priority)] < b
 }
 
 func foldExcluded(c SubsystemCandidate) bool {
@@ -579,6 +815,17 @@ func ComponentLabels(labels []string) []string {
 	var out []string
 	for _, l := range labels {
 		if strings.HasPrefix(strings.ToLower(l), "component:") {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// ProgramLabels returns the program:* labels in labels.
+func ProgramLabels(labels []string) []string {
+	var out []string
+	for _, l := range labels {
+		if strings.HasPrefix(strings.ToLower(l), "program:") {
 			out = append(out, l)
 		}
 	}
@@ -627,7 +874,28 @@ func AppendPartToBody(body string, rec discoveredwork.Record) (string, string, b
 		b.WriteString("### Candidate files\n\n" +
 			filing.RenderUntrusted(strings.Join(rec.CandidateTargetFiles, "\n"), maxFilesRender) + "\n\n")
 	}
+	// The part's criteria are the record's own claims, each falsifiable, never
+	// "resolved, or recorded as not needed" (#2872).
 	fmt.Fprintf(&b, "### Acceptance criteria (Part %s)\n\n", label)
-	fmt.Fprintf(&b, "- [ ] The follow-up summarized in Part %s is resolved, or recorded as not needed\n", label)
+	b.WriteString("- [ ] Resolved: " + criterionLine(rec.Summary) + "\n")
+	for _, e := range rec.Evidence {
+		if strings.TrimSpace(e) != "" {
+			b.WriteString("- [ ] No longer true: " + criterionLine(e) + "\n")
+		}
+	}
 	return b.String(), label, true
+}
+
+// maxCriterionRender bounds one rendered criterion line.
+const maxCriterionRender = 300
+
+// criterionLine renders record text for a checklist item: one line, bounded,
+// inside a code span (so mentions and HTML stay inert), with backticks swapped
+// for the look-alike RenderUntrusted uses so the text cannot close the span.
+func criterionLine(text string) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if r := []rune(text); len(r) > maxCriterionRender {
+		text = string(r[:maxCriterionRender]) + "…"
+	}
+	return "`" + strings.ReplaceAll(text, "`", "ˋ") + "`"
 }

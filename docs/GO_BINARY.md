@@ -5120,38 +5120,60 @@ nightgauge followup materialize <issue-number> [flags]
 | `--dry-run` | Report the would-file list; no forge calls, the capture is kept |
 | `--json`    | Emit `{issue, gate, report_only, reason, items[], refused}`     |
 
-Per record: an issue whose body already carries the
-`<!-- discovered-work: id=… issue=#N -->` marker is `already-exists`; an open
-issue with the same normalized title gets a provenance comment (`deduped`); an
-open issue in the same subsystem gets the record appended as a new
-`## Part <letter>` section with its own criterion, the marker and the
-`Discovered in #N` back-link (`folded`, detail `appended as Part X of #M`, not
-counted by the cap, #3278). The subsystem match is an open issue whose body
-names one of the record's candidate files, or that shares a `component:*` label
-with the parent; a file match outranks a label match, the parent is used only
-when nothing else matches, the lowest number breaks ties, and epics, human-only
-issues and issues In progress, In review or Done are never folded into;
-otherwise the issue is created with `type:<t>`, Priority, Size, Status=Backlog
-and `Discovered in #N (run R, stage S)` (`filed`). Report mode, the kill switch
-or an untrusted issue author make every record `would-file` with no forge call.
+Per record: an issue, open or closed, whose body already carries the
+`<!-- discovered-work: id=… issue=#N -->` marker is `already-exists` (detail
+`marker on closed #M` for a closed one); the parent #N's own body is read first,
+so a parent already carrying the record never depends on the search index. An
+open issue with the same normalized title gets a provenance comment (`deduped`).
+An open issue in the same subsystem gets the record appended as a new
+`## Part <letter>` section with the marker, the `Discovered in #N` back-link and
+its own criteria: `Resolved: <summary>` and one `No longer true: <evidence>` per
+evidence line (`folded`, detail `appended as Part X of #M`, not counted by the
+cap, #3278). Otherwise the issue is created with `type:<t>`, Priority, Size,
+Status=Backlog and `Discovered in #N (run R, stage S)` (`filed`). Report mode,
+the kill switch or an untrusted issue author make every record `would-file`
+with no forge call.
 
-Before that, in either mode, a `producer:independent-review` record is not filed
-when another record already tracks it (#3186):
+A subsystem candidate qualifies only on one of (#2872):
 
-- `tracked-by-parent`: its `criterion` is one this run's `pr-<N>.json` lists with
-  status `unmet` (compared case-folded, whitespace collapsed), and its run id
-  equals that file's `run_id` (absent equals absent). The parent issue stays open
-  through that verdict and the PR says `Refs #N`.
-- `duplicate` (detail `duplicates <id>`): a valid record from another source stage
-  has the same issue and run id, shares a candidate file, and shares at least one
+- its body names one of the record's candidate files as a path token (bounded
+  by whitespace, a backtick, brackets or punctuation, so `b/a/x.go` does not
+  name `a/x.go`), never a ubiquitous file such as `package-lock.json`, `go.mod`
+  or `CHANGELOG.md`;
+- it is an open sibling under the parent's own epic;
+- it shares a `program:*` label with the parent;
+- it shares two or more `component:*` labels with the parent that are not
+  broad. A label carried by more than 15% of open issues is broad, as is every
+  label when the count cannot be read. One shared label never qualifies.
+
+Among qualifying candidates the parent is used only when nothing else
+qualifies; then an epic sibling wins, then board Status Ready over Backlog, then
+the stronger signal (file, program, labels), and the lowest number decides only
+among equals. Epics, human-only issues and issues In progress, In review or
+Done are never folded into, and a record more urgent than the pick's board
+Priority is filed on its own.
+
+Before that, in either mode, a record is not filed when another record or the
+parent already tracks it (#3186, #2872):
+
+- `tracked-by-parent`: from any producer, its summary or `criterion` restates a
+  criterion this run's `pr-<N>.json` lists with status `unmet` (its run id equal
+  to that file's `run_id`, absent equals absent; detail `criterion unmet on #N;
+the PR says Refs`), or an unchecked `- [ ]` criterion in the parent issue's
+  current body (detail `restates an unchecked criterion of #N`). Texts restate
+  each other when equal case-folded with whitespace collapsed, or when one
+  contains the other and the shorter is at least 24 characters.
+- `duplicate` (detail `duplicates <id>`): a `producer:independent-review` record
+  whose issue and run id match a valid record from another source stage, which
+  shares a candidate file, and shares at least one
   code identifier in the summaries and evidence: a backticked span, a `path:line`
   token, or a letter-led token with an internal `_` or `.` (`max_tested`,
   `opencode.json`). The shared files' paths, and identifiers inside them, do not
   count; `e.g.`, `i.e.`, bare numbers and ordinals never qualify.
 
-A met, missing or unnamed criterion, another run, or no `pr-<N>.json` files the
-record as before. Filed, folded, deduped, existing, reported, tracked and duplicate records
-are removed from the capture; refused and invalid ones stay.
+A record that restates neither files as before. Filed, folded, deduped,
+existing, reported, tracked and duplicate records are removed from the capture;
+refused and invalid ones stay.
 
 Exit `0` on success, including a silent no-op when the capture is absent or
 empty; exit `3` when the per-run cap refused records (`refused: K of T`);
