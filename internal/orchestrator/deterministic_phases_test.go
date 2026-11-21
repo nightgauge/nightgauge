@@ -7,6 +7,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
+	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -185,5 +186,120 @@ func TestWithPhaseReporter_NilIsSafe(t *testing.T) {
 	ctx := pmstages.WithPhaseReporter(context.Background(), s.newDeterministicPhaseReporter(nil, "r", 1))
 	if ctx == nil {
 		t.Fatal("WithPhaseReporter returned a nil context")
+	}
+}
+
+// TestDeterministicPhaseReporter_EmitsPlatformPhases pins #3455 on the
+// scheduler path: each reported transition reaches the platform as one
+// stage_progress event with a 1-based phase, complete re-resolves its position
+// from the registry, and supersede (no platform status) sends nothing.
+func TestDeterministicPhaseReporter_EmitsPlatformPhases(t *testing.T) {
+	t.Parallel()
+
+	rs := newPhaseTestRuntime()
+	tel := &mockTelemetry{}
+	s := &Scheduler{}
+	s.WithTelemetryService(tel, true)
+	rep := s.newDeterministicPhaseReporter(rs, "nightgauge/nightgauge", 1247)
+
+	rep.PhaseStart("pr-merge", "merge", 8, 13)
+	rep.PhaseComplete("pr-merge", "merge")
+	rep.PhaseFail("pr-merge", "ci-gate", 3, 13)
+	rep.PhaseSkip("pr-merge", "self-assessment", 12, 13)
+	rep.PhaseSupersede("pr-merge", "fetch-reviews", 5, 13)
+
+	idx, total := pmstages.PhasePosition("pr-merge", "merge")
+	want := []platform.PipelinePhase{
+		{Name: "merge", Index: 9, Total: 13, Status: "started"},
+		{Name: "merge", Index: idx + 1, Total: total, Status: "completed"},
+		{Name: "ci-gate", Index: 4, Total: 13, Status: "failed"},
+		{Name: "self-assessment", Index: 13, Total: 13, Status: "skipped"},
+	}
+	tel.mu.Lock()
+	got := append([]platform.PipelineEvent(nil), tel.events...)
+	tel.mu.Unlock()
+	if len(got) != len(want) {
+		t.Fatalf("got %d events, want %d (supersede sends nothing): %+v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		e := got[i]
+		if e.EventType != "stage_progress" || e.Stage != "pr-merge" || e.RunID != "run-1247" ||
+			e.Repo != "nightgauge/nightgauge" || e.IssueNumber != 1247 {
+			t.Errorf("event %d identity = %+v", i, e)
+		}
+		if e.Phase == nil || *e.Phase != w {
+			t.Errorf("event %d phase = %+v, want %+v", i, e.Phase, w)
+		}
+	}
+}
+
+// TestDeterministicPhaseReporter_TelemetryDisabledSendsNothing: the config
+// gate the scheduler's other run events honour holds for phases too.
+func TestDeterministicPhaseReporter_TelemetryDisabledSendsNothing(t *testing.T) {
+	t.Parallel()
+
+	tel := &mockTelemetry{}
+	s := &Scheduler{}
+	s.WithTelemetryService(tel, false)
+	rep := s.newDeterministicPhaseReporter(newPhaseTestRuntime(), "nightgauge/nightgauge", 1247)
+	rep.PhaseStart("pr-merge", "merge", 8, 13)
+	rep.PhaseComplete("pr-merge", "merge")
+
+	tel.mu.Lock()
+	defer tel.mu.Unlock()
+	if len(tel.events) != 0 {
+		t.Fatalf("telemetry disabled, yet %d events sent", len(tel.events))
+	}
+}
+
+// TestEmitRunEvent_StampsThePR pins AC3 on the scheduler path: no PR before
+// one is recorded, the PR and its number on every event after.
+func TestEmitRunEvent_StampsThePR(t *testing.T) {
+	t.Parallel()
+
+	rs := newPhaseTestRuntime()
+	tel := &mockTelemetry{}
+	s := &Scheduler{}
+	s.WithTelemetryService(tel, true)
+
+	s.emitRunEvent(context.Background(), rs, platform.PipelineEvent{RunID: rs.RunID, EventType: "stage_started"})
+	rs.SetPrUrl("https://github.com/nightgauge/nightgauge/pull/3460")
+	s.emitRunEvent(context.Background(), rs, platform.PipelineEvent{RunID: rs.RunID, EventType: "pipeline_done"})
+
+	tel.mu.Lock()
+	defer tel.mu.Unlock()
+	if len(tel.events) != 2 {
+		t.Fatalf("got %d events, want 2", len(tel.events))
+	}
+	if tel.events[0].PRURL != "" || tel.events[0].PRNumber != 0 {
+		t.Errorf("pre-PR event carries a PR: %q %d", tel.events[0].PRURL, tel.events[0].PRNumber)
+	}
+	if tel.events[1].PRURL != "https://github.com/nightgauge/nightgauge/pull/3460" || tel.events[1].PRNumber != 3460 {
+		t.Errorf("pipeline_done PR = %q %d", tel.events[1].PRURL, tel.events[1].PRNumber)
+	}
+}
+
+// TestRecordPhaseForRun_EmitsPlatformPhases: a scheduler-owned run's phases
+// relayed by IPC are emitted by the scheduler (the IPC server stays silent).
+func TestRecordPhaseForRun_EmitsPlatformPhases(t *testing.T) {
+	t.Parallel()
+
+	rs := newPhaseTestRuntime()
+	tel := &mockTelemetry{}
+	s := &Scheduler{}
+	s.WithTelemetryService(tel, true)
+	s.registerRuntime(rs)
+
+	s.RecordPhaseStartForRun(rs.RunID, 1247, "pr-merge", "merge", 8, 13)
+	s.RecordPhaseCompleteForRun(rs.RunID, 1247, "pr-merge", "merge")
+	s.RecordPhaseStartForRun("someone-else", 1247, "pr-merge", "merge", 8, 13)
+
+	tel.mu.Lock()
+	defer tel.mu.Unlock()
+	if len(tel.events) != 2 {
+		t.Fatalf("got %d events, want 2 (foreign run id sends nothing): %+v", len(tel.events), tel.events)
+	}
+	if p := tel.events[1].Phase; p == nil || p.Status != "completed" || p.Index != 9 || p.Total != 13 {
+		t.Errorf("complete phase = %+v, want merge 9/13 completed", p)
 	}
 }

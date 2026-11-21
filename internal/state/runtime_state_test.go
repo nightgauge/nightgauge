@@ -1180,3 +1180,59 @@ func TestStageHostSleptVerdictContract(t *testing.T) {
 		t.Error("SetStageError did not clear the host-slept verdict")
 	}
 }
+
+func TestPRURL(t *testing.T) {
+	var nilRS *RuntimeState
+	if got := nilRS.PRURL(); got != "" {
+		t.Fatalf("nil runtime PRURL = %q", got)
+	}
+	rs := NewRuntimeState("o/r", 1, "item", "run")
+	if got := rs.PRURL(); got != "" {
+		t.Fatalf("fresh runtime PRURL = %q", got)
+	}
+	rs.SetPrUrl("https://github.com/o/r/pull/9")
+	if got := rs.PRURL(); got != "https://github.com/o/r/pull/9" {
+		t.Fatalf("PRURL = %q", got)
+	}
+}
+
+func TestLatestPhaseLabel(t *testing.T) {
+	var nilRS *RuntimeState
+	if got := nilRS.LatestPhaseLabel(StageFeatureDev); got != "" {
+		t.Fatalf("nil runtime label = %q", got)
+	}
+	rs := NewRuntimeState("o/r", 1, "item", "run")
+	if got := rs.LatestPhaseLabel(StageFeatureDev); got != "" {
+		t.Fatalf("no phases: label = %q", got)
+	}
+	rs.BeginPhase(StageFeatureDev, "plan-verification", 3, 17)
+	rs.BeginPhase(StageFeaturePlanning, "other-stage", 1, 5)
+	if got, want := rs.LatestPhaseLabel(StageFeatureDev), "plan-verification (4/17) running"; got != want {
+		t.Fatalf("label = %q, want %q (other stage ignored, 1-based)", got, want)
+	}
+	rs.BeginPhase(StageFeatureDev, "implementation", 7, 17)
+	rs.CompletePhase(StageFeatureDev, "implementation")
+	if got, want := rs.LatestPhaseLabel(StageFeatureDev), "implementation (8/17) complete"; got != want {
+		t.Fatalf("latest wins: label = %q, want %q", got, want)
+	}
+	rs.BeginPhase(StageFeatureDev, "untotalled", 0, 0)
+	if got, want := rs.LatestPhaseLabel(StageFeatureDev), "untotalled running"; got != want {
+		t.Fatalf("total 0: label = %q, want %q", got, want)
+	}
+}
+
+func TestPhasePosition(t *testing.T) {
+	var nilRS *RuntimeState
+	if _, _, ok := nilRS.PhasePosition(StageFeatureDev, "x"); ok {
+		t.Fatal("nil runtime must report no position")
+	}
+	rs := NewRuntimeState("o/r", 1, "item", "run")
+	if _, _, ok := rs.PhasePosition(StageFeatureDev, "implementation"); ok {
+		t.Fatal("unknown phase must report no position")
+	}
+	rs.BeginPhase(StageFeatureDev, "implementation", 7, 17)
+	rs.BeginPhase(StageFeaturePlanning, "implementation", 2, 9)
+	if i, n, ok := rs.PhasePosition(StageFeatureDev, "implementation"); !ok || i != 7 || n != 17 {
+		t.Fatalf("position = (%d,%d,%v), want (7,17,true)", i, n, ok)
+	}
+}

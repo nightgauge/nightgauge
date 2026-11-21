@@ -311,7 +311,7 @@ func writeGatePassingSkillOutput(workDir, worktreeDir string, issueNumber int, s
 		path := filepath.Join(pipelineDir, fmt.Sprintf("pr-%d.json", issueNumber))
 		// Use a well-formed GitHub PR URL — the pr-merge verifier parses its
 		// trailing segment as the PR number. (The old "https://example/x" only
-		// "passed" because loadPrUrl read the wrong prefix and returned "".)
+		// "passed" because LoadPrUrl read the wrong prefix and returned "".)
 		body := fmt.Sprintf(`{"issue_number":%d,"pr_number":%d,"pr_url":"https://github.com/test-org/test-repo/pull/%d"}`,
 			issueNumber, issueNumber+1000, issueNumber+1000)
 		os.WriteFile(path, []byte(body), 0o644) //nolint:errcheck

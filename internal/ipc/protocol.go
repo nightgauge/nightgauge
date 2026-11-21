@@ -1322,6 +1322,12 @@ type PipelineNotifyStageTransitionParams struct {
 	PeakStepInputTokens int  `json:"peakStepInputTokens,omitempty"`
 	ContextWindowTokens int  `json:"contextWindowTokens,omitempty"`
 	CompactionCount     *int `json:"compactionCount,omitempty"`
+	// EstimatedCostUsd and EstimateBasis are the run's pre-flight estimate
+	// (#3455), computed by the extension's runPreFlightBudgetCheck and sent on
+	// the run's FIRST "running" transition only. The handler copies them onto
+	// that stage_started platform event; any other transition omits them.
+	EstimatedCostUsd *float64 `json:"estimatedCostUsd,omitempty"`
+	EstimateBasis    string   `json:"estimateBasis,omitempty"`
 }
 
 // PipelineResolveStageBudgetsParams are parameters for

@@ -102,14 +102,14 @@
     },
     {
       "name": "pipeline-done-telemetry",
-      "note": "#2756: both paths emit an architecture_approval_required hold as a non-failure (Success=true), like a deferral, so the live view never paints a deliberate human pause red. Go keys it on terminalFailureKind via IsNonFailureTerminalKind; the extension on the terminating stage's gate-sourced kind (heldForApproval), the same source as the run record's terminal_failure_kind.",
+      "note": "#3455: both paths stamp the run's PR (prNumber/prUrl) on it. #2756: both paths emit an architecture_approval_required hold as a non-failure (Success=true), like a deferral, so the live view never paints a deliberate human pause red. Go keys it on terminalFailureKind via IsNonFailureTerminalKind; the extension on the terminating stage's gate-sourced kind (heldForApproval), the same source as the run record's terminal_failure_kind.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
-        "anchor": "s.telemetrySvc.EmitPipelineEvent(context.Background(), platform.PipelineEvent{"
+        "anchor": "s.emitRunEvent(context.Background(), snap, platform.PipelineEvent{"
       },
       "extension": {
         "file": "internal/ipc/server.go",
-        "anchor": "s.emitPipelineDoneTelemetry(runID, p, approvalHold && !p.Success, snap.Visibility)"
+        "anchor": "s.emitPipelineDoneTelemetry(runID, p, approvalHold && !p.Success, snap)"
       }
     },
     {
@@ -611,7 +611,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "9173b2473db63d5bbab3db3670dada9521bcede4a76c9698d10eef8d00289fe6"
+      "sha256": "7175a199b59dc0acb948792a2fae9130690b05644897e3608d50686831342cee"
     },
     {
       "id": "extension-runSlotPipeline-finally",
