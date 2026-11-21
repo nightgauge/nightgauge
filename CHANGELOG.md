@@ -28,6 +28,12 @@ changelog, and the release workflow refuses a tag that does not.
   recorded as not needed", a marker on a closed issue or in the parent's own
   body counts as already filed, and any stage's follow-up that restates one
   of the parent's open criteria is reported as tracked by the parent (#2872).
+- `followup materialize` no longer drops a specific follow-up because a short,
+  generic line in the parent's body (such as "Unit tests cover the new code
+  paths") appears inside its summary. A parent-body criterion now counts as
+  restated only when it matches the summary or covers most of it, including
+  the `Resolved:` lines of folded parts. The command also reads each issue and
+  board placement once per run instead of once per follow-up (#2872).
 - A pull request that edits a workflow (such as a Dependabot action bump) now
   runs the Go tests that read the workflows before it reaches the merge queue,
   and those tests follow the workflows' pinned action refs instead of
