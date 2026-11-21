@@ -9,6 +9,11 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- A usage-limit rejection that exits normally now shows as quota exhausted with
+  its reset time, not as the `permissions.allow` trust warning (#3465).
+
 ### Added
 
 - Signing in to the platform now links the machine without a pasted key. After any sign-in (device flow or GitHub) and on session restore, when no explicit key resolves (`NIGHTGAUGE_LICENSE_KEY`, a key stored with `nightgauge auth license set`, `platform.license_key` in the machine config, or one already in SecretStorage), the extension requests a per-device key from `POST /v1/license/device-key`, stores it in SecretStorage and the shared OS-keychain entry, and the running daemon adopts it over the new `platform.reloadLicense` IPC method, logging `license=present` and attaching the Action Center bridge without a reload. An explicit key is never replaced. No-license, expired, revoked and machine-limit answers each show their own message; a key the platform later reports revoked, suspended or expired is re-requested once. A signed-in machine the daemon still cannot link gets a one-time notice with the new **Nightgauge: Link This Machine to Your Account** command. Activate License stays the fallback (#1883).

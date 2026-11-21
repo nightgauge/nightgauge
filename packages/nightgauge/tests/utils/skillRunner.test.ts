@@ -4448,6 +4448,84 @@ allowed-tools: Read Write
     expect(result.retryAfterMs).toBeGreaterThan(0);
   });
 
+  describe("quota rejection that exits 0 (#3465)", () => {
+    const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+    const rejectedEvent = JSON.stringify({
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: "rejected",
+        resetsAt,
+        rateLimitType: "seven_day",
+        overageStatus: "rejected",
+      },
+    });
+    const run = (assistantModel: string) => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`---
+name: test-skill
+allowed-tools: Read Write
+---
+# Test Skill
+`);
+      const mockProcess = createMockChildProcess();
+      vi.mocked(spawn).mockReturnValue(mockProcess);
+      const onComplete = vi.fn();
+      runStageSkillHeadless("feature-dev", 42, { onComplete });
+      mockProcess.stderr?.emit(
+        "data",
+        Buffer.from("Ignoring 3 permissions.allow entries: workspace has not been trusted\n")
+      );
+      const assistant = JSON.stringify({
+        type: "assistant",
+        message: { model: assistantModel, content: [] },
+      });
+      mockProcess.stdout?.emit("data", Buffer.from(`${rejectedEvent}\n${assistant}\n`));
+      mockProcess.emit("close", 0);
+      expect(onComplete).toHaveBeenCalledOnce();
+      return onComplete.mock.calls[0][0];
+    };
+
+    it("fails the stage with the quota marker, not the trust warning", () => {
+      const result = run("<synthetic>");
+      expect(result.success).toBe(false);
+      expect(result.error?.message).toMatch(
+        /^\[rate-limit-quota-exhausted\] seven-day usage limit reached; resumes at /
+      );
+      expect(result.error?.message).toContain(`resetsAt=${resetsAt}`);
+      expect(result.error?.message).not.toContain("permissions.allow");
+      expect(result.errorCategory).toBe("rate_limit");
+      expect(result.retryAfterMs).toBeGreaterThan(0);
+    });
+
+    it("succeeds when a real model served a request after the event", () => {
+      expect(run("claude-opus-5-5").success).toBe(true);
+    });
+
+    it("never reports the trust warning as the error when it is the only stderr", () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`---
+name: test-skill
+allowed-tools: Read Write
+---
+# Test Skill
+`);
+      const mockProcess = createMockChildProcess();
+      vi.mocked(spawn).mockReturnValue(mockProcess);
+      const onComplete = vi.fn();
+      runStageSkillHeadless("feature-dev", 42, { onComplete });
+      mockProcess.stderr?.emit(
+        "data",
+        Buffer.from("Ignoring 3 permissions.allow entries: workspace has not been trusted\n")
+      );
+      mockProcess.emit("close", 1);
+      expect(onComplete).toHaveBeenCalledOnce();
+      const result = onComplete.mock.calls[0][0];
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+      expect(result.error?.message).not.toContain("permissions.allow");
+    });
+  });
+
   it("should classify stderr errors when no rate_limit_event was detected", () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readFileSync).mockReturnValue(`---
