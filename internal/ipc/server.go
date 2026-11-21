@@ -3966,7 +3966,7 @@ func (s *Server) registerMethods() {
 
 		// Emit the live in-stage token/cost estimate as a stage_progress event.
 		// Skipped internally (no runID / bookend stage) rather than erroring.
-		s.emitStageProgressTelemetry(runID, repo, p.IssueNumber, p.Stage, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd, res.rs)
+		s.emitStageProgressTelemetry(runID, repo, p.IssueNumber, p.Stage, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd, p.Activity, res.rs)
 
 		return map[string]string{"status": "ok"}, nil
 	}

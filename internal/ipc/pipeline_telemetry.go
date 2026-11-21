@@ -2,7 +2,9 @@ package ipc
 
 import (
 	"context"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/platform"
@@ -177,8 +179,9 @@ func (s *Server) emitStageTelemetry(runID, repo string, p PipelineNotifyStageTra
 // fire-and-forget through the same proven AnalyticsService, so it never blocks
 // the IPC handler. Best-effort — a missing runID or bookend stage is skipped by
 // buildStageProgressEvent rather than emitted. Its message is the stage's
-// latest phase (#3455), so the run's activity line says where the stage is.
-func (s *Server) emitStageProgressTelemetry(runID, repo string, issueNumber int, stage string, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, rt *state.RuntimeState) {
+// latest phase and tool step (#3455), so the run's activity line says what the
+// stage is doing; platform.ProgressMessage caps it and fills an empty one.
+func (s *Server) emitStageProgressTelemetry(runID, repo string, issueNumber int, stage string, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, activity string, rt *state.RuntimeState) {
 	if s.analyticsSvc == nil || !s.TelemetryAllowed() {
 		return
 	}
@@ -186,12 +189,53 @@ func (s *Server) emitStageProgressTelemetry(runID, repo string, issueNumber int,
 	if !ok {
 		return
 	}
-	if msg := rt.LatestPhaseLabel(state.PipelineStage(stage)); msg != "" {
+	if msg := stageActivityMessage(rt.LatestPhaseLabel(state.PipelineStage(stage)), activity); msg != "" {
 		event.Metadata = map[string]interface{}{"message": msg}
 	}
 	event.Visibility = rt.RunVisibility()
 	platform.StampPR(&event, rt.PRURL())
 	s.analyticsSvc.EmitPipelineEvent(context.Background(), event)
+}
+
+// stageActivitySeparator joins a stage's phase label and tool step in its
+// stage_progress message (#3455).
+const stageActivitySeparator = " · "
+
+// stageActivityMax caps the client-sent tool step, matching the extension's
+// TOOL_STEP_ACTIVITY_MAX (#3455).
+const stageActivityMax = 120
+
+// stageActivityMessage composes a stage_progress message from the stage's
+// latest phase label and its latest tool step (#3455): both set gives
+// "<phase> · <activity>", one set gives that one, neither gives "" so the
+// platform falls back to "<stage> in progress". The tool step comes from an
+// IPC client, so it is cut at the first control character and capped at
+// stageActivityMax runes before it can reach the platform.
+func stageActivityMessage(phaseLabel, activity string) string {
+	phaseLabel = strings.TrimSpace(phaseLabel)
+	activity = sanitizeStageActivity(activity)
+	switch {
+	case phaseLabel != "" && activity != "":
+		return phaseLabel + stageActivitySeparator + activity
+	case phaseLabel != "":
+		return phaseLabel
+	default:
+		return activity
+	}
+}
+
+// sanitizeStageActivity keeps a client-sent tool step to one line of at most
+// stageActivityMax runes: it drops everything from the first control
+// character (a newline included) and trims the rest.
+func sanitizeStageActivity(activity string) string {
+	if i := strings.IndexFunc(activity, unicode.IsControl); i >= 0 {
+		activity = activity[:i]
+	}
+	activity = strings.TrimSpace(activity)
+	if r := []rune(activity); len(r) > stageActivityMax {
+		activity = strings.TrimSpace(string(r[:stageActivityMax]))
+	}
+	return activity
 }
 
 // emitPhaseTelemetry emits one in-stage phase transition as a stage_progress

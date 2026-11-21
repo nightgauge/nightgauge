@@ -1884,7 +1884,9 @@ describe("skillRunner - Live in-stage progress (#233)", () => {
     expect(onStageProgress).toHaveBeenCalledTimes(2);
     expect(onStageProgress.mock.calls[0][0]).toMatchObject({ inputTokens: 1000, outputTokens: 50 });
     expect(onStageProgress).toHaveBeenLastCalledWith(
-      expect.objectContaining({ inputTokens: 2000, outputTokens: 180 })
+      expect.objectContaining({ inputTokens: 2000, outputTokens: 180 }),
+      // No tool call yet, so no tool step (#3455).
+      undefined
     );
   });
 
@@ -1917,7 +1919,9 @@ describe("skillRunner - Live in-stage progress (#233)", () => {
     );
     // The live estimator DID observe the assistant snapshots (latest-wins 9000).
     expect(onStageProgress).toHaveBeenLastCalledWith(
-      expect.objectContaining({ inputTokens: 9000 })
+      expect.objectContaining({ inputTokens: 9000 }),
+      // No tool call yet, so no tool step (#3455).
+      undefined
     );
   });
 });

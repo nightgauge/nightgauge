@@ -20,6 +20,11 @@ and this project adheres to
 
 ### Added
 
+- A run's live activity line on the platform now names the stage's latest tool
+  step alongside its phase, for example
+  `implementation (8/17) running · Edit analytics.go`, so a stage that sits in
+  one long phase still shows what it is doing. Only the tool name and a file
+  or directory name are sent, never a command or a search pattern (#3455).
 - Signing in to the platform now links the machine without a pasted key. After any sign-in (device flow or GitHub) and on session restore, when no explicit key resolves (`NIGHTGAUGE_LICENSE_KEY`, a key stored with `nightgauge auth license set`, `platform.license_key` in the machine config, or one already in SecretStorage), the extension requests a per-device key from `POST /v1/license/device-key`, stores it in SecretStorage and the shared OS-keychain entry, and the running daemon adopts it over the new `platform.reloadLicense` IPC method, logging `license=present` and attaching the Action Center bridge without a reload. An explicit key is never replaced. No-license, expired, revoked and machine-limit answers each show their own message; a key the platform later reports revoked, suspended or expired is re-requested once. A signed-in machine the daemon still cannot link gets a one-time notice with the new **Nightgauge: Link This Machine to Your Account** command. Activate License stays the fallback (#1883).
 - Installing Codex or Grok skills from the VS Code extension now adopts a skill directory that has no install marker when every file in it matches the running build: the old copy moves to `<skills>.nightgauge-adopted/<UTC-stamp>/<name>` and the skill is reinstalled, and the summary reports `adopted N`. A directory with local edits is still skipped, with a warning naming it. `nightgauge doctor` (NGD112) now tells extension users to reinstall from the extension and offers `install-agent-skills.sh --adopt` only for a checkout (#2831).
 

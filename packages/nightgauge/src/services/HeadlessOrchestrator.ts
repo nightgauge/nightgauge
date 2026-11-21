@@ -17695,7 +17695,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           onCostSnapshot: (usage) => {
             void evaluateBudgetAndCeiling(usage, { live: true });
           },
-          onStageProgress: (usage) => {
+          onStageProgress: (usage, activity) => {
             // Live in-stage token/cost estimate (#233), already throttled to
             // >=5s in skillRunner. Mirror the Go-driven path (PipelineBridge):
             // fire-and-forget a stage_progress event to the platform via Go so
@@ -17728,6 +17728,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 outputTokens: usage.outputTokens,
                 cacheReadTokens: usage.cacheReadTokens,
                 costUsd: usage.costUsd,
+                activity,
                 runId: progressRunId,
               } satisfies NotifyStageProgressParams)
               .catch((err: unknown) => {

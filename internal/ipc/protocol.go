@@ -1380,6 +1380,12 @@ type PipelineNotifyStageProgressParams struct {
 	// MergedPR marks this message as "the run's PR is forge-confirmed MERGED"
 	// (#2730) rather than a token estimate.
 	MergedPR int `json:"mergedPr,omitempty"`
+	// Activity is the stage's latest tool step, as "<Tool> <basename>" or
+	// just "<Tool>" (#3455). Callers must send only a tool name and a file or
+	// directory basename, never a command or a pattern: it leaves the machine
+	// on the run's activity line. The server only cuts it to one line of at
+	// most 120 runes. Optional; absent keeps the phase label as the message.
+	Activity string `json:"activity,omitempty"`
 	// RunID is the run identity the server keys on (ADR-017 step 4, Decision
 	// 1). REQUIRED: absent is run_id_required, non-canonical is
 	// run_id_invalid. RUN-PROGRESS class (Decision 3), and the one Decision 4

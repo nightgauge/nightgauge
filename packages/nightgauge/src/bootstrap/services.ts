@@ -3535,7 +3535,7 @@ export async function initializeServices(
         // a stage_progress event to the platform via Go. The local UI is already
         // driven by onTokenUsage above, so this does NOT touch pipelineStateService
         // (avoids double-counting) — it only streams the estimate to the platform.
-        onStageProgress: (usage) => {
+        onStageProgress: (usage, activity) => {
           // No identity installed → no send (ADR-017 step 4, D2).
           // `notifyStageProgress` is run-progress class, so `runId: ""` is
           // refused `run_id_required` — once per 5-second tick — by a
@@ -3562,6 +3562,7 @@ export async function initializeServices(
               outputTokens: usage.outputTokens,
               cacheReadTokens: usage.cacheReadTokens,
               costUsd: usage.costUsd,
+              activity,
               runId: progressRunId,
             } satisfies NotifyStageProgressParams)
             .catch((err: unknown) => {
