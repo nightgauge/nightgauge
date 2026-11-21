@@ -21,6 +21,9 @@ changelog, and the release workflow refuses a tag that does not.
   `rate_limit_quota_exhausted` with a cooldown to the reset time, instead of a
   stage failure reported as the CLI's `permissions.allow` trust warning (#3465).
 
+- The OpenCode integration check pins the vendor's current `opencode.ai/v2/install`
+  script; the upstream installer changed and its old sha256 failed every run.
+
 - Action Center cards raised in any checkout now reach the phone and dashboard.
   Each checkout used to keep its own card store, and the daemon uploaded only its
   own, so a card raised from a sibling repository or a linked worktree never

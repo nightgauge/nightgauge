@@ -81,6 +81,6 @@ export const ADAPTER_COMPAT: Readonly<Record<AdapterCompatKey, AdapterCompatEntr
       maxTested: "2.2.7",
       floorPolicy: "fail_closed",
       installer: "https://opencode.ai/v2/install",
-      installerSha256: "bbc4584fd6a888bcd14623b8a63afa0f1b4075a2e84a2c3518cd509b446b3135",
+      installerSha256: "b60226508704fc97d7b9d12ae6d4a6f819dfe02b22c190a0425c14ef632b056b",
     },
   });

@@ -465,7 +465,7 @@ func TestCacheFor_ShippedManifestsAndUnknownAdapter(t *testing.T) {
 func TestShippedInstallersCarryTheirPin(t *testing.T) {
 	want := map[string]string{
 		"grok":     "bdd23859b10bd0c1492ffc3443e8413b73a9b09966d48d4d3fa32121043956fc",
-		"opencode": "bbc4584fd6a888bcd14623b8a63afa0f1b4075a2e84a2c3518cd509b446b3135",
+		"opencode": "b60226508704fc97d7b9d12ae6d4a6f819dfe02b22c190a0425c14ef632b056b",
 	}
 	ms, err := Load()
 	if err != nil {
