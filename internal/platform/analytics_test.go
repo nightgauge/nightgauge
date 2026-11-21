@@ -1410,6 +1410,80 @@ func TestBuildEventWire_LegacyStageProgress_KeySetUnchanged(t *testing.T) {
 	if got != want {
 		t.Fatalf("keys = %s, want %s", got, want)
 	}
+	if w["message"] != "feature-dev in progress" {
+		t.Errorf("message = %q, want the stage fallback", w["message"])
+	}
+}
+
+// TestBuildEventWire_StageProgress_MessageNeverEmpty pins the #3455 activity
+// line: explicit message, then phase label, then "<stage> in progress".
+func TestBuildEventWire_StageProgress_MessageNeverEmpty(t *testing.T) {
+	ph := PhaseFromZeroBased("implementation", 7, 17, "start")
+	cases := []struct {
+		name string
+		ev   PipelineEvent
+		want string
+	}{
+		{"no phase no message", PipelineEvent{Stage: "feature-dev"}, "feature-dev in progress"},
+		{"empty metadata message", PipelineEvent{Stage: "pr-create", Metadata: map[string]interface{}{"message": ""}}, "pr-create in progress"},
+		{"phase label", PipelineEvent{Stage: "feature-dev", Phase: ph}, "implementation (8/17) started"},
+		{"explicit message wins over phase", PipelineEvent{Stage: "feature-dev", Phase: ph, Metadata: map[string]interface{}{"message": "testing (9/17) started"}}, "testing (9/17) started"},
+		{"no stage", PipelineEvent{}, "in progress"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.ev.EventType, tc.ev.RunID, tc.ev.Timestamp = "stage_progress", "r", time.Now()
+			if got := buildEventWire(tc.ev)["message"]; got != tc.want {
+				t.Errorf("message = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildEventWire_StageProgress_FallbackCappedAt200(t *testing.T) {
+	w := buildEventWire(PipelineEvent{EventType: "stage_progress", RunID: "r", Stage: strings.Repeat("s", 300), Timestamp: time.Now()})
+	if m := w["message"].(string); len(m) != 200 {
+		t.Errorf("message length = %d, want 200", len(m))
+	}
+}
+
+// TestBuildEventWire_PhaseSources_WireShape pins the wire for the 0-based
+// phases both sources hand PhaseProgressEvent (#3455): skill markers relayed
+// by IPC and PhaseReporter phases from the scheduler. The emitters themselves
+// are covered by TestExtensionRun_PhaseTransitionsReachThePlatform and
+// internal/orchestrator/deterministic_phases_test.go.
+func TestBuildEventWire_PhaseSources_WireShape(t *testing.T) {
+	cases := []struct {
+		source            string
+		name              string
+		index, total      int
+		transition        string
+		wantIndex         int
+		wantStatus, wantM string
+	}{
+		{"marker start", "implementation", 7, 17, "start", 8, "started", "implementation (8/17) started"},
+		{"reporter complete", "push-branch", 2, 4, "complete", 3, "completed", "push-branch (3/4) completed"},
+		{"reporter skip", "post-merge-hook", 3, 4, "skip", 4, "skipped", "post-merge-hook (4/4) skipped"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.source, func(t *testing.T) {
+			ev, ok := PhaseProgressEvent("run-1", "o/r", 7, "pr-merge", tc.name, tc.index, tc.total, tc.transition, time.Now())
+			if !ok {
+				t.Fatal("event not built")
+			}
+			w := buildEventWire(ev)
+			ph, ok := w["phase"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("phase missing: %v", w)
+			}
+			if len(ph) != 4 || ph["name"] != tc.name || ph["index"] != tc.wantIndex || ph["total"] != tc.total || ph["status"] != tc.wantStatus {
+				t.Errorf("phase = %v", ph)
+			}
+			if w["message"] != tc.wantM {
+				t.Errorf("message = %q, want %q", w["message"], tc.wantM)
+			}
+		})
+	}
 }
 
 func TestBuildEventWire_StageProgress_CarriesPhase(t *testing.T) {
@@ -1457,8 +1531,8 @@ func TestBuildEventWire_Phase_InvalidOmittedNotDropped(t *testing.T) {
 		if _, has := w["phase"]; has {
 			t.Errorf("%s: invalid phase sent: %v", name, w["phase"])
 		}
-		if w["message"] != "" {
-			t.Errorf("%s: message = %q, want empty", name, w["message"])
+		if w["message"] != "feature-dev in progress" {
+			t.Errorf("%s: message = %q, want the stage fallback", name, w["message"])
 		}
 	}
 }

@@ -213,3 +213,38 @@ func TestExtensionRun_PRStampedAfterPRCreate(t *testing.T) {
 		t.Errorf("want exactly one pipeline_done, got %+v", events)
 	}
 }
+
+// TestExtensionRun_ProgressBeforeFirstPhaseHasActivityLine pins the #3455
+// activity line for a model-driven stage: a token snapshot that arrives
+// before the stage's first phase marker still sends a non-empty message, and
+// one after a phase sends that phase's label.
+func TestExtensionRun_ProgressBeforeFirstPhaseHasActivityLine(t *testing.T) {
+	s, fake, _ := phaseTelemetryServer(t)
+	const repo, issue = "acme/platform", 3455
+	runID := newTestRunID()
+
+	mustCall(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
+		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "running", RunID: runID,
+	})
+	progress := func() string {
+		mustCall(t, s, "pipeline.notifyStageProgress", PipelineNotifyStageProgressParams{
+			Repo: repo, IssueNumber: issue, Stage: "feature-dev", RunID: runID, InputTokens: 10,
+		})
+		events := eventsOfType(fake.snapshot(), "stage_progress")
+		if len(events) == 0 || events[len(events)-1].Phase != nil {
+			t.Fatalf("no token progress event emitted: %+v", events)
+		}
+		return platform.ProgressMessage(events[len(events)-1])
+	}
+
+	if got := progress(); got != "feature-dev in progress" {
+		t.Fatalf("pre-phase message = %q, want the stage fallback", got)
+	}
+	mustCall(t, s, "pipeline.notifyPhaseTransition", PipelineNotifyPhaseTransitionParams{
+		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Name: "implementation",
+		Index: 7, Total: 17, EventType: "start", RunID: runID,
+	})
+	if got := progress(); got != "implementation (8/17) running" {
+		t.Fatalf("post-phase message = %q, want the latest phase label", got)
+	}
+}

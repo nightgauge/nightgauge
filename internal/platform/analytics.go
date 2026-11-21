@@ -117,9 +117,11 @@ type PipelinePhase struct {
 
 // Platform contract bounds for the optional run-fact fields (#3455).
 const (
-	phaseNameMaxLen     = 120
-	phaseIndexMax       = 1000
-	progressMessageMax  = 200
+	phaseNameMaxLen    = 120
+	phaseIndexMax      = 1000
+	progressMessageMax = 200
+	// progressFallback is the activity line of a stage with no phase yet.
+	progressFallback    = "in progress"
 	prURLMaxLen         = 2048
 	estimateMaxUsd      = 2000
 	estimateBasisMaxLen = 40
@@ -910,13 +912,7 @@ func buildEventWire(e PipelineEvent) map[string]interface{} {
 		}
 	case "stage_progress":
 		w["stage"] = e.Stage
-		// The run's latest-activity line (#3455): a phase transition describes
-		// itself when the emitter left the message empty. Capped at 200.
-		msg := metaString(e.Metadata, "message")
-		if msg == "" && e.Phase.valid() {
-			msg = e.Phase.Label()
-		}
-		w["message"] = truncate(msg, progressMessageMax)
+		w["message"] = ProgressMessage(e)
 		if e.Phase.valid() {
 			w["phase"] = map[string]interface{}{
 				"name":   truncate(e.Phase.Name, phaseNameMaxLen),
@@ -976,6 +972,24 @@ func metaString(m map[string]interface{}, key string) string {
 		return v
 	}
 	return ""
+}
+
+// ProgressMessage is the run's latest-activity line a stage_progress event
+// sends (#3455), never empty and capped at progressMessageMax runes. It is the first
+// non-empty of the emitter's explicit message (the latest phase label on the
+// IPC path), the event's own phase label, and "<stage> in progress", so a
+// model-driven stage reporting tokens before its first phase marker, or a
+// skill that emits no markers, still says what is running.
+func ProgressMessage(e PipelineEvent) string {
+	msg := metaString(e.Metadata, "message")
+	if msg == "" && e.Phase.valid() {
+		msg = e.Phase.Label()
+	}
+	fallback := progressFallback
+	if e.Stage != "" {
+		fallback = e.Stage + " " + progressFallback
+	}
+	return truncate(firstNonEmpty(msg, fallback), progressMessageMax)
 }
 
 func firstNonEmpty(a, b string) string {
