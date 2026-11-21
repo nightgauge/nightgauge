@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Live run progress events sent to the platform always carry an activity line.
+  Before a stage reports its first phase, or when a skill reports none, the line
+  reads `<stage> in progress` instead of being empty (#3455).
+
 - The dashboard no longer loses a tab selection made while it re-renders. The
   extension holds an `activateTab` until the new webview document reports in,
   and on load the webview shows the tab the extension rendered instead of an
