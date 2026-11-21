@@ -5160,9 +5160,16 @@ parent already tracks it (#3186, #2872):
   criterion this run's `pr-<N>.json` lists with status `unmet` (its run id equal
   to that file's `run_id`, absent equals absent; detail `criterion unmet on #N;
 the PR says Refs`), or an unchecked `- [ ]` criterion in the parent issue's
-  current body (detail `restates an unchecked criterion of #N`). Texts restate
-  each other when equal case-folded with whitespace collapsed, or when one
-  contains the other and the shorter is at least 24 characters.
+  current body (detail `restates an unchecked criterion of #N`). For the PR's
+  unmet list, texts restate each other when equal case-folded with whitespace
+  collapsed, or when one contains the other and the shorter is at least 24
+  characters. A parent-body criterion is live, editable text, so it matches
+  more strictly: after dropping a leading `Resolved:` (the prefix of a folded
+  part's criterion), backticks and trailing punctuation, the texts must be
+  equal, or the shorter must be at least 24 characters and cover at least two
+  thirds of the longer. A short, generic line contained in a longer, specific
+  summary does not suppress the record. One `followup materialize` run reads
+  each issue and board placement once and reuses it across records.
 - `duplicate` (detail `duplicates <id>`): a `producer:independent-review` record
   whose issue and run id match a valid record from another source stage, which
   shares a candidate file, and shares at least one

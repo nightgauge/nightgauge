@@ -175,19 +175,20 @@ func runIDOf(rec discoveredwork.Record) string {
 
 // trackedByParent reports why rec, from any producer, is already tracked by
 // its parent, or "". Its summary or criterion restates (see restates) a
-// criterion this run's PR holds unmet (absent run ids match each other), or an
-// unchecked criterion in the parent's current body.
+// criterion this run's PR holds unmet (absent run ids match each other), or
+// restates (see restatesBodyCriterion) an unchecked criterion in the parent's
+// current body.
 func trackedByParent(rec discoveredwork.Record, t Tracking, parentCriteria []string) string {
 	texts := []string{rec.Summary, rec.Criterion}
 	if runIDOf(rec) == t.RunID {
 		for c := range t.Unmet {
-			if restatesAny(texts, c) {
+			if restatesAny(texts, c, restates) {
 				return fmt.Sprintf("criterion unmet on #%d; the PR says Refs", rec.IssueNumber)
 			}
 		}
 	}
 	for _, c := range parentCriteria {
-		if restatesAny(texts, c) {
+		if restatesAny(texts, c, restatesBodyCriterion) {
 			return fmt.Sprintf("restates an unchecked criterion of #%d", rec.IssueNumber)
 		}
 	}
@@ -215,10 +216,62 @@ func restates(a, b string) bool {
 	return len(a) >= minRestateLen && strings.Contains(b, a)
 }
 
-// restatesAny reports whether any of texts restates criterion.
-func restatesAny(texts []string, criterion string) bool {
+// bodyRestateCoverage is the share of the longer text the shorter must cover
+// for restatesBodyCriterion to accept containment.
+const bodyRestateCoverage = 2.0 / 3.0
+
+// resolvedPrefix opens the criterion AppendPartToBody writes for a folded part.
+const resolvedPrefix = "Resolved:"
+
+// backtickLookalike is what criterionLine writes in place of a backtick, so
+// record text cannot close the code span around it.
+const backtickLookalike = "ˋ"
+
+// criterionTrailing is the punctuation, and the truncation ellipsis
+// criterionLine adds, that bodyCriterionText trims from a criterion's end.
+const criterionTrailing = ".,;:!?… "
+
+// stripBackticks drops backticks and their look-alike from criterion text.
+var stripBackticks = strings.NewReplacer("`", "", backtickLookalike, "")
+
+// restatesBodyCriterion reports whether text restates criterion, an unchecked
+// line of the parent's live body (#2872 Part D). That body is editable and
+// accumulates folded parts, so bare containment would let a generic line
+// ("Unit tests cover the new code paths") suppress a longer, specific finding.
+// Both sides drop the "Resolved:" prefix AppendPartToBody writes, backticks
+// (and the backtickLookalike criterionLine writes) and trailing punctuation;
+// then they must be equal, or the shorter must be at least minRestateLen and
+// cover at least bodyRestateCoverage of the longer. An uncertain match files
+// the record, the cheap direction. The PR's unmet list, the pipeline's own
+// verdict, keeps plain restates.
+func restatesBodyCriterion(text, criterion string) bool {
+	a, b := bodyCriterionText(text), bodyCriterionText(criterion)
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+	return len(a) >= minRestateLen && float64(len(a)) >= bodyRestateCoverage*float64(len(b)) &&
+		strings.Contains(b, a)
+}
+
+// bodyCriterionText normalizes one side of restatesBodyCriterion.
+func bodyCriterionText(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= len(resolvedPrefix) && strings.EqualFold(s[:len(resolvedPrefix)], resolvedPrefix) {
+		s = s[len(resolvedPrefix):]
+	}
+	return strings.TrimRight(NormalizeTitle(stripBackticks.Replace(s)), criterionTrailing)
+}
+
+// restatesAny reports whether any of texts restates criterion under match.
+func restatesAny(texts []string, criterion string, match func(a, b string) bool) bool {
 	for _, t := range texts {
-		if restates(t, criterion) {
+		if match(t, criterion) {
 			return true
 		}
 	}
@@ -877,7 +930,7 @@ func AppendPartToBody(body string, rec discoveredwork.Record) (string, string, b
 	// The part's criteria are the record's own claims, each falsifiable, never
 	// "resolved, or recorded as not needed" (#2872).
 	fmt.Fprintf(&b, "### Acceptance criteria (Part %s)\n\n", label)
-	b.WriteString("- [ ] Resolved: " + criterionLine(rec.Summary) + "\n")
+	b.WriteString("- [ ] " + resolvedPrefix + " " + criterionLine(rec.Summary) + "\n")
 	for _, e := range rec.Evidence {
 		if strings.TrimSpace(e) != "" {
 			b.WriteString("- [ ] No longer true: " + criterionLine(e) + "\n")
@@ -897,5 +950,5 @@ func criterionLine(text string) string {
 	if r := []rune(text); len(r) > maxCriterionRender {
 		text = string(r[:maxCriterionRender]) + "…"
 	}
-	return "`" + strings.ReplaceAll(text, "`", "ˋ") + "`"
+	return "`" + strings.ReplaceAll(text, "`", backtickLookalike) + "`"
 }

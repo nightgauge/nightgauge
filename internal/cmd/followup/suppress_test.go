@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -270,4 +271,89 @@ func TestLoadTrackingMatchesAParaphrasedVerdictByIndex(t *testing.T) {
 	if got.Unmet[NormalizeTitle("First criterion.")] {
 		t.Fatalf("a met criterion must not be tracked: %+v", got)
 	}
+}
+
+// TestGenericParentCriterionDoesNotSuppressASpecificFinding is #2872 Part D: a
+// generic unchecked line of the parent's live body, contained in a longer,
+// specific summary, no longer reports the record tracked-by-parent.
+func TestGenericParentCriterionDoesNotSuppressASpecificFinding(t *testing.T) {
+	dir := t.TempDir()
+	run := "run-1"
+	if _, _, err := discoveredwork.Append(dir, discoveredwork.Record{
+		Summary:     "Unit tests cover the new code paths except the retry loop in internal/forge/client.go, which drops the 429 case",
+		Evidence:    []string{"internal/forge/client.go:120"},
+		SourceStage: reviewProducer, IssueNumber: 42, RunID: &run,
+		SuggestedType: "bug", SuggestedPriority: "low", SuggestedSize: "S",
+	}, time.Unix(0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	c, err := discoveredwork.Load(dir, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFake()
+	f.criteria = map[int][]string{42: {"Unit tests cover the new code paths"}}
+	res, err := Materialize(context.Background(), c, fileGate, true, Tracking{RunID: run}, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Items[0].Outcome; got == OutcomeTrackedByParent {
+		t.Fatalf("a generic parent line suppressed a specific finding: %+v", res.Items[0])
+	}
+	if len(f.created) != 1 {
+		t.Fatalf("want the record filed once, created %d: %+v", len(f.created), res.Items)
+	}
+}
+
+func TestRestatesBodyCriterion(t *testing.T) {
+	summary := "Cache board placements and parent body reads across records"
+	ticked := "Cache `placements` and parent body reads across records"
+	long := strings.Join(strings.Fields(strings.Repeat("parent body read ", 21)), " ")
+	base := strings.Repeat("x", 40) // the shorter side of the coverage cases
+	for name, tc := range map[string]struct {
+		text, criterion string
+		want            bool
+	}{
+		"exact, case and spacing":    {summary, "  cache BOARD placements and parent body reads across records. ", true},
+		"folded Resolved: part":      {summary, foldedCriterion(t, summary), true},
+		"folded part with backticks": {ticked, foldedCriterion(t, ticked), true},
+		"folded part truncated":      {long, foldedCriterion(t, long), true},
+		"near-whole containment":     {"plan-compliance: " + summary + ".", summary, true},
+		"coverage just above 2/3":    {base + " " + strings.Repeat("y", 18), base, true},  // 40/59
+		"coverage exactly 2/3":       {base + " " + strings.Repeat("y", 19), base, true},  // 40/60
+		"coverage just below 2/3":    {base + " " + strings.Repeat("y", 20), base, false}, // 40/61
+		"generic line in a long one": {summary + " in followup materialize, which reads ten per record", "Cache board placements", false},
+		"generic 24+ char line":      {"Unit tests cover the new code paths except the 429 retry branch in the forge client", "Unit tests cover the new code paths", false},
+		"unrelated":                  {summary, "The stream parser bounds provider errors to one line", false},
+		"empty criterion":            {summary, resolvedPrefix + " ``", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := restatesBodyCriterion(tc.text, tc.criterion); got != tc.want {
+				t.Fatalf("restatesBodyCriterion(%q, %q) = %v, want %v", tc.text, tc.criterion, got, tc.want)
+			}
+		})
+	}
+	// The PR's unmet list keeps plain containment.
+	if !restates("Unit tests cover the new code paths except the 429 retry branch", "Unit tests cover the new code paths") {
+		t.Fatal("restates lost containment for the PR's unmet list")
+	}
+}
+
+// foldedCriterion is the "Resolved:" criterion AppendPartToBody writes when it
+// folds a record with summary into an issue.
+func foldedCriterion(t *testing.T, summary string) string {
+	t.Helper()
+	body, _, ok := AppendPartToBody("# Parent\n", discoveredwork.Record{
+		ID: "dw-x", IssueNumber: 1, Summary: summary, SourceStage: "feature-dev",
+	})
+	if !ok {
+		t.Fatalf("AppendPartToBody made no part for %q", summary)
+	}
+	for _, c := range UncheckedCriteria(body) {
+		if strings.HasPrefix(c, resolvedPrefix+" ") {
+			return c
+		}
+	}
+	t.Fatalf("no %q criterion in %q", resolvedPrefix, body)
+	return ""
 }

@@ -70,6 +70,17 @@ type GitHubFiler struct {
 	// subs memoizes the per-parent subsystem inputs across the records of one
 	// Materialize run: records in one capture normally share their parent.
 	subs map[int]*parentSubsystem
+	// issues and placements memoize issue reads and board placements across
+	// the records of one Materialize run (#2872 Part E): records share their
+	// parent, epic, siblings and candidates. A GitHubFiler serves one run, so
+	// nothing outlives it; AppendPart writes its edit back into issues.
+	issues     map[int]*types.Issue
+	placements map[int]gh.BoardPlacement
+	// fetchIssue, fetchPlacement and editIssue reach the forge; tests replace
+	// them to count calls without HTTP.
+	fetchIssue     func(ctx context.Context, number int) (*types.Issue, error)
+	fetchPlacement func(ctx context.Context, number int) (gh.BoardPlacement, error)
+	editIssue      func(ctx context.Context, nodeID, body string) error
 }
 
 // parentSubsystem is what FindOpenInSubsystem reads once per parent.
@@ -80,16 +91,56 @@ type parentSubsystem struct {
 }
 
 func NewGitHubFiler(client *gh.Client, owner, repo string, projectNumber int, ownerType gh.OwnerType) *GitHubFiler {
-	return &GitHubFiler{
-		client:   client,
-		owner:    owner,
-		repo:     repo,
-		issueSvc: gh.NewIssueService(client),
-		projSvc:  gh.NewProjectService(client, owner, projectNumber, ownerType),
-		trustF:   gh.NewTrustForge(client),
-		project:  projectNumber,
-		subs:     map[int]*parentSubsystem{},
+	g := &GitHubFiler{
+		client:     client,
+		owner:      owner,
+		repo:       repo,
+		issueSvc:   gh.NewIssueService(client),
+		projSvc:    gh.NewProjectService(client, owner, projectNumber, ownerType),
+		trustF:     gh.NewTrustForge(client),
+		project:    projectNumber,
+		subs:       map[int]*parentSubsystem{},
+		issues:     map[int]*types.Issue{},
+		placements: map[int]gh.BoardPlacement{},
 	}
+	g.fetchIssue = func(ctx context.Context, n int) (*types.Issue, error) {
+		return g.issueSvc.GetIssue(ctx, g.owner, g.repo, n)
+	}
+	g.fetchPlacement = func(ctx context.Context, n int) (gh.BoardPlacement, error) {
+		return gh.IssueBoardPlacement(ctx, g.client, g.owner, g.repo, n, g.project)
+	}
+	g.editIssue = func(ctx context.Context, nodeID, body string) error {
+		_, err := g.issueSvc.EditIssue(ctx, nodeID, body)
+		return err
+	}
+	return g
+}
+
+// getIssue reads issue number once per run. A failed read is not cached.
+func (g *GitHubFiler) getIssue(ctx context.Context, number int) (*types.Issue, error) {
+	if is, ok := g.issues[number]; ok {
+		return is, nil
+	}
+	is, err := g.fetchIssue(ctx, number)
+	if err != nil {
+		return nil, err
+	}
+	g.issues[number] = is
+	return is, nil
+}
+
+// placement reads issue number's board placement once per run. A failed read
+// is not cached.
+func (g *GitHubFiler) placement(ctx context.Context, number int) (gh.BoardPlacement, error) {
+	if p, ok := g.placements[number]; ok {
+		return p, nil
+	}
+	p, err := g.fetchPlacement(ctx, number)
+	if err != nil {
+		return gh.BoardPlacement{}, err
+	}
+	g.placements[number] = p
+	return p, nil
 }
 
 // markerIssueRe reads the issue a marker names.
@@ -98,11 +149,13 @@ var markerIssueRe = regexp.MustCompile(`issue=#(\d+)`)
 // FindByMarker looks for marker in the body of the issue the marker names
 // first (the parent may already carry its own record), then searches open and
 // closed issues for the record id and confirms the whole marker is in the
-// body. Reading the parent directly does not depend on the search index.
+// body. Reading the parent directly does not depend on the search index. That
+// read may come from the run's memo, which is current for this run's own
+// folds because AppendPart writes each edit back into it.
 func (g *GitHubFiler) FindByMarker(ctx context.Context, marker string) (Found, error) {
 	if m := markerIssueRe.FindStringSubmatch(marker); m != nil {
 		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
-			is, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, n)
+			is, err := g.getIssue(ctx, n)
 			if err != nil {
 				return Found{}, fmt.Errorf("read #%d: %w", n, err)
 			}
@@ -139,7 +192,7 @@ const markerSearchLimit = 20
 
 // ParentCriteria returns the unchecked criteria in issue number's body.
 func (g *GitHubFiler) ParentCriteria(ctx context.Context, number int) ([]string, error) {
-	is, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, number)
+	is, err := g.getIssue(ctx, number)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +229,7 @@ func (g *GitHubFiler) HasComment(ctx context.Context, number int, marker string)
 }
 
 func (g *GitHubFiler) AddComment(ctx context.Context, number int, body string) error {
-	is, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, number)
+	is, err := g.getIssue(ctx, number)
 	if err != nil {
 		return err
 	}
@@ -249,7 +302,7 @@ func (g *GitHubFiler) parentInputs(ctx context.Context, parent int) (*parentSubs
 	}
 	ps := &parentSubsystem{sub: Subsystem{Parent: parent, Broad: map[string]bool{}}, siblings: map[int]bool{}}
 	if parent > 0 {
-		p, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, parent)
+		p, err := g.getIssue(ctx, parent)
 		if err != nil {
 			return nil, fmt.Errorf("read parent #%d: %w", parent, err)
 		}
@@ -263,7 +316,7 @@ func (g *GitHubFiler) parentInputs(ctx context.Context, parent int) (*parentSubs
 		}
 		if p.ParentIssueNumber > 0 && sameRepo(p.ParentIssueRepo, g.owner, g.repo) {
 			ps.sub.Epic = p.ParentIssueNumber
-			epic, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, ps.sub.Epic)
+			epic, err := g.getIssue(ctx, ps.sub.Epic)
 			if err != nil {
 				return nil, fmt.Errorf("read epic #%d: %w", ps.sub.Epic, err)
 			}
@@ -273,7 +326,7 @@ func (g *GitHubFiler) parentInputs(ctx context.Context, parent int) (*parentSubs
 					continue
 				}
 				ps.siblings[si.Number] = true
-				is, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, si.Number)
+				is, err := g.getIssue(ctx, si.Number)
 				if err != nil {
 					return nil, fmt.Errorf("read sibling #%d: %w", si.Number, err)
 				}
@@ -361,7 +414,7 @@ func (g *GitHubFiler) FindOpenInSubsystem(ctx context.Context, parent int, files
 			continue
 		}
 		reads++
-		placement, err := gh.IssueBoardPlacement(ctx, g.client, g.owner, g.repo, c.Number, g.project)
+		placement, err := g.placement(ctx, c.Number)
 		if err != nil {
 			return 0, "", err
 		}
@@ -381,18 +434,24 @@ func sameRepo(full, owner, repo string) bool {
 }
 
 // AppendPart appends rec to issue number as a new part. A body already
-// carrying rec's marker is left alone.
+// carrying rec's marker is left alone. It reads the body fresh, never from the
+// run's memo, so the edit never starts from a stale body, and stores the
+// result in the memo, so a later FindByMarker on number sees the new marker.
 func (g *GitHubFiler) AppendPart(ctx context.Context, number int, rec discoveredwork.Record) (string, error) {
-	is, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, number)
+	is, err := g.fetchIssue(ctx, number)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read #%d: %w", number, err)
 	}
+	g.issues[number] = is
 	body, label, changed := AppendPartToBody(is.Body, rec)
 	if !changed {
 		return "", nil
 	}
-	if _, err := g.issueSvc.EditIssue(ctx, is.NodeID, body); err != nil {
-		return "", err
+	if err := g.editIssue(ctx, is.NodeID, body); err != nil {
+		return "", fmt.Errorf("edit #%d: %w", number, err)
 	}
+	edited := *is
+	edited.Body = body
+	g.issues[number] = &edited
 	return label, nil
 }
