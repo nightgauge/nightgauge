@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- pr-merge now re-checks the pipeline review while a PR waits in the merge
+  queue. A review posted after the enqueue with findings that hold the merge
+  dequeues the PR and stops the run as the enqueue gate would, instead of
+  merging past them (#2834).
 - A partial-delivery re-run now honours a remainder the supervisor revised:
   when the issue body was edited after the partial PR merged, its unticked
   criteria are the remainder, and a ticked criterion is never in the re-run's

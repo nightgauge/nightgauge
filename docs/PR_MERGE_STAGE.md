@@ -250,6 +250,18 @@ on core, #2225). The runner therefore:
    skill: the scheduler fails the stage, and the failure reason carries the
    failing merge-group checks for CI-failure handling and retro. A rate limit
    still defers exactly as below.
+
+   While the PR waits in the queue, each poll that sees it queued re-reads the
+   pipeline review comment (#2834). The enqueue gate reads that comment once,
+   before the enqueue, so a review posted or edited afterwards used to merge
+   unread. A comment newer than the one the gate evaluated (any comment on the
+   resume path) is decided by the same enqueue-gate rules: a hold dequeues the
+   PR with `dequeuePullRequest` and the run stops with the gate's own path and
+   reason, so a fix round punts to the review-fix loop as at enqueue; `file`
+   findings are filed and the wait continues. A failed review read never holds.
+   If the merge group lands before the dequeue, the merge stands. Only the
+   pipeline's wait re-checks; `nightgauge pr merge N` does not.
+
 5. **Routes a queue-side conflict** (#2611). When the queue reports the PR
    unmergeable, the runner re-reads its mergeability, polling while GitHub
    answers `UNKNOWN`. A `CONFLICTING` PR is refused with

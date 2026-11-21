@@ -118,6 +118,12 @@ type MergeQueueWaitOptions struct {
 	// OPEN, failed readiness or was never enqueued, so a caller timing the
 	// queue wait starts its clock only once the queue owns the PR.
 	OnQueued func(MergeQueueStatus)
+	// OnPoll, when set, is called on every wait poll that observes the PR in
+	// the queue (#2834). A non-nil return holds the merge: Wait dequeues the
+	// PR and returns a MergeQueueHeld error whose Cause is the returned error.
+	// When the dequeue itself fails the wait keeps polling and asks again, so
+	// a group that merges meanwhile still reads MERGED.
+	OnPoll func(ctx context.Context, st MergeQueueStatus) error
 	// CheckSquashDefaults, when set, runs before an enqueue and reports
 	// whether the repository's squash defaults are PR_TITLE/PR_BODY (#2728).
 	// The queue takes no headline, so these defaults decide the squash subject
@@ -209,6 +215,9 @@ const (
 	// PR_TITLE/PR_BODY (or could not be read) and the PR carries a WIP-preservation commit, so
 	// it was not enqueued (#2728).
 	MergeQueueSquashDefaults = "squash_defaults"
+	// MergeQueueHeld: the wait's OnPoll hook held the merge and the PR was
+	// dequeued (#2834). The hook's reason is the error's Cause.
+	MergeQueueHeld = "held"
 )
 
 // MergeQueueError is the classified failure of a queued merge. It names the
@@ -243,6 +252,8 @@ func (e *MergeQueueError) Error() string {
 			"are not PR_TITLE/PR_BODY; not enqueued (an admin sets squash_merge_commit_title=PR_TITLE and "+
 			"squash_merge_commit_message=PR_BODY: gh api -X PATCH repos/{owner}/{repo} "+
 			"-f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY)", e.PRNumber)
+	case MergeQueueHeld:
+		fmt.Fprintf(&b, "merge queue: PR #%d held and dequeued", e.PRNumber)
 	case MergeQueueTimeout:
 		fmt.Fprintf(&b, "merge queue: PR #%d not merged before the queue wait budget expired", e.PRNumber)
 	case MergeQueueClosed:
@@ -319,6 +330,8 @@ mergeQueueEntry { state position headCommit { oid } }`
 const mergeQueueStatusByIDQuery = `query($id: ID!) { node(id: $id) { ... on PullRequest { ` + mergeQueuePRFields + ` } } }`
 
 const mergeQueueStatusByNumberQuery = `query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { ` + mergeQueuePRFields + ` } } }`
+
+const dequeuePullRequestMutation = `mutation($id: ID!) { dequeuePullRequest(input: {id: $id}) { mergeQueueEntry { state } } }`
 
 const enqueuePullRequestMutation = `mutation($id: ID!) { enqueuePullRequest(input: {pullRequestId: $id}) { mergeQueueEntry { state position } } }`
 
@@ -463,6 +476,21 @@ func (q *MergeQueue) Enqueue(ctx context.Context, prID string) error {
 	}
 	if err := decodeGraphQL(body, &data); err != nil {
 		return fmt.Errorf("enqueue pull request: %w", err)
+	}
+	return nil
+}
+
+// Dequeue removes the PR from its base branch's merge queue (#2834).
+func (q *MergeQueue) Dequeue(ctx context.Context, prID string) error {
+	body, err := q.do(ctx, dequeuePullRequestMutation, map[string]any{"id": prID})
+	if err != nil {
+		return fmt.Errorf("dequeue pull request: %w", err)
+	}
+	var data struct {
+		DequeuePullRequest *struct{} `json:"dequeuePullRequest"`
+	}
+	if err := decodeGraphQL(body, &data); err != nil {
+		return fmt.Errorf("dequeue pull request: %w", err)
 	}
 	return nil
 }
@@ -785,6 +813,18 @@ func (q *MergeQueue) Wait(ctx context.Context, prID string, initial MergeQueueSt
 					seenEntry = true
 					absent = 0
 					blockedUnmergeable = st.EntryState == "UNMERGEABLE" && st.Mergeable != "CONFLICTING"
+					if opts.OnPoll != nil {
+						if hold := opts.OnPoll(ctx, st); hold != nil {
+							derr := q.Dequeue(ctx, prID)
+							if derr == nil {
+								return st, &MergeQueueError{PRNumber: st.Number, Kind: MergeQueueHeld, EntryHeadOID: headOID, Cause: hold}
+							}
+							if isRateLimited(derr) {
+								return st, derr
+							}
+							log.Printf("merge queue: dequeue of held PR #%d failed, asking again next poll: %v", st.Number, derr)
+						}
+					}
 				} else if st.State == "OPEN" {
 					absent++
 					// A removal for failed merge-group checks is real: report it now

@@ -647,7 +647,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		ph.complete("ci-gate")
 		ph.skip("freshness-check")
 		ph.start("merge")
-		return finish(r.awaitMergeQueue(ctx, ph, mq, workdir, issueNumber, prNumber, snap, queueStatus), nil)
+		return finish(r.awaitMergeQueue(ctx, ph, mq, gh, workdir, issueNumber, prNumber, snap, queueStatus, time.Time{}), nil)
 	}
 
 	// Settle the snapshot: the mergeability wait (#1933) and the CI wait (#297)
@@ -726,12 +726,13 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// path. Issues for open findings are filed here, ahead of the merge call,
 	// so nothing depends on a stage that may end. Like conformance, it maps to
 	// no registry phase.
-	if out := r.reviewGate(ctx, gh, workdir, issueNumber, prNumber); !out.Proceed {
+	gate := r.reviewGate(ctx, gh, workdir, issueNumber, prNumber)
+	if !gate.Proceed {
 		return finish(PRMergeResult{
-			Path:     out.Path,
+			Path:     gate.Path,
 			PRNumber: prNumber,
 			PRState:  snap.State,
-			Reason:   out.Reason,
+			Reason:   gate.Reason,
 		}, nil)
 	}
 
@@ -761,7 +762,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// or be rejected (GraphQL), so enqueue and wait for the queue's verdict.
 	if mq != nil {
 		ph.start("merge")
-		return finish(r.awaitMergeQueue(ctx, ph, mq, workdir, issueNumber, prNumber, snap, queueStatus), nil)
+		return finish(r.awaitMergeQueue(ctx, ph, mq, gh, workdir, issueNumber, prNumber, snap, queueStatus, gate.CommentAt), nil)
 	}
 
 	// Issue the merge. Idempotent at the GitHub level: re-issuing on an
@@ -890,10 +891,15 @@ func (r *DeterministicRunner) queueMergedAfterAll(ctx context.Context, mq mergeQ
 // or the re-enqueued wait), the result is still merge-queue-infra-exhausted,
 // a non-fault kind: a stage stopped mid-retry never ends in a timeout kind.
 //
+// While the PR is queued, a review comment newer than reviewSeen is
+// re-evaluated on each poll (#2834); a hold dequeues the PR and stops with the
+// enqueue gate's result. reviewSeen is zero on the resume path, so a PR
+// re-entered mid-queue has its existing review evaluated once.
+//
 // The wait after the PR reaches the queue is recorded for issueNumber
 // (#2770), the same record `nightgauge pr merge --issue` writes, so a
 // wall-clock budget running over this wait leaves it out.
-func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmitter, mq mergeQueueClient, workdir string, issueNumber, prNumber int, snap PRViewSnapshot, st github.MergeQueueStatus) PRMergeResult {
+func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmitter, mq mergeQueueClient, gh ghClient, workdir string, issueNumber, prNumber int, snap PRViewSnapshot, st github.MergeQueueStatus, reviewSeen time.Time) PRMergeResult {
 	log.Printf("pr-merge: PR #%d targets %s, which requires a merge queue — enqueueing and waiting up to %s",
 		prNumber, st.BaseRef, r.QueueWaitTimeout())
 	opts := r.queueWait
@@ -901,6 +907,9 @@ func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmit
 		begin, end := queuewait.Track(workdir, issueNumber, func(err error) { log.Printf("pr-merge: %v", err) })
 		opts.OnQueued = func(github.MergeQueueStatus) { begin() }
 		defer end()
+	}
+	if hook := r.queueReviewRecheck(gh, workdir, issueNumber, prNumber, reviewSeen); hook != nil {
+		opts.OnPoll = hook
 	}
 	var final github.MergeQueueStatus
 	var err error
@@ -964,6 +973,7 @@ func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmit
 	ph.supersedeInFlight()
 	res := PRMergeResult{Path: PathRefused, PRNumber: prNumber, PRState: queueState(final, snap)}
 	var qe *github.MergeQueueError
+	var hold *queueReviewHold
 	switch {
 	case err == nil:
 		res.Reason = fmt.Sprintf("%s: queue wait ended in state %s", ReasonMergeQueueFailed, final.State)
@@ -971,6 +981,9 @@ func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmit
 		// Rate limits defer, exactly as on the direct path.
 		res.Path = PathPunt
 		res.Reason = ReasonRateLimited
+	case errors.As(err, &qe) && qe.Kind == github.MergeQueueHeld && errors.As(err, &hold):
+		// A review posted while queued (#2834): stop as the enqueue gate does.
+		res.Path, res.Reason = hold.out.Path, hold.out.Reason
 	case errors.As(err, &qe) && qe.Kind == github.MergeQueueTimeout:
 		res.Reason = fmt.Sprintf("%s: %s", ReasonMergeQueueTimeout, truncateErr(err, 300))
 	case errors.As(err, &qe) && qe.Kind == github.MergeQueueUnmergeable:
