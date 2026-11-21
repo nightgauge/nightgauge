@@ -49,6 +49,9 @@ type queueServer struct {
 	rewordedHead   string
 	headLag        int
 	pendingMessage string
+	// dequeued counts dequeuePullRequest mutations; dequeueErr fails them.
+	dequeued   int
+	dequeueErr string
 }
 
 func prNode(state string, queueEnabled, inQueue bool, entry map[string]any, mergeOID string) map[string]any {
@@ -160,6 +163,14 @@ func (qs *queueServer) handler(t *testing.T) http.HandlerFunc {
 				}
 			}
 			data = map[string]any{"updateRefs": map[string]any{"clientMutationId": nil}}
+		case strings.Contains(req.Query, "dequeuePullRequest"):
+			qs.mutations = append(qs.mutations, "dequeuePullRequest")
+			qs.dequeued++
+			if qs.dequeueErr != "" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": nil, "errors": []any{map[string]any{"message": qs.dequeueErr}}})
+				return
+			}
+			data = map[string]any{"dequeuePullRequest": map[string]any{"mergeQueueEntry": map[string]any{"state": "QUEUED"}}}
 		case strings.Contains(req.Query, "enqueuePullRequest"):
 			qs.mutations = append(qs.mutations, "enqueuePullRequest")
 			qs.enqueued++
@@ -721,5 +732,63 @@ func TestMergeQueue_DefaultsNotPRTitled_NoWIPCommit_EnqueuesWithoutPatch(t *test
 func TestMergeabilityWaitBudget(t *testing.T) {
 	if got, want := MergeabilityWaitBudget(), 126*time.Second; got != want {
 		t.Fatalf("MergeabilityWaitBudget() = %v, want %v", got, want)
+	}
+}
+
+// TestOnPoll_HoldDequeuesAndReturnsHeld (#2834): a hold from the poll hook
+// dequeues the PR and ends the wait with MergeQueueHeld carrying the cause.
+func TestOnPoll_HoldDequeuesAndReturnsHeld(t *testing.T) {
+	qs := &queueServer{statuses: []map[string]any{
+		prNode("OPEN", true, true, entry("QUEUED", "mg1"), ""), // detection
+		prNode("OPEN", true, true, entry("AWAITING_CHECKS", "mg1"), ""),
+		prNode("MERGED", true, false, nil, "landed1"),
+	}}
+	svc := newQueuePRService(t, qs)
+	cause := errors.New("review holds")
+	svc.QueueWait.OnPoll = func(context.Context, MergeQueueStatus) error { return cause }
+	_, err := svc.MergePRWithStrategy(context.Background(), "PR_1", "SQUASH")
+	var qe *MergeQueueError
+	if !errors.As(err, &qe) || qe.Kind != MergeQueueHeld || !errors.Is(err, cause) {
+		t.Fatalf("err = %v, want MergeQueueHeld wrapping the hold", err)
+	}
+	if qs.dequeued != 1 {
+		t.Errorf("dequeued = %d, want 1", qs.dequeued)
+	}
+}
+
+func TestOnPoll_NilKeepsTheMergedOutcome(t *testing.T) {
+	qs := &queueServer{statuses: []map[string]any{
+		prNode("OPEN", true, true, entry("QUEUED", "mg1"), ""), // detection
+		prNode("OPEN", true, true, entry("AWAITING_CHECKS", "mg1"), ""),
+		prNode("MERGED", true, false, nil, "landed1"),
+	}}
+	svc := newQueuePRService(t, qs)
+	polls := 0
+	svc.QueueWait.OnPoll = func(context.Context, MergeQueueStatus) error { polls++; return nil }
+	sha, err := svc.MergePRWithStrategy(context.Background(), "PR_1", "SQUASH")
+	if err != nil || sha != "landed1" {
+		t.Fatalf("sha=%q err=%v, want landed1", sha, err)
+	}
+	if polls != 1 || qs.dequeued != 0 {
+		t.Errorf("polls=%d dequeued=%d, want 1/0", polls, qs.dequeued)
+	}
+}
+
+// A failed dequeue keeps polling; a group that merges meanwhile reads MERGED.
+func TestOnPoll_DequeueFailureKeepsPolling(t *testing.T) {
+	qs := &queueServer{dequeueErr: "boom", statuses: []map[string]any{
+		prNode("OPEN", true, true, entry("QUEUED", "mg1"), ""), // detection
+		prNode("OPEN", true, true, entry("AWAITING_CHECKS", "mg1"), ""),
+		prNode("OPEN", true, true, entry("AWAITING_CHECKS", "mg1"), ""),
+		prNode("MERGED", true, false, nil, "landed1"),
+	}}
+	svc := newQueuePRService(t, qs)
+	svc.QueueWait.OnPoll = func(context.Context, MergeQueueStatus) error { return errors.New("hold") }
+	sha, err := svc.MergePRWithStrategy(context.Background(), "PR_1", "SQUASH")
+	if err != nil || sha != "landed1" {
+		t.Fatalf("sha=%q err=%v, want landed1", sha, err)
+	}
+	if qs.dequeued != 2 {
+		t.Errorf("dequeued = %d, want a retry on each queued poll (2)", qs.dequeued)
 	}
 }

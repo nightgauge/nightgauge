@@ -19,6 +19,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/atomicfile"
 	"github.com/nightgauge/nightgauge/internal/cmd/discoveredwork"
 	"github.com/nightgauge/nightgauge/internal/cmd/followup"
+	"github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
@@ -364,6 +365,9 @@ type ReviewGateOutcome struct {
 	Rounds   int             `json:"rounds"`
 	Hold     []ReviewFinding `json:"hold,omitempty"`
 	Filed    []int           `json:"filed,omitempty"`
+	// CommentAt is the evaluated comment's UpdatedAt, zero when none was
+	// read. The queue-wait re-check (#2834) evaluates only a newer comment.
+	CommentAt time.Time `json:"-"`
 }
 
 func (o ReviewGateOutcome) stop(path PRMergePath, verdict ReviewVerdict, reason string) ReviewGateOutcome {
@@ -416,6 +420,15 @@ func (r *DeterministicRunner) reviewGate(ctx context.Context, gh ghClient, workd
 		}
 		return out
 	}
+	return r.evaluateReview(ctx, workdir, issueNumber, prNumber, ledger, comment, now, out)
+}
+
+// evaluateReview decides a read review comment against the ledger and, on
+// enqueue, files its open findings. The enqueue gate and the queue-wait
+// re-check (#2834) share it, so a review read in the queue holds exactly as
+// one read before the enqueue.
+func (r *DeterministicRunner) evaluateReview(ctx context.Context, workdir string, issueNumber, prNumber int, ledger ReviewLedger, comment ReviewComment, now time.Time, out ReviewGateOutcome) ReviewGateOutcome {
+	out.CommentAt = comment.UpdatedAt
 	findings, err := ParseReviewComment(comment.Body)
 	if err != nil {
 		return out.stop(PathRefused, ReviewUnreadable, fmt.Sprintf("%s: %s", ReasonReviewUnparseable, truncateErr(err, 200)))
@@ -444,6 +457,51 @@ func (r *DeterministicRunner) reviewGate(ctx context.Context, gh ghClient, workd
 		return out.stop(PathRefused, verdict, fmt.Sprintf("%s: %s", ReasonReviewFilingFailed, truncateErr(err, 300)))
 	}
 	return out
+}
+
+// queueReviewHold is the hold the queue-wait re-check returns (#2834). It
+// carries the gate outcome the runner stops with once the PR is dequeued.
+type queueReviewHold struct{ out ReviewGateOutcome }
+
+func (h *queueReviewHold) Error() string { return "review holds the merge: " + h.out.Reason }
+
+// queueReviewRecheck returns the merge-queue poll hook (#2834), or nil for a
+// client that cannot read reviews. The enqueue gate reads the review once,
+// before the enqueue; a review posted or edited while the PR waits in the
+// queue would otherwise merge unread. Each poll re-reads the comment and
+// evaluates it only when it is newer than the last one evaluated (seenAt);
+// a stop verdict holds the merge. A failed read never holds: a flaky read
+// must not dequeue a PR.
+func (r *DeterministicRunner) queueReviewRecheck(gh ghClient, workdir string, issueNumber, prNumber int, seenAt time.Time) func(context.Context, github.MergeQueueStatus) error {
+	rc, ok := gh.(reviewClient)
+	if !ok {
+		return nil
+	}
+	return func(ctx context.Context, _ github.MergeQueueStatus) error {
+		comment, found, err := rc.ReviewComment(ctx, prNumber)
+		if err != nil {
+			log.Printf("pr-merge: queue-wait review read for PR #%d failed, not holding: %v", prNumber, err)
+			return nil
+		}
+		if !found || !comment.UpdatedAt.After(seenAt) {
+			return nil
+		}
+		ledger, err := LoadReviewLedger(workdir, issueNumber)
+		if err != nil {
+			log.Printf("pr-merge: queue-wait review ledger for #%d unreadable, not holding: %v", issueNumber, err)
+			return nil
+		}
+		out := ReviewGateOutcome{Proceed: true, Verdict: ReviewEnqueue, PRNumber: prNumber, Rounds: ledger.Rounds}
+		out = r.evaluateReview(ctx, workdir, issueNumber, prNumber, ledger, comment, r.now(), out)
+		if out.Proceed {
+			// Only a comment that lets the merge proceed is marked seen: a
+			// hold whose dequeue fails must hold again on the next poll.
+			seenAt = comment.UpdatedAt
+			return nil
+		}
+		log.Printf("pr-merge: review posted while PR #%d was queued holds the merge (%s); dequeueing", prNumber, out.Reason)
+		return &queueReviewHold{out: out}
+	}
 }
 
 // reviewRecord builds the discovered-work record for a finding. The summary
