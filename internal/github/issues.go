@@ -1227,6 +1227,33 @@ func (s *IssueService) GetRepoLabels(ctx context.Context, owner, repo string) (m
 // Narrowing qualifiers (`label:`, `in:`, `author:` …) are kept. An owner or
 // repo that is not a valid name is refused: it is part of the query too.
 func (s *IssueService) SearchIssues(ctx context.Context, owner, repo, query string, limit int) ([]types.Issue, error) {
+	return s.searchIssues(ctx, owner, repo, query, limit, true)
+}
+
+// SearchIssuesAnyState is SearchIssues over open and closed issues, with the
+// same repository confinement. Each result keeps its State.
+func (s *IssueService) SearchIssuesAnyState(ctx context.Context, owner, repo, query string, limit int) ([]types.Issue, error) {
+	return s.searchIssues(ctx, owner, repo, query, limit, false)
+}
+
+// CountOpenMatching returns how many open issues in owner/repo match query,
+// confined as SearchIssues confines it.
+func (s *IssueService) CountOpenMatching(ctx context.Context, owner, repo, query string) (int, error) {
+	if !searchOwnerPattern.MatchString(owner) || !searchRepoPattern.MatchString(repo) || repo == "." || repo == ".." {
+		return 0, fmt.Errorf("count issues: %q/%q is not a repository name", owner, repo)
+	}
+	var q searchIssuesQuery
+	vars := map[string]interface{}{
+		"q":     graphql.String(strings.TrimSpace(fmt.Sprintf("type:issue repo:%s/%s is:open %s", owner, repo, confineSearchQuery(query)))),
+		"limit": graphql.Int(1),
+	}
+	if err := s.client.query(ctx, &q, vars); err != nil {
+		return 0, fmt.Errorf("count issues: %w", err)
+	}
+	return int(q.Search.IssueCount), nil
+}
+
+func (s *IssueService) searchIssues(ctx context.Context, owner, repo, query string, limit int, openOnly bool) ([]types.Issue, error) {
 	if !searchOwnerPattern.MatchString(owner) || !searchRepoPattern.MatchString(repo) || repo == "." || repo == ".." {
 		return nil, fmt.Errorf("search issues: %q/%q is not a repository name", owner, repo)
 	}
@@ -1235,7 +1262,11 @@ func (s *IssueService) SearchIssues(ctx context.Context, owner, repo, query stri
 	} else if limit > 100 {
 		limit = 100
 	}
-	fullQuery := fmt.Sprintf("type:issue repo:%s/%s is:open %s", owner, repo, confineSearchQuery(query))
+	state := "is:open "
+	if !openOnly {
+		state = ""
+	}
+	fullQuery := fmt.Sprintf("type:issue repo:%s/%s %s%s", owner, repo, state, confineSearchQuery(query))
 
 	var q searchIssuesQuery
 	vars := map[string]interface{}{
@@ -1254,7 +1285,7 @@ func (s *IssueService) SearchIssues(ctx context.Context, owner, repo, query stri
 			continue
 		}
 		f := n.IssueFields
-		if !strings.EqualFold(string(f.Repository.NameWithOwner), want) || !strings.EqualFold(string(f.State), "OPEN") {
+		if !strings.EqualFold(string(f.Repository.NameWithOwner), want) || (openOnly && !strings.EqualFold(string(f.State), "OPEN")) {
 			continue // outside the scope pinned above, however it was reached
 		}
 		issue := types.Issue{

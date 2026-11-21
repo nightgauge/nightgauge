@@ -16,6 +16,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A reused or capped pipeline review now restores the discovered work its own
+  round recorded, so reviewing trees A, B, then A again no longer leaves B's
+  follow-ups under A's verdict (#2872).
+- `followup materialize` folds a follow-up into an existing issue only on real
+  evidence: a file named as a path (never a lockfile or changelog mentioned in
+  prose), an open sibling under the same epic, a shared `program:*` label, or
+  two shared component labels that are not carried by most open issues. Ready
+  issues win over Backlog ones, a more urgent follow-up is filed on its own,
+  a folded part's criteria restate the follow-up instead of "resolved, or
+  recorded as not needed", a marker on a closed issue or in the parent's own
+  body counts as already filed, and any stage's follow-up that restates one
+  of the parent's open criteria is reported as tracked by the parent (#2872).
 - A pull request that edits a workflow (such as a Dependabot action bump) now
   runs the Go tests that read the workflows before it reaches the merge queue,
   and those tests follow the workflows' pinned action refs instead of

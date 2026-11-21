@@ -3,6 +3,8 @@ package followup
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/cmd/discoveredwork"
@@ -10,6 +12,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/filing"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/trust"
+	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
 // AuthorTrusted asks the trust gate whether the source issue is eligible
@@ -64,6 +67,16 @@ type GitHubFiler struct {
 	projSvc  *gh.ProjectService
 	trustF   *gh.TrustForge
 	project  int
+	// subs memoizes the per-parent subsystem inputs across the records of one
+	// Materialize run: records in one capture normally share their parent.
+	subs map[int]*parentSubsystem
+}
+
+// parentSubsystem is what FindOpenInSubsystem reads once per parent.
+type parentSubsystem struct {
+	sub      Subsystem
+	siblings map[int]bool
+	extra    []types.Issue // open siblings the searches may not return
 }
 
 func NewGitHubFiler(client *gh.Client, owner, repo string, projectNumber int, ownerType gh.OwnerType) *GitHubFiler {
@@ -75,28 +88,62 @@ func NewGitHubFiler(client *gh.Client, owner, repo string, projectNumber int, ow
 		projSvc:  gh.NewProjectService(client, owner, projectNumber, ownerType),
 		trustF:   gh.NewTrustForge(client),
 		project:  projectNumber,
+		subs:     map[int]*parentSubsystem{},
 	}
 }
 
-// FindByMarker searches open issues for the record id, then confirms the
-// whole marker is in the body. A closed follow-up is not found here; the
-// capture is consumed once a record is filed, so a re-run has nothing to
-// re-file.
-func (g *GitHubFiler) FindByMarker(ctx context.Context, marker string) (int, string, error) {
+// markerIssueRe reads the issue a marker names.
+var markerIssueRe = regexp.MustCompile(`issue=#(\d+)`)
+
+// FindByMarker looks for marker in the body of the issue the marker names
+// first (the parent may already carry its own record), then searches open and
+// closed issues for the record id and confirms the whole marker is in the
+// body. Reading the parent directly does not depend on the search index.
+func (g *GitHubFiler) FindByMarker(ctx context.Context, marker string) (Found, error) {
+	if m := markerIssueRe.FindStringSubmatch(marker); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+			is, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, n)
+			if err != nil {
+				return Found{}, fmt.Errorf("read #%d: %w", n, err)
+			}
+			if strings.Contains(is.Body, marker) {
+				return foundOf(is), nil
+			}
+		}
+	}
 	id := marker
 	if i := strings.Index(marker, "id="); i >= 0 {
 		id = strings.Fields(marker[i+3:])[0]
 	}
-	issues, err := g.issueSvc.SearchIssues(ctx, g.owner, g.repo, `"`+id+`"`, 20)
+	issues, err := g.issueSvc.SearchIssuesAnyState(ctx, g.owner, g.repo, `"`+id+`"`, markerSearchLimit)
 	if err != nil {
-		return 0, "", err
+		return Found{}, err
 	}
-	for _, is := range issues {
-		if strings.Contains(is.Body, marker) {
-			return is.Number, is.URL, nil
+	for i := range issues {
+		if strings.Contains(issues[i].Body, marker) {
+			return foundOf(&issues[i]), nil
 		}
 	}
-	return 0, "", nil
+	return Found{}, nil
+}
+
+func foundOf(is *types.Issue) Found {
+	return Found{Number: is.Number, URL: is.URL, Closed: !strings.EqualFold(is.State, issueOpen)}
+}
+
+// issueOpen is GitHub's state for an open issue.
+const issueOpen = "OPEN"
+
+// markerSearchLimit bounds the results FindByMarker reads.
+const markerSearchLimit = 20
+
+// ParentCriteria returns the unchecked criteria in issue number's body.
+func (g *GitHubFiler) ParentCriteria(ctx context.Context, number int) ([]string, error) {
+	is, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, number)
+	if err != nil {
+		return nil, err
+	}
+	return UncheckedCriteria(is.Body), nil
 }
 
 // FindOpenByTitle matches the normalized title exactly; a search hit with a
@@ -174,76 +221,163 @@ func (g *GitHubFiler) CreateIssue(ctx context.Context, title, body, typ, priorit
 	return issue.Number, issue.URL, nil
 }
 
-// Bounds on the subsystem search: files and components searched, and results
-// read per search.
+// Bounds on the subsystem search: files, components and programs searched,
+// results read per search, and board placements read.
 const (
 	maxSubsystemFiles      = 5
 	maxSubsystemComponents = 3
+	maxSubsystemPrograms   = 3
 	subsystemSearchLimit   = 20
+	maxPlacementReads      = 10
 )
 
-// FindOpenInSubsystem searches open issues naming one of files, and open
-// issues carrying one of the parent's component:* labels, then picks with
-// PickSubsystemIssue. A pick whose board Status rules it out is dropped and
-// the next is tried, so the board is read only for the issues actually picked.
-func (g *GitHubFiler) FindOpenInSubsystem(ctx context.Context, parent int, files []string) (int, string, error) {
-	sub := Subsystem{Parent: parent, Files: files}
+// broadLabelShare is the share of all open issues above which a component
+// label is broad: sharing it says nothing about the subsystem.
+const broadLabelShare = 0.15
+
+// maxSiblingReads bounds the open epic siblings read per parent.
+const maxSiblingReads = 10
+
+// parentInputs reads, once per parent, the parent's component:* and program:*
+// labels, its same-repository epic and that epic's open siblings (at most
+// maxSiblingReads), and which component labels are broad. An unreadable
+// open-issue count marks every component label broad: the safe direction
+// files instead of folding.
+func (g *GitHubFiler) parentInputs(ctx context.Context, parent int) (*parentSubsystem, error) {
+	if ps, ok := g.subs[parent]; ok {
+		return ps, nil
+	}
+	ps := &parentSubsystem{sub: Subsystem{Parent: parent, Broad: map[string]bool{}}, siblings: map[int]bool{}}
 	if parent > 0 {
 		p, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, parent)
 		if err != nil {
-			return 0, "", fmt.Errorf("read parent #%d: %w", parent, err)
+			return nil, fmt.Errorf("read parent #%d: %w", parent, err)
 		}
-		sub.Components = ComponentLabels(p.Labels)
+		ps.sub.Components = ComponentLabels(p.Labels)
+		if len(ps.sub.Components) > maxSubsystemComponents {
+			ps.sub.Components = ps.sub.Components[:maxSubsystemComponents]
+		}
+		ps.sub.Programs = ProgramLabels(p.Labels)
+		if len(ps.sub.Programs) > maxSubsystemPrograms {
+			ps.sub.Programs = ps.sub.Programs[:maxSubsystemPrograms]
+		}
+		if p.ParentIssueNumber > 0 && sameRepo(p.ParentIssueRepo, g.owner, g.repo) {
+			ps.sub.Epic = p.ParentIssueNumber
+			epic, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, ps.sub.Epic)
+			if err != nil {
+				return nil, fmt.Errorf("read epic #%d: %w", ps.sub.Epic, err)
+			}
+			for _, si := range epic.SubIssues {
+				if si.Number == parent || !strings.EqualFold(si.State, issueOpen) ||
+					!sameRepo(si.Repo, g.owner, g.repo) || len(ps.siblings) == maxSiblingReads {
+					continue
+				}
+				ps.siblings[si.Number] = true
+				is, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, si.Number)
+				if err != nil {
+					return nil, fmt.Errorf("read sibling #%d: %w", si.Number, err)
+				}
+				ps.extra = append(ps.extra, *is)
+			}
+		}
 	}
+	if len(ps.sub.Components) > 0 {
+		total, err := g.issueSvc.CountOpenMatching(ctx, g.owner, g.repo, "")
+		for _, c := range ps.sub.Components {
+			n := 0
+			if err == nil {
+				n, err = g.issueSvc.CountOpenMatching(ctx, g.owner, g.repo, `label:"`+c+`"`)
+			}
+			if err != nil || total == 0 || float64(n) > broadLabelShare*float64(total) {
+				ps.sub.Broad[strings.ToLower(c)] = true
+			}
+		}
+	}
+	g.subs[parent] = ps
+	return ps, nil
+}
+
+// FindOpenInSubsystem gathers candidates (open issues naming one of files,
+// carrying one of the parent's non-broad component:* or program:* labels, or
+// open under the parent's epic), reads the board placement of the qualifying
+// ones (at most maxPlacementReads; a qualifying candidate past that bound is
+// dropped, never folded into blind), and picks with PickSubsystemIssue. It
+// returns 0 when nothing qualifies, and also when the pick's board Priority is
+// one priority outranks: that follow-up is filed on its own.
+func (g *GitHubFiler) FindOpenInSubsystem(ctx context.Context, parent int, files []string, priority string) (int, string, error) {
+	ps, err := g.parentInputs(ctx, parent)
+	if err != nil {
+		return 0, "", err
+	}
+	sub := ps.sub
+	sub.Files = files
 	var queries []string
 	for i, f := range files {
 		if i == maxSubsystemFiles {
 			break
 		}
-		if f = strings.TrimSpace(f); f != "" && !strings.ContainsAny(f, `"`) {
+		if f = strings.TrimSpace(f); f != "" && !Ubiquitous(f) && !strings.ContainsAny(f, `"`) {
 			queries = append(queries, `"`+f+`" in:body`)
 		}
 	}
-	for i, c := range sub.Components {
-		if i == maxSubsystemComponents {
-			break
-		}
-		if !strings.ContainsAny(c, `"`) {
+	for _, c := range append(append([]string{}, sub.Components...), sub.Programs...) {
+		if !sub.Broad[strings.ToLower(c)] && !strings.ContainsAny(c, `"`) {
 			queries = append(queries, `label:"`+c+`"`)
 		}
 	}
 	seen := map[int]int{}
 	var cands []SubsystemCandidate
+	add := func(is types.Issue) {
+		if _, ok := seen[is.Number]; ok {
+			return
+		}
+		seen[is.Number] = len(cands)
+		c := SubsystemCandidate{Number: is.Number, URL: is.URL, Body: is.Body, Labels: is.Labels}
+		if ps.siblings[is.Number] {
+			c.Parent = sub.Epic
+		}
+		cands = append(cands, c)
+	}
+	for _, is := range ps.extra {
+		add(is)
+	}
 	for _, q := range queries {
 		issues, err := g.issueSvc.SearchIssues(ctx, g.owner, g.repo, q, subsystemSearchLimit)
 		if err != nil {
 			return 0, "", err
 		}
 		for _, is := range issues {
-			if _, ok := seen[is.Number]; ok {
-				continue
-			}
-			seen[is.Number] = len(cands)
-			cands = append(cands, SubsystemCandidate{Number: is.Number, URL: is.URL, Body: is.Body, Labels: is.Labels})
+			add(is)
 		}
 	}
-	for range cands {
-		n, url := PickSubsystemIssue(sub, cands)
-		if n == 0 {
-			return 0, "", nil
+	reads := 0
+	for i := range cands {
+		c := &cands[i]
+		if signal, sibling := qualify(sub, *c); signal == noMatch && !sibling {
+			continue
 		}
-		placement, err := gh.IssueBoardPlacement(ctx, g.client, g.owner, g.repo, n, g.project)
+		if reads == maxPlacementReads {
+			c.Number = 0
+			continue
+		}
+		reads++
+		placement, err := gh.IssueBoardPlacement(ctx, g.client, g.owner, g.repo, c.Number, g.project)
 		if err != nil {
 			return 0, "", err
 		}
-		c := &cands[seen[n]]
-		c.BoardStatus = placement.Status
-		if !foldExcluded(*c) {
-			return n, url, nil
-		}
-		c.Number = 0 // ruled out by its board Status
+		c.BoardStatus, c.Priority = placement.Status, placement.Priority
 	}
-	return 0, "", nil
+	n, url := PickSubsystemIssue(sub, cands)
+	if n == 0 || Outranks(priority, cands[seen[n]].Priority) {
+		return 0, "", nil
+	}
+	return n, url, nil
+}
+
+// sameRepo reports whether full ("owner/name") is this repository. An empty
+// name is taken as this repository: GitHub omits it for a same-repository link.
+func sameRepo(full, owner, repo string) bool {
+	return full == "" || strings.EqualFold(full, owner+"/"+repo)
 }
 
 // AppendPart appends rec to issue number as a new part. A body already

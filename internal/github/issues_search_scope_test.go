@@ -87,3 +87,35 @@ func TestConfineSearchQuery(t *testing.T) {
 		t.Error("an upper-case qualifier survived")
 	}
 }
+
+// SearchIssuesAnyState keeps the repository confinement but drops is:open and
+// returns closed issues with their State (#2872).
+func TestIssueService_SearchIssuesAnyState_KeepsClosed(t *testing.T) {
+	body := `{"data":{"search":{"issueCount":2,"nodes":[
+		{"__typename":"Issue","id":"I_1","number":1,"title":"open","state":"OPEN","url":"u","repository":{"nameWithOwner":"o/r"},"labels":{"nodes":[]}},
+		{"__typename":"Issue","id":"I_3","number":3,"title":"closed","state":"CLOSED","url":"u","repository":{"nameWithOwner":"o/r"},"labels":{"nodes":[]}},
+		{"__typename":"Issue","id":"I_4","number":4,"title":"theirs","state":"CLOSED","url":"u","repository":{"nameWithOwner":"o/x"},"labels":{"nodes":[]}}
+	]}}}`
+	client, queries := searchRecorder(t, body)
+	issues, err := NewIssueService(client).SearchIssuesAnyState(context.Background(), "o", "r", `"dw-1" repo:o/x is:open`, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := (*queries)[0], `type:issue repo:o/r "dw-1"`; got != want {
+		t.Errorf("query = %q, want %q", got, want)
+	}
+	if len(issues) != 2 || issues[1].Number != 3 || issues[1].State != "CLOSED" {
+		t.Errorf("issues = %+v", issues)
+	}
+}
+
+func TestIssueService_CountOpenMatching(t *testing.T) {
+	client, queries := searchRecorder(t, `{"data":{"search":{"issueCount":17,"nodes":[]}}}`)
+	n, err := NewIssueService(client).CountOpenMatching(context.Background(), "o", "r", `label:"component:cli" repo:o/x`)
+	if err != nil || n != 17 {
+		t.Fatalf("%d, %v", n, err)
+	}
+	if got, want := (*queries)[0], `type:issue repo:o/r is:open label:"component:cli"`; got != want {
+		t.Errorf("query = %q, want %q", got, want)
+	}
+}

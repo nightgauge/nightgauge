@@ -138,7 +138,6 @@ func TestReviewRecordsTheParentDoesNotTrackAreFiled(t *testing.T) {
 		"another run":          {review3184(strp("run-0")), unmet("run-1", criterion4)},
 		"run only on one side": {review3184(nil), unmet("run-1", criterion4)},
 		"no pr context":        {review3184(strp("run-1")), Tracking{}},
-		"not the review's own": {spec{"feature-dev", "Criterion 4 gap", manifest + ":5", manifest, criterion4, strp("run-1")}, unmet("run-1", criterion4)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFake()
