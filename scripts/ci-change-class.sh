@@ -5,7 +5,8 @@
 # PR title) and emits the workflow-job outputs that `.github/workflows/ci.yml`
 # uses to gate the expensive steps of its heavy jobs:
 #
-#   run_heavy=true|false   change_class=<class>   reason=<text>
+#   run_heavy=true|false   pr_heavy=true|false   workflow_tests=true|false
+#   change_class=<class>   reason=<text>
 #
 # Classification is delegated to `nightgauge ci classify` so the shell has NO
 # opinion of its own about what "docs" means: the globs live once, in
@@ -76,21 +77,23 @@ log() {
   fi
 }
 
-# decide emits the four outputs and exits 0 — the ONLY exit path in this file.
+# decide emits the five outputs and exits 0 — the ONLY exit path in this file.
 # pr_heavy=true makes ci.yml run the heavy suites on a pull request even when
-# the merge queue would otherwise run them (#3093).
+# the merge queue would otherwise run them (#3093). workflow_tests=true makes it
+# run the workflow-reading Go tests on the light path (#3483).
 decide() {
-  local heavy="$1" class="$2" reason="$3" pr_heavy="${4:-false}"
+  local heavy="$1" class="$2" reason="$3" pr_heavy="${4:-false}" workflow_tests="${5:-false}"
   emit run_heavy "$heavy"
   emit pr_heavy "$pr_heavy"
+  emit workflow_tests "$workflow_tests"
   emit change_class "$class"
   emit reason "$reason"
-  log "change_class=$class run_heavy=$heavy pr_heavy=$pr_heavy — $reason"
+  log "change_class=$class run_heavy=$heavy pr_heavy=$pr_heavy workflow_tests=$workflow_tests — $reason"
   exit 0
 }
 
 fail_open() {
-  decide true unknown "$1" true
+  decide true unknown "$1" true true
 }
 
 event="${NG_EVENT_NAME:-}"
@@ -146,6 +149,7 @@ json="$("$bin" ci classify --base "$base" --head "$head" --workdir "$root" --jso
 class="$(sed -n 's/^[[:space:]]*"change_class"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$json" | sed -n 1p)"
 heavy="$(sed -n 's/^[[:space:]]*"run_heavy"[[:space:]]*:[[:space:]]*\([a-z]*\).*/\1/p' <<<"$json" | sed -n 1p)"
 pr_heavy="$(sed -n 's/^[[:space:]]*"pr_heavy"[[:space:]]*:[[:space:]]*\([a-z]*\).*/\1/p' <<<"$json" | sed -n 1p)"
+workflow_tests="$(sed -n 's/^[[:space:]]*"workflow_tests"[[:space:]]*:[[:space:]]*\([a-z]*\).*/\1/p' <<<"$json" | sed -n 1p)"
 reason="$(sed -n 's/^[[:space:]]*"reason"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' <<<"$json" | sed -n 1p)"
 
 [ -n "$class" ] || fail_open "could not parse change_class out of the classifier output — running the full suite"
@@ -158,4 +162,9 @@ case "$pr_heavy" in
   *) fail_open "could not parse pr_heavy out of the classifier output — running the full suite" ;;
 esac
 
-decide "$heavy" "$class" "${reason:-classified from the diff ${base}...${head}}" "$pr_heavy"
+case "$workflow_tests" in
+  true | false) ;;
+  *) fail_open "could not parse workflow_tests out of the classifier output — running the full suite" ;;
+esac
+
+decide "$heavy" "$class" "${reason:-classified from the diff ${base}...${head}}" "$pr_heavy" "$workflow_tests"

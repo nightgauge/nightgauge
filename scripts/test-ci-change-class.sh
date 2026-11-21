@@ -193,6 +193,30 @@ pr_heavy_case() {
 pr_heavy_case "the npm CLI installer is pr_heavy" true scripts/install-npm-cli.sh
 pr_heavy_case "an ordinary source diff is not pr_heavy" false internal/x.go
 
+# A workflow edit selects the workflow-reading Go tests on the light path
+# (#3483): #3463's action bump otherwise first met them in the merge queue.
+workflow_tests_case() {
+  local name="$1" want="$2" file="$3" repo base head outputs got
+  repo="$(new_repo)"
+  base="$(git -C "$repo" rev-parse HEAD)"
+  git_in "$repo" checkout -q -b feature
+  mkdir -p "$repo/$(dirname "$file")"
+  echo "changed by $name" >>"$repo/$file"
+  git_in "$repo" add -A
+  git_in "$repo" commit -q -m "$name"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  outputs="$(classify "$repo" pull_request "$base" "$head")"
+  got="$(printf '%s\n' "$outputs" | sed -n 's/^workflow_tests=//p')"
+  if [ "$got" = "$want" ]; then
+    ok "$name → workflow_tests=$got"
+  else
+    bad "$name" "want workflow_tests=$want; got workflow_tests=${got:-<none>}"
+  fi
+}
+workflow_tests_case "a workflow edit selects the workflow tests" true .github/workflows/ci.yml
+workflow_tests_case "a source diff does not" false internal/x.go
+workflow_tests_case "a docs diff does not" false docs/GUIDE.md
+
 # A README + docs/ sweep is still one kind.
 case_diff "multi-file docs sweep" docs_only false docs/GUIDE.md docs/OTHER.md
 
@@ -200,16 +224,17 @@ echo
 echo "B. Fail-open — anything unclassifiable runs the full suite"
 
 fail_open_case() {
-  local name="$1" outputs got_heavy got_class got_pr
+  local name="$1" outputs got_heavy got_class got_pr got_workflow_tests
   shift
   outputs="$("$@")"
   got_heavy="$(printf '%s\n' "$outputs" | sed -n 's/^run_heavy=//p')"
   got_class="$(printf '%s\n' "$outputs" | sed -n 's/^change_class=//p')"
   got_pr="$(printf '%s\n' "$outputs" | sed -n 's/^pr_heavy=//p')"
-  if [ "$got_heavy" = "true" ] && [ "$got_class" = "unknown" ] && [ "$got_pr" = "true" ]; then
-    ok "$name → run_heavy=true change_class=unknown pr_heavy=true"
+  got_workflow_tests="$(printf '%s\n' "$outputs" | sed -n 's/^workflow_tests=//p')"
+  if [ "$got_heavy" = "true" ] && [ "$got_class" = "unknown" ] && [ "$got_pr" = "true" ] && [ "$got_workflow_tests" = "true" ]; then
+    ok "$name → run_heavy=true change_class=unknown pr_heavy=true workflow_tests=true"
   else
-    bad "$name" "want run_heavy=true change_class=unknown pr_heavy=true; got run_heavy=${got_heavy:-<none>} change_class=${got_class:-<none>} pr_heavy=${got_pr:-<none>}"
+    bad "$name" "want run_heavy=true change_class=unknown pr_heavy=true workflow_tests=true; got run_heavy=${got_heavy:-<none>} change_class=${got_class:-<none>} pr_heavy=${got_pr:-<none>} workflow_tests=${got_workflow_tests:-<none>}"
   fi
 }
 
@@ -347,6 +372,8 @@ assert_block changes "run_heavy:.*steps\.queue\.outputs\.enforced == 'true' && s
   "a pull request leaves the heavy suites to an enforced merge queue unless it is pr_heavy"
 assert_block changes 'pr_heavy:.*steps\.classify\.outputs\.pr_heavy' \
   "the changes job exports pr_heavy"
+assert_block changes 'workflow_tests:.*steps\.classify\.outputs\.workflow_tests' \
+  "the changes job exports workflow_tests"
 assert_block changes "if grep -qx merge_queue" \
   "enforcement is read from the live ruleset"
 assert_block changes 'if: .*github\.event_name == .pull_request.' \
@@ -451,6 +478,29 @@ assert_ungated_step go 'test-ci-change-class.sh' \
 assert_ungated_step go './internal/preflight/' \
   "the working-tree content guards run ungated" \
   "the mojibake and skill-content guards would then skip the docs_only PRs they exist to police"
+
+# A workflow edit on the light path runs the tests that read the workflows
+# (#3483). The step must gate on workflow_tests and name every package in
+# ci.WorkflowReadingTestPackages, and each must exist.
+wf_step="$(step_block go './internal/orchestrator/stages/')"
+if [ -z "$wf_step" ]; then
+  bad "the Go job runs the workflow-reading tests" "no step in the 'go' job runs ./internal/orchestrator/stages/"
+elif ! block_matches "$wf_step" "^[[:space:]]*if:.*run_heavy == 'false'.*workflow_tests == 'true'"; then
+  bad "the workflow-reading tests gate on workflow_tests" "step has no if: on run_heavy=='false' && workflow_tests=='true'"
+else
+  ok "the workflow-reading tests gate on workflow_tests"
+  # The list comes from ci.WorkflowReadingTestPackages, the single source.
+  wf_pkgs="$(sed -n 's/^var WorkflowReadingTestPackages = \[\]string{\(.*\)}$/\1/p' \
+    "$REPO_ROOT/internal/ci/classify.go" | tr -d '" ' | tr ',' ' ')"
+  [ -n "$wf_pkgs" ] || bad "ci.WorkflowReadingTestPackages is readable" "no list parsed from internal/ci/classify.go"
+  for pkg in $wf_pkgs; do
+    if block_matches "$wf_step" "go test .*${pkg//./\\.}" && [ -d "$REPO_ROOT/${pkg#./}" ]; then
+      ok "the workflow-reading step runs $pkg"
+    else
+      bad "the workflow-reading step runs $pkg" "missing from the ci.yml step or from the tree"
+    fi
+  done
+fi
 
 # …and the package that step names must still HOLD those guards. Asserting only
 # that the step exists would leave a green, empty step behind if the tests were

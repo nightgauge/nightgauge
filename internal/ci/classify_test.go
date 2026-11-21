@@ -1,6 +1,8 @@
 package ci
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -28,6 +30,35 @@ func TestClassifyForCIPRHeavy(t *testing.T) {
 	}
 	if !FailOpenResult("x").PRHeavy {
 		t.Error("FailOpenResult: PRHeavy = false, want true")
+	}
+}
+
+// A workflow edit selects the workflow-reading tests; nothing else does (#3483).
+func TestClassifyForCIWorkflowTests(t *testing.T) {
+	for _, tc := range []struct {
+		files []string
+		want  bool
+	}{
+		{[]string{".github/workflows/ci.yml"}, true},
+		{[]string{"docs/x.md", ".github/workflows/release.yml"}, true},
+		{[]string{"internal/x.go"}, false},
+		{[]string{"docs/GUIDE.md"}, false},
+		{[]string{".github/dependabot.yml"}, false},
+		{[]string{".github/workflows-archive/x.yml"}, false},
+		{[]string{"sub/.github/workflows/ci.yml"}, false},
+		{nil, false},
+	} {
+		if got := ClassifyForCI(tc.files).WorkflowTests; got != tc.want {
+			t.Errorf("%v: WorkflowTests = %v, want %v", tc.files, got, tc.want)
+		}
+	}
+	if !FailOpenResult("x").WorkflowTests {
+		t.Error("FailOpenResult: WorkflowTests = false, want true")
+	}
+	for _, pkg := range WorkflowReadingTestPackages {
+		if _, err := os.Stat(filepath.Join("..", "..", pkg)); err != nil {
+			t.Errorf("WorkflowReadingTestPackages names %s: %v", pkg, err)
+		}
 	}
 }
 
@@ -68,5 +99,44 @@ func TestClassifyForCI(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Every package whose tests read this repository's workflows is in
+// WorkflowReadingTestPackages, so the list cannot fall behind (#3483).
+func TestWorkflowReadingTestPackagesComplete(t *testing.T) {
+	listed := map[string]bool{}
+	for _, p := range WorkflowReadingTestPackages {
+		listed[strings.TrimSuffix(strings.TrimPrefix(p, "./"), "/")] = true
+	}
+	needles := []string{`"../../.github/workflows"`, `repoRoot, ".github", "workflows"`, "ListWorkflowSteps(repoRoot", "ListWorkflowSteps(root"}
+	root := filepath.Join("..", "..")
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && (d.Name() == "node_modules" || strings.HasPrefix(d.Name(), ".")) && path != root {
+			return filepath.SkipDir
+		}
+		if d.IsDir() || !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, n := range needles {
+			if strings.Contains(string(b), n) {
+				rel, _ := filepath.Rel(root, filepath.Dir(path))
+				if !listed[filepath.ToSlash(rel)] {
+					t.Errorf("%s reads the repository workflows but %s is not in WorkflowReadingTestPackages", path, rel)
+				}
+				break
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

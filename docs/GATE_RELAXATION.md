@@ -80,10 +80,10 @@ be skipped — a documented convention is exactly what failed here.
 
 `.github/workflows/ci.yml` runs a cheap `changes` job (`name: Change class`)
 that shells `scripts/ci-change-class.sh`, which classifies the pull request's
-diff via `nightgauge ci classify` and publishes four job outputs:
+diff via `nightgauge ci classify` and publishes five job outputs:
 
 ```text
-run_heavy=false   pr_heavy=false   change_class=docs_only   reason=…
+run_heavy=false   pr_heavy=false   workflow_tests=false   change_class=docs_only   reason=…
 ```
 
 The three build-and-test jobs — `go` (`Go build & test`), `sdk` (`SDK build &
@@ -127,6 +127,13 @@ scripts depend on the runner's own npm, which no unit test stands in for, and
 deferring them let PR #3103 break only in the queue (#3093). Every fail-open
 path emits `pr_heavy=true` as well, so a pull request whose diff cannot be
 classified runs the heavy suites itself rather than deferring to the queue.
+
+A narrower selector covers workflow edits: a diff under `.github/workflows/`
+sets `workflow_tests=true`, and on the light path the `Go build & test` job
+runs only the packages whose tests read the real workflows
+(`WorkflowReadingTestPackages` in `internal/ci/classify.go`). Without it an
+action bump first met those tests in the queue: PR #3463 went green on the
+pull request and failed there (#3483). Fail-open emits `workflow_tests=true`.
 
 ### `change_class` → workflow gate mapping
 

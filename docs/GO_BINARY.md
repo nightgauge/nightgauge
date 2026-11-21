@@ -4547,6 +4547,8 @@ nightgauge ci classify --base "$BASE_SHA" --head "$HEAD_SHA" --json
 {
   "change_class": "docs_only",
   "run_heavy": false,
+  "pr_heavy": false,
+  "workflow_tests": false,
   "jobs": {
     "run_build": false,
     "run_go_tests": false,
@@ -4562,7 +4564,10 @@ nightgauge ci classify --base "$BASE_SHA" --head "$HEAD_SHA" --json
 `docs_only` / `empty`; every other class (including `config_only`) runs the full
 suite. **Fail-open:** an unclassifiable diff (e.g. a failed `git diff`) returns
 `change_class=unknown` with `run_heavy=true`, so CI never under-tests a change it
-could not classify.
+could not classify. `pr_heavy` is true when the diff touches a
+`PRHeavyPaths` script; `workflow_tests` is true when it touches
+`.github/workflows/`, selecting `WorkflowReadingTestPackages` on the light path.
+Fail-open sets both true.
 
 See [GATE_RELAXATION.md § "CI fast-track"](GATE_RELAXATION.md#2-ci-fast-track-4127)
 for the fast-track surface and the `ci_jobs` → workflow-gate mapping.
