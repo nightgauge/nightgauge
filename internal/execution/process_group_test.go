@@ -382,17 +382,16 @@ func TestSignalProcessTree_ReapedLeaderStillReachesSurvivors(t *testing.T) {
 }
 
 // TestSignalProcessTree_StaleProcessUnderForkLoadSparesOwnGroup (#3443) guards
-// the #3454 predicates under the fork load of a concurrent gate. It is not a
-// reproduction of the exit 241: kill(-pid) reaches only the group whose ID is
-// pid, and a live group ID is never reused, so a stale leader cannot alias the
-// caller's group. The exit-241 sender is unidentified (#3446): no daemon path
-// that signals the test binary's group was found. What it pins is the
-// explicit refusal: the caller's own group and pid 1 are never accepted for a
-// group signal (removing that check in leadsForeignGroup fails this test), a
-// reaped leader with an empty group is not signalled while pids churn, and a
-// live foreign leader still is (the positive control, so the guard cannot
-// simply disable group signals). SIGTERM is caught so any stray group signal
-// is reported instead of killing the binary.
+// the #3454 predicates under the fork load of a concurrent gate. It pins the
+// refusal behaviour only and is not a reproduction of the exit 241, whose
+// cause is unidentified (#3446). #3454's pid-aliasing explanation is
+// unconfirmed: this test neither confirms nor refutes it. What it pins: the
+// caller's own group and pid 1 are never accepted for a group signal
+// (removing that check in leadsForeignGroup fails this test), a reaped leader
+// with an empty group is not signalled while pids churn, and a live foreign
+// leader still is (the positive control, so the guard cannot simply disable
+// group signals). SIGTERM is caught so any stray group signal is reported
+// instead of killing the binary.
 func TestSignalProcessTree_StaleProcessUnderForkLoadSparesOwnGroup(t *testing.T) {
 	caught := make(chan os.Signal, 16)
 	signal.Notify(caught, syscall.SIGTERM)
