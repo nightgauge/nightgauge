@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/layout"
 )
@@ -70,8 +71,12 @@ func WriteContext(path string, ctx *StageContext) error {
 // The directory is workspaceRoot's pipeline state directory
 // (layout.PipelineStateDir). A relative workspaceRoot is made absolute first.
 // The resolver's error ("not a git repository" outside one) is returned, never
-// a path somewhere else.
+// a path somewhere else. An empty workspaceRoot is an error: filepath.Abs("")
+// is the process cwd, which would silently read another checkout's state (#3473).
 func ContextPath(workspaceRoot string, issueNumber int, stage string) (string, error) {
+	if strings.TrimSpace(workspaceRoot) == "" {
+		return "", fmt.Errorf("stage context %s-%d.json: empty workspace root", stage, issueNumber)
+	}
 	abs, err := filepath.Abs(workspaceRoot)
 	if err != nil {
 		return "", fmt.Errorf("stage context: resolve %q: %w", workspaceRoot, err)

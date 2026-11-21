@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- An extension run with no worktree no longer reads the pull request of whatever
+  checkout the process runs in: an empty workspace root is now an error when
+  resolving a stage context path, and the PR lookup goes straight to the
+  repository root (#3473).
 - Live run progress events sent to the platform always carry an activity line.
   Before a stage reports its first phase, or when a skill reports none, the line
   reads `<stage> in progress` instead of being empty (#3455).

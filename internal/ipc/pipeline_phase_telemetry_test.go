@@ -179,6 +179,19 @@ func TestExtensionRun_PRStampedAfterPRCreate(t *testing.T) {
 	const prURL = "https://github.com/acme/platform/pull/77"
 	runID := newTestRunID()
 
+	// Decoy (#3473): the process cwd is a repository whose state holds a
+	// different PR. The run has no worktree, so it must never be read.
+	decoy := layouttest.Repo(t)
+	decoyDir := layouttest.PipelineDir(t, decoy)
+	if err := os.MkdirAll(decoyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(decoyDir, "pr-3455.json"),
+		[]byte(`{"pr_url":"https://github.com/acme/platform/pull/3470"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(decoy)
+
 	mustCall(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
 		Repo: repo, IssueNumber: issue, Stage: "pr-create", Status: "running", RunID: runID,
 	})

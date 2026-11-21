@@ -117,3 +117,15 @@ func TestContextPathOutsideARepositoryIsAnError(t *testing.T) {
 		t.Errorf("ContextPath = %q, want \"\" on error", path)
 	}
 }
+
+// TestContextPathEmptyRootIsAnError pins #3473: an empty root must not resolve
+// against the process cwd, even when the cwd is a repository.
+func TestContextPathEmptyRootIsAnError(t *testing.T) {
+	t.Chdir(layouttest.Repo(t))
+	for _, root := range []string{"", "  "} {
+		path, err := ContextPath(root, 1, "pr")
+		if err == nil || path != "" {
+			t.Errorf("ContextPath(%q) = %q, %v; want an empty-root error", root, path, err)
+		}
+	}
+}
