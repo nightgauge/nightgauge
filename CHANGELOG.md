@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A partial-delivery re-run now honours a remainder the supervisor revised:
+  when the issue body was edited after the partial PR merged, its unticked
+  criteria are the remainder, and a ticked criterion is never in the re-run's
+  scope or its no-op verdict (#3460).
 - An extension run with no worktree no longer reads the pull request of whatever
   checkout the process runs in: an empty workspace root is now an error when
   resolving a stage context path, and the PR lookup goes straight to the

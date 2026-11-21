@@ -144,8 +144,12 @@ func (s *Scheduler) scopePartialRerun(ctx context.Context, runtime *state.Runtim
 // named in that PR's met or unmet acceptance-criteria sections. It never
 // re-adds every criterion the report fails to judge satisfied: prose criteria
 // are always undetectable, so that would re-open what the partial PR already
-// delivered. When the body cannot be read or has no criteria, the comment
-// list stands unchanged.
+// delivered. A ticked criterion is never in the brief. When the body was edited
+// after the partial PR merged, the supervisor revised the remainder: the brief
+// is the body's unticked criteria, PR-named or not (#3460). An edit between
+// the PR opening and its merge, or an unreadable edit time, keeps the rule
+// above (unreadable counts as edited since the PR opened). When the body
+// cannot be read or has no criteria, the comment list stands unchanged.
 func (s *Scheduler) reconcilePartialScope(ctx context.Context, item types.BoardItem, ws string, listed []string, pr int, commentAt *time.Time) PartialDeliveryFile {
 	reads := PartialScopeReads{
 		Body: func(ctx context.Context) (string, error) { return s.readACReconcileBody(ctx, item) },
@@ -189,7 +193,6 @@ func ReconcilePartialScope(ctx context.Context, reads PartialScopeReads, ws stri
 	var prCriteria []string
 	addNew := false
 	got, err := reads.PR(ctx, pr)
-	created, prBody := got.CreatedAt, got.Body
 	if err != nil {
 		// Without the PR's met and unmet sections nothing can be told apart
 		// from what it delivered (prose criteria are always undetectable), so
@@ -197,8 +200,21 @@ func ReconcilePartialScope(ctx context.Context, reads PartialScopeReads, ws stri
 		log.Printf("#%d: partial PR #%d unreadable (%v) — no criteria are added beyond the comment's list [#3235]",
 			issue, pr, err)
 	} else {
-		prCriteria = partialPRCriteria(prBody)
-		addNew = bodyEditedSince(ctx, reads.BodyEditedAt, issue, created, pr)
+		edited, readable := issueBodyEditedAt(ctx, reads.BodyEditedAt, issue, pr)
+		if readable && edited != nil && !got.MergedAt.IsZero() && edited.After(got.MergedAt) {
+			// The body was revised after the remainder was recorded: its
+			// unticked criteria are the remainder now (#3460).
+			scope, added, dropped := revisedRemainder(listed, rec)
+			for _, a := range added {
+				log.Printf("#%d: criterion added to the issue body after partial PR #%d merged — in the brief: %q [#3460]", issue, pr, a)
+			}
+			for _, d := range dropped {
+				log.Printf("#%d: partial-delivery criterion no longer an unticked box in the revised body — dropped: %q [#3460]", issue, d)
+			}
+			return scope, dropped
+		}
+		prCriteria = partialPRCriteria(got.Body)
+		addNew = !readable || (edited != nil && edited.After(got.CreatedAt))
 	}
 	scope, added, dropped := reconcilePartialRemainder(listed, prCriteria, rec, addNew)
 	for _, a := range added {
@@ -282,18 +298,17 @@ func (s *Scheduler) readPartialPR(ctx context.Context, repo string, pr int) (par
 	return forgePartialPR(s, ctx, repo, pr)
 }
 
-// bodyEditedSince reports whether the issue body changed after partial PR pr
-// was opened. An unedited body holds no criteria new since the PR. An
-// unreadable edit time answers true: the body may hold criteria the PR never
-// saw.
-func bodyEditedSince(ctx context.Context, editedAt func(context.Context) (*time.Time, error), issue int, opened time.Time, pr int) bool {
+// issueBodyEditedAt reads when the issue body was last edited (nil: never).
+// readable is false when the read failed: the body may then hold criteria the
+// partial PR never saw.
+func issueBodyEditedAt(ctx context.Context, editedAt func(context.Context) (*time.Time, error), issue, pr int) (edited *time.Time, readable bool) {
 	edited, err := editedAt(ctx)
 	if err != nil {
-		log.Printf("#%d: issue body edit time unreadable (%v) — treating the body as edited since PR #%d [#3235]",
+		log.Printf("#%d: issue body edit time unreadable (%v) — PR #%d [#3235]",
 			issue, err, pr)
-		return true
+		return nil, false
 	}
-	return edited != nil && edited.After(opened)
+	return edited, true
 }
 
 // forgePartialPR is the production read behind readPartialPR.
@@ -309,7 +324,7 @@ var forgePartialPR = func(s *Scheduler, ctx context.Context, repo string, pr int
 	return client.PartialPR(ctx, owner, name, pr)
 }
 
-// forgeIssueBodyEditedAt is the production read behind bodyEditedSince.
+// forgeIssueBodyEditedAt is the production read behind issueBodyEditedAt.
 var forgeIssueBodyEditedAt = func(s *Scheduler, ctx context.Context, item types.BoardItem) (*time.Time, error) {
 	owner, name := splitRepo(item.Repo)
 	if owner == "" || name == "" {
@@ -398,11 +413,46 @@ func partialRemainderMatchAny(k string, keys []string) bool {
 	return false
 }
 
+// revisedRemainder is the remainder of a body revised after the partial PR
+// merged (#3460): its unticked criteria, in body order. added are those
+// matching no listed entry; dropped the listed entries matching none of them.
+func revisedRemainder(listed []string, rec *preflight.ACReconcileResult) (scope, added, dropped []string) {
+	listedKeys := make([]string, len(listed))
+	found := make([]bool, len(listed))
+	for i, l := range listed {
+		listedKeys[i] = partialRemainderKey(l)
+	}
+	for _, c := range rec.AcceptanceCriteria {
+		if c.CheckboxState == preflight.CheckboxChecked {
+			continue
+		}
+		k := partialRemainderKey(c.Text)
+		isListed := false
+		for i, lk := range listedKeys {
+			if partialRemainderMatch(lk, k) {
+				found[i] = true
+				isListed = true
+			}
+		}
+		scope = append(scope, c.Text)
+		if !isListed {
+			added = append(added, c.Text)
+		}
+	}
+	for i, l := range listed {
+		if !found[i] {
+			dropped = append(dropped, l)
+		}
+	}
+	return scope, added, dropped
+}
+
 // reconcilePartialRemainder returns the brief, in issue-body order, the
 // criteria it added as new since the partial PR, and the listed criteria the
-// body no longer contains. A listed criterion still in the body stays whatever
-// its classification (#3089: code on main does not prove a listed criterion
-// met). With addNew, a body criterion joins the brief only when it is new: it
+// body no longer contains. A ticked criterion is never in the brief, and a
+// ticked listed one is not dropped either: it was resolved (#3460). A listed
+// criterion still in the body unticked stays whatever its classification
+// (#3089: code on main does not prove a listed criterion met). With addNew, a body criterion joins the brief only when it is new: it
 // matches neither a listed entry nor a criterion the partial PR named (met or
 // unmet), and the report does not judge it satisfied.
 func reconcilePartialRemainder(listed, prCriteria []string, rec *preflight.ACReconcileResult, addNew bool) (scope, added, dropped []string) {
@@ -425,6 +475,8 @@ func reconcilePartialRemainder(listed, prCriteria []string, rec *preflight.ACRec
 			}
 		}
 		switch {
+		case c.CheckboxState == preflight.CheckboxChecked:
+			// A ticked box is resolved, listed or not (#3460).
 		case isListed:
 			scope = append(scope, c.Text)
 		case addNew && c.Classification != preflight.ACSatisfied && !partialRemainderMatchAny(k, prKeys):

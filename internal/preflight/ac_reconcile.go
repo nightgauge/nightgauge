@@ -63,11 +63,14 @@ type ACReconcileResult struct {
 	ACFingerprint string `json:"ac_fingerprint,omitempty"`
 }
 
+// CheckboxChecked is ReconciledCriterion.CheckboxState for a ticked box.
+const CheckboxChecked = "checked"
+
 // ReconciledCriterion is one acceptance criterion with its deterministic verdict.
 type ReconciledCriterion struct {
 	Index          int      `json:"index"`
 	Text           string   `json:"text"`
-	CheckboxState  string   `json:"checkbox_state"` // "checked" | "unchecked" — informational only
+	CheckboxState  string   `json:"checkbox_state"` // "checked" | "unchecked"; a partial-delivery re-run never scopes a checked one (#3460)
 	RuleApplied    *string  `json:"rule_applied"`
 	Classification string   `json:"classification"`
 	Reason         string   `json:"reason"`
@@ -407,7 +410,7 @@ func parseACs(body string) []acCriterion {
 		seen[key] = true
 		state := "unchecked"
 		if box != " " {
-			state = "checked"
+			state = CheckboxChecked
 		}
 		if item != nil {
 			joinIdx = len(out)
