@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A pull request that edits a workflow (such as a Dependabot action bump) now
+  runs the Go tests that read the workflows before it reaches the merge queue,
+  and those tests follow the workflows' pinned action refs instead of
+  hard-coding them, so a `setup-go` bump no longer fails only in the queue
+  (#3483).
 - pr-merge now re-checks the pipeline review while a PR waits in the merge
   queue. A review posted after the enqueue with findings that hold the merge
   dequeues the PR and stops the run as the enqueue gate would, instead of

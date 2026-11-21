@@ -63,6 +63,7 @@ jobs:
     outputs:
       run_heavy: ${{ steps.queue.outputs.enforced == 'true' && steps.classify.outputs.pr_heavy != 'true' && 'false' || steps.classify.outputs.run_heavy }}
       pr_heavy: ${{ steps.classify.outputs.pr_heavy }}
+      workflow_tests: ${{ steps.classify.outputs.workflow_tests }}
       change_class: ${{ steps.classify.outputs.change_class }}
       reason: ${{ steps.classify.outputs.reason }}
     steps:
@@ -169,6 +170,14 @@ jobs:
       # against (#750). A stale copy silently weakens that check. ~2s.
       - name: Platform operation registry in sync
         run: make check-platform-operations
+      # A workflow edit (a Dependabot action bump) leaves run_heavy=false on the
+      # pull request while the merge queue is enforced, so the only Go tests that
+      # read the real workflows first ran in the queue: #3463 went green here and
+      # failed there (#3483). These packages are ci.WorkflowReadingTestPackages.
+      # On the heavy path the Test step already covers them.
+      - name: Workflow-reading tests (workflow change on the light path)
+        if: ${{ !cancelled() && needs.changes.outputs.run_heavy == 'false' && needs.changes.outputs.workflow_tests == 'true' }}
+        run: go test ./internal/orchestrator/stages/ ./internal/ci/ ./internal/skillrender/ ./cmd/release-dwarf-check/ ./cmd/release-text-pattern-check/ -count=1
       - name: Build
         id: build
         if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}

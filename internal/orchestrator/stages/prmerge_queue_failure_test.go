@@ -20,7 +20,7 @@ import (
 // workflows, so a change to ci.yml that this classifier cannot read fails here.
 func stepKinds(t *testing.T) func(string) ci.StepKind {
 	t.Helper()
-	root := filepath.Join("..", "..", "..")
+	root := repoRoot(t)
 	disc, err := ci.DiscoverCommands(context.Background(), root, "")
 	if err != nil {
 		t.Fatal(err)
@@ -32,6 +32,20 @@ func stepKinds(t *testing.T) func(string) ci.StepKind {
 	return kind
 }
 
+// workflowUsesStep renders the step name GitHub gives the first ci.yml step
+// that uses action ("Run actions/setup-go@<ref>"), so the fixtures follow a
+// Dependabot bump of the pinned ref instead of hard-coding it (#3463, #3483).
+func workflowUsesStep(t *testing.T, action string) string {
+	t.Helper()
+	for _, st := range ci.ListWorkflowSteps(repoRoot(t)) {
+		if st.Workflow == "ci.yml" && strings.HasPrefix(st.Uses, action+"@") {
+			return "Run " + st.Uses
+		}
+	}
+	t.Fatalf("no ci.yml step uses %s", action)
+	return ""
+}
+
 func steps(spec ...string) []github.WorkflowRunStep {
 	out := make([]github.WorkflowRunStep, 0, len(spec))
 	for i, s := range spec {
@@ -41,14 +55,16 @@ func steps(spec ...string) []github.WorkflowRunStep {
 	return out
 }
 
-var (
-	// #3191 / #3195: the merge-group job of run 43034809958 (and again in
-	// 43044474409), as GitHub recorded it. Build passed, then apt failed
-	// while installing Playwright's OS dependencies; the test never ran.
-	playwrightSetupJob = MergeGroupJobResult{Check: "Playwright webview tests", JobID: 130571120205, RunID: 43034809958, Steps: steps(
+// #3191 / #3195: the merge-group job of run 43034809958 (and again in
+// 43044474409), as GitHub recorded it. Build passed, then apt failed
+// while installing Playwright's OS dependencies; the test never ran.
+func playwrightSetupJob(t *testing.T) MergeGroupJobResult {
+	t.Helper()
+	checkoutStep, setupNodeStep := workflowUsesStep(t, "actions/checkout"), workflowUsesStep(t, "actions/setup-node")
+	return MergeGroupJobResult{Check: "Playwright webview tests", JobID: 130571120205, RunID: 43034809958, Steps: steps(
 		"Set up job=success",
-		"Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1=success",
-		"Run actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1=success",
+		checkoutStep+"=success",
+		setupNodeStep+"=success",
 		"Install=success",
 		"Build=success",
 		"Get Playwright version=success",
@@ -59,15 +75,20 @@ var (
 		"Upload dashboard fixture screenshots=success",
 		"Upload Playwright failure artifacts (screenshots, traces, video)=success",
 		"Post Cache Playwright browser binary=skipped",
-		"Post Run actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1=skipped",
-		"Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1=success",
+		"Post "+setupNodeStep+"=skipped",
+		"Post "+checkoutStep+"=success",
 		"Complete job=success")}
-	// #3193: the Go job of run 43044474409 failed in its own test step.
-	goTestJob = MergeGroupJobResult{Check: "Go build & test", JobID: 130605138765, RunID: 43044474409, Steps: steps(
+}
+
+// #3193: the Go job of run 43044474409 failed in its own test step.
+func goTestJob(t *testing.T) MergeGroupJobResult {
+	t.Helper()
+	checkoutStep, setupGoStep := workflowUsesStep(t, "actions/checkout"), workflowUsesStep(t, "actions/setup-go")
+	return MergeGroupJobResult{Check: "Go build & test", JobID: 130605138765, RunID: 43044474409, Steps: steps(
 		"Set up job=success",
-		"Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1=success",
+		checkoutStep+"=success",
 		"Configure git identity (tests create local repos)=success",
-		"Run actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e=success",
+		setupGoStep+"=success",
 		"CI change-class gate regression suite=success",
 		"Working-tree content guards (encoding, skill includes, portability)=success",
 		"Platform operation registry in sync=success",
@@ -79,15 +100,16 @@ var (
 		"Upload Go test logs=success",
 		"branch-merged-check.sh regression suite=success",
 		"Verify required steps did not silently skip=success",
-		"Post Run actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e=skipped",
-		"Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1=success",
+		"Post "+setupGoStep+"=skipped",
+		"Post "+checkoutStep+"=success",
 		"Complete job=success")}
-)
+}
 
 const goTestStep = "Test (plain and race, concurrently)"
 
 func TestClassifyMergeGroupFailure(t *testing.T) {
 	kind := stepKinds(t)
+	setupGoStep := workflowUsesStep(t, "actions/setup-go")
 	goCancelled := MergeGroupJobResult{Check: "Go build & test", Steps: steps(
 		"Set up job=success", "Build=success", "Vet=success", "Gofmt=success", goTestStep+"=cancelled")}
 	cases := []struct {
@@ -97,20 +119,20 @@ func TestClassifyMergeGroupFailure(t *testing.T) {
 		wantJob   string
 		wantStep  string
 	}{
-		{"infra only (#3191, recorded)", []MergeGroupJobResult{playwrightSetupJob}, MergeGroupInfra, "Playwright webview tests", "Install Playwright OS dependencies (cache hit)"},
-		{"code only (recorded)", []MergeGroupJobResult{goTestJob}, MergeGroupCode, "Go build & test", goTestStep},
-		{"mixed, code decides (#3193, recorded)", []MergeGroupJobResult{playwrightSetupJob, goTestJob}, MergeGroupCode, "Go build & test", goTestStep},
-		{"mixed, code decides in any order", []MergeGroupJobResult{goTestJob, playwrightSetupJob}, MergeGroupCode, "Go build & test", goTestStep},
-		{"a cancelled own step does not outvote infra", []MergeGroupJobResult{playwrightSetupJob, goCancelled}, MergeGroupInfra, "Playwright webview tests", "Install Playwright OS dependencies (cache hit)"},
+		{"infra only (#3191, recorded)", []MergeGroupJobResult{playwrightSetupJob(t)}, MergeGroupInfra, "Playwright webview tests", "Install Playwright OS dependencies (cache hit)"},
+		{"code only (recorded)", []MergeGroupJobResult{goTestJob(t)}, MergeGroupCode, "Go build & test", goTestStep},
+		{"mixed, code decides (#3193, recorded)", []MergeGroupJobResult{playwrightSetupJob(t), goTestJob(t)}, MergeGroupCode, "Go build & test", goTestStep},
+		{"mixed, code decides in any order", []MergeGroupJobResult{goTestJob(t), playwrightSetupJob(t)}, MergeGroupCode, "Go build & test", goTestStep},
+		{"a cancelled own step does not outvote infra", []MergeGroupJobResult{playwrightSetupJob(t), goCancelled}, MergeGroupInfra, "Playwright webview tests", "Install Playwright OS dependencies (cache hit)"},
 		{"cancelled only", []MergeGroupJobResult{goCancelled}, MergeGroupUnclassified, "", ""},
 		{"setup failure before build", []MergeGroupJobResult{{Check: "Go build & test", Steps: steps(
-			"Set up job=success", "Run actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e=failure", "Build=skipped", goTestStep+"=skipped")}}, MergeGroupInfra, "Go build & test", "Run actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e"},
+			"Set up job=success", setupGoStep+"=failure", "Build=skipped", goTestStep+"=skipped")}}, MergeGroupInfra, "Go build & test", setupGoStep},
 		{"setup step timed out", []MergeGroupJobResult{{Check: "Go build & test", Steps: steps(
 			"Configure git identity (tests create local repos)=timed_out", "Build=skipped")}}, MergeGroupInfra, "Go build & test", "Configure git identity (tests create local repos)"},
 		{"a lockfile install the PR can break is code (#3198 review)", []MergeGroupJobResult{{Check: "Go build & test", Steps: steps(
 			"Install=failure", "Build=skipped")}}, MergeGroupCode, "Go build & test", "Install"},
 		{"checks after a setup failure still ran", []MergeGroupJobResult{{Check: "Go build & test", Steps: steps(
-			"Build=success", "Run actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e=failure",
+			"Build=success", setupGoStep+"=failure",
 			"branch-merged-check.sh regression suite=success")}}, MergeGroupUnclassified, "", ""},
 		{"a check the classifier does not recognise is code", []MergeGroupJobResult{{Check: "Go build & test", Steps: steps(
 			"Build=success", "Vet=failure", goTestStep+"=skipped")}}, MergeGroupCode, "Go build & test", "Vet"},
@@ -124,8 +146,8 @@ func TestClassifyMergeGroupFailure(t *testing.T) {
 			"Set up job=success", "Configure git identity (tests create local repos)=failure", "Upload Go test logs=skipped")}}, MergeGroupUnclassified, "", ""},
 		{"no step failed", []MergeGroupJobResult{{Check: "Go build & test", Steps: steps("Build=success", goTestStep+"=success")}}, MergeGroupUnclassified, "", ""},
 		{"unreadable steps", []MergeGroupJobResult{{Check: "Go build & test", JobID: 12}}, MergeGroupUnclassified, "", ""},
-		{"infra plus an unclassifiable status", []MergeGroupJobResult{playwrightSetupJob, {Check: "cla/check"}}, MergeGroupUnclassified, "", ""},
-		{"code plus an unclassifiable status", []MergeGroupJobResult{goTestJob, {Check: "cla/check"}}, MergeGroupCode, "Go build & test", goTestStep},
+		{"infra plus an unclassifiable status", []MergeGroupJobResult{playwrightSetupJob(t), {Check: "cla/check"}}, MergeGroupUnclassified, "", ""},
+		{"code plus an unclassifiable status", []MergeGroupJobResult{goTestJob(t), {Check: "cla/check"}}, MergeGroupCode, "Go build & test", goTestStep},
 		{"no jobs", nil, MergeGroupUnclassified, "", ""},
 	}
 	for _, tc := range cases {
@@ -139,13 +161,44 @@ func TestClassifyMergeGroupFailure(t *testing.T) {
 }
 
 func TestClassifyMergeGroupFailure_NoOwnStepsIsUnclassified(t *testing.T) {
-	if got := ClassifyMergeGroupFailure([]MergeGroupJobResult{goTestJob}, nil); got.Class != MergeGroupUnclassified {
+	if got := ClassifyMergeGroupFailure([]MergeGroupJobResult{goTestJob(t)}, nil); got.Class != MergeGroupUnclassified {
 		t.Errorf("without own steps a removal must stay unclassified, got %+v", got)
+	}
+}
+
+// TestClassifyMergeGroupFailure_SetupGoRefBump proves the classifier follows
+// the workflows' setup-go ref, not a pinned one: a bump keeps a setup failure
+// classified as infrastructure (#3463, #3483).
+func TestClassifyMergeGroupFailure_SetupGoRefBump(t *testing.T) {
+	root := repoRoot(t)
+	disc, err := ci.DiscoverCommands(context.Background(), root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bumped := "actions/setup-go@" + strings.Repeat("f", 40)
+	wfSteps := append([]ci.WorkflowStep(nil), ci.ListWorkflowSteps(root)...)
+	n := 0
+	for i := range wfSteps {
+		if strings.HasPrefix(wfSteps[i].Uses, "actions/setup-go@") {
+			wfSteps[i].Uses = bumped
+			n++
+		}
+	}
+	if n == 0 {
+		t.Fatal("no workflow step uses actions/setup-go")
+	}
+	kind := StepKinds(wfSteps, disc.Commands)
+	job := MergeGroupJobResult{Check: "Go build & test", Steps: steps(
+		"Set up job=success", "Run "+bumped+"=failure", "Build=skipped", goTestStep+"=skipped")}
+	got := ClassifyMergeGroupFailure([]MergeGroupJobResult{job}, kind)
+	if got.Class != MergeGroupInfra || got.Step != "Run "+bumped {
+		t.Errorf("got %+v, want infra at %q", got, "Run "+bumped)
 	}
 }
 
 func TestStepKinds_RepositoryWorkflows(t *testing.T) {
 	kind := stepKinds(t)
+	checkoutStep := workflowUsesStep(t, "actions/checkout")
 	for step, want := range map[string]ci.StepKind{
 		goTestStep:                           ci.StepCheck, // a multi-line block parity discovery drops
 		"Test (Playwright)":                  ci.StepCheck,
@@ -155,8 +208,8 @@ func TestStepKinds_RepositoryWorkflows(t *testing.T) {
 		"Install Playwright OS dependencies (cache hit)": ci.StepSetup, // rendered with a suffix
 		"Install":                ci.StepOther, // npm ci reads the PR's lockfile
 		"Get Playwright version": ci.StepCheck, // names @playwright/test: a check wins over GITHUB_OUTPUT
-		"Configure git identity (tests create local repos)":             ci.StepSetup,
-		"Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1": ci.StepSetup,
+		"Configure git identity (tests create local repos)": ci.StepSetup,
+		checkoutStep:                 ci.StepSetup,
 		"Set up job":                 ci.StepSetup,
 		"Vet":                        ci.StepOther, // go vet: a check the classifier does not recognise
 		"Test retro engine (pytest)": ci.StepCheck, // pip install pytest && pytest: the check wins
@@ -274,7 +327,7 @@ func newRemovalRunner(t *testing.T, q *removalQueueGh) (*DeterministicRunner, *[
 	t.Helper()
 	q.fakeGh = fakeGh{preMerge: cleanOpen}
 	q.status = github.MergeQueueStatus{PRID: "PR_1", State: "OPEN", QueueRequired: true, BaseRef: "main"}
-	q.jobs = map[int64][]github.WorkflowRunStep{playwrightSetupJob.JobID: playwrightSetupJob.Steps, goTestJob.JobID: goTestJob.Steps}
+	q.jobs = map[int64][]github.WorkflowRunStep{playwrightSetupJob(t).JobID: playwrightSetupJob(t).Steps, goTestJob(t).JobID: goTestJob(t).Steps}
 	r := newQueueRunner(&q.queueGh)
 	r.gh = q
 	kind := stepKinds(t)
@@ -285,7 +338,7 @@ func newRemovalRunner(t *testing.T, q *removalQueueGh) (*DeterministicRunner, *[
 }
 
 func TestRun_MergeQueueInfraRemoval_ReEnqueuesThenMerges(t *testing.T) {
-	q := &removalQueueGh{outcomes: []error{removal(playwrightSetupJob), nil}}
+	q := &removalQueueGh{outcomes: []error{removal(playwrightSetupJob(t)), nil}}
 	r, slept := newRemovalRunner(t, q)
 	res, err := r.Run(context.Background(), 7, "", "")
 	if err != nil {
@@ -303,7 +356,7 @@ func TestRun_MergeQueueInfraRemoval_ReEnqueuesThenMerges(t *testing.T) {
 }
 
 func TestRun_MergeQueueInfraRemoval_ExhaustedIsNamedAndNeedsNoChange(t *testing.T) {
-	q := &removalQueueGh{outcomes: []error{removal(playwrightSetupJob), removal(playwrightSetupJob), removal(playwrightSetupJob)}}
+	q := &removalQueueGh{outcomes: []error{removal(playwrightSetupJob(t)), removal(playwrightSetupJob(t)), removal(playwrightSetupJob(t))}}
 	r, slept := newRemovalRunner(t, q)
 	res, err := r.Run(context.Background(), 7, "", "")
 	if err != nil {
@@ -332,8 +385,8 @@ func TestRun_MergeQueueInfraRemoval_InterruptedRetryIsInfraExhausted(t *testing.
 		sleepErr       bool
 		wantReenqueues string
 	}{
-		{"during the delay", []error{removal(playwrightSetupJob)}, true, "re-enqueued 0 time(s)"},
-		{"during the re-enqueued wait", []error{removal(playwrightSetupJob), context.Canceled}, false, "re-enqueued 1 time(s)"},
+		{"during the delay", []error{removal(playwrightSetupJob(t))}, true, "re-enqueued 0 time(s)"},
+		{"during the re-enqueued wait", []error{removal(playwrightSetupJob(t)), context.Canceled}, false, "re-enqueued 1 time(s)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			q := &removalQueueGh{outcomes: tc.outcomes}
@@ -364,18 +417,18 @@ func TestRun_MergeQueueCodeRemoval_MarkedAndRecorded(t *testing.T) {
 		name string
 		jobs []MergeGroupJobResult
 	}{
-		{"code only", []MergeGroupJobResult{goTestJob}},
-		{"mixed (#3193): code decides", []MergeGroupJobResult{playwrightSetupJob, goTestJob}},
+		{"code only", []MergeGroupJobResult{goTestJob(t)}},
+		{"mixed (#3193): code decides", []MergeGroupJobResult{playwrightSetupJob(t), goTestJob(t)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ws := layouttest.Repo(t)
 			q := &removalQueueGh{outcomes: []error{removal(tc.jobs...)}}
 			r, slept := newRemovalRunner(t, q)
-			stamped, jobLog := timedJobLog(goTestJob.Steps, map[string]string{
+			stamped, jobLog := timedJobLog(goTestJob(t).Steps, map[string]string{
 				goTestStep: "=== RUN TestSkipAccounting\n--- FAIL: TestSkipAccounting (0.00s)\nFAIL",
 			})
-			q.jobs[goTestJob.JobID] = stamped
-			q.logs = map[int64]string{goTestJob.JobID: jobLog}
+			q.jobs[goTestJob(t).JobID] = stamped
+			q.logs = map[int64]string{goTestJob(t).JobID: jobLog}
 			res, err := r.Run(context.Background(), 7, "", ws)
 			if err != nil {
 				t.Fatalf("Run: %v", err)
@@ -395,7 +448,7 @@ func TestRun_MergeQueueCodeRemoval_MarkedAndRecorded(t *testing.T) {
 			if err := json.Unmarshal(data, &rec); err != nil {
 				t.Fatal(err)
 			}
-			if rec.Check != goTestJob.Check || rec.Step != goTestStep || rec.JobID != goTestJob.JobID || rec.PRNumber != 42 ||
+			if rec.Check != goTestJob(t).Check || rec.Step != goTestStep || rec.JobID != goTestJob(t).JobID || rec.PRNumber != 42 ||
 				!strings.Contains(rec.LogExcerpt, "--- FAIL: TestSkipAccounting") {
 				t.Errorf("record = %+v", rec)
 			}
@@ -425,7 +478,7 @@ func TestRun_MergeQueueUnclassifiedRemoval_KeepsTodaysReason(t *testing.T) {
 }
 
 func TestRun_MergeQueueRemoval_DiscoveryFailureIsUnclassified(t *testing.T) {
-	q := &removalQueueGh{outcomes: []error{removal(playwrightSetupJob)}}
+	q := &removalQueueGh{outcomes: []error{removal(playwrightSetupJob(t))}}
 	r, _ := newRemovalRunner(t, q)
 	r.stepKinds = func(context.Context, string) (func(string) ci.StepKind, error) {
 		return nil, errors.New("no workflows")

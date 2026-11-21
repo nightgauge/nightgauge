@@ -26,6 +26,11 @@ type ClassifyResult struct {
 	// `changes` job then runs the heavy suites on the pull request itself
 	// instead of leaving them to the merge queue (#3093).
 	PRHeavy bool `json:"pr_heavy"`
+	// WorkflowTests is true when the diff touches .github/workflows/. The CI
+	// `changes` job then runs WorkflowReadingTestPackages on the light path, so
+	// a workflow edit cannot first meet the tests that read the workflows in the
+	// merge queue (#3463, #3483).
+	WorkflowTests bool `json:"workflow_tests"`
 	// Reason is a human-readable explanation for logs.
 	Reason string `json:"reason"`
 }
@@ -77,7 +82,31 @@ func ClassifyForCI(changedFiles []string) ClassifyResult {
 		res.PRHeavy = true
 		res.Reason += fmt.Sprintf("; %s installs or runs a pinned npm CLI, so the pull request runs the heavy suites itself", path)
 	}
+	if touchesWorkflows(changedFiles) {
+		res.WorkflowTests = true
+		res.Reason += "; the diff edits a workflow, so the pull request runs the workflow-reading tests"
+	}
 	return res
+}
+
+// workflowsDirPrefix is the directory whose files WorkflowReadingTestPackages read.
+const workflowsDirPrefix = ".github/workflows/"
+
+// WorkflowReadingTestPackages are the Go packages whose tests read this
+// repository's real workflows. ci.yml runs them on a pull request that edits a
+// workflow even when the heavy suites are left to the merge queue, and
+// scripts/test-ci-change-class.sh checks that step names every entry.
+var WorkflowReadingTestPackages = []string{"./internal/orchestrator/stages/", "./internal/ci/", "./internal/skillrender/", "./cmd/release-dwarf-check/", "./cmd/release-text-pattern-check/"}
+
+// touchesWorkflows reports whether any changed file is under workflowsDirPrefix.
+// The path itself is not echoed into Reason: it is pull-request controlled.
+func touchesWorkflows(changedFiles []string) bool {
+	for _, f := range changedFiles {
+		if strings.HasPrefix(f, workflowsDirPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // firstPRHeavyPath returns the first changed file listed in PRHeavyPaths, or "".
@@ -104,11 +133,12 @@ func classReason(class changeClassifier.Classification, runHeavy bool) string {
 // unclassifiable change is never under-tested (fail-open, not fail-closed).
 func FailOpenResult(reason string) ClassifyResult {
 	res := ClassifyResult{
-		ChangeClass: "unknown",
-		RunHeavy:    true,
-		PRHeavy:     true,
-		Jobs:        make(map[string]bool, len(HeavyJobKeys)),
-		Reason:      reason,
+		ChangeClass:   "unknown",
+		RunHeavy:      true,
+		PRHeavy:       true,
+		WorkflowTests: true,
+		Jobs:          make(map[string]bool, len(HeavyJobKeys)),
+		Reason:        reason,
 	}
 	for _, k := range HeavyJobKeys {
 		res.Jobs[k] = true
