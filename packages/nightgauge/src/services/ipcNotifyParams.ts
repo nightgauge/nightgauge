@@ -117,6 +117,11 @@ export interface NotifyStageProgressParams {
   model?: string;
   /** Marks the run's PR as forge-confirmed MERGED, not a token estimate (#2730). */
   mergedPr?: number;
+  /**
+   * The stage's latest tool step, `"<Tool> <file basename>"` or `"<Tool>"`
+   * (#3455). Never a command or a pattern: it reaches the run's activity line.
+   */
+  activity?: string;
   /** The run this progress estimate belongs to. Accepted and ignored until step 4. */
   runId: string;
 }

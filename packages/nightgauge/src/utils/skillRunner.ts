@@ -677,8 +677,10 @@ export interface SkillRunCallbacks {
    * authoritative `TokenAccumulator`, which is reconciled from the terminal
    * `result` envelope and continues to drive `onTokenUsage`/`onComplete`.
    * Consumers forward this to the platform via `pipeline.notifyStageProgress`.
+   * `activity` is the stage's latest tool step from {@link toolStepActivity}
+   * (#3455), absent until the stage has made a tool call.
    */
-  onStageProgress?: (usage: ParsedTokenUsage) => void;
+  onStageProgress?: (usage: ParsedTokenUsage, activity?: string) => void;
   /**
    * Called when a stage that has no child process in this host shows REAL
    * activity (#431, ADR-017 C18) — today only the Codex interactive TUI, which
@@ -7836,7 +7838,11 @@ function runStageSkillHeadlessImpl(
   //
   // Returns true when the caller must abort the stage.
   const seenToolUseIds = new Set<string>();
+  // The stage's latest tool step, sent on the next live progress tick so the
+  // run's activity line says what the agent is doing (#3455).
+  let latestToolStep: string | undefined;
   const observeToolCall = ({ name, input, id, parentToolUseId }: ToolCall): boolean => {
+    latestToolStep = toolStepActivity(name, input) || latestToolStep;
     // A call delivered in BOTH shapes must be counted once. Without this the
     // AskUserQuestion counter would advance twice per attempt and trip its
     // abort at HALF the intended threshold — a stage killed for a loop it
@@ -8294,7 +8300,7 @@ function runStageSkillHeadlessImpl(
         const nowMs = Date.now();
         if (nowMs - lastProgressEmitMs >= PROGRESS_EMIT_CADENCE_MS) {
           lastProgressEmitMs = nowMs;
-          callbacks?.onStageProgress?.(liveEstimator.estimate());
+          callbacks?.onStageProgress?.(liveEstimator.estimate(), latestToolStep);
         }
         // Live budget/ceiling enforcement (#254): feed the same estimate into
         // the enforcement path on its own throttled cadence. The terminal
@@ -8967,6 +8973,53 @@ async function resolveBudgetOutcome(request: StageBudgetRequest): Promise<StageB
   }
 }
 
+/** Longest tool step {@link toolStepActivity} returns. */
+export const TOOL_STEP_ACTIVITY_MAX = 120;
+
+/**
+ * The only tool inputs whose value may leave the machine, and only as a
+ * basename (#3455). Every other input stays local.
+ */
+export const TOOL_STEP_FILE_INPUT_KEYS = ["file_path", "notebook_path", "path"] as const;
+
+/** A basename that looks like a URL, a query or a key=value is not sent. */
+const UNSAFE_TOOL_STEP_BASENAME = /[?=&:#@%\s]/;
+
+/**
+ * The run activity line's tool step (#3455): `"<Tool> <basename>"` when the
+ * call names a file or directory, otherwise just `"<Tool>"`, capped at
+ * {@link TOOL_STEP_ACTIVITY_MAX} characters. It leaves the machine on the
+ * platform's run view, so it never carries a Bash command, a search pattern,
+ * a URL or any other free-form input, which can hold a secret
+ * (standards/security.md). Returns "" for a call with no tool name.
+ */
+export function toolStepActivity(name: string, input: unknown): string {
+  const tool = name.trim();
+  if (tool === "") return "";
+  let file = "";
+  if (input !== null && typeof input === "object") {
+    const record = input as Record<string, unknown>;
+    for (const key of TOOL_STEP_FILE_INPUT_KEYS) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim() !== "") {
+        // Split on both separators: a Windows path must not reach the
+        // platform whole on a POSIX host.
+        const base =
+          value
+            .trim()
+            .replace(/[\\/]+$/, "")
+            .split(/[\\/]/)
+            .pop() ?? "";
+        const isUrl = value.includes("://");
+        file = isUrl || UNSAFE_TOOL_STEP_BASENAME.test(base) ? "" : base;
+        break;
+      }
+    }
+  }
+  const step = file === "" ? tool : `${tool} ${file}`;
+  return step.length > TOOL_STEP_ACTIVITY_MAX ? step.slice(0, TOOL_STEP_ACTIVITY_MAX) : step;
+}
+
 /**
  * Run a pipeline stage headlessly: see runStageSkillHeadlessImpl for the
  * parameters. When a stage budget resolver is registered (#1668), the
@@ -9161,6 +9214,8 @@ export function resumeSessionWithResponse(
   const liveEstimator = new LiveStageEstimator("claude", defaultModel ?? "sonnet");
   const PROGRESS_EMIT_CADENCE_MS = 5000;
   let lastProgressEmitMs = -PROGRESS_EMIT_CADENCE_MS;
+  // Latest tool step for the progress tick's activity line (#3455).
+  let latestToolStep: string | undefined;
   let stdoutBuffer = "";
   let capturedSessionId: string | undefined;
 
@@ -9222,7 +9277,7 @@ export function resumeSessionWithResponse(
         const nowMs = Date.now();
         if (nowMs - lastProgressEmitMs >= PROGRESS_EMIT_CADENCE_MS) {
           lastProgressEmitMs = nowMs;
-          callbacks?.onStageProgress?.(liveEstimator.estimate());
+          callbacks?.onStageProgress?.(liveEstimator.estimate(), latestToolStep);
         }
       }
       if (parsed?.sessionId) {
@@ -9234,10 +9289,9 @@ export function resumeSessionWithResponse(
       // named on #169 — it turned up by sweeping for remaining readers, the
       // question none of the three prior fixes asked. Same normaliser, so it
       // cannot drift from the others again.
-      if (callbacks?.onToolUse) {
-        for (const { name, input, id } of collectToolCalls(parsed)) {
-          callbacks.onToolUse(name, input, id);
-        }
+      for (const { name, input, id } of collectToolCalls(parsed)) {
+        latestToolStep = toolStepActivity(name, input) || latestToolStep;
+        callbacks?.onToolUse?.(name, input, id);
       }
     }
   });

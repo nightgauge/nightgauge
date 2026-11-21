@@ -3,6 +3,7 @@ package ipc
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
@@ -239,9 +240,10 @@ func TestExtensionRun_ProgressBeforeFirstPhaseHasActivityLine(t *testing.T) {
 	mustCall(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
 		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "running", RunID: runID,
 	})
-	progress := func() string {
+	progressWith := func(activity string) string {
 		mustCall(t, s, "pipeline.notifyStageProgress", PipelineNotifyStageProgressParams{
 			Repo: repo, IssueNumber: issue, Stage: "feature-dev", RunID: runID, InputTokens: 10,
+			Activity: activity,
 		})
 		events := eventsOfType(fake.snapshot(), "stage_progress")
 		if len(events) == 0 || events[len(events)-1].Phase != nil {
@@ -249,9 +251,13 @@ func TestExtensionRun_ProgressBeforeFirstPhaseHasActivityLine(t *testing.T) {
 		}
 		return platform.ProgressMessage(events[len(events)-1])
 	}
+	progress := func() string { return progressWith("") }
 
 	if got := progress(); got != "feature-dev in progress" {
 		t.Fatalf("pre-phase message = %q, want the stage fallback", got)
+	}
+	if got := progressWith("Edit analytics.go"); got != "Edit analytics.go" {
+		t.Fatalf("pre-phase tool-step message = %q, want the tool step", got)
 	}
 	mustCall(t, s, "pipeline.notifyPhaseTransition", PipelineNotifyPhaseTransitionParams{
 		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Name: "implementation",
@@ -259,5 +265,37 @@ func TestExtensionRun_ProgressBeforeFirstPhaseHasActivityLine(t *testing.T) {
 	})
 	if got := progress(); got != "implementation (8/17) running" {
 		t.Fatalf("post-phase message = %q, want the latest phase label", got)
+	}
+	if got := progressWith("Edit analytics.go"); got != "implementation (8/17) running · Edit analytics.go" {
+		t.Fatalf("post-phase tool-step message = %q, want phase label and tool step", got)
+	}
+	// The phase label plus a capped tool step must fit the platform's
+	// 200-rune message cap (platform.progressMessageMax).
+	long := strings.Repeat("x", 300)
+	want := "implementation (8/17) running" + stageActivitySeparator + strings.Repeat("x", stageActivityMax)
+	if got := progressWith(long); got != want {
+		t.Fatalf("long tool-step message = %q, want the step capped at %d runes", got, stageActivityMax)
+	}
+}
+
+// TestStageActivityMessage pins how a stage_progress message is composed from
+// the latest phase label and tool step (#3455).
+func TestStageActivityMessage(t *testing.T) {
+	cases := []struct{ phase, activity, want string }{
+		{"implementation (8/17) running", "Edit a.go", "implementation (8/17) running · Edit a.go"},
+		{"implementation (8/17) running", "", "implementation (8/17) running"},
+		{"", "Bash", "Bash"},
+		{"", "  ", ""},
+		{"", "", ""},
+		{"  ", "Bash", "Bash"},
+		{" impl ", " Edit a.go ", "impl · Edit a.go"},
+		{"", "Edit a.go\nrm -rf /", "Edit a.go"},
+		{"", "\x1b[31mEdit", ""},
+		{"", strings.Repeat("é", 150), strings.Repeat("é", stageActivityMax)},
+	}
+	for _, c := range cases {
+		if got := stageActivityMessage(c.phase, c.activity); got != c.want {
+			t.Errorf("stageActivityMessage(%q, %q) = %q, want %q", c.phase, c.activity, got, c.want)
+		}
 	}
 }

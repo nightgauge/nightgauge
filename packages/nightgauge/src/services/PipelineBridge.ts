@@ -579,7 +579,7 @@ export class PipelineBridge {
           }
         }
       },
-      onStageProgress: (_stage, usage) => {
+      onStageProgress: (_stage, usage, activity) => {
         // Live in-stage token/cost estimate (#233), already throttled to >=5s in
         // SkillRunner. Fire-and-forget a stage_progress event to the platform via
         // Go so the run-detail view can show tokens/cost accruing mid-stage; the
@@ -597,6 +597,7 @@ export class PipelineBridge {
             outputTokens: usage.outputTokens,
             cacheReadTokens: usage.cacheReadTokens,
             costUsd: usage.costUsd,
+            activity,
           } satisfies NotifyStageProgressParams)
           .catch((err) => {
             this.logger.warn("PipelineBridge: notifyStageProgress failed", {

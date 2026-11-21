@@ -302,7 +302,9 @@ export interface SkillRunnerCallbacks {
       cacheCreation5mTokens?: number;
       cacheCreation1hTokens?: number;
       costUsd: number;
-    }
+    },
+    /** The stage's latest tool step (#3455); absent before its first tool call. */
+    activity?: string
   ) => void;
   onToolCall?: (stage: PipelineStage, data: { tool: string; target: string }) => void;
   /** Called when a rate_limit_event is detected in stream-json output (Issue #2573) */
@@ -440,8 +442,8 @@ export class SkillRunner {
           onTokenUsage: async (usage) => {
             callbacks?.onTokenUsage?.(usage);
           },
-          onStageProgress: (usage) => {
-            callbacks?.onStageProgress?.(callbackStage, usage);
+          onStageProgress: (usage, activity) => {
+            callbacks?.onStageProgress?.(callbackStage, usage, activity);
           },
           onPhaseStart: (_detectedStage, name, index, total) => {
             callbacks?.onPhaseStart?.(callbackStage, name, index, total);

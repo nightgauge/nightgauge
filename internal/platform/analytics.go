@@ -976,8 +976,9 @@ func metaString(m map[string]interface{}, key string) string {
 
 // ProgressMessage is the run's latest-activity line a stage_progress event
 // sends (#3455), never empty and capped at progressMessageMax runes. It is the first
-// non-empty of the emitter's explicit message (the latest phase label on the
-// IPC path), the event's own phase label, and "<stage> in progress", so a
+// non-empty of the emitter's explicit message (on the IPC path the latest
+// phase label, the latest tool step, or "<phase> · <tool step>"), the event's
+// own phase label, and "<stage> in progress", so a
 // model-driven stage reporting tokens before its first phase marker, or a
 // skill that emits no markers, still says what is running.
 func ProgressMessage(e PipelineEvent) string {

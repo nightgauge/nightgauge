@@ -75,7 +75,12 @@ vi.mock("child_process", async () => {
   };
 });
 
-import { runStageSkillHeadless, resumeSessionWithResponse } from "../../src/utils/skillRunner";
+import {
+  runStageSkillHeadless,
+  resumeSessionWithResponse,
+  toolStepActivity,
+  TOOL_STEP_ACTIVITY_MAX,
+} from "../../src/utils/skillRunner";
 import { createMockChildProcess } from "../mocks/child-process";
 
 describe("skillRunner — tool call observation across delivery shapes (#169)", () => {
@@ -352,6 +357,73 @@ describe("skillRunner — tool call observation across delivery shapes (#169)", 
 
       expect(onToolUse).toHaveBeenCalledTimes(1);
       expect(onToolUse).toHaveBeenCalledWith("Bash", { command: "git status" }, "toolu_resume1");
+    });
+  });
+
+  // ──────────────── live progress activity line (#3455) ────────────────
+
+  describe("live progress tool-step activity", () => {
+    it.each<[string, unknown, string]>([
+      ["Edit", { file_path: "/repo/internal/platform/analytics.go" }, "Edit analytics.go"],
+      ["NotebookEdit", { notebook_path: "/n/a.ipynb" }, "NotebookEdit a.ipynb"],
+      ["Bash", { command: "curl -H 'Authorization: Bearer s3cr3t'" }, "Bash"],
+      ["Grep", { pattern: "s3cr3t", path: "/repo/src" }, "Grep src"],
+      ["Glob", { path: "/repo/src/" }, "Glob src"],
+      ["Read", { file_path: "C:\\repo\\a.go" }, "Read a.go"],
+      ["Read", { file_path: "  ", path: "/repo/b.go" }, "Read b.go"],
+      ["mcp_fetch", { path: "/v1/items?token=s3cr3t" }, "mcp_fetch"],
+      ["mcp_fetch", { path: "https://host/x" }, "mcp_fetch"],
+      ["Read", "not an object", "Read"],
+      ["", { file_path: "/a.go" }, ""],
+      ["  ", { file_path: "/a.go" }, ""],
+    ])("toolStepActivity(%j, %j) is %j", (name, input, want) => {
+      expect(toolStepActivity(name, input)).toBe(want);
+    });
+
+    it("caps the tool step", () => {
+      expect(toolStepActivity("Read", { file_path: "/" + "x".repeat(300) })).toHaveLength(
+        TOOL_STEP_ACTIVITY_MAX
+      );
+    });
+
+    it("sends the latest tool step on the next progress tick", () => {
+      let now = 1_000_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const onStageProgress = vi.fn();
+      runStageSkillHeadless("feature-dev", 42, { onStageProgress });
+
+      emitAssistantToolUse([
+        { name: "Edit", input: { file_path: "/repo/analytics.go" }, id: "toolu_e1" },
+      ]);
+      now += 6_000;
+      emitAssistantToolUse([
+        { name: "Bash", input: { command: "echo TOKEN=s3cr3t" }, id: "toolu_b1" },
+      ]);
+      now += 6_000;
+      emitAssistantToolUse([{ name: "  ", input: {}, id: "toolu_x1" }]);
+      now += 6_000;
+      emitAssistantToolUse([{ name: "Read", input: {}, id: "toolu_r1" }]);
+
+      const activities = onStageProgress.mock.calls.map((c) => c[1]);
+      // A nameless call keeps the previous step rather than blanking it.
+      expect(activities).toEqual([undefined, "Edit analytics.go", "Bash", "Bash"]);
+      expect(JSON.stringify(onStageProgress.mock.calls)).not.toContain("s3cr3t");
+    });
+
+    it("sends the latest tool step on the resume path too", () => {
+      let now = 1_000_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const onStageProgress = vi.fn();
+      // No onToolUse: the step must be tracked without that consumer.
+      resumeSessionWithResponse("sess_abc", "my answer", { onStageProgress });
+
+      emitAssistantToolUse([
+        { name: "Write", input: { file_path: "/repo/notes.md" }, id: "toolu_w9" },
+      ]);
+      now += 6_000;
+      emitAssistantToolUse([{ name: "Read", input: {}, id: "toolu_r9" }]);
+
+      expect(onStageProgress.mock.calls.map((c) => c[1])).toEqual([undefined, "Write notes.md"]);
     });
   });
 });
