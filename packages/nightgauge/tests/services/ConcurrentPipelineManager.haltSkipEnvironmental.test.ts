@@ -106,6 +106,8 @@ vi.mock("../../src/services/IpcClient", () => ({
 
 import { ConcurrentPipelineManager } from "../../src/services/ConcurrentPipelineManager";
 import { fakeCloneLayout } from "../helpers/cloneLayout";
+import { WorktreeManager } from "../../src/utils/WorktreeManager";
+import { formatQuotaRejectionMarker } from "../../src/utils/tokenParser";
 
 // Per-clone data resolves under the git directory (ADR-024 § 7); map the
 // fake roots (and their worktrees) to a clone without running git.
@@ -225,6 +227,29 @@ describe("ConcurrentPipelineManager — skip haltQueueOnSlotFailure on environme
     expect(mockAutonomousPause).not.toHaveBeenCalled();
     expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
     expect(queueClear).not.toHaveBeenCalled();
+  });
+
+  it("skips halt and keeps the worktree for an exit-0 seven-day quota rejection (#3465)", async () => {
+    const { manager, controllable, queueClear } = makeManager(undefined, 3465);
+    await manager.fillSlots();
+    const resetsAt = Math.floor(Date.now() / 1000) + 6 * 3600;
+    controllable.failIssue(
+      3465,
+      "feature-planning",
+      formatQuotaRejectionMarker({ status: "rejected", rateLimitType: "seven_day", resetsAt })
+    );
+    await manager.settleForTest(3465);
+
+    expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
+    expect(queueClear).not.toHaveBeenCalled();
+    // Every failed slot keeps its worktree (preserveWorktree = !pipelineSucceeded);
+    // this pins that the quota marker does not take a cleanup path either.
+    expect(vi.mocked(WorktreeManager).mock.results.length).toBeGreaterThan(0);
+    const cleanupCalls = vi
+      .mocked(WorktreeManager)
+      .mock.results.flatMap((r: any) => r.value.cleanup.mock.calls as unknown[][]);
+    expect(cleanupCalls.filter((c) => c[0] === 3465)).toEqual([]);
   });
 
   it("skips halt for stream idle timeout failure", async () => {

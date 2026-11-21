@@ -4500,6 +4500,30 @@ allowed-tools: Read Write
     it("succeeds when a real model served a request after the event", () => {
       expect(run("claude-opus-5-5").success).toBe(true);
     });
+
+    it("never reports the trust warning as the error when it is the only stderr", () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`---
+name: test-skill
+allowed-tools: Read Write
+---
+# Test Skill
+`);
+      const mockProcess = createMockChildProcess();
+      vi.mocked(spawn).mockReturnValue(mockProcess);
+      const onComplete = vi.fn();
+      runStageSkillHeadless("feature-dev", 42, { onComplete });
+      mockProcess.stderr?.emit(
+        "data",
+        Buffer.from("Ignoring 3 permissions.allow entries: workspace has not been trusted\n")
+      );
+      mockProcess.emit("close", 1);
+      expect(onComplete).toHaveBeenCalledOnce();
+      const result = onComplete.mock.calls[0][0];
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+      expect(result.error?.message).not.toContain("permissions.allow");
+    });
   });
 
   it("should classify stderr errors when no rate_limit_event was detected", () => {
