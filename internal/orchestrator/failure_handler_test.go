@@ -280,3 +280,25 @@ func TestDemoteEnvironmentalKindForOutcome(t *testing.T) {
 		}
 	}
 }
+
+// A quota rejection that exited 0 is booked as quota exhausted with a cooldown
+// to the reported reset, not demoted to a stall (#3465).
+func TestQuotaRejectionMarker_ClassifiesAndCoolsDown(t *testing.T) {
+	t.Parallel()
+	marker := "[rate-limit-quota-exhausted] seven-day usage limit reached; " +
+		"resumes at 2026-11-21T04:00:00Z (rate_limit_event status=rejected; " +
+		"seven_day bucket; resetsAt=1795233600)"
+	kind := ClassifyTerminalKind(marker)
+	if kind != TerminalKindRateLimitQuotaExhausted {
+		t.Fatalf("ClassifyTerminalKind = %q, want %q", kind, TerminalKindRateLimitQuotaExhausted)
+	}
+	if got, demoted := DemoteWarningOnlyQuotaKind(kind, marker); demoted || got != kind {
+		t.Fatalf("DemoteWarningOnlyQuotaKind demoted a rejection to %q", got)
+	}
+	const resetsAt = 1795233600
+	now := time.Unix(resetsAt, 0).Add(-48 * time.Hour)
+	want := time.Unix(resetsAt, 0).Add(quotaResetGrace)
+	if until := computeQuotaCooldownUntil(marker, now); !until.Equal(want) {
+		t.Fatalf("cooldown = %v, want %v (resetsAt + grace)", until, want)
+	}
+}

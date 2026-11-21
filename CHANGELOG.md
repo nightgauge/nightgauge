@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A stage the Anthropic API refuses for an exhausted usage bucket (the CLI
+  streams `rate_limit_event` `status: rejected` and exits 0) is now booked as
+  `rate_limit_quota_exhausted` with a cooldown to the reset time, instead of a
+  stage failure reported as the CLI's `permissions.allow` trust warning (#3465).
+
 - Action Center cards raised in any checkout now reach the phone and dashboard.
   Each checkout used to keep its own card store, and the daemon uploaded only its
   own, so a card raised from a sibling repository or a linked worktree never
