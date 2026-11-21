@@ -834,3 +834,98 @@ func TestPartialRerun_MetRemainderCloses(t *testing.T) {
 		})
 	}
 }
+
+// partialMerged is when the fixtures' partial PR merged (#3460).
+var partialMerged = partialOpened.Add(2 * time.Hour)
+
+// revisedReads are reconcile reads for a body of bodyLines last edited at
+// edited, after a partial PR opened at partialOpened and merged at
+// partialMerged whose body is prBody.
+func revisedReads(bodyLines []string, prBody string, edited func(context.Context) (*time.Time, error)) PartialScopeReads {
+	return PartialScopeReads{
+		Body: func(context.Context) (string, error) { return partialRemainderBody(bodyLines...), nil },
+		PR: func(context.Context, int) (gh.PartialPR, error) {
+			return gh.PartialPR{CreatedAt: partialOpened, MergedAt: partialMerged, Body: prBody, MergeSHA: "x"}, nil
+		},
+		BodyEditedAt: edited,
+	}
+}
+
+func editedAt(t time.Time) func(context.Context) (*time.Time, error) {
+	return func(context.Context) (*time.Time, error) { return &t, nil }
+}
+
+// AC 3 (#3460): the supervisor ticks the one listed criterion and adds a new
+// one after the partial PR merged. The scope is exactly the new criterion, and
+// the no-op verdict names it, not the ticked one.
+func TestReconcilePartialRecord_RevisedAfterMergeUsesUntickedBoxes(t *testing.T) {
+	t.Parallel()
+	ws := gitWorkspace(t)
+	ticked := "Ticked behaviour is handled by the scheduler"
+	added := "internal/orchestrator/partial_rerun.go:42 handles the revised remainder"
+	// The PR body names the new criterion, so the #3235 filter would drop it.
+	reads := revisedReads([]string{"- [x] " + ticked, "- [ ] " + added},
+		partialPRBody([]string{added}, []string{ticked}), editedAt(partialMerged.Add(time.Hour)))
+	rec := ReconcilePartialRecord(context.Background(), reads, ws, 3460, []string{ticked}, 7, nil)
+	if strings.Join(rec.Criteria, "|") != added {
+		t.Fatalf("scope = %q, want only %q", rec.Criteria, added)
+	}
+	if len(rec.Dropped) != 1 || rec.Dropped[0] != ticked {
+		t.Fatalf("dropped = %q, want [%q]", rec.Dropped, ticked)
+	}
+	summary := unmetSummary(JudgeRemainder(context.Background(), ws, rec.MergeSHA, rec.Criteria))
+	if !strings.Contains(summary, added) || strings.Contains(summary, ticked) {
+		t.Fatalf("no-op verdict = %q, want it to name %q and not %q", summary, added, ticked)
+	}
+}
+
+// (#3460) A listed criterion ticked in a body edited before the merge leaves
+// the scope without being reported dropped.
+func TestReconcilePartialRecord_TickedListedCriterionExcluded(t *testing.T) {
+	t.Parallel()
+	ticked, open := "Ticked behaviour is handled", "Open behaviour is handled"
+	for i, edited := range []func(context.Context) (*time.Time, error){
+		editedAt(partialOpened.Add(time.Hour)),
+		func(context.Context) (*time.Time, error) { return nil, nil },
+	} {
+		reads := revisedReads([]string{"- [x] " + ticked, "- [ ] " + open},
+			partialPRBody(nil, []string{ticked, open}), edited)
+		rec := ReconcilePartialRecord(context.Background(), reads, gitWorkspace(t), 3460, []string{ticked, open}, 7, nil)
+		if strings.Join(rec.Criteria, "|") != open || len(rec.Dropped) != 0 {
+			t.Fatalf("case %d: scope = %q dropped = %q, want [%q] and none", i, rec.Criteria, rec.Dropped, open)
+		}
+	}
+}
+
+// (#3460) An unreadable edit time keeps the #3235 reconcile: the listed
+// remainder stands and a criterion the PR named is not added.
+func TestReconcilePartialRecord_UnreadableEditTimeKeepsReconcile(t *testing.T) {
+	t.Parallel()
+	listed, named := "Listed behaviour is handled", "Named behaviour is handled"
+	fresh := "Fresh behaviour is handled"
+	reads := revisedReads(unchecked(listed, named, fresh), partialPRBody([]string{named}, []string{listed}),
+		func(context.Context) (*time.Time, error) { return nil, errors.New("boom") })
+	rec := ReconcilePartialRecord(context.Background(), reads, gitWorkspace(t), 3460, []string{listed}, 7, nil)
+	if strings.Join(rec.Criteria, "|") != listed+"|"+fresh {
+		t.Fatalf("scope = %q, want [%q %q]: unreadable counts as edited, PR-named stays out", rec.Criteria, listed, fresh)
+	}
+}
+
+// (#3460) On the revised path a listed criterion still unticked stays in
+// scope, neither added nor dropped, in body order with a new one.
+func TestReconcilePartialRecord_RevisedKeepsUntickedListed(t *testing.T) {
+	t.Parallel()
+	added, listed := "Added behaviour is handled", "Listed behaviour is handled"
+	reads := revisedReads(unchecked(added, listed), "", editedAt(partialMerged.Add(time.Minute)))
+	rec := ReconcilePartialRecord(context.Background(), reads, gitWorkspace(t), 3460, []string{listed}, 7, nil)
+	if strings.Join(rec.Criteria, "|") != added+"|"+listed || len(rec.Dropped) != 0 {
+		t.Fatalf("scope = %q dropped = %q", rec.Criteria, rec.Dropped)
+	}
+	// Edited exactly at the merge is not a revision: the #3235 rule applies,
+	// and it keeps out a criterion the PR body named.
+	reads = revisedReads(unchecked(added, listed), partialPRBody([]string{added}, []string{listed}), editedAt(partialMerged))
+	rec = ReconcilePartialRecord(context.Background(), reads, gitWorkspace(t), 3460, []string{listed}, 7, nil)
+	if strings.Join(rec.Criteria, "|") != listed {
+		t.Fatalf("edited at merge: scope = %q, want only %q", rec.Criteria, listed)
+	}
+}

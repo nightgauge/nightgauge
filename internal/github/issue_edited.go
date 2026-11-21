@@ -51,6 +51,7 @@ type partialPRQuery struct {
 		PullRequest *struct {
 			CreatedAt   graphql.String
 			Body        graphql.String
+			MergedAt    *graphql.String
 			MergeCommit *struct {
 				Oid graphql.String
 			}
@@ -62,9 +63,12 @@ type partialPRQuery struct {
 // remainder (#3235, #3423): when it was opened, which bounds when its unmet
 // list was computed; its body, which names the criteria it covered; and its
 // merge commit, the diff a remaining criterion is re-judged against. MergeSHA
-// is empty for an unmerged PR.
+// is empty for an unmerged PR. MergedAt, zero for an unmerged PR, bounds when
+// the remainder was recorded: an issue body edited after it is a revision of
+// that remainder (#3460).
 type PartialPR struct {
 	CreatedAt time.Time
+	MergedAt  time.Time
 	Body      string
 	MergeSHA  string
 }
@@ -94,6 +98,13 @@ func (c *Client) PartialPR(ctx context.Context, owner, repo string, number int) 
 	out := PartialPR{CreatedAt: at, Body: string(pr.Body)}
 	if pr.MergeCommit != nil {
 		out.MergeSHA = string(pr.MergeCommit.Oid)
+	}
+	if pr.MergedAt != nil && *pr.MergedAt != "" {
+		merged, err := time.Parse(time.RFC3339, string(*pr.MergedAt))
+		if err != nil {
+			return PartialPR{}, fmt.Errorf("read %s/%s#%d: mergedAt: %w", owner, repo, number, err)
+		}
+		out.MergedAt = merged
 	}
 	return out, nil
 }
