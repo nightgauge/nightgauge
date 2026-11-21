@@ -58,6 +58,19 @@ export interface CapturedPanel {
   received: unknown[];
   /** `Date.now()` of each entry in `received`, by index. */
   receivedAt: number[];
+  /**
+   * `Date.now()` of each `webview.html` assignment. Each one replaces the
+   * webview document, and a post the old document accepted is gone with it,
+   * so a report can tell "never loaded after the last re-render" from
+   * "loaded and did not answer" (#3025).
+   */
+  htmlSetAt: number[];
+  /**
+   * Whether `htmlSetAt` is being recorded. False when no `html` accessor was
+   * found to wrap, so an empty `htmlSetAt` means "not captured", not "never
+   * set".
+   */
+  htmlCaptured: boolean;
 }
 
 export interface CapturedNotification {
@@ -195,8 +208,11 @@ function wrapCreateWebviewPanel(original: CreateWebviewPanel): CreateWebviewPane
       deliveredAt: [],
       received: [],
       receivedAt: [],
+      htmlSetAt: [],
+      htmlCaptured: false,
     };
     const webview = panel.webview;
+    record.htmlCaptured = recordHtmlAssignments(webview, record.htmlSetAt);
     const subscribe = webview.onDidReceiveMessage.bind(webview);
     (webview as { onDidReceiveMessage: unknown }).onDidReceiveMessage = (
       listener: (message: unknown) => unknown,
@@ -237,6 +253,35 @@ function wrapCreateWebviewPanel(original: CreateWebviewPanel): CreateWebviewPane
     panels.push(record);
     return panel;
   } as CreateWebviewPanel;
+}
+
+/**
+ * Shadow `webview.html` with an own accessor that timestamps each assignment
+ * and forwards to the real one. The real accessor lives on the prototype
+ * chain. Returns false when none is found (an API change), so the report can
+ * say the assignments were not captured instead of "set 0 times".
+ */
+function recordHtmlAssignments(webview: vscode.Webview, htmlSetAt: number[]): boolean {
+  let proto: object | null = webview;
+  let descriptor: PropertyDescriptor | undefined;
+  while (proto && !descriptor) {
+    descriptor = Object.getOwnPropertyDescriptor(proto, "html");
+    proto = Object.getPrototypeOf(proto);
+  }
+  const { get, set } = descriptor ?? {};
+  if (!get || !set) return false;
+  Object.defineProperty(webview, "html", {
+    configurable: true,
+    enumerable: descriptor?.enumerable ?? true,
+    get(this: vscode.Webview) {
+      return get.call(this);
+    },
+    set(this: vscode.Webview, value: string) {
+      htmlSetAt.push(Date.now());
+      set.call(this, value);
+    },
+  });
+  return true;
 }
 
 type CreateTreeView = typeof vscode.window.createTreeView;

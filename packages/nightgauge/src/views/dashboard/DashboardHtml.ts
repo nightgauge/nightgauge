@@ -391,7 +391,18 @@ function getTabCss(): string {
   `;
 }
 
-function getTabScript(): string {
+/**
+ * The webview's tab script. Exported for tests that run it against a fake DOM.
+ *
+ * On load the tab the extension host rendered as active wins over the one in
+ * `vscode.getState()`. The host owns the active tab (#3025): a re-render
+ * carries it in the markup, and webview state can be older than the host's
+ * choice, for example an `activateTab` the host posted to a document that was
+ * replaced before its script ran. Restoring that older tab and reporting it
+ * back as `selectTab` reverted the host's choice. Webview state is the fallback
+ * only for markup with no active tab button.
+ */
+export function getTabScript(): string {
   return `
     function activateTab(tabId) {
       document.querySelectorAll('.tab-btn').forEach(function(btn) {
@@ -406,12 +417,16 @@ function getTabScript(): string {
     }
 
     (function() {
-      var savedTab = (vscode.getState() && vscode.getState().activeTab) || 'overview';
-      activateTab(savedTab);
+      var renderedTabBtn = document.querySelector('.tab-btn.active');
+      var initialTab = (renderedTabBtn && renderedTabBtn.dataset.tab)
+        || (vscode.getState() && vscode.getState().activeTab)
+        || 'overview';
+      activateTab(initialTab);
       // Notify backend so lazy-loaded tabs (audit, discovery) fetch their data
       // on restore. Without this, the tab panel is visible but data never loads
-      // (Issue #2582).
-      vscode.postMessage({ type: 'selectTab', tab: savedTab });
+      // (Issue #2582). It is also the first message every document sends, so
+      // the host reads it as "this document is loaded" (#3025).
+      vscode.postMessage({ type: 'selectTab', tab: initialTab });
 
       document.querySelectorAll('.tab-btn').forEach(function(btn, _i, buttons) {
         btn.addEventListener('click', function() {

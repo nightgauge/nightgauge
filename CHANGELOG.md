@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The dashboard no longer loses a tab selection made while it re-renders. The
+  extension holds an `activateTab` until the new webview document reports in,
+  and on load the webview shows the tab the extension rendered instead of an
+  older one from its saved state. The demo-mode host smoke now reports how many
+  times the dashboard re-rendered and whether a document loaded after the last
+  one (#3025).
+
 - A stage the Anthropic API refuses for an exhausted usage bucket (the CLI
   streams `rate_limit_event` `status: rejected` and exits 0) is now booked as
   `rate_limit_quota_exhausted` with a cooldown to the reset time, instead of a

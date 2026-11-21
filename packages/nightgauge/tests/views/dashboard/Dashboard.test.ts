@@ -1230,6 +1230,117 @@ describe("Dashboard - Tab Selection (Issue #1539)", () => {
     messageHandler({ type: "selectTab", tab: "" });
     expect((dashboard as any).activeTab).toBe("pipeline");
   });
+
+  // #3025 Part B: a full re-render (`webview.html = …`) replaces the webview
+  // document, and an activateTab VS Code accepted for the old document is lost
+  // with it. The host holds the post until the new document reports in.
+  describe("activateTab is held until the webview document has loaded (#3025)", () => {
+    async function openPanel() {
+      dashboard.show();
+      const vscodeModule = vi.mocked(await import("vscode"));
+      const panel = vi.mocked(vscodeModule.window.createWebviewPanel).mock.results[0]?.value;
+      const messageHandler = panel.webview.onDidReceiveMessage.mock.calls[0][0];
+      const activatePosts = () =>
+        panel.webview.postMessage.mock.calls
+          .map(([m]: [{ type: string; tab?: string }]) => m)
+          .filter((m: { type: string }) => m.type === "activateTab")
+          .map((m: { tab?: string }) => m.tab);
+      // The firewall section needs a fully shaped log service; it is not under test.
+      (dashboard as any).sanitizationLogService = undefined;
+      const rerender = () => (dashboard as any).renderPanel();
+      return { panel, messageHandler, activatePosts, rerender };
+    }
+
+    it("posts at once when the current document has loaded", async () => {
+      const { messageHandler, activatePosts, rerender } = await openPanel();
+      rerender();
+      messageHandler({ type: "selectTab", tab: "overview" }); // load-time report
+
+      expect(dashboard.selectTab("pipeline")).toBe(true);
+      expect(activatePosts()).toEqual(["pipeline"]);
+    });
+
+    it("holds the post across a re-render and sends it once on the first inbound message", async () => {
+      const { panel, messageHandler, activatePosts, rerender } = await openPanel();
+      rerender();
+      messageHandler({ type: "selectTab", tab: "overview" });
+      rerender(); // replaces the loaded document
+
+      expect(dashboard.selectTab("history")).toBe(true);
+      expect(activatePosts()).toEqual([]);
+      expect(dashboard.getActiveTab()).toBe("history");
+      // A further re-render while unloaded keeps the post held, and the next
+      // document is rendered with the host's tab.
+      rerender();
+      expect(activatePosts()).toEqual([]);
+      expect(panel.webview.html).toContain('data-tab="history" tabindex="0"');
+
+      // The new document's load-time report proves it is listening.
+      messageHandler({ type: "selectTab", tab: "history" });
+      expect(activatePosts()).toEqual(["history"]);
+      messageHandler({ type: "scrollPosition", scrollY: 0 });
+      expect(activatePosts()).toEqual(["history"]);
+    });
+
+    it("posts every held tab in call order, and the last one wins over the load report", async () => {
+      const { messageHandler, activatePosts, rerender } = await openPanel();
+      rerender();
+      dashboard.selectTab("pipeline");
+      dashboard.selectTab("analytics");
+      dashboard.selectTab("analytics");
+      expect(activatePosts()).toEqual([]);
+
+      // A document reporting an older tab must not revert the host's choice.
+      messageHandler({ type: "selectTab", tab: "overview" });
+      expect(activatePosts()).toEqual(["pipeline", "analytics"]);
+      expect(dashboard.getActiveTab()).toBe("analytics");
+    });
+
+    it("queues a reselected tab once, at its latest position", async () => {
+      const { messageHandler, activatePosts, rerender } = await openPanel();
+      rerender();
+      for (const tab of ["pipeline", "analytics", "pipeline", "analytics"])
+        dashboard.selectTab(tab);
+      messageHandler({ type: "selectTab", tab: "overview" });
+      expect(activatePosts()).toEqual(["pipeline", "analytics"]);
+    });
+
+    async function reopen() {
+      (dashboard as any).handlePanelClosed();
+      dashboard.show();
+      const vscodeModule = vi.mocked(await import("vscode"));
+      const panel = vi.mocked(vscodeModule.window.createWebviewPanel).mock.results[1]?.value;
+      const messageHandler = panel.webview.onDidReceiveMessage.mock.calls[0][0];
+      const activatePosts = () =>
+        panel.webview.postMessage.mock.calls
+          .map(([m]: [{ type: string; tab?: string }]) => m)
+          .filter((m: { type: string }) => m.type === "activateTab")
+          .map((m: { tab?: string }) => m.tab);
+      return { messageHandler, activatePosts };
+    }
+
+    it("holds posts in a reopened panel until its document loads", async () => {
+      const { messageHandler } = await openPanel();
+      messageHandler({ type: "selectTab", tab: "overview" }); // first panel loaded
+
+      const reopened = await reopen();
+      dashboard.selectTab("history");
+      expect(reopened.activatePosts()).toEqual([]);
+      reopened.messageHandler({ type: "selectTab", tab: "history" });
+      expect(reopened.activatePosts()).toEqual(["history"]);
+    });
+
+    it("drops posts held for a closed panel", async () => {
+      const { activatePosts, rerender } = await openPanel();
+      rerender();
+      dashboard.selectTab("pipeline"); // held: no document has loaded
+
+      const reopened = await reopen();
+      reopened.messageHandler({ type: "selectTab", tab: "overview" });
+      expect(reopened.activatePosts()).toEqual([]);
+      expect(activatePosts()).toEqual([]);
+    });
+  });
 });
 
 /**

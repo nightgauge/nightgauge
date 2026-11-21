@@ -6,9 +6,11 @@
  *
  * DashboardHtml.ts's tab script (getTabScript()) is the code under test:
  *
- *   var savedTab = (vscode.getState() && vscode.getState().activeTab) || 'overview';
- *   activateTab(savedTab);
- *   vscode.postMessage({ type: 'selectTab', tab: savedTab });
+ *   // The host-rendered active tab wins over webview state (#3025).
+ *   var initialTab = renderedActiveTab || (vscode.getState() && vscode.getState().activeTab)
+ *     || 'overview';
+ *   activateTab(initialTab);
+ *   vscode.postMessage({ type: 'selectTab', tab: initialTab });
  *   ...
  *   btn.addEventListener('click', function() {
  *     activateTab(tabId);

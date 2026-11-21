@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Fixed
 
+- The dashboard keeps a tab selected from the extension (demo steps, commands)
+  when a refresh lands at the same moment, instead of snapping back to the
+  previous tab (#3025).
+
 - A usage-limit rejection that exits normally now shows as quota exhausted with
   its reset time, not as the `permissions.allow` trust warning (#3465).
 
