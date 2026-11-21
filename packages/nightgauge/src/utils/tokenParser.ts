@@ -1244,11 +1244,11 @@ export function calculateRateLimitWait(resetsAt: number): number {
 /**
  * Check if the rate limit status indicates a hard limit (execution must pause).
  *
- * @param status - Rate limit status from CLI ("allowed_warning" or "limited")
- * @returns true if execution should pause and wait
+ * @param status - Rate limit status from CLI ("allowed_warning", "limited" or "rejected")
+ * @returns true for "limited" or "rejected" (the request was refused)
  */
 export function isHardRateLimit(status: string): boolean {
-  return status === "limited";
+  return status === "limited" || status === "rejected";
 }
 
 /**
@@ -1265,11 +1265,96 @@ export function isHardRateLimit(status: string): boolean {
  * `feature-validate` idled 15m during self-assessment after a healthy `allowed`
  * five_hour event and halted all autonomous dispatch for ~1h38m).
  *
- * @param status - Rate limit status from CLI ("allowed" | "allowed_warning" | "limited")
- * @returns true for "allowed_warning" or "limited"; false otherwise
+ * A `rejected` status (#3465) is the API refusing the request outright.
+ *
+ * @param status - Rate limit status ("allowed" | "allowed_warning" | "limited" | "rejected")
+ * @returns true for "allowed_warning", "limited" or "rejected"; false otherwise
  */
 export function isQuotaPressureSignal(status: string): boolean {
-  return status === "allowed_warning" || status === "limited";
+  return status === "allowed_warning" || status === "limited" || status === "rejected";
+}
+
+/** A quota rejection read from a stage's stream-json transcript (#3465). */
+export interface StreamQuotaRejection {
+  status: string;
+  rateLimitType: string;
+  /** Unix epoch seconds; undefined when the event carried none or an implausible one. */
+  resetsAt?: number;
+}
+
+/** The model the Claude CLI names on a reply it generated locally, not served by the API. */
+export const SYNTHETIC_ASSISTANT_MODEL = "<synthetic>";
+
+/** Marker prefix the Go classifier keys on for `rate_limit_quota_exhausted`. */
+export const QUOTA_EXHAUSTED_MARKER = "[rate-limit-quota-exhausted]";
+
+/** Longest a bucket reset may lie ahead and still be trusted (the seven-day window plus slack). */
+const MAX_RESET_AHEAD_SECONDS = 8 * 24 * 60 * 60;
+
+function plausibleResetsAt(v: unknown, nowSeconds: number): number | undefined {
+  if (typeof v !== "number" || !Number.isInteger(v)) return undefined;
+  return v > nowSeconds - 24 * 60 * 60 && v <= nowSeconds + MAX_RESET_AHEAD_SECONDS ? v : undefined;
+}
+
+/**
+ * Find an API quota rejection in a Claude CLI stream-json transcript (#3465).
+ *
+ * The CLI answers an exhausted bucket with a `rate_limit_event` whose status
+ * is a hard limit (`rejected` or `limited`), a synthetic zero-token assistant
+ * message, and exit code 0. Returns the last such event when no assistant
+ * message with a real model follows it — a request served after the event
+ * means the stage was not refused. Accepts the nested (`rate_limit_info` /
+ * `rateLimitInfo`) and flat event shapes, as `parseStreamJsonLine` does. The
+ * bucket name is restricted to `[a-z0-9_]` and `resetsAt` to a plausible
+ * window, since both are written into a marker the scheduler parses.
+ */
+export function detectStreamQuotaRejection(
+  stdoutText: string,
+  nowSeconds: number = Math.floor(Date.now() / 1000)
+): StreamQuotaRejection | undefined {
+  let found: StreamQuotaRejection | undefined;
+  for (const raw of stdoutText.split("\n")) {
+    const t = raw.trim();
+    if (!t.startsWith("{")) continue;
+    let ev: Record<string, unknown>;
+    try {
+      ev = JSON.parse(t);
+    } catch {
+      continue;
+    }
+    if (ev.type === "rate_limit_event") {
+      const info = (ev.rate_limit_info ?? ev.rateLimitInfo ?? ev) as Record<string, unknown>;
+      if (typeof info.status === "string" && isHardRateLimit(info.status)) {
+        const type = info.rateLimitType;
+        found = {
+          status: info.status,
+          rateLimitType:
+            typeof type === "string" && /^[a-z0-9_]{1,64}$/.test(type) ? type : "unknown",
+          resetsAt: plausibleResetsAt(info.resetsAt, nowSeconds),
+        };
+      }
+    } else if (ev.type === "assistant" && found) {
+      const model = (ev.message as { model?: unknown } | undefined)?.model;
+      if (typeof model === "string" && model !== SYNTHETIC_ASSISTANT_MODEL) found = undefined;
+    }
+  }
+  return found;
+}
+
+/**
+ * The `[rate-limit-quota-exhausted]` marker for a stream quota rejection.
+ * The first line names the cause; Go parses `resetsAt=<unix>` (#3465).
+ */
+export function formatQuotaRejectionMarker(r: StreamQuotaRejection): string {
+  const bucket = r.rateLimitType.replace(/_/g, "-");
+  const resumes =
+    r.resetsAt !== undefined
+      ? `; resumes at ${new Date(r.resetsAt * 1000).toISOString().replace(/\.\d{3}Z$/, "Z")}`
+      : "";
+  return (
+    `${QUOTA_EXHAUSTED_MARKER} ${bucket} usage limit reached${resumes} ` +
+    `(rate_limit_event status=${r.status}; ${r.rateLimitType} bucket; resetsAt=${r.resetsAt ?? "unknown"})`
+  );
 }
 
 /**

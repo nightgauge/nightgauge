@@ -95,6 +95,8 @@ import {
   isQuotaPressureSignal,
   isAnthropicSessionLimit,
   parseSessionLimitResetsAt,
+  detectStreamQuotaRejection,
+  formatQuotaRejectionMarker,
   type ParsedTokenUsage,
   type RateLimitEventData,
   type ToolCall,
@@ -2232,13 +2234,31 @@ export function apiRetryExhaustionMarker(stdoutText: string): string {
     : "";
 }
 
+const UNTRUSTED_PERMISSIONS_ALLOW_WARNING = /^\s*Ignoring \d+ permissions\.allow entries\b/i;
+
+/**
+ * Drop CLI stderr lines that never explain a failure — the "Ignoring N
+ * permissions.allow entries … not been trusted" warning (#3465) — so they are
+ * never reported as the stage's error.
+ *
+ * @internal Exported for testing only
+ */
+export function stripBenignStderr(stderrText: string): string {
+  return stderrText
+    .split("\n")
+    .filter((l) => !UNTRUSTED_PERMISSIONS_ALLOW_WARNING.test(l))
+    .join("\n")
+    .trim();
+}
+
 function inferBaseProcessError(
   stderrText: string,
   stdoutText: string,
   exitCode: number | null
 ): Error | undefined {
-  if (stderrText.length > 0) {
-    return new Error(stderrText.split("\n").slice(-3).join("\n"));
+  const stderrSignal = stripBenignStderr(stderrText);
+  if (stderrSignal.length > 0) {
+    return new Error(stderrSignal.split("\n").slice(-3).join("\n"));
   }
 
   if (stdoutText.length > 0) {
@@ -8477,9 +8497,14 @@ function runStageSkillHeadlessImpl(
     }
 
     // A CLI that traps the kill and exits 0 is still a stopped stage (#2723).
-    const success = exitCode === 0 && !pluginGate?.stopped;
     const stderrText = stderrBuffer.trim();
     const stdoutText = appendTail(stdoutRawTail, stdoutBuffer, OUTPUT_ERROR_TAIL_MAX_CHARS).trim();
+    // An API quota rejection exits 0 with a synthetic reply; it is a failed
+    // stage carrying the quota marker, never a success (#3465).
+    // Claude-only: other adapters may print agent text as raw lines.
+    const quotaRejection =
+      adapter === "claude" ? detectStreamQuotaRejection(stdoutText) : undefined;
+    const success = exitCode === 0 && !pluginGate?.stopped && !quotaRejection;
 
     // Safety-net fallback (Issue #2919): if the streaming line parser missed the
     // stage's terminal usage envelope (`type:"result"` from the Claude CLI, or
@@ -8508,7 +8533,9 @@ function runStageSkillHeadlessImpl(
       }
     }
 
-    const inferredError = inferProcessError(success, stderrText, stdoutText, exitCode);
+    const inferredError = quotaRejection
+      ? new Error(formatQuotaRejectionMarker(quotaRejection))
+      : inferProcessError(success, stderrText, stdoutText, exitCode);
 
     // Cleanup GEMINI.md after stage completion (Issue #1055)
     if (adapter === "gemini" || adapter === "gemini-sdk") {
@@ -8524,7 +8551,13 @@ function runStageSkillHeadlessImpl(
     let retryAfterMs: number | undefined;
     if (!success) {
       // If a rate_limit_event was detected during execution, use that directly
-      if (lastRateLimitEvent && isHardRateLimit(lastRateLimitEvent.status)) {
+      if (quotaRejection) {
+        errorCategory = "rate_limit";
+        retryAfterMs =
+          quotaRejection.resetsAt !== undefined
+            ? calculateRateLimitWait(quotaRejection.resetsAt)
+            : undefined;
+      } else if (lastRateLimitEvent && isHardRateLimit(lastRateLimitEvent.status)) {
         errorCategory = "rate_limit";
         retryAfterMs = calculateRateLimitWait(lastRateLimitEvent.resetsAt);
       } else {
