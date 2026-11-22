@@ -21,13 +21,16 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/nightgauge/nightgauge/internal/trust"
 	"log"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/deliverable"
@@ -460,30 +463,198 @@ func (as *AutonomousScheduler) raiseBlockedByDeferral(repo string, issue int, ti
 
 // --- Producer (unnumbered): not pipeline-actionable (per-issue) -------------
 
+// The platform mirror drops a card whose body or blocker exceeds these.
+const (
+	attentionBodyMaxBytes    = 8000
+	attentionBlockerMaxBytes = 4000
+	// noOpReasonMaxBytes leaves the body to the criteria.
+	noOpReasonMaxBytes = 1000
+)
+
+// noOpJudgeTimeout bounds the merged-diff read behind one card; the judge
+// bounds each of its per-criterion greps itself.
+const noOpJudgeTimeout = 30 * time.Second
+
+// unmetDetailSeparator is where decidePartialNoOp appends its capped list of
+// unmet criteria to a booking detail.
+const unmetDetailSeparator = "; unmet on the merged diff: "
+
+// closeRemainderLabel is the close option's button text (#3487).
+const closeRemainderLabel = "The remaining criteria are met; close the issue as completed"
+
 // raiseNotPipelineActionable surfaces a run that ended not_pipeline_actionable
 // (#3354): an empty plan, a publication-boundary verdict, or a pr-create on a
 // branch level with its base. The issue is parked in Backlog with no retry, so
 // without this card the verdict and the planner's approach are invisible.
+//
+// When that run was a partial-delivery re-run (isPartialRerunStop and a
+// readable remainder), the card also lists every open criterion with the
+// judge's evidence and offers the close a human otherwise does by hand
+// (#3487). Every other raise is the ack-only card. The partial card reads git,
+// so it runs off as.mu (dispatchAttention).
 func (as *AutonomousScheduler) raiseNotPipelineActionable(repo string, issue int, title, detail string) {
-	as.raiseAttention(attention.DecisionRequest{
-		IdempotencyKey: fmt.Sprintf("not-pipeline-actionable:%s#%d", repo, issue),
+	req := attention.DecisionRequest{
+		IdempotencyKey: fmt.Sprintf("%s:%s#%d", attention.ProducerNotPipelineActionable, repo, issue),
 		Kind:           attention.KindHandoff,
 		Severity:       attention.SeverityBlockingRun,
 		Title:          fmt.Sprintf("Not pipeline-actionable: %s (#%d)", title, issue),
-		// No requeue option: the park is Backlog plus the owner-action label, and
-		// queue.add lifts neither, so the way back in is the board itself.
+		// detail already says what was found (an empty plan's approach, a
+		// publication-boundary verdict); the body adds only the way back in.
 		Body: fmt.Sprintf("%s\n\nThe issue is parked in Backlog and will not be retried. "+
 			"Revise the issue or its plan so there is something to build, remove any "+
 			"`owner-action` label, and move it to Ready.", detail),
-		Producer: "not-pipeline-actionable",
+		Producer: attention.ProducerNotPipelineActionable,
 		Context:  attention.Context{Repo: repo, Issue: issue, Blocker: detail},
 		Options: []attention.Option{
 			noopOption("ack", "Acknowledge"),
 		},
+		// Never close: expiry is not a human saying the criteria are met.
 		DefaultAction: "ack",
 		ExpiresAt:     expiryFromNow(14 * 24 * time.Hour),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Optional note: what will change so a later run has work to do"},
-	})
+	}
+	if isPartialRerunStop(issue, detail) {
+		if r, ok := as.openPartialRemainder(repo, issue); ok {
+			req.Body = partialNoOpCardBody(detail, r.pr, r.open)
+			// The detail's unmet list quotes raw evidence, which can name the
+			// run's worktree and so the OS account; the body lists it redacted.
+			reason, _, _ := strings.Cut(detail, unmetDetailSeparator)
+			req.Context.Blocker = clipBytes(reason, attentionBlockerMaxBytes)
+			req.Context.PR = r.pr
+			req.Options = append(req.Options, attention.Option{
+				ID: "close", Label: closeRemainderLabel, Verb: attention.VerbIssueCloseRemainder,
+				Args: map[string]any{"pr": r.pr, "criteria": r.open, "criteria_fingerprint": r.fingerprint},
+			})
+		}
+	}
+	as.raiseAttention(req)
+}
+
+// isPartialRerunStop reports whether a booked detail is one a partial-delivery
+// re-run of issue ends with: a feature-dev no-op, dispute or failed close, or
+// one of the three no-diff stops before a pull request, which any run can end
+// with and which therefore count only beside a partial-delivery record
+// (openPartialRemainder). Only the detail's first marker is read, so another
+// ending that quotes one of these is not taken for it. #3487's second step
+// replaces this with the booking's structured kind.
+func isPartialRerunStop(issue int, detail string) bool {
+	const marker = "[not-pipeline-actionable] "
+	_, booked, found := strings.Cut(detail, marker)
+	if !found {
+		return false
+	}
+	for _, prefix := range []string{
+		// The trailing space keeps #34 from matching #348.
+		fmt.Sprintf("feature-dev: partial-delivery re-run of #%d ", issue),
+		"feature-validate left branch ",
+		"pr-create: branch ",
+		"pr-create: the feature branch has no diff",
+	} {
+		if strings.HasPrefix(booked, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// partialRemainder is what a close option is offered over.
+type partialRemainder struct {
+	pr          int
+	fingerprint string
+	open        []attention.RemainderCriterion
+}
+
+// openPartialRemainder re-judges the remainder the issue's partial re-run was
+// scoped to. The record is removed at the start of every unscoped run, so its
+// presence is what identifies a partial re-run. Its fingerprint is of the body
+// its criteria were reconciled from; without one a close could cover a
+// criterion the card never listed, so none is offered. When every criterion is met
+// (the automatic close failed, or the run disputed its plan) all are returned:
+// the issue is still open on each of them.
+func (as *AutonomousScheduler) openPartialRemainder(repo string, issue int) (partialRemainder, bool) {
+	none := func(err error) (partialRemainder, bool) {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("autonomous: %s#%d: no-op card without its close option: %v [#3487]", repo, issue, err)
+		}
+		return partialRemainder{}, false
+	}
+	root, err := as.blockedFindingRoot(repo)
+	if err != nil || root == "" {
+		return none(err)
+	}
+	rec, err := ReadPartialDeliveryContext(root, issue)
+	if err != nil || rec.PR <= 0 || len(rec.Criteria) == 0 {
+		return none(err)
+	}
+	if rec.CriteriaFingerprint == "" {
+		return none(errors.New("its remainder was not reconciled with the issue body and the partial PR"))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), noOpJudgeTimeout)
+	defer cancel()
+	v := JudgeRemainder(ctx, root, rec.MergeSHA, rec.Criteria)
+	shown := v.Unmet()
+	if len(shown) == 0 {
+		shown = v.Criteria
+	}
+	open := make([]attention.RemainderCriterion, 0, len(shown))
+	for _, c := range shown {
+		open = append(open, attention.RemainderCriterion{Text: c.Text, Evidence: cardEvidence(root, c.Evidence)})
+	}
+	return partialRemainder{pr: rec.PR, fingerprint: rec.CriteriaFingerprint, open: open}, true
+}
+
+// cardEvidence keeps the checkout's path out of an evidence line: the card is
+// mirrored and a close publishes the line, and the path names the OS account.
+// An unreadable merged diff keeps only the judge's reason, whose cause is a
+// local git error.
+func cardEvidence(root, evidence string) string {
+	if unreadable := "undecidable: " + mergedDiffUnreadable; strings.HasPrefix(evidence, unreadable) {
+		return unreadable
+	}
+	return strings.ReplaceAll(evidence, root, "the checkout")
+}
+
+// partialNoOpCardBody lists every open criterion. When they do not fit the
+// mirror's body limit each line is shortened, never dropped; the option's args
+// keep the full text. The detail's own capped list is left out as a duplicate.
+func partialNoOpCardBody(detail string, pr int, open []attention.RemainderCriterion) string {
+	reason, _, _ := strings.Cut(detail, unmetDetailSeparator)
+	head := fmt.Sprintf("%s\n\nOpen criteria after PR #%d, with the judge's evidence:\n",
+		clipBytes(reason, noOpReasonMaxBytes), pr)
+	tail := "\nIf they are met, choose close to close the issue as completed. Otherwise revise the issue, " +
+		"remove any `owner-action` label, and move it to Ready. It will not be retried until then."
+	perLine := (attentionBodyMaxBytes - len(head) - len(tail)) / max(1, len(open))
+	var b strings.Builder
+	for _, c := range open {
+		text, evidence := pmstages.CommentSafeACText(c.Text), pmstages.CommentSafeACText(c.Evidence)
+		const bullet, sep, end = "- ", " — ", "\n"
+		room := perLine - len(bullet) - len(sep) - len(end)
+		if len(text)+len(evidence) > room {
+			// The shorter half keeps what it needs; the longer takes the rest.
+			textRoom := max(room/2, room-len(evidence))
+			text = clipBytes(text, textRoom)
+			evidence = clipBytes(evidence, room-len(text))
+		}
+		b.WriteString(bullet + text + sep + evidence + end)
+	}
+	// So many criteria that their bullets alone overflow: the args still hold each.
+	return head + clipBytes(b.String(), attentionBodyMaxBytes-len(head)-len(tail)) + tail
+}
+
+// clipBytes shortens s to at most n bytes on a rune boundary, marking the cut.
+func clipBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	const cut = "…"
+	end := n - len(cut)
+	if end <= 0 {
+		return ""
+	}
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end] + cut
 }
 
 // --- Producer (unnumbered): architecture-approval gate (per-issue) -----------

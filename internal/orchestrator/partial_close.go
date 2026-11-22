@@ -33,6 +33,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/acparse"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -55,6 +56,10 @@ var (
 
 // fullCommitSHARE is a full commit id (SHA-1 or SHA-256).
 var fullCommitSHARE = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+
+// mergedDiffUnreadable is the judge's reason for a merged diff git could not
+// read; what follows it in the evidence is a local error.
+const mergedDiffUnreadable = "the merged diff could not be read"
 
 // CriterionVerdict is one remaining criterion's answer on the merged diff.
 type CriterionVerdict struct {
@@ -103,7 +108,7 @@ func JudgeRemainder(ctx context.Context, ws, mergeSHA string, criteria []string)
 	}
 	d, err := pmstages.CollectACDiffRange(ctx, ws, mergeSHA+"^1", mergeSHA)
 	if err != nil {
-		return undecidable(fmt.Sprintf("the merged diff could not be read: %v", err))
+		return undecidable(fmt.Sprintf("%s: %v", mergedDiffUnreadable, err))
 	}
 	all := true
 	for _, c := range criteria {
@@ -123,10 +128,14 @@ type PartialCloseIssues interface {
 	CloseIssue(ctx context.Context, issueID string) error
 }
 
-// PartialCloseDeps are what CloseMetRemainder writes with. Board and
-// ProjectNumber are optional: without them the board is left to the run's
-// issue_closed booking, which moves it to Done.
+// PartialCloseDeps are what CloseMetRemainder and CloseRemainderByOperator
+// write with. Board and ProjectNumber are optional: without them a run's close
+// leaves the board to its issue_closed booking, and an operator's close leaves
+// it unsynced.
 type PartialCloseDeps struct {
+	// Comments, when set, lets a retried operator close skip the comment it
+	// already posted (#3487).
+	Comments      PartialCloseComments
 	Issues        PartialCloseIssues
 	Board         hooks.BoardSyncer
 	Owner, Repo   string
@@ -134,12 +143,18 @@ type PartialCloseDeps struct {
 }
 
 // PartialCloseTarget names the issue a close acts on: its number, node id and
-// current body (whose boxes are ticked), and the partial PR.
+// current body (whose boxes are ticked) and state, and the partial PR.
 type PartialCloseTarget struct {
 	Number int
 	NodeID string
 	Body   string
+	State  string
 	PR     int
+}
+
+// PartialCloseComments lists an issue's comments; *gh.TrustForge satisfies it.
+type PartialCloseComments interface {
+	IssueComments(ctx context.Context, owner, repo string, number int) ([]trust.Comment, error)
 }
 
 // PartialCloseIssueReader reads the issue a close acts on;
@@ -148,7 +163,7 @@ type PartialCloseIssueReader interface {
 	GetIssueWithRelations(ctx context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error)
 }
 
-// ReadPartialCloseTarget reads owner/repo#number's node id and current body
+// ReadPartialCloseTarget reads owner/repo#number's node id, state and current body
 // for a close of the remainder partial PR pr left. The scheduler and
 // `nightgauge issue partial-noop --apply-close` both read through it.
 func ReadPartialCloseTarget(ctx context.Context, r PartialCloseIssueReader, owner, repo string, number, pr int) (PartialCloseTarget, error) {
@@ -159,7 +174,7 @@ func ReadPartialCloseTarget(ctx context.Context, r PartialCloseIssueReader, owne
 	if iss == nil || iss.NodeID == "" {
 		return PartialCloseTarget{}, ErrNoIssueToClose
 	}
-	return PartialCloseTarget{Number: number, NodeID: iss.NodeID, Body: iss.Body, PR: pr}, nil
+	return PartialCloseTarget{Number: number, NodeID: iss.NodeID, Body: iss.Body, State: iss.State, PR: pr}, nil
 }
 
 // PartialCloseResult reports what a close did.

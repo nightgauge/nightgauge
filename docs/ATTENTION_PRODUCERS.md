@@ -751,6 +751,43 @@ loop reached, so its observed set is complete.
   card's `Context`. The daemon finds the dependency's latest merged closing PR
   and runs the post-merge path a merged run runs. If that path leaves no marker
   (main still red, say), the verb fails and the card stays.
+- **`not-pipeline-actionable`.** A run parked `not_pipeline_actionable`, keyed
+  `not-pipeline-actionable:<owner/repo>#<N>`. Its default is `ack`, a no-op,
+  and an issue with a blocked finding gets that finding's card instead. A
+  partial-delivery re-run's stop gets more (#3487) when all three hold:
+  - the booked detail opens, at its first marker, as one of that re-run's
+    endings (a feature-dev no-op, dispute or failed close, or a no-diff stop
+    before a pull request);
+  - `partial-delivery-{N}.json` names a pull request and at least one criterion;
+  - that record carries a `criteria_fingerprint`, which it has only when its
+    criteria were reconciled from a body with criteria and the partial PR,
+    both read.
+
+  The producer then re-judges the remainder, lists each open criterion with the
+  judge's evidence (shortened to the mirror's 8000-byte body limit; the option's
+  arguments keep the full text) and adds **close**, bound to
+  `issue.closeRemainder`. An evidence line never carries the checkout's path.
+  Any other ending, and any missing or unreadable file, gives the ack-only
+  card. A later raise without a remainder withdraws an earlier close.
+
+  The repository and the issue come from the card's `Context`; the only
+  arguments are `pr`, `criteria` and `criteria_fingerprint`. Nothing retracts
+  the card when a later run starts, so resolving **close** on an open issue is
+  refused, with the card left open, in two cases:
+  - the issue's criteria no longer match the fingerprint (one added, removed or
+    reworded; a tick does not count);
+  - the current `partial-delivery-{N}.json` no longer names that pull request
+    and those criteria.
+
+  Otherwise the daemon comments, closes the issue as completed, moves it to
+  Done on that repository's board and clears the issue's operator hold. The
+  comment lists the criteria as plain text and names the forge login the close
+  is written as, or "An operator" when that is a GitHub App or unknown; the
+  resolve actor stays in the attention journal. An issue already closed gets no
+  comment or close, only the board move and the released hold. A failed comment or close leaves the card and the
+  hold, and a retry does not repeat an identical comment; a failed board move is
+  logged.
+
 - **`dependency-cycle`.** A cycle of open native `blockedBy` edges, detected by
   `detectDependencyCycles` (Tarjan's strongly connected components). Standing,
   keyed by the cycle's sorted issues, with a fingerprint over its edges. It

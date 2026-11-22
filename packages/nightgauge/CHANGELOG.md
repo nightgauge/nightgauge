@@ -9,6 +9,12 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- The Action Center describes the **close** option on a partial-delivery no-op
+  card: it closes the issue as completed, comments with the criteria that were
+  open and moves it to Done (#3487).
+
 ## [0.8.7] - 2026-11-22
 
 ### Added

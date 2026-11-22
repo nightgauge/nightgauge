@@ -21,6 +21,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention/sweep"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/platform"
@@ -466,6 +467,18 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		// surface starts the hook outside it (acceptQueuedVerb, #3353).
 		return attention.ExecuteRerunPostMerge(ctx, s.postMergeRerunner(), req, opt, s.configuredRepos())
 
+	case attention.VerbIssueCloseRemainder:
+		if err := attention.ExecuteCloseRemainder(ctx, remainderCloser{server: s}, req, opt,
+			s.configuredRepos()); err != nil {
+			return err
+		}
+		// The no-op left an operator hold on the issue; this is the decision it
+		// waited for. Lock order store → as.mu, as in the arms above (#2528).
+		if s.autonomousScheduler != nil {
+			s.autonomousScheduler.ClearIssueFailures(key)
+		}
+		return nil
+
 	case attention.VerbPRUpdateBranch:
 		// The workspace root's configured set, the same one workspace.addRepo
 		// and blocked.clearFinding are checked against — the repository this
@@ -882,6 +895,115 @@ func (c blockedFindingClearer) ClearBlockedFinding(_ context.Context, repo strin
 		return fmt.Errorf("attention: clear blocked finding for %s#%d: %w", repo, issue, err)
 	}
 	return nil
+}
+
+// remainderCloser backs attention.VerbIssueCloseRemainder (#3487). It holds
+// only the server: the target arrives from the card through
+// ExecuteCloseRemainder.
+type remainderCloser struct{ server *Server }
+
+// CloseRemainder records the decision on the forge.
+func (c remainderCloser) CloseRemainder(ctx context.Context, repo string, issue, pr int, fingerprint string, criteria []attention.RemainderCriterion) error {
+	owner, name := splitOwnerRepo(repo)
+	if owner == "" || name == "" {
+		return fmt.Errorf("%s: target %q is not owner/name", attention.VerbIssueCloseRemainder, repo)
+	}
+	forgeFor := c.server.remainderCloseDeps
+	if c.server.remainderCloseDepsOverride != nil {
+		forgeFor = c.server.remainderCloseDepsOverride
+	}
+	f, err := forgeFor(ctx, owner, name)
+	if err != nil {
+		return err
+	}
+	target, err := orchestrator.ReadPartialCloseTarget(ctx, f.reader, owner, name, issue, pr)
+	if err != nil {
+		return err
+	}
+	return orchestrator.CloseRemainderByOperator(ctx, f.deps, target, orchestrator.RemainderDecision{
+		StateRoot:   c.server.repoRoot(repo),
+		Fingerprint: fingerprint,
+		Login:       f.login,
+		Criteria:    criteria,
+	})
+}
+
+// remainderCloseForge is what one close reads and writes with. login is the
+// forge user the close is written as, "" when that is not a person.
+type remainderCloseForge struct {
+	deps   orchestrator.PartialCloseDeps
+	reader orchestrator.PartialCloseIssueReader
+	login  string
+}
+
+// remainderCloseDeps builds that for owner/name: its client, and its own board
+// rather than the scheduler's startup project, which is another repository's
+// in a multi-repo workspace. An unresolved board is logged and left out; the
+// close still runs.
+func (s *Server) remainderCloseDeps(ctx context.Context, owner, name string) (remainderCloseForge, error) {
+	client, err := s.resolveClientForRequest(ctx, "", owner, name)
+	if err != nil {
+		// The cause names local paths, and the card's resolver, who may be
+		// remote, is shown this error.
+		log.Printf("attention: %s: no client for %s/%s: %v", attention.VerbIssueCloseRemainder, owner, name, err)
+		return remainderCloseForge{}, fmt.Errorf("could not set up a GitHub client for %s/%s; the daemon log has the cause", owner, name)
+	}
+	if client == nil {
+		return remainderCloseForge{}, fmt.Errorf("no GitHub client for %s/%s", owner, name)
+	}
+	svc := gh.NewIssueService(client)
+	f := remainderCloseForge{
+		deps:   orchestrator.PartialCloseDeps{Issues: svc, Comments: gh.NewTrustForge(client), Owner: owner, Repo: name},
+		reader: svc,
+		login:  closingLogin(ctx, client),
+	}
+	root := s.repoRoot(owner + "/" + name)
+	project, err := resolveProjectFor(root, owner, name)
+	switch {
+	case err != nil:
+		log.Printf("attention: %s: could not resolve the board of %s/%s, its status is not synced: %v",
+			attention.VerbIssueCloseRemainder, owner, name, err)
+	case project <= 0:
+		log.Printf("attention: %s: no board resolves for %s/%s, its status is not synced",
+			attention.VerbIssueCloseRemainder, owner, name)
+	default:
+		ownerType := ""
+		if cfg, err := config.Load(root); err == nil && cfg != nil {
+			ownerType = cfg.OwnerType
+		}
+		f.deps.ProjectNumber = project
+		f.deps.Board = s.boardServicesFor(client, owner, project, gh.ParseOwnerType(ownerType)).Project
+	}
+	return f, nil
+}
+
+// closingLoginTimeout leaves the rest of the verb's deadline to the close.
+const closingLoginTimeout = 5 * time.Second
+
+// forgeIdentity is the part of *gh.Client closingLogin reads.
+type forgeIdentity interface {
+	App() *gh.AppCredentials
+	Whoami(ctx context.Context) (*forgetypes.Actor, error)
+}
+
+// closingLogin is the login a close is written as. A GitHub App is not who
+// decided, so it has none; neither has a login that could not be read.
+func closingLogin(ctx context.Context, id forgeIdentity) string {
+	if id.App() != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, closingLoginTimeout)
+	defer cancel()
+	who, err := id.Whoami(ctx)
+	if err != nil {
+		log.Printf("attention: %s: could not read the closing login, the comment says an operator: %v",
+			attention.VerbIssueCloseRemainder, err)
+		return ""
+	}
+	if who == nil {
+		return ""
+	}
+	return who.Login
 }
 
 // prBranchUpdater backs attention.VerbPRUpdateBranch with the forge's

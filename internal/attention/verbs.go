@@ -1,7 +1,9 @@
 package attention
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -143,6 +145,18 @@ const (
 	// See ExecuteRerunPostMerge, the verb's only executor.
 	VerbIssueRerunPostMerge Verb = "issue.rerunPostMerge"
 
+	// VerbIssueCloseRemainder records a human's decision that the criteria a
+	// partial-delivery re-run left open are met, and closes ONE issue as
+	// completed (#3487): a comment naming who closed and those criteria, the
+	// close, and the board move to Done. issue.close does none but the close
+	// and has no configured-repo check, so it cannot back this option.
+	//
+	// The repository and the issue come from the persisted request's Context.
+	// The only arguments are `pr`, `criteria` and `criteria_fingerprint`, which
+	// the producer declared: they fill in the comment and can only make the
+	// close refuse. See ExecuteCloseRemainder, the verb's only executor.
+	VerbIssueCloseRemainder Verb = "issue.closeRemainder"
+
 	// VerbPRUpdateBranch merges the base branch into ONE pull request that is
 	// green but behind its base, so the merge the pipeline already finished can
 	// actually land (#1575).
@@ -218,6 +232,7 @@ var registry = map[Verb]struct{}{
 	VerbWorkspaceAddRepo:             {},
 	VerbBlockedFindingClear:          {},
 	VerbIssueRerunPostMerge:          {},
+	VerbIssueCloseRemainder:          {},
 	VerbPRUpdateBranch:               {},
 	VerbDoctorApplyRemedy:            {},
 	VerbDoctorRecheck:                {},
@@ -324,6 +339,22 @@ func (e *VerbExecutionError) Error() string {
 
 // Unwrap supports errors.Is/errors.As against the wrapped cause.
 func (e *VerbExecutionError) Unwrap() error { return e.Err }
+
+// resolverKey is the context key of the actor behind a resolution.
+type resolverKey struct{}
+
+// WithResolver carries the validated actor of a resolution to its verb. The
+// request cannot: Lifecycle.Resolved is written only after the verb returns.
+func WithResolver(ctx context.Context, actor string) context.Context {
+	return context.WithValue(ctx, resolverKey{}, actor)
+}
+
+// ResolverFrom returns the actor WithResolver put on ctx, or "" when the verb
+// was not run by a resolution (an expiry's default action).
+func ResolverFrom(ctx context.Context) string {
+	actor, _ := ctx.Value(resolverKey{}).(string)
+	return actor
+}
 
 // NoopExecutor records resolutions without side effects. Used by read-only
 // surfaces and tests; every verb is a no-op (still registry-validated upstream).
@@ -647,6 +678,88 @@ func ExecuteRerunPostMerge(ctx context.Context, runner PostMergeRerunner, req *D
 		return &VerbCauseError{Cause: err.Error()}
 	}
 	return &VerbQueuedError{Repo: repo, Issue: req.Context.Issue, PR: pr}
+}
+
+// --- issue.closeRemainder (#3487) -------------------------------------------
+
+// ProducerNotPipelineActionable is the producer of the card that may offer
+// issue.closeRemainder.
+const ProducerNotPipelineActionable = "not-pipeline-actionable"
+
+// RemainderCriterion is one open criterion and the judge's evidence line, as
+// the close option's args carry it.
+type RemainderCriterion struct {
+	Text     string `json:"text"`
+	Evidence string `json:"evidence"`
+}
+
+// RemainderCloser is the single capability issue.closeRemainder needs. An
+// issue already closed is success. It is not given the resolver: that actor is
+// an OS account, an email or a surface label, and the close is public.
+type RemainderCloser interface {
+	CloseRemainder(ctx context.Context, repo string, issue, pr int, fingerprint string, criteria []RemainderCriterion) error
+}
+
+// ExecuteCloseRemainder is the ONLY implementation of issue.closeRemainder.
+// It refuses another verb, another producer's card, a target the card does
+// not name or configuration does not cover, any undeclared or missing
+// argument, a resolution with no resolver (an expiry is nobody's decision),
+// and a surface without the capability.
+func ExecuteCloseRemainder(ctx context.Context, closer RemainderCloser, req *DecisionRequest, opt Option, configuredRepos []string) error {
+	if req == nil {
+		return fmt.Errorf("attention: %s requires the persisted request", VerbIssueCloseRemainder)
+	}
+	if opt.Verb != VerbIssueCloseRemainder {
+		return fmt.Errorf("attention: %s executor invoked for verb %q", VerbIssueCloseRemainder, opt.Verb)
+	}
+	if req.Producer != ProducerNotPipelineActionable {
+		return fmt.Errorf("attention: %s is not offered by producer %q", VerbIssueCloseRemainder, req.Producer)
+	}
+	repo := strings.TrimSpace(req.Context.Repo)
+	if repo == "" {
+		return fmt.Errorf("attention: %s: request %s names no repository", VerbIssueCloseRemainder, req.ID)
+	}
+	if req.Context.Issue <= 0 {
+		return fmt.Errorf("attention: %s: request %s names no issue", VerbIssueCloseRemainder, req.ID)
+	}
+	if !RepoInConfiguredSet(configuredRepos, repo) {
+		return fmt.Errorf("%w: %q", ErrVerbTargetNotConfigured, repo)
+	}
+	var args struct {
+		PR          int                  `json:"pr"`
+		Criteria    []RemainderCriterion `json:"criteria"`
+		Fingerprint string               `json:"criteria_fingerprint"`
+	}
+	// Args hold Go values before the store round-trips them and decoded JSON
+	// after, so both are read through JSON.
+	raw, err := json.Marshal(opt.Args)
+	if err != nil {
+		return fmt.Errorf("attention: %s args: %w", VerbIssueCloseRemainder, err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&args); err != nil {
+		return fmt.Errorf("attention: %s accepts only pr, criteria and criteria_fingerprint: %w", VerbIssueCloseRemainder, err)
+	}
+	if args.PR <= 0 {
+		return fmt.Errorf("attention: %s: request %s names no partial pull request", VerbIssueCloseRemainder, req.ID)
+	}
+	if args.Fingerprint == "" {
+		return fmt.Errorf("attention: %s: request %s has no criteria fingerprint", VerbIssueCloseRemainder, req.ID)
+	}
+	if len(args.Criteria) == 0 {
+		return fmt.Errorf("attention: %s: request %s lists no open criteria", VerbIssueCloseRemainder, req.ID)
+	}
+	if ResolverFrom(ctx) == "" {
+		return fmt.Errorf("attention: %s needs the person who decided", VerbIssueCloseRemainder)
+	}
+	if closer == nil {
+		return fmt.Errorf("attention: %s is not available on this surface", VerbIssueCloseRemainder)
+	}
+	if err := closer.CloseRemainder(ctx, repo, req.Context.Issue, args.PR, args.Fingerprint, args.Criteria); err != nil {
+		return &VerbCauseError{Cause: err.Error()}
+	}
+	return nil
 }
 
 // --- pr.updateBranch (#1575) ------------------------------------------------

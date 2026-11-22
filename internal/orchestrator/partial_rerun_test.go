@@ -745,6 +745,49 @@ func TestReconcilePartialRecord_MergeSHA(t *testing.T) {
 	}
 }
 
+// (#3487) A close is offered over the record's fingerprint, so the record has
+// one only when its criteria were reconciled from that very body.
+func TestReconcilePartialRecord_CriteriaFingerprint(t *testing.T) {
+	t.Parallel()
+	listed, added := "Listed behaviour is handled", "Added behaviour is handled"
+	body := "## Acceptance criteria\n\n- [ ] " + listed + "\n- [ ] " + added + "\n"
+	down := errors.New("forge down")
+	for _, tc := range []struct {
+		name, body string
+		bodyErr    error
+		prErr      error
+		want       string
+	}{
+		{name: "reconciled", body: body, want: preflight.ACFingerprint(body)},
+		{name: "criterion in the body, absent from the scope", body: body, prErr: down},
+		{name: "body unreadable", body: body, bodyErr: down},
+		{name: "body without criteria", body: "prose"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			bodyReads := 0
+			edited := partialMerged.Add(time.Hour)
+			reads := PartialScopeReads{
+				Body: func(context.Context) (string, error) { bodyReads++; return tc.body, tc.bodyErr },
+				PR: func(context.Context, int) (gh.PartialPR, error) {
+					return gh.PartialPR{CreatedAt: partialOpened, MergedAt: partialMerged}, tc.prErr
+				},
+				BodyEditedAt: editedAt(edited),
+			}
+			rec := ReconcilePartialRecord(context.Background(), reads, gitWorkspace(t), 3487, []string{listed}, 7, nil)
+			if rec.CriteriaFingerprint != tc.want || bodyReads != 1 {
+				t.Fatalf("fingerprint %q after %d body read(s), want %q from one", rec.CriteriaFingerprint, bodyReads, tc.want)
+			}
+			if tc.want != "" && strings.Join(rec.Criteria, "|") != listed+"|"+added {
+				t.Fatalf("scope %q does not cover the fingerprinted body", rec.Criteria)
+			}
+			if tc.prErr != nil && strings.Join(rec.Criteria, "|") != listed {
+				t.Fatalf("scope %q, want the added criterion absent", rec.Criteria)
+			}
+		})
+	}
+}
+
 func gitInitForPartialRecord(t *testing.T, dir string) {
 	t.Helper()
 	gittest.Run(t, dir, "init", "-q")

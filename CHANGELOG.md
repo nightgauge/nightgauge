@@ -14,6 +14,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- The Action Center card for a partial-delivery re-run that found nothing left to build can now close the issue. It lists each open criterion with the judge's evidence and offers **close** beside **ack**: resolving with close comments with the criteria that were open and the forge login that closed (or "An operator"), closes the issue as completed, moves it to Done on its board and releases its hold. A close is refused, and the card stays open, when the issue's criteria or the recorded remainder changed after the card was raised. An issue already closed resolves without error. How such a run is reported is unchanged (#3487).
+
 ## [0.8.7] - 2026-11-22
 
 ### Added

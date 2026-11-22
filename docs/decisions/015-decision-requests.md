@@ -197,6 +197,8 @@ already trust.
 | `autonomous.clearIssueFailures` | IPC `autonomous.clearIssueFailures`                                      | IPC                |
 | `project.syncStatus`            | `project sync-status` / IPC `project.syncStatus` / `board.updateStatus`  | CLI, IPC, internal |
 | `issue.close`                   | IPC `issue.close`                                                        | IPC                |
+| `issue.closeRemainder`          | daemon `CloseRemainderByOperator` (#3487)                                | IPC                |
+| `issue.rerunPostMerge`          | daemon `ResolveRerunTarget`, then the post-merge hook (#3081)            | IPC                |
 
 ¹ `issue.removeBlockedBy` exists as a CLI verb and internal method but has **no
 IPC method today**; E1 adds the thin IPC wrapper (it is a pure re-export of the

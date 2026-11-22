@@ -222,6 +222,8 @@ export function describeAttentionOption(
     }
     case "issue.close":
       return "Closes the issue.";
+    case "issue.closeRemainder":
+      return "Closes the issue as completed, comments with the criteria that were open, and moves it to Done.";
     case "project.syncStatus": {
       const status = str("status") ?? "a new status";
       return `Moves the board status to "${status}".`;

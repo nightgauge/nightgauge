@@ -59,6 +59,12 @@ type PartialDeliveryFile struct {
 	// scope time. A zero-change re-run judges the remainder against it and
 	// its first parent (#3423); empty means the remainder cannot be judged.
 	MergeSHA string `json:"merge_sha,omitempty"`
+	// CriteriaFingerprint is preflight.ACFingerprint of the body Criteria was
+	// reconciled from. It is empty unless that reconcile completed (a body
+	// with criteria and the partial PR, both read): only then do Criteria
+	// cover every criterion the fingerprint does, and only then may a close
+	// be offered over them (#3487).
+	CriteriaFingerprint string `json:"criteria_fingerprint,omitempty"`
 }
 
 // readPartialDelivery reads repo#issue's pending partial-delivery remainder
@@ -227,7 +233,8 @@ func ReconcilePartialScope(ctx context.Context, reads PartialScopeReads, ws stri
 }
 
 // ReconcilePartialRecord is ReconcilePartialScope plus the partial PR's merge
-// commit, as the partial-delivery-{N}.json record both the scheduler and
+// commit and the reconciled body's fingerprint, as the
+// partial-delivery-{N}.json record both the scheduler and
 // `nightgauge issue partial-delivery --write-context` write (#3423). The PR
 // is read once: the reconcile's read is reused, and made here only when the
 // reconcile never reached it. An unreadable PR leaves MergeSHA empty, so the
@@ -253,6 +260,20 @@ func ReconcilePartialRecord(ctx context.Context, reads PartialScopeReads, ws str
 		}
 		return *read, nil
 	}
+	// The fingerprint is taken from the reconcile's own body read: a later
+	// read could hold a criterion the scope does not.
+	var fingerprint string
+	if readBody := reads.Body; readBody != nil {
+		reads.Body = func(ctx context.Context) (string, error) {
+			body, err := readBody(ctx)
+			if err == nil {
+				if fp := preflight.ACFingerprint(body); fp != preflight.ACFingerprint("") {
+					fingerprint = fp
+				}
+			}
+			return body, err
+		}
+	}
 	scope, dropped := ReconcilePartialScope(ctx, reads, ws, issue, listed, pr)
 	if scope == nil {
 		scope = []string{}
@@ -263,6 +284,7 @@ func ReconcilePartialRecord(ctx context.Context, reads PartialScopeReads, ws str
 			issue, pr, err)
 	} else {
 		rec.MergeSHA = got.MergeSHA
+		rec.CriteriaFingerprint = fingerprint
 	}
 	return rec
 }
