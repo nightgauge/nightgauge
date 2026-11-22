@@ -32,26 +32,33 @@ func AuthorTrusted(ctx context.Context, client *gh.Client, workdir, owner, repo 
 // stage, for a capture of review findings. The gate calls it before the merge
 // because the post-merge stage depends on the run surviving the merge.
 //
-// The gate decides report versus file. In report mode nothing reaches the forge.
+// The gate decides report versus file. In report mode the forge is only read,
+// for the parent's criteria, so tracked-by-parent applies there too. That read
+// needs no project board, so report mode tolerates an unresolved project, and
+// when the repository is not owner/name the report runs without the read.
 func ReviewFiling(client *gh.Client, cfg *config.Config) func(ctx context.Context, workdir, repo string, capture *discoveredwork.Capture) (*Result, error) {
 	return func(ctx context.Context, workdir, repo string, capture *discoveredwork.Capture) (*Result, error) {
 		gate := filing.ResolveGate(workdir)
-		if !gate.Files() {
-			return Materialize(ctx, capture, gate, false, Tracking{}, nil)
-		}
 		// A pr-{N}.json restored for a dispatched PR carries no pr_url.
 		if repo == "" {
 			repo = cfg.Owner + "/" + cfg.DefaultRepo
 		}
 		owner, name, ok := strings.Cut(repo, "/")
 		if !ok || owner == "" || name == "" {
+			if !gate.Files() {
+				return Materialize(ctx, capture, gate, false, Tracking{}, nil)
+			}
 			return nil, fmt.Errorf("repository %q is not owner/name", repo)
 		}
 		project, err := config.ResolveRepoProjectNumber(cfg, config.RepoProjectQuery{Owner: owner, Repo: name})
-		if err != nil {
+		if err != nil && gate.Files() {
 			return nil, err
 		}
+		// Report mode makes no board call, so an unresolved project (0) is fine.
 		filer := NewGitHubFiler(client, owner, name, project, gh.ParseOwnerType(cfg.OwnerType))
+		if !gate.Files() {
+			return Materialize(ctx, capture, gate, false, Tracking{}, filer)
+		}
 		trusted := AuthorTrusted(ctx, client, workdir, owner, name, capture.IssueNumber)
 		return Materialize(ctx, capture, gate, trusted, Tracking{}, filer)
 	}

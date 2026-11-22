@@ -5111,14 +5111,14 @@ pr-merge on every issue whose capture holds records.
 nightgauge followup materialize <issue-number> [flags]
 ```
 
-| Flag        | Description                                                     |
-| ----------- | --------------------------------------------------------------- |
-| `--repo`    | Repository (default: config). Never taken from a record         |
-| `--project` | Project board number (default: config)                          |
-| `--workdir` | Directory holding `.nightgauge/config.yaml` (default: cwd)      |
-| `--run-dir` | Directory holding the capture (default: the pipeline state dir) |
-| `--dry-run` | Report the would-file list; no forge calls, the capture is kept |
-| `--json`    | Emit `{issue, gate, report_only, reason, items[], refused}`     |
+| Flag        | Description                                                                 |
+| ----------- | --------------------------------------------------------------------------- |
+| `--repo`    | Repository (default: config). Never taken from a record                     |
+| `--project` | Project board number (default: config)                                      |
+| `--workdir` | Directory holding `.nightgauge/config.yaml` (default: cwd)                  |
+| `--run-dir` | Directory holding the capture (default: the pipeline state dir)             |
+| `--dry-run` | Report the would-file list; reads only the parent's body, keeps the capture |
+| `--json`    | Emit `{issue, gate, report_only, reason, items[], refused}`                 |
 
 Per record: an issue, open or closed, whose body already carries the
 `<!-- discovered-work: id=… issue=#N -->` marker is `already-exists` (detail
@@ -5132,7 +5132,11 @@ evidence line (`folded`, detail `appended as Part X of #M`, not counted by the
 cap, #3278). Otherwise the issue is created with `type:<t>`, Priority, Size,
 Status=Backlog and `Discovered in #N (run R, stage S)` (`filed`). Report mode,
 the kill switch or an untrusted issue author make every record `would-file`
-with no forge call.
+with no forge write, unless it is `tracked-by-parent` or `duplicate`. The
+parent's body is still read, best effort, so `tracked-by-parent` below holds
+there too; marker and title lookups do not run. When no GitHub client can be
+built, the command prints `followup materialize: parent criteria unavailable: <error>`
+on stderr, reports without the read, and exits 0.
 
 A subsystem candidate qualifies only on one of (#2872):
 

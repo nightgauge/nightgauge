@@ -34,6 +34,10 @@ changelog, and the release workflow refuses a tag that does not.
   restated only when it matches the summary or covers most of it, including
   the `Resolved:` lines of folded parts. The command also reads each issue and
   board placement once per run instead of once per follow-up (#2872).
+- `followup materialize --dry-run` and report-only runs, including the
+  pr-merge gate's, now read the parent issue's body, so a follow-up that
+  restates one of its open criteria is reported as tracked by the parent
+  there too. They still write nothing to GitHub (#2872).
 - A pull request that edits a workflow (such as a Dependabot action bump) now
   runs the Go tests that read the workflows before it reaches the merge queue,
   and those tests follow the workflows' pinned action refs instead of

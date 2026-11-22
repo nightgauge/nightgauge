@@ -453,9 +453,11 @@ func CommentBody(rec discoveredwork.Record) string {
 
 // Materialize decides and performs filing for capture. A nil or empty
 // capture is a silent no-op. In report mode, or for an untrusted author
-// without allow_untrusted_authors, every valid record is would-file and the
-// Filer is never called. In file mode records already filed (marker) are
-// skipped, records matching an open issue's title become a provenance
+// without allow_untrusted_authors, every valid record that is not tracked or
+// a duplicate is would-file, and the Filer is only read for the parent's
+// criteria (ParentCriteria), so tracked-by-parent holds there too; a nil Filer
+// skips that check. In file mode records already filed (marker) are skipped,
+// records matching an open issue's title become a provenance
 // comment, records with an open issue in the same subsystem are appended to
 // it as a new part (folded), and at most gate.Cap issues are created: the rest
 // are refused and a *filing.CapError is returned with the result.
