@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
 
@@ -100,4 +103,34 @@ func TestQueueDropProcessing_HandlerHandsBack(t *testing.T) {
 	if _, err := s.methods["queue.dropProcessing"](context.Background(), json.RawMessage(`{"handBack":"x"}`)); err == nil {
 		t.Error("malformed params were accepted")
 	}
+}
+
+// Both dequeue cases hold when the checkout sits inside a multi-repository
+// workspace (#3275).
+//
+// Serial: changes the working directory (t.Chdir).
+func TestQueueDropProcessing_InsideAWorkspace(t *testing.T) {
+	ws := t.TempDir()
+	files := map[string]string{
+		".vscode/nightgauge-workspace.yaml": "repositories:\n  - name: a\n    path: a\n  - name: b\n    path: b\n",
+		"a/.nightgauge/config.yaml":         "owner: o\ndefaultRepo: a\n",
+		"b/.nightgauge/config.yaml":         "owner: o\ndefaultRepo: b\n",
+	}
+	for name, body := range files {
+		path := filepath.Join(ws, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := filepath.Join(ws, "a")
+	t.Chdir(root)
+	if got := config.WorkspaceRepoPaths(root); len(got) < 2 {
+		t.Fatalf("fixture paths = %v, want two repositories", got)
+	}
+
+	t.Run("Handler", TestQueueDropProcessing_Handler)
+	t.Run("HandlerHandsBack", TestQueueDropProcessing_HandlerHandsBack)
 }

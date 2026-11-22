@@ -1890,3 +1890,14 @@ func TestIssueService_SearchIssues_ReturnsBody(t *testing.T) {
 		t.Fatalf("issues = %+v, want the body carried through", issues)
 	}
 }
+
+func TestIssueServiceHasClient(t *testing.T) {
+	t.Parallel()
+	var none *IssueService
+	if none.HasClient() || NewIssueService(nil).HasClient() {
+		t.Error("HasClient = true without a client")
+	}
+	if !NewIssueService(NewClientWithURL("t", "http://127.0.0.1:1")).HasClient() {
+		t.Error("HasClient = false with a client")
+	}
+}
