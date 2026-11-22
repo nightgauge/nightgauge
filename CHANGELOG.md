@@ -14,6 +14,24 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-11-22
+
+### Added
+
+- The platform's live run view now follows a run inside each stage. Every phase start, completion, skip and failure is sent as a `stage_progress` event carrying the phase name and its 1-based position, coalesced to at most one event per second per run with the latest state winning; each live progress update names the stage's latest phase and its latest tool step as its message, for example `implementation (8/17) running · Edit analytics.go` (capped at 200 characters; the tool step is only a tool name and a file or directory name, never a command or a search pattern). Once pr-create opens or reuses a pull request, every run event carries its number and URL, `pipeline_done` included, and the first `stage_started` of an extension-run pipeline carries the pre-flight cost estimate and its basis. Out-of-contract values are omitted rather than sent (#3455).
+- Signing in to the platform now links the machine without a pasted key. After any sign-in (device flow or GitHub) and on session restore, when no explicit key resolves (`NIGHTGAUGE_LICENSE_KEY`, a key stored with `nightgauge auth license set`, `platform.license_key` in the machine config, or one already in SecretStorage), the extension requests a per-device key from `POST /v1/license/device-key`, stores it in SecretStorage and the shared OS-keychain entry, and the running daemon adopts it over the new `platform.reloadLicense` IPC method, logging `license=present` and attaching the Action Center bridge without a reload. An explicit key is never replaced. No-license, expired, revoked and machine-limit answers each show their own message; a key the platform later reports revoked, suspended or expired is re-requested once. A signed-in machine the daemon still cannot link gets a one-time notice with the new **Nightgauge: Link This Machine to Your Account** command. Activate License stays the fallback (#1883).
+- Installing Codex or Grok skills from the VS Code extension now adopts a skill directory that has no install marker when every file in it matches the running build: the old copy moves to `<skills>.nightgauge-adopted/<UTC-stamp>/<name>` and the skill is reinstalled, and the summary reports `adopted N`. A directory with local edits is still skipped, with a warning naming it. `nightgauge doctor` (NGD112) now tells extension users to reinstall from the extension and offers `install-agent-skills.sh --adopt` only for a checkout (#2831).
+- The adapter-canary workflow now runs `TestClaudeSkillsTreeLive` daily and on `workflow_dispatch` against the reviewed Claude Code pin, so the stage skills tree is proven readable and write-refused under the real CLI without someone remembering to run it. A skipped test fails the job; it is not a required check (#2824).
+- `nightgauge doctor` now reports stranded fork refs (`refs/nightgauge/stranded/<issue>`, NGD052), which a branch_forked run leaves behind and nothing else reclaimed. `doctor --fix` deletes one once its issue is closed; a ref whose issue is open is kept, and one whose issue state cannot be read is reported as unverifiable and never deleted (#2753).
+
+### Changed
+
+- pr-create's changed-file secret scan now runs as `nightgauge scan diff-secrets --base <ref>`, a deterministic verb that reads the HEAD commit and has JSON output and a gating exit code (2 when it cannot run), so the same check can be re-run after a fix without rendering the skill. Its counts are matching lines per pattern, not one per pattern as before (#2702).
+- After pr-create stops on a `security_scan` gate, the retry now re-runs `nightgauge scan diff-secrets` at the current HEAD in the deterministic pr-create runner instead of re-rendering the skill: a clean scan clears the stop and opens the PR, and a scan that still finds critical secrets (or cannot run) ends the stage `blocked` with the record refreshed at the scanned HEAD. The rescan judges history, not only HEAD: the stop holds while the recorded commit is still in the branch history (rewrite it out, then retry), and once it is not, gitleaks over `<base>..HEAD` and the diff scan must both be clean to clear it, so a stop gitleaks raised no longer blocks every retry until the record is deleted by hand. A missing or failing gitleaks, or a record naming no commit, keeps the stop. The orchestrator now keeps that record and no longer opens a fallback PR around it when HEAD has moved (#3419).
+- A cleared secret-scan stop no longer opens its PR from origin's copy of the branch when the push is rejected, and a branch that edits `.gitleaks.toml` or `.gitleaksignore` cannot clear its own stop (#3419).
+- The plugin manifest now names its icon through the `icon` field (`./.claude-plugin/icon.png`), so tools that read the manifest find it without relying on auto-detection (#2863).
+- The tested Claude Code version is now 2.1.316, the version the install-docs gate was proven on: the `claude-headless` `max_tested` pin, its flag-contract `--help` capture, the install-docs gate and the clean-install image all use it (#3047).
+
 ### Fixed
 
 - A reused or capped pipeline review now restores the discovered work its own
@@ -58,22 +76,18 @@ changelog, and the release workflow refuses a tag that does not.
 - Live run progress events sent to the platform always carry an activity line.
   Before a stage reports its first phase, or when a skill reports none, the line
   reads `<stage> in progress` instead of being empty (#3455).
-
 - The dashboard no longer loses a tab selection made while it re-renders. The
   extension holds an `activateTab` until the new webview document reports in,
   and on load the webview shows the tab the extension rendered instead of an
   older one from its saved state. The demo-mode host smoke now reports how many
   times the dashboard re-rendered and whether a document loaded after the last
   one (#3025).
-
 - A stage the Anthropic API refuses for an exhausted usage bucket (the CLI
   streams `rate_limit_event` `status: rejected` and exits 0) is now booked as
   `rate_limit_quota_exhausted` with a cooldown to the reset time, instead of a
   stage failure reported as the CLI's `permissions.allow` trust warning (#3465).
-
 - The OpenCode integration check pins the vendor's current `opencode.ai/v2/install`
   script; the upstream installer changed and its old sha256 failed every run.
-
 - Action Center cards raised in any checkout now reach the phone and dashboard.
   Each checkout used to keep its own card store, and the daemon uploaded only its
   own, so a card raised from a sibling repository or a linked worktree never
@@ -89,30 +103,10 @@ changelog, and the release workflow refuses a tag that does not.
 - Stopping a run is no longer booked as a pipeline failure. A Stop from the extension (one slot, Stop All, or a platform cancel) now tells the Go scheduler first, over the new `pipeline.cancelForOperatorStop` IPC method, so the stage ends `operator_stop` instead of a bare `pipeline failure`. It does not count toward the issue's lifetime failure cap. The run record books it `cancelled` / `operator_stopped`, and the stage exit record carries `terminal_kind: operator_stop` and `signal_source: operator`, so a stop no longer looks like a zero-output hang. A pr-merge hand-back interrupted by an admission stop ends the same way and resumes into pr-merge for its open PR. A run still booked `failed` now always names its `failure_stage` and a `terminal_failure_detail` (#1848).
 - The Flutter build check now runs the repository's analyze entry point: `commands.analyze`,
   then `bash scripts/flutter-analyze.sh`, then `flutter analyze`; ci discovery lists the same command.
-
-### Added
-
-- The platform's live run view now follows a run inside each stage. Every phase start, completion, skip and failure is sent as a `stage_progress` event carrying the phase name and its 1-based position, coalesced to at most one event per second per run with the latest state winning; each live progress update names the stage's latest phase and its latest tool step as its message, for example `implementation (8/17) running · Edit analytics.go` (capped at 200 characters; the tool step is only a tool name and a file or directory name, never a command or a search pattern). Once pr-create opens or reuses a pull request, every run event carries its number and URL, `pipeline_done` included, and the first `stage_started` of an extension-run pipeline carries the pre-flight cost estimate and its basis. Out-of-contract values are omitted rather than sent (#3455).
-- Signing in to the platform now links the machine without a pasted key. After any sign-in (device flow or GitHub) and on session restore, when no explicit key resolves (`NIGHTGAUGE_LICENSE_KEY`, a key stored with `nightgauge auth license set`, `platform.license_key` in the machine config, or one already in SecretStorage), the extension requests a per-device key from `POST /v1/license/device-key`, stores it in SecretStorage and the shared OS-keychain entry, and the running daemon adopts it over the new `platform.reloadLicense` IPC method, logging `license=present` and attaching the Action Center bridge without a reload. An explicit key is never replaced. No-license, expired, revoked and machine-limit answers each show their own message; a key the platform later reports revoked, suspended or expired is re-requested once. A signed-in machine the daemon still cannot link gets a one-time notice with the new **Nightgauge: Link This Machine to Your Account** command. Activate License stays the fallback (#1883).
-- Installing Codex or Grok skills from the VS Code extension now adopts a skill directory that has no install marker when every file in it matches the running build: the old copy moves to `<skills>.nightgauge-adopted/<UTC-stamp>/<name>` and the skill is reinstalled, and the summary reports `adopted N`. A directory with local edits is still skipped, with a warning naming it. `nightgauge doctor` (NGD112) now tells extension users to reinstall from the extension and offers `install-agent-skills.sh --adopt` only for a checkout (#2831).
-- The adapter-canary workflow now runs `TestClaudeSkillsTreeLive` daily and on `workflow_dispatch` against the reviewed Claude Code pin, so the stage skills tree is proven readable and write-refused under the real CLI without someone remembering to run it. A skipped test fails the job; it is not a required check (#2824).
-- `nightgauge doctor` now reports stranded fork refs (`refs/nightgauge/stranded/<issue>`, NGD052), which a branch_forked run leaves behind and nothing else reclaimed. `doctor --fix` deletes one once its issue is closed; a ref whose issue is open is kept, and one whose issue state cannot be read is reported as unverifiable and never deleted (#2753).
-
-### Changed
-
-- pr-create's changed-file secret scan now runs as `nightgauge scan diff-secrets --base <ref>`, a deterministic verb that reads the HEAD commit and has JSON output and a gating exit code (2 when it cannot run), so the same check can be re-run after a fix without rendering the skill. Its counts are matching lines per pattern, not one per pattern as before (#2702).
-- After pr-create stops on a `security_scan` gate, the retry now re-runs `nightgauge scan diff-secrets` at the current HEAD in the deterministic pr-create runner instead of re-rendering the skill: a clean scan clears the stop and opens the PR, and a scan that still finds critical secrets (or cannot run) ends the stage `blocked` with the record refreshed at the scanned HEAD. The rescan judges history, not only HEAD: the stop holds while the recorded commit is still in the branch history (rewrite it out, then retry), and once it is not, gitleaks over `<base>..HEAD` and the diff scan must both be clean to clear it, so a stop gitleaks raised no longer blocks every retry until the record is deleted by hand. A missing or failing gitleaks, or a record naming no commit, keeps the stop. The orchestrator now keeps that record and no longer opens a fallback PR around it when HEAD has moved (#3419).
-- A cleared secret-scan stop no longer opens its PR from origin's copy of the branch when the push is rejected, and a branch that edits `.gitleaks.toml` or `.gitleaksignore` cannot clear its own stop (#3419).
-- The plugin manifest now names its icon through the `icon` field (`./.claude-plugin/icon.png`), so tools that read the manifest find it without relying on auto-detection (#2863).
-- The tested Claude Code version is now 2.1.316, the version the install-docs gate was proven on: the `claude-headless` `max_tested` pin, its flag-contract `--help` capture, the install-docs gate and the clean-install image all use it (#3047).
-
-### Fixed
-
 - `scripts/install-agent-skills.sh` now installs Codex and Grok skills into
   `$CODEX_HOME/skills` and `$GROK_HOME/skills` when those variables are set, the
   homes `nightgauge doctor` NGD112 and the VS Code extension check, instead of
   always `~/.codex` and `~/.grok` (#2832).
-
 - A sharded Go test step killed by a signal now says so: `scripts/go-test-shard.py` names the signal and the tests still running and exits `128+N` (143 for SIGTERM) instead of the opaque `241`. The `internal/ipc` end-to-end tests start `nightgauge serve` in its own process group and kill that group on cleanup, and the daemon stops group-signalling a stage process that has been reaped or no longer leads its own group. Both are defence in depth: what sent the SIGTERM behind the `241` is still unidentified, and no daemon path that reaches the test's group was found (#3443, #3446).
 - Backlog promotion no longer moves an issue to Ready when one of its blockers is missing from the dependency graph (off the board, or in a repository the graph did not load). Such a blocker's state is unknown, so the issue stays in Backlog and the promotion tally records `unresolved-blocker`, matching the dispatch-time dependency check. An issue whose only blocker is off-board and already closed now needs a manual move to Ready (#2744).
 - A raw GraphQL document that holds a query and a mutation (`query A { ... } mutation B { ... }`) now drops the cached board snapshots: the board cache classifies every operation in the document instead of only the first, so a write selected by `operationName` can no longer leave a stale board. A fragment beside a query is now a read (#2732).
@@ -9548,7 +9542,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.6...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.7...HEAD
+[0.8.7]: https://github.com/nightgauge/nightgauge/compare/v0.8.6...v0.8.7
 [0.8.6]: https://github.com/nightgauge/nightgauge/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.5
 [0.8.4]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.4
