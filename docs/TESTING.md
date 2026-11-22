@@ -108,6 +108,12 @@ because of what it asserts, not how it runs.
 | Extension host smoke (real headless VSCode)                    | `tests/vscode-host/**`                     | `*.host.ts` (entry point), `*.suite.ts` (cases)             | `@vscode/test-electron` via `tests/vscode-host/launch.ts` | `vscode-host` (`.github/workflows/ci.yml`)                |
 | Clean-install release gate (packaged VSIX, real agent + forge) | `tests/clean-install/**` (repo root)       | `driver/driver.js` (in-host driver), `fixture/`, `issue.md` | `scripts/clean-install-e2e.sh` (Docker + Xvfb)            | `clean-install-e2e.yml` (dispatch + weekly; never on PRs) |
 
+The clean-install gate also has an offline replay (#3501):
+`go test ./tests/clean-install/`, the `clean-install AC judge replay` step of
+`scripts/ci-local.sh`, judges `issue.md` against the recorded G1 diff in
+`testdata/g1-rc25.diff`. A change to `fixture/` or `issue.md` must keep that
+diff applying and every criterion met.
+
 Run each tier locally:
 
 ```bash

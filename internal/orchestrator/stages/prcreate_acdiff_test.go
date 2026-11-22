@@ -1890,3 +1890,788 @@ func TestACPreservedTokens(t *testing.T) {
 		}
 	}
 }
+
+// The three criteria of the G1 fixture, verbatim (#3501).
+var g1ACs = []string{
+	"`test/truncate.test.js` covers: unchanged when short enough, truncated with " +
+		"`…` when too long, the boundary (`text.length === maxLength` is unchanged), " +
+		"the `TypeError` and the `RangeError`.",
+	"`npm test` passes with the existing `slugify` tests untouched.",
+	"`README.md` lists `truncate` next to `slugify`.",
+}
+
+const slugifyTest = "const { slugify } = require(\"../src\");\n" +
+	"test(\"lower-cases\", () => equal(slugify(\"Hi\"), \"hi\"));\n" +
+	"test(\"hyphenates\", () => equal(slugify(\"a b\"), \"a-b\"));\n"
+
+// slugifyRepo builds the G1 shape: slugify and its test on main, with a
+// feature branch checked out.
+func slugifyRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	gitOut(t, dir, "init", "-q", "-b", "main")
+	gitOut(t, dir, "config", "user.email", "test@example.com")
+	gitOut(t, dir, "config", "user.name", "Test")
+	gitOut(t, dir, "config", "commit.gpgsign", "false")
+	writeFile(t, dir, "src/index.js", "function slugify(s) {}\n\nmodule.exports = { slugify };\n")
+	writeFile(t, dir, "README.md", "# Fixture\n\n`src/index.js` exports `slugify`.\n")
+	writeFile(t, dir, "test/slugify.test.js", slugifyTest)
+	writeFile(t, dir, "test/case conversion.js", "// helpers\ncheck(kebab(\"A B\"));\n")
+	writeFile(t, dir, "test/other.test.js", "check(other());\n")
+	writeFile(t, dir, "test/get.test.js", "check(get());\n")
+	writeFile(t, dir, "test/budget.test.js", "check(widget());\n")
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "base")
+	gitOut(t, dir, "checkout", "-q", "-b", "feat/truncate")
+	return dir
+}
+
+// onBase runs change on main, commits it and restarts the feature branch there.
+func onBase(t *testing.T, dir string, change func(t *testing.T, dir string)) {
+	t.Helper()
+	gitOut(t, dir, "checkout", "-q", "main")
+	change(t, dir)
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "base change")
+	gitOut(t, dir, "checkout", "-q", "-B", "feat/truncate")
+}
+
+// addTruncate makes the change the G1 issue asks for.
+func addTruncate(t *testing.T, dir string) {
+	t.Helper()
+	writeFile(t, dir, "src/index.js",
+		"function slugify(s) {}\n\nfunction truncate(s, n) {}\n\nmodule.exports = { slugify, truncate };\n")
+	writeFile(t, dir, "README.md", "# Fixture\n\n`src/index.js` exports `slugify` and `truncate`.\n")
+	writeFile(t, dir, "test/truncate.test.js", "// unchanged when short, boundary text.length === maxLength\n"+
+		"equal(truncate(\"hello\", 2), \"h…\");\nthrows(TypeError);\nthrows(RangeError);\n")
+}
+
+// "`X` tests untouched" preserves X's test files, not every line naming X
+// (#3501).
+func TestVerifyACAgainstDiff_TestScopedPreservation(t *testing.T) {
+	const slug = "test/slugify.test.js"
+	const strict = "changes a line containing"
+	const stillPass = "`slugify` tests still pass"
+	const mustPass = "the `slugify` tests must remain and pass"
+	editTest := func(t *testing.T, dir string) { writeFile(t, dir, slug, slugifyTest+"check(1);\n") }
+	deleteTest := func(t *testing.T, dir string) { gitOut(t, dir, "rm", "-q", slug) }
+	emptyTest := func(t *testing.T, dir string) { writeFile(t, dir, slug, "") }
+	oversized := strings.Repeat("// filler\n", acReadMaxBytes/10+1)
+	addOversized := func(t *testing.T, dir string) { writeFile(t, dir, "test/z.test.js", oversized+"slugify(1)\n") }
+	unknownLayout := func(t *testing.T, dir string) {
+		gitOut(t, dir, "rm", "-q", slug)
+		writeFile(t, dir, "src/case.rs", "#[test]\nfn keeps() { slugify(1) }\n")
+	}
+	const example = "# Fixture\n\n    test(\"example\", () => slugify(1))\n"
+	rewrite := func(t *testing.T, dir string) { writeFile(t, dir, "src/index.js", "function slugify(s) { throw s }\n") }
+	write := func(p, body string) func(t *testing.T, dir string) {
+		return func(t *testing.T, dir string) { writeFile(t, dir, p, body) }
+	}
+	move := func(from, to string) func(t *testing.T, dir string) {
+		return func(t *testing.T, dir string) {
+			if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(to)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			gitOut(t, dir, "mv", from, to)
+		}
+	}
+	const untouched = "the `slugify` tests are untouched"
+	const swift = "Tests/SlugifyTests.swift"
+	for _, tc := range []struct {
+		name   string
+		crit   string // default: criterion 2
+		only   bool   // change is the whole diff, without addTruncate
+		base   func(t *testing.T, dir string)
+		change func(t *testing.T, dir string)
+		want   string
+		names  string
+	}{
+		{name: "criterion 1", crit: g1ACs[0], want: ACMet},
+		{name: "criterion 2", want: ACMet, names: slug},
+		{name: "criterion 3", crit: g1ACs[2], want: ACMet},
+		{name: "modified", want: ACUnmet, names: "modifies `" + slug + "`",
+			change: func(t *testing.T, dir string) { writeFile(t, dir, slug, slugifyTest+"check(1);\n") }},
+		{name: "comment only", want: ACUnmet, names: slug,
+			change: func(t *testing.T, dir string) { writeFile(t, dir, slug, "// note\n"+slugifyTest) }},
+		{name: "span removed", want: ACUnmet, names: slug,
+			change: func(t *testing.T, dir string) {
+				writeFile(t, dir, slug, strings.ReplaceAll(slugifyTest, "slugify", "kebab"))
+			}},
+		{name: "deleted", want: ACUnmet, names: "deletes `" + slug + "`",
+			change: func(t *testing.T, dir string) { gitOut(t, dir, "rm", "-q", slug) }},
+		{name: "renamed with edits", want: ACUnmet, names: "renames `" + slug + "`",
+			change: func(t *testing.T, dir string) {
+				gitOut(t, dir, "mv", slug, "test/slug.test.js")
+				writeFile(t, dir, "test/slug.test.js", slugifyTest+"check(1);\n")
+			}},
+		{name: "untracked and rewritten", want: ACUnmet, names: slug,
+			change: func(t *testing.T, dir string) {
+				gitOut(t, dir, "rm", "-q", "--cached", slug)
+				writeFile(t, dir, slug, "check(1);\n")
+			}},
+		{name: "unrelated test edit", want: ACMet, names: slug,
+			change: func(t *testing.T, dir string) { writeFile(t, dir, "test/other.test.js", "check(other(2));\n") }},
+		{name: "content match, path with a space", crit: "The `kebab` tests are untouched",
+			want: ACUnmet, names: "test/case conversion.js",
+			change: func(t *testing.T, dir string) {
+				writeFile(t, dir, "test/case conversion.js", "// helpers\ncheck(kebab(\"C D\"));\n")
+			}},
+		{name: "content match kept", crit: "The `kebab()` tests are untouched", want: ACMet, names: "test/case conversion.js"},
+		{name: "pure rename", want: ACUnmet, names: "renames `" + slug + "`",
+			change: func(t *testing.T, dir string) { gitOut(t, dir, "mv", slug, "test/slug.test.js") }},
+		{name: "path match only", crit: "The `conversion` specs are untouched", want: ACMet, names: "test/case conversion.js"},
+		{name: "both readings met", crit: "`kebab` tests are untouched and keep `kebab`",
+			want: ACMet, names: "changes no line containing"},
+		{name: "tests and a second span", crit: "`exports` tests are untouched and keep `Fixture`",
+			want: ACUnmet, names: strict},
+		{name: "name inside another word", crit: "`get()` tests are untouched", want: ACMet, names: "test/get.test.js",
+			change: func(t *testing.T, dir string) { writeFile(t, dir, "test/budget.test.js", "check(total(2));\n") }},
+		{name: "still pass, case appended", crit: "The `slugify` tests still pass",
+			want: ACUnmet, names: "modifies `" + slug + "`",
+			change: func(t *testing.T, dir string) { writeFile(t, dir, slug, slugifyTest+"check(1);\n") }},
+		{name: "still pass, implementation changed", crit: "The `slugify` tests still pass",
+			want: ACMet, names: slug,
+			change: func(t *testing.T, dir string) { writeFile(t, dir, "src/index.js", "function slugify(s) { throw s }\n") }},
+		{name: "stay green", crit: "The `slugify` tests stay green", want: ACMet, names: slug},
+		{name: "still pass unchanged", crit: "The `slugify` test suite still passes unchanged",
+			want: ACUnmet, names: "modifies `" + slug + "`",
+			change: func(t *testing.T, dir string) { writeFile(t, dir, slug, slugifyTest+"check(1);\n") }},
+		{name: "untouched and still pass", crit: "The `slugify` tests untouched and still pass", want: ACMet, names: slug},
+		{name: "test as a modifier", crit: "The `slugify` test flag is unchanged",
+			want: ACUnmet, names: "changes a line containing"},
+		{name: "spec that may not be a test", crit: "The `slugify` spec is unchanged", want: ACUnmet, names: strict},
+		{name: "spec named by no changed file", crit: "The `kebab` spec is unchanged", want: ACMet, names: "test/case conversion.js"},
+		{name: "spec, test file edited", crit: "The `slugify` spec is unchanged", want: ACUnmet, names: slug,
+			change: func(t *testing.T, dir string) { writeFile(t, dir, slug, slugifyTest+"check(1);\n") }},
+		{name: "bare name inside another word", crit: "The `get` tests are untouched", want: ACMet, names: "test/get.test.js",
+			change: func(t *testing.T, dir string) { writeFile(t, dir, "test/budget.test.js", "check(widget(1));\n") }},
+		{name: "coordinated after", crit: "The `slugify` tests and behavior remain unchanged", want: ACUnmet, names: strict},
+		{name: "coordinated object", crit: "Keep `slugify` tests and implementation", want: ACUnmet, names: strict},
+		{name: "coordinated before", crit: "The implementation and `slugify` tests are untouched", want: ACUnmet, names: strict},
+		{name: "coordinated, test edited", crit: "The `slugify` tests and behavior remain unchanged", want: ACUnmet, names: slug,
+			change: func(t *testing.T, dir string) { writeFile(t, dir, slug, slugifyTest+"check(1);\n") }},
+		{name: "tests as a modifier", crit: "The `slugify` tests flag is unchanged",
+			want: ACUnmet, names: "changes a line containing"},
+		{name: "keep passing", crit: "Keep the `slugify` tests passing",
+			want: ACUnmet, names: "modifies `" + slug + "`",
+			change: func(t *testing.T, dir string) { writeFile(t, dir, slug, slugifyTest+"check(1);\n") }},
+		{name: "keep green", crit: "Keep `slugify` tests green",
+			want: ACUnmet, names: "modifies `" + slug + "`",
+			change: func(t *testing.T, dir string) { writeFile(t, dir, slug, slugifyTest+"check(1);\n") }},
+		{name: "specs may be documents", crit: "The `slugify` specs are unchanged", want: ACUnmet, names: strict},
+		{name: "spec file may be a document", crit: "The `slugify` spec file is unchanged", want: ACUnmet, names: strict},
+		{name: "document named for the span", crit: "The `kebab` spec is unchanged", want: ACMet, names: "changes no line containing",
+			change: func(t *testing.T, dir string) { writeFile(t, dir, "docs/kebab.yaml", "type: string\n") }},
+		{name: "no base test", crit: "The `truncate` tests are untouched", want: ACUnmet, names: strict},
+		{name: "scoped and unscoped readings", crit: "`slugify` tests are untouched and keep `slugify`",
+			want: ACUnmet, names: "changes a line containing"},
+		{name: "tests and behavior, only a new test names it", crit: "The `kebab` tests and behavior remain unchanged",
+			want: ACUnmet, names: strict,
+			change: func(t *testing.T, dir string) { writeFile(t, dir, "test/new.test.js", "check(kebab(1));\n") }},
+
+		// A qualified test noun is scoped.
+		{name: "qualified", crit: "The existing `slugify` unit tests are untouched", want: ACMet, names: slug},
+		{name: "qualified, test edited", crit: "The existing `slugify` unit tests are untouched",
+			want: ACUnmet, names: "modifies `" + slug + "`", change: editTest},
+		{name: "two qualifiers", crit: "The `slugify` browser regression tests are untouched", want: ACMet, names: slug},
+		{name: "two qualifiers, test edited", crit: "The `slugify` browser regression tests are untouched",
+			want: ACUnmet, names: "modifies `" + slug + "`", change: editTest},
+		{name: "qualified object", crit: "Keep the `slugify` integration tests", want: ACMet, names: slug},
+		{name: "qualified result", crit: "`slugify` unit tests remain green", want: ACMet, names: slug},
+		{name: "qualified result, test edited", crit: "`slugify` unit tests remain green",
+			want: ACUnmet, names: "modifies `" + slug + "`", change: editTest},
+		{name: "qualified result object", crit: "Keep the `slugify` unit tests passing", want: ACMet, names: slug},
+		{name: "qualified result object, test edited", crit: "Keep the `slugify` unit tests passing",
+			want: ACUnmet, names: "modifies `" + slug + "`", change: editTest},
+
+		// A word that starts a subordinate clause after the span keeps the span.
+		{name: "once", crit: "Keep `slugify` once tests pass",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "whenever", crit: "Keep `slugify` whenever tests pass",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "whilst", crit: "Keep `slugify` whilst tests pass",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "provided", crit: "Keep `slugify` provided tests pass",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "unlisted word, finite result", crit: "Keep `slugify` frozen tests must pass",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "unlisted word, finite predicate", crit: "Keep `slugify` frozen tests are untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "conjunction without a verb", crit: "Keep `slugify` once tests green",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "conjunction after the subject", crit: "`slugify` once tests pass remains unchanged",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+
+		// A lone suite may be no test suite, and an excluded one is not kept.
+		{name: "lone suite", crit: "The `slugify` suite is unchanged",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "qualified lone suite", crit: "The `slugify` cipher suite is unchanged",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "exclusion word", crit: "`slugify` unlike tests are unchanged",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "plural tests, singular verb", crit: "`slugify` frozen tests is unchanged",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+
+		// A clause that preserves anything else keeps the strict verdict.
+		{name: "and before the span", crit: "The implementation and the associated `slugify` tests are untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "preservation word before the span", crit: "Behavior is unchanged with `slugify` tests untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "criterion 2, implementation rewritten", only: true, change: rewrite, want: ACMet, names: slug},
+		{name: "preserved before the span", crit: "Behavior is preserved with `slugify` tests untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "keep with another object", crit: "Keep behavior with `slugify` tests untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "or before the span", crit: "The API or the `slugify` tests are untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "comma and before the span", crit: "The implementation, and the associated `slugify` tests are untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "qualified, and before the span", crit: "The API and the `slugify` unit tests are untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "keep takes the tests", crit: "Keep the `slugify` tests untouched",
+			only: true, change: rewrite, want: ACMet, names: slug},
+		{name: "semicolon starts a clause", crit: "`npm test` passes; the `slugify` tests are untouched",
+			only: true, change: rewrite, want: ACMet, names: slug},
+
+		// Only a known lead, tail and sibling clause leave the tests alone kept.
+		{name: "kept thing after comma and", crit: "Keep the `slugify` tests, and the implementation, untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "so is the next clause", crit: "The `slugify` tests are untouched, and so is the implementation",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "semicolon continues", crit: "The `slugify` tests are untouched; so is the implementation",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "semicolon before", crit: "The API is as before; the `slugify` tests are untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "alongside", crit: "The implementation alongside the `slugify` tests is untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "slash", crit: "The implementation/`slugify` tests are untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "in addition to", crit: "The implementation in addition to the `slugify` tests is untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "must not change", crit: "The API must not change with `slugify` tests untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "no change", crit: "No behavior change with `slugify` tests untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "identical", crit: "Behavior is identical with `slugify` tests untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "as is", crit: "The API as is with `slugify` tests untouched",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "and before the kept word", crit: "The `slugify` tests and is unchanged",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "verb as a qualifier", crit: "`slugify` ignoring tests is unchanged",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "result and more", crit: "Keep `slugify` tests passing and its API stable",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "still pass and more", crit: "The `slugify` tests still pass and its API stays",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "result, next clause", crit: "Keep the `slugify` tests passing, and its API too",
+			only: true, change: rewrite, want: ACUnmet, names: strict},
+		{name: "result clause after", crit: "The `slugify` tests are untouched, and `npm test` passes",
+			only: true, change: rewrite, want: ACMet, names: slug},
+
+		// Rule 1: no decision from the scope is the strict verdict.
+		{name: "rule 1a, oversized test edited", crit: "The `slugify` tests are untouched",
+			only: true, base: addOversized, want: ACUnmet, names: strict + " `slugify` at `test/z.test.js",
+			change: func(t *testing.T, dir string) { writeFile(t, dir, "test/z.test.js", oversized+"slugify(2)\n") }},
+		{name: "rule 1a, oversized test after a kept one", crit: "The `slugify` tests are untouched",
+			base: addOversized, want: ACUnmet, names: strict},
+		{name: "rule 1b, no test holds the span", crit: "The `slugify` tests are untouched",
+			base: deleteTest, want: ACUnmet, names: strict},
+		{name: "rule 1b, unknown layout only", crit: "The `slugify` tests are untouched",
+			only: true, base: unknownLayout, want: ACUnmet, names: strict + " `slugify` at `src/case.rs",
+			change: func(t *testing.T, dir string) {
+				writeFile(t, dir, "src/case.rs", "#[test]\nfn keeps() { slugify(2) }\n")
+			}},
+		{name: "rule 1b, strict is met", crit: "The `slugify` tests are untouched",
+			only: true, base: deleteTest, want: ACMet, names: "changes no line containing",
+			change: func(t *testing.T, dir string) { writeFile(t, dir, "test/other.test.js", "check(other(2));\n") }},
+
+		// Rule 2: a test file is known by its path, and a document is never one.
+		{name: "rule 2, README test example", crit: "the `slugify` tests are untouched",
+			only: true, want: ACMet, names: slug,
+			base:   func(t *testing.T, dir string) { writeFile(t, dir, "README.md", example) },
+			change: func(t *testing.T, dir string) { writeFile(t, dir, "README.md", example+"`slugify` is exported.\n") }},
+		{name: "rule 2, test plan", crit: "the `slugify` tests are untouched",
+			only: true, want: ACMet, names: slug,
+			base:   func(t *testing.T, dir string) { writeFile(t, dir, "docs/test-plan.md", "Test `slugify`.\n") },
+			change: func(t *testing.T, dir string) { writeFile(t, dir, "docs/test-plan.md", "Test `slugify` twice.\n") }},
+		{name: "rule 2, document in a test directory", crit: "the `slugify` tests are untouched",
+			only: true, want: ACMet, names: slug,
+			base:   func(t *testing.T, dir string) { writeFile(t, dir, "test/README.md", "`slugify` cases\n") },
+			change: func(t *testing.T, dir string) { writeFile(t, dir, "test/README.md", "All `slugify` cases\n") }},
+		{name: "rule 2, test in a docs package", crit: untouched, only: true,
+			base:   write("internal/docs/slug_test.go", "slugify(1)\n"),
+			change: write("internal/docs/slug_test.go", "slugify(2)\n"),
+			want:   ACUnmet, names: "modifies `internal/docs/slug_test.go`"},
+		{name: "rule 2, code and README only", crit: untouched, only: true, want: ACMet, names: slug,
+			change: func(t *testing.T, dir string) {
+				rewrite(t, dir)
+				writeFile(t, dir, "README.md", "`slugify` is exported.\n")
+			}},
+
+		// Rule 2: a touched test-like path the list does not know is strict.
+		{name: "test-like, Tests/*.swift", crit: untouched, only: true,
+			base: write(swift, "slugify(1)\n"), change: write(swift, "slugify(2)\n"),
+			want: ACUnmet, names: strict + " `slugify` at `" + swift},
+		{name: "test-like, *Test.java", crit: untouched, only: true,
+			base: write("src/SlugifyTest.java", "slugify(1)\n"), change: write("src/SlugifyTest.java", "slugify(2)\n"),
+			want: ACUnmet, names: strict + " `slugify` at `src/SlugifyTest.java"},
+		{name: "test-like, *.cy.js", crit: untouched, only: true,
+			base: write("cypress/slugify.cy.js", "slugify(1)\n"), change: write("cypress/slugify.cy.js", "slugify(2)\n"),
+			want: ACUnmet, names: strict + " `slugify` at `cypress/slugify.cy.js"},
+		{name: "test-like, e2e", crit: untouched, only: true,
+			base: write("e2e/slugify.js", "slugify(1)\n"), change: write("e2e/slugify.js", "slugify(2)\n"),
+			want: ACUnmet, names: strict + " `slugify` at `e2e/slugify.js"},
+		{name: "test-like, deleted", crit: untouched, only: true,
+			base:   write(swift, "slugify(1)\n"),
+			change: func(t *testing.T, dir string) { gitOut(t, dir, "rm", "-q", swift) },
+			want:   ACUnmet, names: "removes a line containing `slugify` from `" + swift},
+		{name: "test-like, emptied", crit: untouched, only: true,
+			base: write(swift, "slugify(1)\n"), change: write(swift, ""),
+			want: ACUnmet, names: "removes a line containing `slugify` from `" + swift},
+		{name: "test-like, renamed away", crit: untouched,
+			base: write(swift, "slugify(1)\n"), change: move(swift, "checks/slug.swift"),
+			want: ACUnmet, names: strict},
+		{name: "test-like, renamed into", crit: untouched,
+			base: write("checks/slug.js", "slugify(1)\n"), change: move("checks/slug.js", "e2e/slug.js"),
+			want: ACUnmet, names: strict},
+		{name: "test-like, edit adds the span", crit: untouched, only: true,
+			base: write("e2e/case.js", "check(1)\n"), change: write("e2e/case.js", "slugify(2)\n"),
+			want: ACUnmet, names: strict + " `slugify` at `e2e/case.js"},
+		{name: "test-like, span in the path only", crit: untouched,
+			base: write("e2e/slugify.js", "check(1)\n"), change: write("e2e/slugify.js", "check(2)\n"),
+			want: ACUnmet, names: strict},
+		{name: "test-like, span inside a word", crit: untouched,
+			base: write("e2e/case.js", "check(1)\nreslugify()\n"), change: write("e2e/case.js", "check(2)\nreslugify()\n"),
+			want: ACUnmet, names: strict},
+		{name: "test-like, unreadable", crit: untouched,
+			base: write("e2e/case.js", oversized), change: write("e2e/case.js", oversized+"check(2)\n"),
+			want: ACUnmet, names: strict},
+		{name: "test-like, strict is met", crit: untouched, only: true,
+			base: write("e2e/case.js", "check(1)\nslugify()\n"), change: write("e2e/case.js", "check(2)\nslugify()\n"),
+			want: ACMet, names: "changes no line containing"},
+		{name: "test-like by substring", crit: untouched, only: true,
+			base: write("src/latest.js", "slugify(1)\n"), change: write("src/latest.js", "slugify(2)\n"),
+			want: ACUnmet, names: strict + " `slugify` at `src/latest.js"},
+		{name: "test-like without the span", crit: untouched,
+			base: write("e2e/case.js", "check(1)\n"), change: write("e2e/case.js", "check(2)\n"),
+			want: ACMet, names: slug},
+		{name: "test-like, not touched", crit: untouched,
+			base: write(swift, "slugify(1)\n"), want: ACMet, names: slug},
+		{name: "test-like, added", crit: untouched,
+			change: write("Tests/NewTests.swift", "slugify(1)\n"), want: ACMet, names: slug},
+		{name: "test-like beside an edited test", crit: untouched, only: true,
+			base: write(swift, "slugify(1)\n"),
+			change: func(t *testing.T, dir string) {
+				writeFile(t, dir, swift, "slugify(2)\n")
+				editTest(t, dir)
+			},
+			want: ACUnmet, names: "modifies `" + slug + "`"},
+
+		// Rule 3: a kept result is judged like any other scoped clause.
+		{name: "rule 3, still pass, deleted", crit: stillPass, change: deleteTest,
+			want: ACUnmet, names: "deletes `" + slug + "`"},
+		{name: "rule 3, still pass, emptied", crit: stillPass, change: emptyTest,
+			want: ACUnmet, names: "modifies `" + slug + "`"},
+		{name: "rule 3, still pass, only deleted", crit: stillPass, only: true, change: deleteTest,
+			want: ACUnmet, names: "deletes `" + slug + "`"},
+		{name: "rule 3, still pass, kept", crit: stillPass, want: ACMet, names: slug},
+		{name: "rule 3, remain and pass, deleted", crit: mustPass, change: deleteTest,
+			want: ACUnmet, names: "deletes `" + slug + "`"},
+		{name: "rule 3, remain and pass, emptied", crit: mustPass, change: emptyTest,
+			want: ACUnmet, names: "modifies `" + slug + "`"},
+		{name: "rule 3, remain and pass, only emptied", crit: mustPass, only: true, change: emptyTest,
+			want: ACUnmet, names: "modifies `" + slug + "`"},
+		{name: "rule 3, remain and pass, kept", crit: mustPass, want: ACMet, names: slug},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := slugifyRepo(t)
+			if tc.base != nil {
+				onBase(t, dir, tc.base)
+			}
+			if !tc.only {
+				addTruncate(t, dir)
+			}
+			if tc.change != nil {
+				tc.change(t, dir)
+			}
+			crit, prior := tc.crit, []string(nil)
+			switch crit {
+			case "":
+				crit, prior = g1ACs[1], g1ACs[:1]
+			case g1ACs[2]:
+				prior = g1ACs[:2]
+			}
+			got, ok := VerifyACAgainstDiff(crit, prior, collect(t, dir), ACTestState{})
+			if !ok || got.Status != tc.want || !strings.Contains(got.Evidence, tc.names) {
+				t.Fatalf("got %+v ok=%v, want %q naming %q", got, ok, tc.want, tc.names)
+			}
+		})
+	}
+}
+
+// A failed read gives the strict verdict, never met or undecided (#3501).
+func TestACTestsPreserved_NoBase(t *testing.T) {
+	dir := slugifyRepo(t)
+	addTruncate(t, dir)
+	for name, spoil := range map[string]func(d *ACDiff){
+		"empty base":   func(d *ACDiff) { d.BaseRev = "" },
+		"option base":  func(d *ACDiff) { d.BaseRev = "--all" },
+		"unknown base": func(d *ACDiff) { d.BaseRev = "no-such-rev" },
+		"no workdir":   func(d *ACDiff) { d.Workdir = "" },
+	} {
+		d := collect(t, dir)
+		spoil(d)
+		if r := acTestsPreserved("slugify", d); r.ok {
+			t.Errorf("%s: got %+v, want no decision", name, r)
+		}
+		r := acPreserved(parseACClause(g1ACs[1]), d)
+		if r.status != ACUnmet || !strings.Contains(r.evidence, "changes a line containing") {
+			t.Errorf("%s: got %+v, want the strict unmet", name, r)
+		}
+	}
+}
+
+// git grep skips a blob it cannot read and exits as if it had searched it
+// (#3501).
+func TestACTestsPreserved_UnreadableBlob(t *testing.T) {
+	const lost = "test/z.test.js"
+	for _, tc := range []struct {
+		name      string
+		otherKept bool
+	}{{"only candidate", false}, {"another test kept", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := slugifyRepo(t)
+			onBase(t, dir, func(t *testing.T, dir string) {
+				writeFile(t, dir, lost, "check(slugify(\"lost\"))\n")
+				if !tc.otherKept {
+					gitOut(t, dir, "rm", "-q", "test/slugify.test.js")
+				}
+			})
+			writeFile(t, dir, lost, "check(slugify(\"found\"))\n")
+			// Committed, so only git grep has to read the lost blob: a dirty
+			// file makes the git diff that lists touched paths fail first.
+			gitOut(t, dir, "commit", "-qam", "edit")
+			d := collect(t, dir)
+			sha := strings.TrimSpace(gitOut(t, dir, "rev-parse", d.BaseRev+":"+lost))
+			if err := os.Remove(filepath.Join(dir, ".git", "objects", sha[:2], sha[2:])); err != nil {
+				t.Fatal(err)
+			}
+			r := acPreserved(parseACClause("The `slugify` tests are untouched"), d)
+			if r.status != ACUnmet || !strings.Contains(r.evidence, "changes a line containing") {
+				t.Errorf("got %+v, want the strict unmet", r)
+			}
+		})
+	}
+}
+
+func TestACPreservedSpans_TestNoun(t *testing.T) {
+	for text, want := range map[string]bool{
+		"`X` test is unchanged":            true,
+		"`X` tests are untouched":          true,
+		"`X` Tests are untouched":          true,
+		"`X` test files are unchanged":     true,
+		"`X` test suite is unchanged":      true,
+		"`X` suite is unchanged":           true,
+		"`X` spec is unchanged":            true,
+		"`X` specs are unchanged":          true,
+		"Keep `X` tests.":                  true,
+		"The existing `X` tests stay":      true,
+		"`X` test cases are unchanged":     true,
+		"Keep `X` test, as before":         true,
+		"`X` test flag is unchanged":       false,
+		"`X` test helper stays":            false,
+		"`X` spec version is unchanged":    false,
+		"`X` suite name is unchanged":      false,
+		"`X` is unchanged":                 false,
+		"`X` tests-only mode is unchanged": false,
+		"`X` testing stays":                false,
+		"`X`'s tests are unchanged":        false,
+		"Keep `X`: tests depend on it":     false,
+
+		"`X` unit tests are untouched":               true,
+		"`X` browser regression tests are untouched": true,
+		"`X` stress tests are unchanged":             true,
+		"Keep all the existing `X` tests untouched":  true,
+	} {
+		got := acPreservedSpans(parseACClause(text))
+		if len(got) != 1 || got[0].testScoped != want {
+			t.Errorf("acPreservedSpans(%q) = %+v, want testScoped=%v", text, got, want)
+		}
+	}
+	// These may govern no span at all; none may be read as tests.
+	for _, text := range []string{
+		"`X` fast browser regression tests are untouched",
+		"`X` end-to-end tests are unchanged",
+		"`X` and tests are unchanged",
+		"Keep `X` out of tests",
+		"`X` during tests is unchanged",
+		"`X` needs tests and is unchanged",
+		"`X` gained tests and is unchanged",
+		"`X` currently tests are unchanged",
+		"`X` unchanged tests",
+		"`X` unit test flag is unchanged",
+		"`X` unit spec is unchanged",
+		"Behavior is preserved, `X` tests untouched",
+	} {
+		for _, s := range acPreservedSpans(parseACClause(text)) {
+			if s.testScoped {
+				t.Errorf("acPreservedSpans(%q) = %+v, want no testScoped reading", text, s)
+			}
+		}
+	}
+}
+
+func TestParseACClauses_AfterAnd(t *testing.T) {
+	got := parseACClauses("`a, and b` is set, and `c` stays; `d` and `e` stay, and `f` stays")
+	want := []bool{false, true, false, true}
+	if len(got) != len(want) {
+		t.Fatalf("got %d clauses, want %d", len(got), len(want))
+	}
+	for i, c := range got {
+		if c.AfterAnd != want[i] {
+			t.Errorf("clause %q: AfterAnd=%v, want %v", c.Raw, c.AfterAnd, want[i])
+		}
+	}
+}
+
+func TestACTestFileRE(t *testing.T) {
+	for p, want := range map[string]bool{
+		"test/a.js": true, "pkg/tests/a": true, "src/__tests__/a.ts": true, "spec/a.rb": true,
+		"pkg/a_test.go": true, "src/a.test.js": true, "src/a.spec.ts": true, "py/test_a.py": true,
+		"src/a.js": false, "latest/a.js": false, "src/contest.js": false, "testdata/a.txt": false,
+		"src/test_dir/a.js": false, "specs/a.md": false, "src/testing.go": false, "test": false,
+	} {
+		if got := acTestFileRE.MatchString(p); got != want {
+			t.Errorf("test file %q = %v, want %v", p, got, want)
+		}
+	}
+}
+
+// A document is never a test file, wherever it lives (#3501).
+func TestACIsTestFile(t *testing.T) {
+	for p, want := range map[string]bool{
+		"test/a.js": true, "pkg/a_test.go": true, "test/docstring.py": true, "src/docs.test.js": true,
+		"test/README.md": false, "test/A.MD": false, "test/a.markdown": false, "test/a.rst": false,
+		"test/a.adoc": false, "test/notes.txt": false, "docs/test-plan.md": false, "src/case.rs": false,
+		"internal/docs/slug_test.go": true, "docs/test/a.js": true, "doc/a_test.go": true, "pkg/Docs/a.test.js": true,
+		"Tests/SlugifyTests.swift": false, "src/SlugifyTest.java": false,
+		"cypress/slugify.cy.js": false, "e2e/slugify.js": false,
+	} {
+		if got := acIsTestFile(p); got != want {
+			t.Errorf("acIsTestFile(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
+// The test-like list is closed (#3501): five substrings of the path, and no
+// documentation extension.
+func TestACIsTestLike(t *testing.T) {
+	for p, want := range map[string]bool{
+		"src/checks/slug.js": false, "src/index.js": false, "docs/slug.go": false, "src/latest.js": true,
+		"Tests/SlugifyTests.swift": true, "src/SlugifyTest.java": true,
+		"cypress/slugify.cy.js": true, "e2e/slugify.js": true,
+		"src/slug.CY.ts": true, "E2E/slug.js": true, "Cypress/slug.js": true, "Sources/CaseSpec.scala": true,
+		"test/a.js": true, "pkg/tests/a": true, "src/__tests__/a.ts": true, "spec/a.rb": true,
+		"pkg/a_test.go": true, "src/a.test.js": true, "src/a.spec.ts": true, "py/test_a.py": true,
+		"internal/docs/slug_test.go": true, "docs/test-plan.md": false,
+		"spec/a.markdown": false, "e2e/a.rst": false,
+		"cypress/a.adoc": false, "src/a.cy.txt": false, "Tests/A.MD": false,
+	} {
+		if got := acIsTestLike(p); got != want {
+			t.Errorf("acIsTestLike(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
+// The pre-filter must not drop a line the span matcher accepts (#3501).
+func TestACGrepLiteral(t *testing.T) {
+	for tok, line := range map[string]string{
+		"slugify": "slugify(x)", "obj.name()": "other.name (1)", "{sessionJwt}": "[{ sessionJwt: [] }]",
+		"mode:fast": `"Mode": "fast"`, "begin-…-end": "begin-42-end",
+	} {
+		if !acSpanMatcher(tok)(line) || !strings.Contains(line, acGrepLiteral(tok)) {
+			t.Errorf("span %q: literal %q misses %q", tok, acGrepLiteral(tok), line)
+		}
+	}
+}
+
+func TestVerifyACOnMerge_TestScopedPreservation(t *testing.T) {
+	for _, touched := range []bool{false, true} {
+		dir := slugifyRepo(t)
+		addTruncate(t, dir)
+		if touched {
+			writeFile(t, dir, "test/slugify.test.js", slugifyTest+"check(1);\n")
+		}
+		gitOut(t, dir, "add", "-A")
+		gitOut(t, dir, "commit", "-qm", "change")
+		gitOut(t, dir, "checkout", "-q", "main")
+		gitOut(t, dir, "merge", "-q", "--no-ff", "-m", "merge", "feat/truncate")
+		met, ev := judgeOnMerge(t, dir, "HEAD", g1ACs[1])
+		if met == touched || !strings.Contains(ev, "test/slugify.test.js") {
+			t.Errorf("touched=%v: met=%v (%s)", touched, met, ev)
+		}
+		// The first clause is met on the merge, so only the split-off one can fail.
+		const joined = "`Fixture` is unchanged, and the `slugify` tests are untouched"
+		if met, ev := judgeOnMerge(t, dir, "HEAD", joined); met || !touched && !strings.Contains(ev, "changes a line containing") {
+			t.Errorf("touched=%v: %q met=%v (%s), want the strict verdict", touched, joined, met, ev)
+		}
+	}
+}
+
+// The merged-diff judge fails a kept result on a deleted test (#3501).
+func TestVerifyACOnMerge_ResultOnlyTestScope(t *testing.T) {
+	dir := slugifyRepo(t)
+	gitOut(t, dir, "rm", "-q", "test/slugify.test.js")
+	gitOut(t, dir, "commit", "-qm", "delete")
+	gitOut(t, dir, "checkout", "-q", "main")
+	gitOut(t, dir, "merge", "-q", "--no-ff", "-m", "merge", "feat/truncate")
+	met, ev := judgeOnMerge(t, dir, "HEAD", "`slugify` tests still pass")
+	if met || !strings.Contains(ev, "deletes `test/slugify.test.js`") {
+		t.Errorf("met=%v (%s), want unmet naming the test", met, ev)
+	}
+}
+
+// git quotes such a path in diff headers, so "untouched" cannot be read and
+// the strict verdict stands (#3501).
+func TestACTestsPreserved_QuotedPath(t *testing.T) {
+	dir := slugifyRepo(t)
+	gitOut(t, dir, "checkout", "-q", "main")
+	writeFile(t, dir, `test/say "hi".js`, "greet()\n")
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "quoted")
+	gitOut(t, dir, "checkout", "-q", "-B", "feat/truncate")
+	addTruncate(t, dir)
+	d := collect(t, dir)
+	if r := acTestsPreserved("greet", d); r.ok {
+		t.Errorf("got %+v, want no decision", r)
+	}
+	r := acPreserved(parseACClause("The `greet` tests are untouched"), d)
+	if r.status != ACMet || !strings.Contains(r.evidence, "changes no line containing") {
+		t.Errorf("got %+v, want the strict met", r)
+	}
+}
+
+// A kept file that sorts first must not hide an edited one whose path git
+// quotes (#3501).
+func TestACTestsPreserved_EditedQuotedPath(t *testing.T) {
+	for _, odd := range []string{`test/z "q".test.js`, "test/z\rq.test.js"} {
+		dir := slugifyRepo(t)
+		gitOut(t, dir, "checkout", "-q", "main")
+		writeFile(t, dir, odd, "slugify()\n")
+		gitOut(t, dir, "add", "-A")
+		gitOut(t, dir, "commit", "-qm", "quoted")
+		gitOut(t, dir, "checkout", "-q", "-B", "feat/truncate")
+		addTruncate(t, dir)
+		writeFile(t, dir, odd, "slugify(1)\n")
+		if r := acTestsPreserved("slugify", collect(t, dir)); r.status == ACMet {
+			t.Errorf("%q: got %+v, want no met", odd, r)
+		}
+	}
+}
+
+// A layout the test-file rule does not know: alone it leaves the strict
+// verdict, and beside a kept test it does so only when its path is test-like
+// (#3501).
+func TestVerifyACAgainstDiff_UnrecognisedTestFile(t *testing.T) {
+	const slug = "test/slugify.test.js"
+	for _, tc := range []struct {
+		path, body string
+		testLike   bool
+	}{
+		{path: "Tests/SlugifyTests.swift", testLike: true},
+		{path: "src/FooTest.java", testLike: true},
+		{path: "Sources/CaseSpec.scala", testLike: true},
+		{path: "src/slugify.cy.ts", testLike: true},
+		{path: "src/SlugifyIT.java"},
+		{path: "t/basic.t"},
+		{path: "features/case.feature"},
+		{path: "src/case.rs", body: "#[cfg(test)]\nmod checks {}\n"},
+		{path: "src/case.py", body: "def test_case():\n    pass\n"},
+		{path: "src/case.ts", body: "if (import.meta.vitest) {}\n"},
+		{path: "src/Case.java", body: "@Test\nvoid keeps() {}\n"},
+	} {
+		p, body := tc.path, tc.body
+		for _, knownKept := range []bool{false, true} {
+			dir := slugifyRepo(t)
+			onBase(t, dir, func(t *testing.T, dir string) {
+				writeFile(t, dir, p, body+"slugify(1)\n")
+				if !knownKept {
+					gitOut(t, dir, "rm", "-q", slug)
+				}
+			})
+			writeFile(t, dir, p, body+"slugify(2)\n")
+			got, ok := VerifyACAgainstDiff("The `slugify` tests are untouched", nil, collect(t, dir), ACTestState{})
+			want, names := ACUnmet, "changes a line containing `slugify` at `"+p
+			if knownKept && !tc.testLike {
+				want, names = ACMet, slug
+			}
+			if !ok || got.Status != want || !strings.Contains(got.Evidence, names) {
+				t.Errorf("%s, knownKept=%v: got %+v ok=%v, want %s naming %q", p, knownKept, got, ok, want, names)
+			}
+		}
+	}
+}
+
+// A touched test-like path git quotes cannot be read from the diff, nor can
+// a rename's quoted base path, so neither is met by the scope (#3501).
+func TestACTestsPreserved_TestLikeQuotedPath(t *testing.T) {
+	for name, tc := range map[string]struct{ base, to string }{
+		"edited":            {base: `e2e/z "q".js`},
+		"renamed into e2e/": {base: `z "q".js`, to: "e2e/z.js"},
+	} {
+		dir := slugifyRepo(t)
+		onBase(t, dir, func(t *testing.T, dir string) {
+			writeFile(t, dir, tc.base, "slugify()\n")
+			writeFile(t, dir, "e2e/other.js", "check()\n")
+		})
+		addTruncate(t, dir)
+		if tc.to != "" {
+			gitOut(t, dir, "mv", tc.base, tc.to)
+		} else {
+			writeFile(t, dir, tc.base, "slugify(1)\n")
+		}
+		d := collect(t, dir)
+		if r := acTestsPreserved("slugify", d); r.ok {
+			t.Errorf("%s: got %+v, want no decision", name, r)
+		}
+		if r := acPreserved(parseACClause(g1ACs[1]), d); r.status != ACUnmet {
+			t.Errorf("%s: got %+v, want the strict unmet", name, r)
+		}
+	}
+}
+
+// The merged-diff judge has the same test-like rule (#3501).
+func TestVerifyACOnMerge_TestLike(t *testing.T) {
+	const p = "Tests/SlugifyTests.swift"
+	dir := slugifyRepo(t)
+	onBase(t, dir, func(t *testing.T, dir string) { writeFile(t, dir, p, "slugify(1)\n") })
+	writeFile(t, dir, p, "slugify(2)\n")
+	gitOut(t, dir, "commit", "-qam", "edit")
+	gitOut(t, dir, "checkout", "-q", "main")
+	gitOut(t, dir, "merge", "-q", "--no-ff", "-m", "merge", "feat/truncate")
+	met, ev := judgeOnMerge(t, dir, "HEAD", "the `slugify` tests are untouched")
+	if met || !strings.Contains(ev, p) {
+		t.Errorf("met=%v (%s), want the strict unmet naming the file", met, ev)
+	}
+}
+
+// git quotes the new path, so the diff's headers never record the rename (#3501).
+func TestACTestsPreserved_RenamedToQuotedPath(t *testing.T) {
+	for _, otherKept := range []bool{false, true} {
+		dir := slugifyRepo(t)
+		if otherKept {
+			gitOut(t, dir, "checkout", "-q", "main")
+			writeFile(t, dir, "test/a.test.js", "slugify()\n")
+			gitOut(t, dir, "add", "-A")
+			gitOut(t, dir, "commit", "-qm", "second")
+			gitOut(t, dir, "checkout", "-q", "-B", "feat/truncate")
+		}
+		addTruncate(t, dir)
+		gitOut(t, dir, "mv", "test/slugify.test.js", `test/z "q".test.js`)
+		r := acTestsPreserved("slugify", collect(t, dir))
+		if r.status != ACUnmet || !strings.Contains(r.evidence, "test/slugify.test.js") {
+			t.Errorf("otherKept=%v: got %+v, want unmet naming the base path", otherKept, r)
+		}
+	}
+}

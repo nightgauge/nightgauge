@@ -275,6 +275,83 @@ clause decides.
 | section      | a diffed path plus backticked `## …` headings                                                                                                                                                                                                                                                                                          | an added line in that file sits beneath the headings and carries the clause's code spans and `#NNN` refs                                                                                                                                                                                                                          |
 | token/file   | code spans and `#NNN` refs                                                                                                                                                                                                                                                                                                             | every one appears in the added lines or the post-change file (of the named diffed file, when one is named), and at least one is in the added lines                                                                                                                                                                                |
 
+The preservation row has one narrower reading, for a clause that keeps a span's
+tests (#3501). Its governing rule: **the test scope may turn a strict `unmet`
+into `met` only when the span's tests are the one thing the clause preserves.
+Whenever that is not certain, the clause keeps today's strict verdict.** The
+strict verdict is the row's own line and presence check; a false `unmet` on an
+unusual phrasing is acceptable, a false `met` is not.
+
+- **A qualified test noun is scoped.** The noun ("test", "tests", "suite",
+  "spec" or "specs") follows the span directly, or after one or two plain words:
+  "The existing `slugify` unit tests are untouched". It must head its phrase
+  ("test files" does, "test flag" does not). A qualifier is letters only and is
+  not a function word, a verb-like word in "-s" or "-ing" ("existing" is the
+  exception), an "-ly" adverb, or a result or preservation word. After qualifiers the noun
+  is never "spec", "specs" or a lone "suite", "tests" takes no singular verb,
+  and the rest of the clause may say only that the
+  tests are kept, with no and/or before it says so. After "keep" or "does not
+  change" a qualified noun has no verb of its own: "Keep the `slugify` unit
+  tests passing" is scoped, "Keep `slugify` once tests pass" is strict.
+- **A clause that preserves anything else is strict.** Nothing is scoped when
+  the clause was split off at ", and", or when the text before the span is more
+  than these, each optional: a command's result ("`npm test` passes with"), the
+  verb keeping the tests ("keep", "does not change") and determiners ("the",
+  "its", "all", "existing", "current"). So and, or, any other joiner and any
+  other preservation wording before the span are strict. These stay `unmet`
+  when `slugify` is rewritten: "The implementation and the associated `slugify`
+  tests are untouched" and "Behavior is unchanged with `slugify` tests
+  untouched". "Keep the `slugify` tests untouched" is scoped.
+
+A scoped span is judged on test files that contain it at the diff's base, in
+path or content. A bare name counts as whole words, and a case change ends a
+word (`get` is in `get_test.go` and `getUser`, not in `widget`):
+
+- `unmet` when the diff modifies, empties, deletes or renames one, comments
+  included. The evidence names the base path.
+- Strict when more than tests may be kept and the diff changes a line
+  containing the span or a non-test file naming it. More may be kept when the
+  words after the span say more ("tests and behavior", or "spec" or a lone
+  "suite", which can be a document or a cipher suite), or when the criterion has another clause that is more than a
+  command's result ("; so is the implementation").
+- Otherwise `met` when at least one exists, every candidate was read, the diff
+  touches none and it touches no test-like file that Rule 2 makes strict: an
+  added test file, or a README or source line naming the span, does not count.
+
+Three rules bound that judgement:
+
+1. **The test scope never returns undecided.** When it cannot decide, the whole
+   clause gets the strict verdict. That is when no base test file contains the
+   span, a candidate is over the 1 MiB read limit, a read fails (`git grep`
+   writing to stderr is one), the base or work directory is missing, a path
+   is one a diff header cannot carry reliably, or Rule 2 says so.
+2. **Files are classified by path only, in two classes.** No file's text
+   classifies it, and a path ending `.md`, `.markdown`, `.rst`, `.adoc` or
+   `.txt` is in neither class.
+   - A **recognised test file** has a `test`, `tests`, `__tests__` or `spec`
+     directory, or is named `*_test.*`, `*.test.*`, `*.spec.*` or `test_*.*`.
+     A `docs` or `doc` directory does not exclude one:
+     `internal/docs/slug_test.go` is a test file.
+   - A **test-like path** contains `test`, `spec`, `.cy.`, `e2e` or `cypress`
+     when lower-cased. Every recognised test file is test-like;
+     `Tests/SlugifyTests.swift`, `src/SlugifyTest.java` and
+     `cypress/slugify.cy.js` are test-like and not recognised.
+
+   When the diff edits, empties, deletes or renames a file that is test-like,
+   not recognised and holds the span in its path, base content or changed
+   lines, or such a file cannot be read, the clause gets the strict verdict,
+   also beside a kept test. Holding is the strict check's match, so `get` is in
+   `widget` here. A rename counts by either path; an added file never counts.
+   The five substrings are the whole definition, closed by decision: any other
+   layout is a non-test file, and a false `unmet` from a substring
+   (`src/latest.js`) is accepted.
+
+3. **A result-only clause is judged like any other scoped clause.** "`slugify`
+   tests still pass" and "the `slugify` tests must remain and pass" are `unmet`
+   when a test file containing the span is edited, emptied or deleted, and
+   `met` when none is touched. An `unmet` from another verdict, such as a
+   failing test run, still outranks that `met`.
+
 A missing token is `unmet` only when the clause names a diffed file. With no
 diffed file named, the clause is skipped, because it may be about something
 the diff does not hold.
@@ -343,10 +420,15 @@ earlier PR's merged diff: the merge commit of the PR the
 The merge SHA is read from the forge when the run is scoped and stored as
 `merge_sha` in `partial-delivery-{N}.json`. Only two rules can answer met there:
 a preservation (the merged diff changed no non-comment line containing the span,
-and the span exists after the merge) and a removal (the span existed at the
-first parent and is gone after the merge). Everything else is unmet, including
+and the span exists after the merge; when the span's tests are the one thing
+kept, as above, it touched no test file that contained the span at the first
+parent, or, if that cannot be told or Rule 2 makes it strict, the line and
+presence check decides) and a removal (the span existed at the first parent and
+is gone after the merge).
+Everything else is unmet, including
 a presence criterion, a criterion with no code span, a span on neither side, a
-merge commit missing locally, and any read error. When every criterion is met,
+merge commit missing locally, and a read error in the deciding check. When every
+criterion is met,
 the issue is closed as completed with an evidence comment, its matching boxes
 are ticked and its board row moves to Done; the run ends `issue_closed`, not
 as a failure. When any is unmet, the run is booked `not_pipeline_actionable` with
