@@ -662,8 +662,11 @@ issue to each path with its body line.
   counts as its own, a sibling path mentioned outside the acceptance criteria
   never refuses, and a body with no resolving paths is inconclusive.
 - **Fail-open**: if the body, a repository's file list or the workspace
-  registry cannot be read, the issue dispatches and the log says why.
-- **Single-repo workspaces**: the check does nothing.
+  registry cannot be read, or there is no forge client to read the body with,
+  the issue dispatches and the log says why.
+- **Single-repo workspaces**: the check does nothing. Neither does it for a
+  scheduler with no workspace root, which never reads the working directory's
+  workspace.
 
 The gate runs in `PickNext`, `RunQueue` and the queue dequeue. A refused queue
 item is paused with kind `repo_affinity`. No refusal state is stored: transfer

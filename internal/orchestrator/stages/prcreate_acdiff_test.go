@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -1860,6 +1861,180 @@ func TestCollectACDiffRange_RejectsBadArguments(t *testing.T) {
 	for _, rev := range []string{"", "--all"} {
 		if _, _, err := acGitGrepRev(dir, rev, "-F", "x", nil); err == nil {
 			t.Errorf("acGitGrepRev rev %q: want an error", rev)
+		}
+	}
+}
+
+// Both collectors parse the same diff whatever prefixes the git config asks
+// for (#3505). diff.mnemonicPrefix renames only a working-tree diff's
+// prefixes; git already gives a commit range a/ and b/ under it.
+func TestCollectACDiff_PinnedPrefixes(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	dir := slugifyRepo(t)
+	addTruncate(t, dir)
+	gitOut(t, dir, "rm", "-q", "test/other.test.js")
+	gitOut(t, dir, "mv", "test/get.test.js", "test/fetch.test.js")
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "change")
+	// Tracked, so it reaches the parser; an untracked file does not.
+	writeFile(t, dir, "test/budget.test.js", "check(widget());\ncheck(budget());\n")
+
+	both := func() (worktree, commits map[string]*ACFileDiff) {
+		t.Helper()
+		r, err := CollectACDiffRange(context.Background(), dir, "HEAD^1", "HEAD")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return collect(t, dir).Files, r.Files
+	}
+	wantWorktree, wantCommits := both()
+	for path, status := range map[string]string{
+		"src/index.js":          "modified",
+		"test/truncate.test.js": "added",
+		"test/other.test.js":    "deleted",
+		"test/fetch.test.js":    "renamed",
+	} {
+		for name, files := range map[string]map[string]*ACFileDiff{"worktree": wantWorktree, "range": wantCommits} {
+			if f := files[path]; f == nil || f.Status != status {
+				t.Fatalf("baseline %s: %s = %+v, want %s", name, path, f, status)
+			}
+		}
+	}
+	if f := wantWorktree["test/budget.test.js"]; f == nil || len(f.Added) == 0 {
+		t.Fatalf("baseline worktree lacks the uncommitted edit: %+v", f)
+	}
+
+	same := func(name string, got, want map[string]*ACFileDiff) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Errorf("%s: read %d files, want %d", name, len(got), len(want))
+		}
+		for path, w := range want {
+			if !reflect.DeepEqual(got[path], w) {
+				t.Errorf("%s: %s = %+v, want %+v", name, path, got[path], w)
+			}
+		}
+	}
+	for _, key := range []string{"diff.noprefix", "diff.mnemonicPrefix"} {
+		gitOut(t, dir, "config", key, "true")
+		worktree, commits := both()
+		same(key+": CollectACDiff", worktree, wantWorktree)
+		same(key+": CollectACDiffRange", commits, wantCommits)
+		gitOut(t, dir, "config", "--unset", key)
+	}
+}
+
+// A rewritten definition is seen, and unmet, under diff.noprefix (#3505).
+func TestVerifyACOnMerge_NoPrefix(t *testing.T) {
+	dir := slugifyRepo(t)
+	gitOut(t, dir, "config", "diff.noprefix", "true")
+	writeFile(t, dir, "src/index.js", "function slugify(s, sep) {}\n\nmodule.exports = { slugify };\n")
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "rewrite slugify")
+	commit := strings.TrimSpace(gitOut(t, dir, "rev-parse", "HEAD"))
+	if met, ev := judgeOnMerge(t, dir, commit, "`slugify` is unchanged"); met || !strings.Contains(ev, "src/index.js") {
+		t.Errorf("rewritten definition: met=%v (%s), want unmet naming src/index.js", met, ev)
+	}
+}
+
+// A path git C-quotes is read like any other, so a change beside an ordinary
+// file cannot hide in it (#3505).
+func TestVerifyACOnMerge_QuotedPaths(t *testing.T) {
+	dir := slugifyRepo(t)
+	const edited, gone, from, to = `src/q"x.js`, `src/back\slash.js`, "src/tab\there.js", `src/to "b.js`
+	writeFile(t, dir, edited, "function kebab(s) {}\n")
+	writeFile(t, dir, gone, "gone();\n")
+	writeFile(t, dir, from, "moved();\n")
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "quoted paths")
+	base := strings.TrimSpace(gitOut(t, dir, "rev-parse", "HEAD"))
+
+	writeFile(t, dir, edited, "function kebab(s, sep) {}\n")
+	writeFile(t, dir, "o.txt", "other\n")
+	gitOut(t, dir, "rm", "-q", "--", gone)
+	gitOut(t, dir, "mv", "--", from, to)
+	gitOut(t, dir, "add", "o.txt")
+	worktree, err := CollectACDiff(context.Background(), dir, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !worktree.Uncommitted[edited] {
+		t.Errorf("%s is not uncommitted: %v", edited, worktree.Uncommitted)
+	}
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "commit", "-qm", "change")
+	commit := strings.TrimSpace(gitOut(t, dir, "rev-parse", "HEAD"))
+	merged, err := CollectACDiffRange(context.Background(), dir, base, commit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, d := range map[string]*ACDiff{"worktree": worktree, "range": merged} {
+		for path, status := range map[string]string{edited: "modified", gone: "deleted", to: "renamed"} {
+			if f := d.Files[path]; f == nil || f.Status != status {
+				t.Errorf("%s: %q = %+v, want %s", name, path, f, status)
+			}
+		}
+		if f := d.Files[to]; f != nil && f.OldPath != from {
+			t.Errorf("%s: renamed from %q, want %q", name, f.OldPath, from)
+		}
+	}
+	if met, ev := VerifyACOnMerge("`kebab` is unchanged", merged); met || !strings.Contains(ev, edited) {
+		t.Errorf("rewritten definition: met=%v (%s), want unmet naming %s", met, ev, edited)
+	}
+}
+
+// No section takes another's place, whatever bytes its path holds (#3505).
+func TestParseUnifiedDiff_SectionsKeepTheirPath(t *testing.T) {
+	const victim = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n"
+	for name, c := range map[string]struct {
+		diff string
+		want []string
+	}{
+		"non-UTF-8 quoted names": {
+			"diff --git \"a/q\\\"\xff\" \"b/q\\\"\xff\"\n" + "diff --git \"a/q\\\"\xfe\" \"b/q\\\"\xfe\"\n",
+			[]string{"q\"\xff", "q\"\xfe"},
+		},
+		"edit of a name holding b/": {
+			victim + "diff --git a/x b/f b/x b/f\n--- a/x b/f\t\n+++ b/x b/f\t\n@@ -1 +1 @@\n-a\n+b\n",
+			[]string{"f", "x b/f"},
+		},
+		"deletion of a name holding b/": {
+			victim + "diff --git a/x b/f b/x b/f\ndeleted file mode 100644\n",
+			[]string{"f", "x b/f"},
+		},
+		"rename to a name holding b/": {
+			victim + "diff --git a/o b/x b/f\nrename from o\nrename to x b/f\n",
+			[]string{"f", "x b/f"},
+		},
+		"type change": {
+			"diff --git a/f b/f\ndeleted file mode 100644\n--- a/f\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n" +
+				"diff --git a/f b/f\nnew file mode 120000\n--- /dev/null\n+++ b/f\n@@ -0,0 +1 @@\n+target\n",
+			[]string{"f"},
+		},
+	} {
+		files := parseUnifiedDiff(c.diff)
+		if len(files) != len(c.want) {
+			t.Errorf("%s: read %d files, want %d", name, len(files), len(c.want))
+		}
+		for _, p := range c.want {
+			f := files[p]
+			if f == nil {
+				t.Errorf("%s: no %q", name, p)
+			} else if p == "f" && !reflect.DeepEqual(f.Removed, []string{"old"}) {
+				t.Errorf("%s: f lost its removed line: %+v", name, f)
+			}
+		}
+	}
+}
+
+// A merged diff with no files proves nothing kept (#3505).
+func TestVerifyACOnMerge_NoFiles(t *testing.T) {
+	dir := slugifyRepo(t)
+	for name, files := range map[string]map[string]*ACFileDiff{"nil": nil, "empty": {}} {
+		d := &ACDiff{Files: files, Workdir: dir, BaseRev: "HEAD", FromRev: "HEAD", ToRev: "HEAD"}
+		if met, ev := VerifyACOnMerge("`slugify` is unchanged", d); met || !strings.HasPrefix(ev, "undecidable:") {
+			t.Errorf("%s files: met=%v (%s), want undecidable", name, met, ev)
 		}
 	}
 }
