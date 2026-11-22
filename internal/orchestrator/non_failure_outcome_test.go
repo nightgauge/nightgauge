@@ -16,6 +16,7 @@ func TestApplyNonFailureOutcome(t *testing.T) {
 		wantOutcome, wantType            string
 	}{
 		{"approval hold → cancelled awaiting_approval", TerminalKindArchitectureApprovalRequired, "failed", "", "cancelled", OutcomeTypeAwaitingApproval},
+		{"not_pipeline_actionable alone stays failed", TerminalKindNotPipelineActionable, "failed", "", "failed", ""},
 		{"subagent crash stays failed", TerminalKindSubagentCrash, "failed", "", "failed", ""},
 		{"validation failure stays failed", "validation_failed", "failed", "", "failed", ""},
 		{"blocked record unchanged", "", "failed", OutcomeTypeBlocked, "failed", OutcomeTypeBlocked},
@@ -34,4 +35,27 @@ func TestApplyNonFailureOutcome(t *testing.T) {
 		})
 	}
 	ApplyNonFailureOutcome(nil) // must not panic
+}
+
+// #3487: only a writer holding the booking's flag calls this, and it books
+// nothing but not_pipeline_actionable.
+func TestApplyPartialNoOpOutcome(t *testing.T) {
+	t.Parallel()
+
+	rec := state.V2RunRecord{Outcome: "failed", OutcomeType: OutcomeTypeBlocked, TerminalFailureKind: TerminalKindNotPipelineActionable}
+	ApplyPartialNoOpOutcome(&rec)
+	if rec.Outcome != "cancelled" || rec.OutcomeType != OutcomeTypeNoOp || rec.TerminalFailureKind != TerminalKindNotPipelineActionable {
+		t.Errorf("record = %+v, want cancelled/no_op with the kind retained", rec)
+	}
+	stopped := state.V2RunRecord{Outcome: "cancelled", OutcomeType: OutcomeTypeOperatorStopped, TerminalFailureKind: TerminalKindOperatorStop}
+	ApplyPartialNoOpOutcome(&stopped)
+	if stopped.OutcomeType != OutcomeTypeOperatorStopped {
+		t.Errorf("an operator stop was rebooked %q", stopped.OutcomeType)
+	}
+	crashed := state.V2RunRecord{Outcome: "failed", TerminalFailureKind: TerminalKindSubagentCrash}
+	ApplyPartialNoOpOutcome(&crashed)
+	if crashed.Outcome != "failed" || crashed.OutcomeType != "" {
+		t.Errorf("a crash was rebooked %s/%s", crashed.Outcome, crashed.OutcomeType)
+	}
+	ApplyPartialNoOpOutcome(nil) // must not panic
 }

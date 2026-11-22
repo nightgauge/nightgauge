@@ -272,6 +272,9 @@ func TestPartialNoOp_1051NamedDisputeEndsAsDispute(t *testing.T) {
 	if kind != TerminalKindNotPipelineActionable {
 		t.Fatalf("terminal kind = %q, want %q", kind, TerminalKindNotPipelineActionable)
 	}
+	if !snap.PartialNoOp {
+		t.Fatal("a dispute did not set the no-op booking (#3487)")
+	}
 	if detail := snap.StageErrors[string(state.StageFeatureDev)]; !strings.Contains(detail, "Task 1: internal/x/x.go has no Handle func") {
 		t.Fatalf("feature-dev error = %q, want the named dispute", detail)
 	}
@@ -366,5 +369,52 @@ func TestPartialNoOp_LevelBranchRelapsThenBooksNoOp(t *testing.T) {
 	detail := snap.StageErrors[string(state.StageFeatureDev)]
 	if strings.Contains(detail, "stale") || strings.Contains(detail, "premature turn end") {
 		t.Fatalf("feature-dev error = %q, want a no-op ending", detail)
+	}
+}
+
+// #3487: a dispute reports the remainder too, for the no-op comment.
+func TestDecidePartialNoOp_DisputeCarriesRemainder(t *testing.T) {
+	t.Parallel()
+
+	ws, _ := mergedPartialRepo(t, false)
+	path, err := stagecontext.ContextPath(ws, 7, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dev := `{"feedback":[{"signal_type":"PLAN_REVISION_NEEDED","evidence":["Task 1 is wrong"]}]}`
+	if err := os.WriteFile(path, []byte(dev), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v := RemainderVerdict{Criteria: []CriterionVerdict{{Text: "A", Evidence: "undecidable"}}}
+	got := DecidePartialNoOp(ws, 7, &state.PartialRerun{PR: 5, Criteria: []string{"A"}}, false, v)
+	if got.Action != PartialNoOpActionDispute || got.Remainder == nil || len(got.Remainder.Criteria) != 1 {
+		t.Fatalf("result = %+v, want a dispute with the remainder", got)
+	}
+}
+
+// #3487: relap carries the remainder as well: the pr-create no-diff stop asks
+// after feature-dev, when an operator-revised plan still answers relap.
+func TestDecidePartialNoOp_RelapCarriesRemainder(t *testing.T) {
+	t.Parallel()
+
+	ws, _ := mergedPartialRepo(t, false)
+	path, err := stagecontext.ContextPath(ws, 7, "planning")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan := `{"revision_reasons":["operator-origin: action-center"],"files_to_modify":["a.go"]}`
+	if err := os.WriteFile(path, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v := RemainderVerdict{Criteria: []CriterionVerdict{{Text: "A", Evidence: "undecidable"}}}
+	got := DecidePartialNoOp(ws, 7, &state.PartialRerun{PR: 5, Criteria: []string{"A"}}, false, v)
+	if got.Action != PartialNoOpActionRelap || got.Remainder == nil || len(got.Remainder.Criteria) != 1 {
+		t.Fatalf("result = %+v, want a relap with the remainder", got)
 	}
 }

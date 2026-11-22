@@ -45,6 +45,12 @@ const OutcomeTypeAwaitingApproval = "awaiting_approval"
 // failed run in the dashboard's or exit-records' failure totals.
 const OutcomeTypeIssueClosed = "issue_closed"
 
+// OutcomeTypeNoOp is the run outcome_type for a partial-delivery re-run booked
+// a no-op (#3487). It books as "cancelled" and keeps its terminal kind,
+// not_pipeline_actionable, which parks the issue and holds it for a human.
+// The kind alone never selects it: see ApplyPartialNoOpOutcome.
+const OutcomeTypeNoOp = "no_op"
+
 // OutcomeTypeOperatorStopped is the run outcome_type for a run an operator
 // stopped (#1848): an operator Stop, a cancel that tore the run down, or a
 // pr-merge hand-back interrupted by an admission stop. Nothing about the issue
@@ -130,6 +136,19 @@ func ApplyNonFailureOutcome(rec *state.V2RunRecord) {
 		return
 	}
 	rec.Outcome = "cancelled"
+}
+
+// ApplyPartialNoOpOutcome books a run record as a partial-delivery no-op
+// (#3487): outcome "cancelled", outcome_type no_op, kind and detail retained.
+// Both run-record writers call it after ApplyNonFailureOutcome, only when the
+// booking's structured flag is set; any other not_pipeline_actionable record
+// stays a failure record.
+func ApplyPartialNoOpOutcome(rec *state.V2RunRecord) {
+	if rec == nil || rec.TerminalFailureKind != TerminalKindNotPipelineActionable {
+		return
+	}
+	rec.Outcome = "cancelled"
+	rec.OutcomeType = OutcomeTypeNoOp
 }
 
 // Terminal failure kinds — what aborted the pipeline run (Issue #3001).
@@ -1006,8 +1025,11 @@ func ResolveTerminalKind(gateRan bool, gateTerminalKind string, hostSlept bool, 
 // snapshot's current (failed) stage. The scheduler's structured operator-stop
 // verdict (RuntimeState.StageOperatorStopped, #1848) outranks everything: a
 // stopped stage's error text is whatever a SIGTERM'd process last said, and the
-// stop must not be re-derived from it. Otherwise it is ResolveTerminalKind over
-// the stage's host-sleep verdict and errorText.
+// stop must not be re-derived from it. A partial-delivery no-op booking
+// (RuntimeState.PartialNoOp, #3487) is next: the feature-dev gate has already
+// stamped the empty diff dev_produced_no_changes, and the booking's text
+// quotes criteria. Otherwise it is ResolveTerminalKind over the stage's
+// host-sleep verdict and errorText.
 func ResolveSnapshotTerminalKind(snap *state.RuntimeState, gateRan bool, gateTerminalKind, errorText string) string {
 	if snap == nil {
 		return ResolveTerminalKind(gateRan, gateTerminalKind, false, errorText)
@@ -1015,6 +1037,9 @@ func ResolveSnapshotTerminalKind(snap *state.RuntimeState, gateRan bool, gateTer
 	stage := string(snap.Stage)
 	if snap.StageOperatorStopped[stage] {
 		return TerminalKindOperatorStop
+	}
+	if snap.PartialNoOp {
+		return TerminalKindNotPipelineActionable
 	}
 	return ResolveTerminalKind(gateRan, gateTerminalKind, snap.StageHostSlept[stage], errorText)
 }

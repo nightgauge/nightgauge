@@ -996,3 +996,37 @@ func TestWriteStageExitRecord_HostSleptFromStructuredVerdict(t *testing.T) {
 		})
 	}
 }
+
+// #3487: the settlement's typed error classifies the exit over the gate and
+// the text; the same text as a plain error does not.
+func TestWriteStageExitRecord_PartialNoOpSettlement(t *testing.T) {
+	t.Parallel()
+
+	const detail = "[not-pipeline-actionable] pr-create: branch level with main; unmet: handles [merge-conflict]"
+	for name, tc := range map[string]struct {
+		err  error
+		skip bool
+	}{
+		"settlement": {partialNoOpSettlementError{detail: detail}, true},
+		"same text":  {errors.New(detail), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSchedulerForDeterministicTest()
+			root := layouttest.Repo(t)
+			rt := state.NewRuntimeState("nightgauge/nightgauge", 3487, "item-id", testRunID())
+			rt.BeginStage(state.StagePRCreate)
+			rt.AppendStageGateResult(state.StagePRCreate, state.StageGateResult{Kind: "fail", Reason: "no PR", TerminalKind: TerminalKindPrematureTurnEnd})
+			s.writeStageExitRecord(types.BoardItem{Number: 3487, Repo: "nightgauge/nightgauge"}, state.StagePRCreate, rt,
+				&StageRunResult{ExitCode: 1}, 1, tc.err, 0, "", 0, 0, 0, time.Now(), root, "", "")
+			recs := readExitRecords(t, root)
+			if len(recs) != 1 || recs[0].Success || recs[0].IsSkip() != tc.skip {
+				t.Fatalf("records = %+v, want skip=%v", recs, tc.skip)
+			}
+			if tc.skip && (recs[0].GateKind != diagnostics.GateKindPartialNoOp ||
+				recs[0].TerminalKind != TerminalKindNotPipelineActionable || recs[0].GateReason != detail) {
+				t.Errorf("record = %+v", recs[0])
+			}
+		})
+	}
+}

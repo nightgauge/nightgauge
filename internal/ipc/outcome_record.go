@@ -50,6 +50,10 @@ const (
 	// for a human (#2756). A deliberate pause is not a failure. Exact parity
 	// with the Go scheduler's skip in scheduler.go.
 	outcomeSkipAwaitingApproval
+	// outcomeSkipNoOp: the run was booked a partial-delivery no-op (#3487),
+	// outcome_type no_op. Every corpus reader counts success:false as a
+	// failure. Exact parity with the Go scheduler's skip in scheduler.go.
+	outcomeSkipNoOp
 )
 
 // String names the decision for logs. Distinct strings per state so a log line
@@ -68,6 +72,8 @@ func (d outcomeDecision) String() string {
 		return "skip-gate-plugin-missing"
 	case outcomeSkipAwaitingApproval:
 		return "skip-awaiting-approval"
+	case outcomeSkipNoOp:
+		return "skip-no-op"
 	default:
 		return "unset"
 	}
@@ -102,6 +108,9 @@ func learningOutcomeFor(
 	}
 	if record.OutcomeType == orchestrator.OutcomeTypeAwaitingApproval {
 		return learning.Outcome{}, outcomeSkipAwaitingApproval
+	}
+	if record.OutcomeType == orchestrator.OutcomeTypeNoOp {
+		return learning.Outcome{}, outcomeSkipNoOp
 	}
 	if record.TerminalFailureKind == orchestrator.TerminalKindNetworkUnavailable {
 		return learning.Outcome{}, outcomeSkipNetworkUnavailable

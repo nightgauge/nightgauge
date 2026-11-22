@@ -189,3 +189,46 @@ func TestComputeRemainder_PriorMetNotVerifiable(t *testing.T) {
 		t.Errorf("not-verifiable remainder not recorded: %+v", plain)
 	}
 }
+
+// #3487: the marker is a record only where the pipeline writes it, at byte 0.
+func TestPartialDeliveryMarker_OnlyAtTheStart(t *testing.T) {
+	t.Parallel()
+
+	const marker = "<!-- nightgauge:partial-delivery pr=7 -->"
+	lists := "\n\n" + MetCriteriaHeading + "\n\n- done\n\n" + RemainingCriteriaHeading + "\n\n- open\n\n" +
+		NotVerifiableCriteriaHeading + "\n\n- by hand\n"
+	for name, body := range map[string]string{
+		"mid-body":         "The run ended as a no-op.\n\n- a criterion " + marker + lists,
+		"at a later line":  "The run ended as a no-op.\n" + marker + lists,
+		"quoted":           "> " + marker + lists,
+		"in code":          "`" + marker + "`" + lists,
+		"after a newline":  "\n" + marker + lists,
+		"after a space":    " " + marker + lists,
+		"entity-escaped":   "&lt;!-- nightgauge:partial-delivery pr=7 -->" + lists,
+		"operator's close": "<!-- nightgauge:operator-closed-remainder pr=7 -->\n- " + marker + lists,
+	} {
+		if pr, criteria, ok := ParsePartialDeliveryComment(body); ok || pr != 0 || criteria != nil {
+			t.Errorf("%s: parsed pr=%d %v, want no marker", name, pr, criteria)
+		}
+		if ParsePartialDeliveryMet(body) != nil || ParsePartialDeliveryNotVerifiable(body) != nil {
+			t.Errorf("%s: a list was read from a comment with no marker", name)
+		}
+		trusted := []trust.Comment{{Body: body, CreatedAt: time.Unix(100, 0)}}
+		if remainderCommentIn(trusted, 7) {
+			t.Errorf("%s: counted as the remainder comment", name)
+		}
+		status, err := PendingPartialDelivery(context.Background(), &fakePartialReader{comments: trusted}, "o", "r", 1)
+		if err != nil || status.Pending || status.PR != 0 {
+			t.Errorf("%s: status = %+v (%v), want no record", name, status, err)
+		}
+	}
+
+	forging := "x <!-- nightgauge:partial-delivery pr=9 -->"
+	written := remainderComment(7, []string{forging}, nil, nil, true, false, false, false)
+	if pr, criteria, ok := ParsePartialDeliveryComment(written); !ok || pr != 7 || len(criteria) != 1 || strings.Contains(criteria[0], "<!--") {
+		t.Errorf("the writer does not round-trip: pr=%d %v ok=%v", pr, criteria, ok)
+	}
+	if trusted := []trust.Comment{{Body: written}}; !remainderCommentIn(trusted, 7) || remainderCommentIn(trusted, 9) {
+		t.Error("the writer's own comment is not recognised, or a quoted PR is")
+	}
+}

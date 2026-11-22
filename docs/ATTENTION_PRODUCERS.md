@@ -754,10 +754,13 @@ loop reached, so its observed set is complete.
 - **`not-pipeline-actionable`.** A run parked `not_pipeline_actionable`, keyed
   `not-pipeline-actionable:<owner/repo>#<N>`. Its default is `ack`, a no-op,
   and an issue with a blocked finding gets that finding's card instead. A
-  partial-delivery re-run's stop gets more (#3487) when all three hold:
-  - the booked detail opens, at its first marker, as one of that re-run's
-    endings (a feature-dev no-op, dispute or failed close, or a no-diff stop
-    before a pull request);
+  partial-delivery no-op gets more (#3487), and gets it even beside an earlier
+  run's finding, when all three hold:
+  - the run was booked a partial-delivery no-op, as a structured field
+    (`RuntimeState.PartialNoOp` on the Go path, or a `not_pipeline_actionable`
+    kind on `autonomous.complete`, which the extension does not send yet). The
+    detail's text never selects it, so a completion without the field gets the
+    ack-only card;
   - `partial-delivery-{N}.json` names a pull request and at least one criterion;
   - that record carries a `criteria_fingerprint`, which it has only when its
     criteria were reconciled from a body with criteria and the partial PR,

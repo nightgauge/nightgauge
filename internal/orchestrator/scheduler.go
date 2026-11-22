@@ -1135,6 +1135,13 @@ type Scheduler struct {
 	// whose answer the window never read. In memory only: a token names one
 	// call of this process. Guarded by mu.
 	dequeuedBy map[string]string
+	// noOpBlockers holds the issues (repoIssueKey) whose run ended a
+	// partial-delivery no-op (#3487). Such an issue stays open with no queue
+	// item, so the dequeue guard would not otherwise see it blocking. It holds
+	// a successor only while that blocker reads OPEN, so closing the issue
+	// releases it. In memory only: after a restart pickup's dependency check
+	// defers the successor instead. Guarded by mu.
+	noOpBlockers map[string]bool
 
 	// OnFailureStatus: "ready" (default), "backlog", or "unchanged"
 	onFailureStatus string
@@ -3720,7 +3727,8 @@ func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, 
 			continue
 		}
 
-		// blockedBy guard: skip if blocked by any OPEN issue that is running, dequeued, or still in queue
+		// blockedBy guard: skip if blocked by any OPEN issue that is running,
+		// dequeued, still in queue, or ended a partial-delivery no-op (#3487)
 		if len(item.BlockedBy) > 0 {
 			blocked := false
 			for _, b := range item.BlockedBy {
@@ -3728,7 +3736,7 @@ func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, 
 					continue
 				}
 				key := queueBlockerKey(item.Repo, b)
-				if inFlight[key] || queued[key] || inFlightAnyRepo[b.Number] {
+				if inFlight[key] || queued[key] || inFlightAnyRepo[b.Number] || s.noOpBlockers[key] {
 					blocked = true
 					break
 				}
@@ -3758,6 +3766,9 @@ func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, 
 
 		item.Status = "processing"
 		dequeued = append(dequeued, item)
+		// A no-op issue dispatched again is in flight, which the guard sees:
+		// its hold has nothing left to do (#3487).
+		delete(s.noOpBlockers, repoIssueKey(item.Repo, item.IssueNumber))
 		inFlight[repoIssueKey(item.Repo, item.IssueNumber)] = true
 		repoInFlight[item.Repo]++
 		toRemoveIdx = append(toRemoveIdx, i)
@@ -3785,6 +3796,43 @@ func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, 
 	}
 
 	return dequeued
+}
+
+// HoldNoOpSuccessors keeps the queued issues that repo's issueNumber blocks
+// from dispatching while it stays open after a partial-delivery no-op (#3487).
+// Items it does not block still fill the freed slot.
+func (s *Scheduler) HoldNoOpSuccessors(repo string, issueNumber int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.noOpBlockers == nil {
+		s.noOpBlockers = make(map[string]bool)
+	}
+	s.noOpBlockers[repoIssueKey(repo, issueNumber)] = true
+}
+
+// ReleaseNoOpBlocker drops the hold HoldNoOpSuccessors placed for repo's
+// issueNumber once that issue is closed, and marks it CLOSED on every queued
+// item it blocks, so the next dequeue dispatches them without waiting for a
+// forge read (#3487). The no-op card's close calls it; a close by hand is
+// released by refreshBlockerStates instead.
+func (s *Scheduler) ReleaseNoOpBlocker(repo string, issueNumber int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := repoIssueKey(repo, issueNumber)
+	delete(s.noOpBlockers, key)
+	changed := false
+	for i := range s.queue {
+		for j, b := range s.queue[i].BlockedBy {
+			if queueBlockerKey(s.queue[i].Repo, b) == key && strings.EqualFold(b.State, "OPEN") {
+				s.queue[i].BlockedBy[j].State = "CLOSED"
+				changed = true
+			}
+		}
+	}
+	if changed {
+		s.persistQueue()
+		s.emitQueueChangedUnlocked()
+	}
 }
 
 // completeQueueItemLocked removes the matching "processing" queue item
@@ -5158,11 +5206,14 @@ func dirtyPaths(worktreePath string) []string {
 // stage ran and nothing was attempted — the scheduler already excludes it from
 // outcome recording for exactly this reason, and the extension path maps its
 // Deferred flag to "cancelled" rather than to a failure.
-func schedulerTerminalOutcome(success bool, terminalFailureKind string) string {
+//
+// A PARTIAL-DELIVERY NO-OP IS "cancelled" too (#3487), as both run-record
+// writers book it. It is keyed on the booking's flag, never on the kind.
+func schedulerTerminalOutcome(success bool, terminalFailureKind string, partialNoOp bool) string {
 	switch {
 	case success:
 		return "complete"
-	case terminalFailureKind == TerminalKindBlockedDependency:
+	case partialNoOp, terminalFailureKind == TerminalKindBlockedDependency:
 		return "cancelled"
 	default:
 		return "failed"
@@ -5812,6 +5863,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		}
 
 		snap := runtime.Snapshot()
+		// A partial-delivery no-op (#3487) is not a failure. Read from the
+		// booking's flag: other not_pipeline_actionable endings are failures.
+		partialNoOp := !pipelineSuccess && snap.PartialNoOp
 
 		// Terminal trace event (#179): the run's outcome with the terminal
 		// failure kind, closing the per-run decision trace.
@@ -5824,6 +5878,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// Remove the item from the queue on every exit path — success,
 		// failure, cancellation. No-op when the run wasn't dispatched via
 		// DequeueIndependent (e.g. the autonomous board-scan path). (Issue #232)
+		// A partial-delivery no-op leaves its issue open with no queue item:
+		// hold what it blocks until it closes (#3487). Before the item leaves
+		// the queue, so no dequeue sees the blocker unheld.
+		if partialNoOp {
+			s.HoldNoOpSuccessors(item.Repo, item.Number)
+		}
 		s.CompleteQueueItem(item.Repo, item.Number)
 
 		if s.onPipelineComplete != nil {
@@ -5833,8 +5893,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// Total run duration + outcome so the platform transitions the live
 			// row from 'running' to complete/failed (#1047). Copy the bool so the
 			// pointer doesn't alias the loop/closure variable.
-			// An approval hold is a non-failure (#2756): never a red row.
-			doneSuccess := pipelineSuccess || IsNonFailureTerminalKind(terminalFailureKind)
+			// An approval hold (#2756) or a partial no-op (#3487) is never a red row.
+			doneSuccess := pipelineSuccess || partialNoOp || IsNonFailureTerminalKind(terminalFailureKind)
 			totalDurationMs := 0
 			if !snap.StartedAt.IsZero() {
 				totalDurationMs = int(time.Since(snap.StartedAt).Milliseconds())
@@ -5900,10 +5960,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// `terminal: true`, so even a snapshot that lands between this line and
 		// the seal is one adoption refuses and the reconciler removes without
 		// emitting. Writes stop at the seal, not here.
-		runtime.MarkTerminal(schedulerTerminalOutcome(pipelineSuccess, terminalFailureKind))
+		runtime.MarkTerminal(schedulerTerminalOutcome(pipelineSuccess, terminalFailureKind, partialNoOp))
 
-		// Four terminal kinds record NOTHING, and the extension path skips the
-		// same four (internal/ipc/outcome_record.go) — one corpus, one meaning
+		// The terminal states below record NOTHING, and the extension path skips
+		// the same ones (internal/ipc/outcome_record.go) — one corpus, one meaning
 		// per field, or `success` and `costUsd` carry two meanings across the
 		// file's two writers with no discriminator to tell them apart.
 		//
@@ -5917,6 +5977,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		//
 		//   gate_plugin_missing (#2723) — the stage was stopped before any work
 		//   because its plugin did not load: the row would measure the install.
+		//
+		//   A partial-delivery no-op (#3487) records nothing either, keyed on
+		//   its flag rather than a kind: every reader of the corpus counts a
+		//   success:false row as a failure.
 		//
 		//   blocked_dependency (#305) — a deferral is not a failure and did no
 		//   work: no AI stage ran, so the row would book success:false at ~$0.
@@ -5944,6 +6008,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — awaiting human approval, not a failure)",
 				item.Number, TerminalKindArchitectureApprovalRequired)
 		default:
+			if partialNoOp {
+				log.Printf("#%d: skipping outcome recording (partial-delivery no-op, not a failure)", item.Number)
+				break
+			}
 			// recordOutcome re-resolves the prediction from the run's worktree
 			// before writing the row (#994) — the values here were read at
 			// pickup, before the file existed.
@@ -6525,6 +6593,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if detail, stopped := s.stopNoDiffBeforePRCreate(ctx, item, stageWorkspace(runtime, workspaceRoot)); stopped {
 				runtime.BeginStage(stage)
 				runtime.SetStageError(stage, detail)
+				if runtime.PartialRerunScope() != nil {
+					runtime.MarkPartialNoOp()
+				}
 				s.emitStateChanged(item.Repo, item.Number, runtime)
 				terminalFailureKind = TerminalKindNotPipelineActionable
 				return
@@ -8037,11 +8108,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			case partialNoOpDispute:
 				log.Printf("#%d: %s", item.Number, partialNoOp.Detail)
 				runtime.SetStageError(stage, partialNoOp.Detail)
+				runtime.MarkPartialNoOp()
 				terminalFailureKind = TerminalKindNotPipelineActionable
 				return
 			case partialNoOpClose:
 				detail, kind := s.endPartialRemainderMet(ctx, item, runtime.PartialRerunScope().PR, verdict)
 				runtime.SetStageError(stage, detail)
+				if kind == TerminalKindNotPipelineActionable { // the close failed
+					runtime.MarkPartialNoOp()
+				}
 				s.emitStateChanged(item.Repo, item.Number, runtime)
 				terminalFailureKind = kind
 				return
@@ -8064,6 +8139,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					s.emitStateChanged(item.Repo, item.Number, runtime)
 				}
 				runtime.SetStageError(stage, detail)
+				if kind == TerminalKindNotPipelineActionable {
+					runtime.MarkPartialNoOp()
+				}
 				terminalFailureKind = kind
 				return
 			}
@@ -8077,6 +8155,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		if partialNoOp.Action == partialNoOpBook {
 			log.Printf("#%d: %s", item.Number, partialNoOp.Detail)
 			runtime.SetStageError(stage, partialNoOp.Detail)
+			runtime.MarkPartialNoOp()
 			terminalFailureKind = TerminalKindNotPipelineActionable
 			return
 		}
@@ -8310,6 +8389,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if gateRan {
 				exitPayload.GateKind = string(gateRes.Kind)
 			}
+			if !exitPayload.Success && isPartialNoOpSettlement(err) {
+				exitPayload.TerminalKind = TerminalKindNotPipelineActionable
+				exitPayload.GateKind = diagnostics.GateKindPartialNoOp
+			}
 			tracer.Emit(trace.KindStageExit, string(stage), exitPayload)
 		}
 
@@ -8337,6 +8420,19 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				s.emitStateChanged(item.Repo, item.Number, runtime)
 				log.Printf("#%d: stage %s stopped by the operator (exit %d) — not the issue's failure, no retry, no escalation",
 					item.Number, stage, exitCode)
+				return
+			}
+
+			// A partial re-run that pr-create's no-diff settlement parked
+			// (#3487). Booked here, where the run returns, and ahead of every
+			// retry, recovery and escalation: the branch is level with its
+			// base, so another attempt reaches the same stop.
+			if isPartialNoOpSettlement(err) {
+				runtime.SetStageError(stage, err.Error())
+				runtime.MarkPartialNoOp()
+				terminalFailureKind = TerminalKindNotPipelineActionable
+				s.emitStateChanged(item.Repo, item.Number, runtime)
+				log.Printf("#%d: stage %s ended a partial-delivery no-op — no retry, no escalation", item.Number, stage)
 				return
 			}
 
@@ -9818,6 +9914,10 @@ func (s *Scheduler) refreshBlockerStates(ctx context.Context) {
 				changed = true
 			}
 		}
+		// A blocker read as no longer open needs no no-op hold (#3487).
+		if !strings.EqualFold(r.state, "OPEN") {
+			delete(s.noOpBlockers, repoIssueKey(r.target.repo, r.target.number))
+		}
 	}
 	if changed {
 		s.persistQueue()
@@ -11263,6 +11363,9 @@ func (s *Scheduler) recordV2History(
 	record := hw.BuildV2Record(snap, success, errMsg, input, now)
 	// #2756: an architecture-approval hold is a non-failure.
 	ApplyNonFailureOutcome(&record)
+	if !success && snap.PartialNoOp {
+		ApplyPartialNoOpOutcome(&record)
+	}
 	// #1848: a record still booked failed names its stage and reason.
 	EnsureFailureAttribution(&record, string(snap.Stage), errMsg)
 
@@ -12515,7 +12618,7 @@ func (s *Scheduler) tryDeterministicPRCreate(
 		// declined (#2942), so the run ends here with the criteria settled.
 		runtime.RecordExecutionPath(stage, "deterministic")
 		runtime.RecordStagePuntReason(stage, detResult.Reason)
-		return false, false, s.settleNoDiffRun(ctx, item, detResult)
+		return false, false, s.settleNoDiffRun(ctx, runtime.PartialRerunScope(), item, detResult)
 	}
 	if detErr == nil && detResult.Path == pmstages.CreatePathBlocked {
 		// #3419: a security_scan stop survived the deterministic rescan. The
@@ -12583,8 +12686,10 @@ func (s *Scheduler) tryDeterministicPRCreate(
 // is met; otherwise the comment names what is unmet and the returned text
 // parks the issue, which the autonomous scheduler moves to Backlog so it
 // cannot loop through Ready. A comment or close that fails leaves the issue
-// open and parked: closing on an unrecorded verdict is the worse error.
-func (s *Scheduler) settleNoDiffRun(ctx context.Context, item types.BoardItem, res pmstages.PRCreateResult) error {
+// open and parked: closing on an unrecorded verdict is the worse error. A
+// parked partial re-run returns a partialNoOpSettlementError (#3487): this only
+// names the ending, and the run loop books it where the run returns.
+func (s *Scheduler) settleNoDiffRun(ctx context.Context, scope *state.PartialRerun, item types.BoardItem, res pmstages.PRCreateResult) error {
 	var commenter NoDiffCommenter
 	if s.client != nil {
 		commenter = gh.NewIssueService(s.client)
@@ -12593,8 +12698,11 @@ func (s *Scheduler) settleNoDiffRun(ctx context.Context, item types.BoardItem, r
 	if s.issueSvc != nil {
 		closer = s.issueSvc
 	}
-	detail, _ := SettleNoDiff(ctx, commenter, closer, item.NodeID, item.Number, res)
+	detail, closed := SettleNoDiff(ctx, commenter, closer, item.NodeID, item.Number, res)
 	log.Printf("#%d: pr-create deterministic path: %s", item.Number, detail)
+	if !closed && scope != nil {
+		return partialNoOpSettlementError{detail: detail}
+	}
 	return errors.New(detail)
 }
 

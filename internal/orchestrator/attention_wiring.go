@@ -487,12 +487,13 @@ const closeRemainderLabel = "The remaining criteria are met; close the issue as 
 // branch level with its base. The issue is parked in Backlog with no retry, so
 // without this card the verdict and the planner's approach are invisible.
 //
-// When that run was a partial-delivery re-run (isPartialRerunStop and a
-// readable remainder), the card also lists every open criterion with the
-// judge's evidence and offers the close a human otherwise does by hand
-// (#3487). Every other raise is the ack-only card. The partial card reads git,
-// so it runs off as.mu (dispatchAttention).
-func (as *AutonomousScheduler) raiseNotPipelineActionable(repo string, issue int, title, detail string) {
+// When that run was booked a partial-delivery no-op (partialNoOp, the booking's
+// structured flag, never its text) and its remainder is readable, the card
+// also lists every open criterion with the judge's evidence and offers the
+// close a human otherwise does by hand (#3487). Every other raise is the
+// ack-only card. The partial card reads git, so it runs off as.mu
+// (dispatchAttention).
+func (as *AutonomousScheduler) raiseNotPipelineActionable(repo string, issue int, title, detail string, partialNoOp bool) {
 	req := attention.DecisionRequest{
 		IdempotencyKey: fmt.Sprintf("%s:%s#%d", attention.ProducerNotPipelineActionable, repo, issue),
 		Kind:           attention.KindHandoff,
@@ -513,7 +514,7 @@ func (as *AutonomousScheduler) raiseNotPipelineActionable(repo string, issue int
 		ExpiresAt:     expiryFromNow(14 * 24 * time.Hour),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Optional note: what will change so a later run has work to do"},
 	}
-	if isPartialRerunStop(issue, detail) {
+	if partialNoOp {
 		if r, ok := as.openPartialRemainder(repo, issue); ok {
 			req.Body = partialNoOpCardBody(detail, r.pr, r.open)
 			// The detail's unmet list quotes raw evidence, which can name the
@@ -528,33 +529,6 @@ func (as *AutonomousScheduler) raiseNotPipelineActionable(repo string, issue int
 		}
 	}
 	as.raiseAttention(req)
-}
-
-// isPartialRerunStop reports whether a booked detail is one a partial-delivery
-// re-run of issue ends with: a feature-dev no-op, dispute or failed close, or
-// one of the three no-diff stops before a pull request, which any run can end
-// with and which therefore count only beside a partial-delivery record
-// (openPartialRemainder). Only the detail's first marker is read, so another
-// ending that quotes one of these is not taken for it. #3487's second step
-// replaces this with the booking's structured kind.
-func isPartialRerunStop(issue int, detail string) bool {
-	const marker = "[not-pipeline-actionable] "
-	_, booked, found := strings.Cut(detail, marker)
-	if !found {
-		return false
-	}
-	for _, prefix := range []string{
-		// The trailing space keeps #34 from matching #348.
-		fmt.Sprintf("feature-dev: partial-delivery re-run of #%d ", issue),
-		"feature-validate left branch ",
-		"pr-create: branch ",
-		"pr-create: the feature branch has no diff",
-	} {
-		if strings.HasPrefix(booked, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 // partialRemainder is what a close option is offered over.
@@ -627,7 +601,8 @@ func partialNoOpCardBody(detail string, pr int, open []attention.RemainderCriter
 	head := fmt.Sprintf("%s\n\nOpen criteria after PR #%d, with the judge's evidence:\n",
 		clipBytes(reason, noOpReasonMaxBytes), pr)
 	tail := "\nIf they are met, choose close to close the issue as completed. Otherwise revise the issue, " +
-		"remove any `owner-action` label, and move it to Ready. It will not be retried until then."
+		"remove any `owner-action` label, and move it to Ready, " + parkedReleaseStep + ": Ready alone " +
+		"does not lift its hold. It will not be retried until then."
 	perLine := (attentionBodyMaxBytes - len(head) - len(tail)) / max(1, len(open))
 	var b strings.Builder
 	for _, c := range open {

@@ -138,10 +138,17 @@ func TestSchedulerTerminalOutcome_MatchesTheExtensionPathVocabulary(t *testing.T
 		{"a deferral is cancelled, not failed", false, TerminalKindBlockedDependency, "cancelled"},
 		{"an unclassified failure is failed", false, "", "failed"},
 		{"a classified failure is failed", false, TerminalKindNetworkUnavailable, "failed"},
+		{"not_pipeline_actionable without the booking is failed", false, TerminalKindNotPipelineActionable, "failed"},
+	}
+	if got := schedulerTerminalOutcome(false, TerminalKindNotPipelineActionable, true); got != "cancelled" {
+		t.Errorf("a partial-delivery no-op latches %q, want cancelled", got)
+	}
+	if got := schedulerTerminalOutcome(true, "", true); got != "complete" {
+		t.Errorf("success over the flag latches %q, want complete", got)
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := schedulerTerminalOutcome(tc.success, tc.kind); got != tc.want {
+			if got := schedulerTerminalOutcome(tc.success, tc.kind, false); got != tc.want {
 				t.Errorf("schedulerTerminalOutcome(%v, %q) = %q, want %q", tc.success, tc.kind, got, tc.want)
 			}
 		})

@@ -215,6 +215,7 @@ func extractHistory(dir string, opts Options, result *Result) error {
 				IssueNumber     int                       `json:"issue_number"`
 				Title           string                    `json:"title"`
 				Outcome         string                    `json:"outcome"`
+				OutcomeType     string                    `json:"outcome_type"`
 				StartedAt       string                    `json:"started_at"`
 				TotalDurationMs int64                     `json:"total_duration_ms"`
 				Stages          map[string]map[string]any `json:"stages"`
@@ -230,6 +231,11 @@ func extractHistory(dir string, opts Options, result *Result) error {
 				continue
 			}
 			if opts.Issue != 0 && rec.IssueNumber != opts.Issue {
+				continue
+			}
+			// A booked partial-delivery no-op is not a failure, though the
+			// booking leaves its stopping stage failed (#3487).
+			if rec.Outcome == "cancelled" && rec.OutcomeType == "no_op" {
 				continue
 			}
 

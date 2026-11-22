@@ -337,6 +337,19 @@ func TestResolveNoOpCard(t *testing.T) {
 				}, nil
 			}
 
+			// A queued successor of o/r#7, held by its no-op (#3487). The
+			// forge refresh reads nothing, so only the close can release it.
+			offline := gh.NewClientWithHTTPClient(&http.Client{Transport: roundTripFunc3487(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+					Body: io.NopCloser(strings.NewReader(`{"errors":[{"message":"offline"}]}`)), Request: r}, nil
+			})})
+			sched := orchestrator.NewScheduler(offline, orchestrator.SchedulerConfig{})
+			sched.SetTrustGate(permissiveGate())
+			sched.QueueAddItem(orchestrator.QueueItem{Repo: "o/r", IssueNumber: 8,
+				BlockedBy: []orchestrator.QueueBlockingRef{{Number: 7, State: "OPEN"}}})
+			sched.HoldNoOpSuccessors("o/r", 7)
+			s.scheduler = sched
+
 			store := s.attentionStore()
 			cardID, err := attention.NewID()
 			if err != nil {
@@ -393,6 +406,10 @@ func TestResolveNoOpCard(t *testing.T) {
 			}
 			if got := len(as.Status().Failed); got != wantHolds {
 				t.Errorf("holds = %d, want %d", got, wantHolds)
+			}
+			released := len(sched.DequeueIndependent(context.Background(), 4, nil)) == 1
+			if want := wantHolds == 0; released != want {
+				t.Errorf("successor dispatched = %v, want %v", released, want)
 			}
 			if used != (option == "close") || len(f.comments) != tc.comments || len(f.closed) != tc.closed || len(f.boards) != tc.boards {
 				t.Fatalf("used=%v comments=%v closed=%v boards=%v", used, f.comments, f.closed, f.boards)

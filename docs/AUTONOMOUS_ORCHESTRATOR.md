@@ -716,8 +716,15 @@ else:
   architecture", and the gate would re-halt the run at the price of another
   planning lap.
 - **`not_pipeline_actionable`** — `autonomous resume` (fleet or repo), or
-  `ClearIssueFailures` for the issue. Nothing the pipeline can observe about
-  the issue stands in for a person doing the thing.
+  `ClearIssueFailures` for the issue, which the no-op card's close option also
+  calls once it has closed the issue (#3487). Nothing the pipeline can observe
+  about the issue stands in for a person doing the thing. A partial-delivery
+  no-op is held the same way. Its structured booking, not the gate's kind or
+  the text, is what puts it here: it charges nothing, is never retried, ignores
+  a conflict-restart signal and raises the card that offers close. The
+  scheduler holds the queued issues it blocks until the issue closes: the
+  card's close releases them at once, and a close by hand on the next poll
+  that reads the blocker as closed.
 
 The board status is deliberately **not** a release signal. The sideline's board
 move is asynchronous, so at reconcile time the row can still read the status it

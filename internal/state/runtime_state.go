@@ -271,6 +271,12 @@ type RuntimeState struct {
 	// rest of the issue, and this run's whole scope is the listed criteria.
 	PartialRerun *PartialRerun `json:"partialRerun,omitempty"`
 
+	// PartialNoOp is set where this run was booked a partial-delivery no-op
+	// (#3487): a re-run scoped to a remainder that ended not_pipeline_actionable
+	// with no diff. Consumers read it ahead of the gate's kind and the error
+	// text, and never infer it from either.
+	PartialNoOp bool `json:"partialNoOp,omitempty"`
+
 	// MainCheckVerdict + MainCheckFailing are the post-merge verification of
 	// the base branch (#1249, #2055): whether the merge was green (the merge
 	// commit's tree is the merged PR head's, the head's required checks passed,
@@ -987,6 +993,9 @@ func (rs *RuntimeState) BeginStage(stage PipelineStage) {
 	defer rs.mu.Unlock()
 	rs.Stage = stage
 	rs.StageStart = time.Now()
+	// A no-op ends the run it books, so a stage that begins is not one
+	// (#3487). Every retry, escalation, relap and resume passes through here.
+	rs.PartialNoOp = false
 
 	// Un-book any completed attempt of this stage. Almost always zero or one
 	// entry, but the loop is written for N because nothing prevents a run
@@ -1998,6 +2007,15 @@ func (rs *RuntimeState) SetPartialRerun(pr int, criteria []string) {
 		return
 	}
 	rs.PartialRerun = &PartialRerun{PR: pr, Criteria: append([]string(nil), criteria...)}
+}
+
+// MarkPartialNoOp records that the run is booked a partial-delivery no-op
+// (#3487). Only the scheduler's partial-delivery bookings call it, each
+// immediately before the return that ends the run; BeginStage clears it.
+func (rs *RuntimeState) MarkPartialNoOp() {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.PartialNoOp = true
 }
 
 // PartialRerunScope returns a copy of this run's partial-delivery scope, or
@@ -3423,6 +3441,7 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		MergedAt:                 rs.MergedAt,
 		PartialDelivery:          rs.PartialDelivery,
 		PartialRerun:             copyPartialRerun(rs.PartialRerun),
+		PartialNoOp:              rs.PartialNoOp,
 		MainCheckVerdict:         rs.MainCheckVerdict,
 		MainCheckFailing:         append([]string(nil), rs.MainCheckFailing...),
 		// The two durable latch halves travel with every copy and therefore

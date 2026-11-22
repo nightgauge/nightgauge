@@ -11,9 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/focus"
+	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 
 	"github.com/nightgauge/nightgauge/internal/layout"
@@ -6009,5 +6011,252 @@ func TestNotifyComplete_ClosedIssueRefusal_BookingDependsOnStructuredKind(t *tes
 	neg.drainBackground()
 	if got := neg.state.LifetimeIssueFailures[key]; got == 0 {
 		t.Errorf("without the start refusal: LifetimeIssueFailures = 0, want the text booked as a failure")
+	}
+}
+
+// remainderCardExecutor resolves a stored card against a fake forge, through
+// the verb's own executor and CloseRemainderByOperator.
+type remainderCardExecutor struct {
+	root, repo, body string
+	forge            *operatorCloseForge
+}
+
+func (e remainderCardExecutor) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest, opt attention.Option) error {
+	if opt.Verb == attention.VerbNoop {
+		return nil
+	}
+	return attention.ExecuteCloseRemainder(ctx, e, req, opt, []string{e.repo})
+}
+
+func (e remainderCardExecutor) CloseRemainder(ctx context.Context, repo string, issue, pr int, fingerprint string, criteria []attention.RemainderCriterion) error {
+	owner, name := splitOwnerRepo(repo)
+	return CloseRemainderByOperator(ctx,
+		PartialCloseDeps{Issues: e.forge, Comments: e.forge, Board: e.forge, Owner: owner, Repo: name, ProjectNumber: 3},
+		PartialCloseTarget{Number: issue, NodeID: "I_3487", State: "OPEN", Body: e.body, PR: pr},
+		RemainderDecision{StateRoot: e.root, Fingerprint: fingerprint, Login: "octocat", PostedAs: "octocat", Criteria: criteria})
+}
+
+// startRunCallback runs as.Run for one cycle so the scheduler carries the real
+// completion callback. The loop is stopped before the run completes: a re-scan
+// of the empty test graph would prune the bookkeeping under test.
+func startRunCallback(t *testing.T, as *AutonomousScheduler) {
+	t.Helper()
+	stubGraphFn(as)
+	cycled := make(chan struct{}, 1)
+	as.onCycleComplete = func() {
+		select {
+		case cycled <- struct{}{}:
+		default:
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	go func() {
+		_ = as.Run(ctx)
+		close(stopped)
+	}()
+	t.Cleanup(as.drainBackground)
+	defer func() {
+		cancel()
+		<-stopped
+	}()
+	select {
+	case <-cycled:
+	case <-time.After(15 * time.Second):
+		t.Fatal("Run never completed its first cycle")
+	}
+}
+
+// assertUncharged asserts that a completion charged nothing and retries
+// nothing: no lifetime or session count, no cascade feed, no backoff.
+func assertUncharged(t *testing.T, as *AutonomousScheduler, repo string, issue int) {
+	t.Helper()
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	key := fmt.Sprintf("%s#%d", repo, issue)
+	if n := as.state.LifetimeIssueFailures[key]; n != 0 {
+		t.Errorf("lifetime failures = %d, want 0", n)
+	}
+	if n := as.perIssueFailureCount[key]; n != 0 {
+		t.Errorf("session failures = %d, want 0", n)
+	}
+	if plan, ok := as.retryBackoff[key]; ok {
+		t.Errorf("a retry was scheduled: %+v", plan)
+	}
+	if n := as.conflictRestartCount[key]; n != 0 {
+		t.Errorf("conflict restarts = %d, want 0", n)
+	}
+	if as.cascadeTracker != nil {
+		if n := as.cascadeTracker.CountInWindow(time.Now()); n != 0 {
+			t.Errorf("cascade window = %d, want 0", n)
+		}
+	}
+}
+
+// #3487 finding 1: through the real Run callback, a re-run booked a no-op whose
+// gate kind is dev_produced_no_changes charges nothing, does not retry and
+// raises the card that offers close. That card is carried through resolve:
+// close comments, closes and moves the board, ack only acknowledges. A
+// publication verdict on the same scoped run keeps the ack-only card.
+//
+// Serial: swaps package var reconcileExecGh (via partialRerunScheduler).
+func TestRunCallback_PartialNoOp(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		build     func(*testing.T) (*Scheduler, string)
+		wantClose bool
+		choose    string
+	}{
+		{"no-op over dev_produced_no_changes, closed", emptyDiffPartialRun, true, "close"},
+		{"no-op over dev_produced_no_changes, acknowledged", emptyDiffPartialRun, true, "ack"},
+		{"publication verdict", publicationVerdictRun, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const repo, issue = "nightgauge/test", 3487
+			s, root := tc.build(t)
+			// The remainder is reconciled from a body and the partial PR, or
+			// the card cannot offer a close.
+			body := "## Acceptance Criteria\n\n- [ ] " + partialRerunCriterion + "\n"
+			s.acReconcileBody = func(context.Context, types.BoardItem) (string, error) { return body, nil }
+			s.issueBodyEditedAt = func(context.Context, types.BoardItem) (*time.Time, error) { return nil, nil }
+			s.partialPRRead = func(context.Context, string, int) (partialPR, error) { return partialPR{}, nil }
+			var snap *state.RuntimeState
+			s.OnPipelineComplete(func(_ string, _ int, rt *state.RuntimeState, _ bool) { snap = rt })
+			as := NewAutonomousScheduler(s, nil, nil, nil, DefaultAutonomousConfig(), root)
+			as.trustGateOverride = allWritersGate()
+			startRunCallback(t, as)
+			as.mu.Lock()
+			addRunning(as, repo, issue, "re-run")
+			as.mu.Unlock()
+
+			s.runPipeline(context.Background(), types.BoardItem{Number: issue, Repo: repo, ID: "item-3487", NodeID: "I_3487"})
+			as.drainBackground()
+
+			if snap == nil || snap.PartialNoOp != tc.wantClose {
+				t.Fatalf("booking flag != %v", tc.wantClose)
+			}
+			if tc.wantClose {
+				grs := snap.StageGateResults[string(state.StageFeatureDev)]
+				if len(grs) == 0 || grs[len(grs)-1].TerminalKind != TerminalKindDevProducedNoChanges {
+					t.Fatalf("gate results = %+v; the fixture must stamp dev_produced_no_changes", grs)
+				}
+			}
+			if got := failedKind(t, as, repo, issue); got != TerminalKindNotPipelineActionable {
+				t.Fatalf("booked %q, want %q", got, TerminalKindNotPipelineActionable)
+			}
+			assertUncharged(t, as, repo, issue)
+			var card *attention.DecisionRequest
+			for _, req := range openRequests(t, as) {
+				if req.Producer == attention.ProducerNotPipelineActionable {
+					card = &req
+				}
+			}
+			if card == nil {
+				t.Fatal("no card was raised")
+			}
+			if got := card.FindOption("close") != nil; got != tc.wantClose {
+				t.Fatalf("close offered = %v, want %v: %+v", got, tc.wantClose, card.Options)
+			}
+			if !tc.wantClose {
+				return
+			}
+			const label = "The remaining criteria are met; close the issue as completed"
+			if len(card.Options) != 2 || card.Options[0].ID != "ack" || card.FindOption("close").Label != label {
+				t.Fatalf("options = %+v, want ack and close", card.Options)
+			}
+
+			forge := &operatorCloseForge{}
+			exec := remainderCardExecutor{root: root, repo: repo, body: body, forge: forge}
+			if _, err := as.Attention().Resolve(context.Background(), card.ID, tc.choose, "jane", "", "", exec); err != nil {
+				t.Fatalf("resolve %s: %v", tc.choose, err)
+			}
+			resolved, found, err := as.Attention().Get(card.ID)
+			if err != nil || !found || resolved.Lifecycle.State != attention.StateResolved {
+				t.Fatalf("card = %+v (found %v, err %v)", resolved, found, err)
+			}
+			calls := strings.Join(forge.calls, " ")
+			if tc.choose == "ack" {
+				if calls != "" {
+					t.Errorf("ack reached the forge: %s", calls)
+				}
+				return
+			}
+			if calls != "comment close board" || !strings.EqualFold(forge.synced[0], "done") {
+				t.Fatalf("calls = %q board = %v", calls, forge.synced)
+			}
+			for _, want := range []string{"`octocat` account", "An integration test", "PR #3141"} {
+				if !strings.Contains(forge.comments[0], want) {
+					t.Errorf("comment lacks %q: %s", want, forge.comments[0])
+				}
+			}
+		})
+	}
+}
+
+// #3487: the extension's structured kind is read before the text and before a
+// conflict restart, and beside an earlier run's finding. A kind derived from
+// text is never that signal.
+func TestNotifyComplete_PartialNoOp(t *testing.T) {
+	t.Parallel()
+
+	const repo, issue = "O/app", 1255
+	const detail = "[not-pipeline-actionable] wrote no changes; unmet on the merged diff: handles merge_conflict and pr_merge_unmerged"
+	for _, tc := range []struct {
+		name, kind, detail  string
+		restart, finding    bool
+		wantCard, wantClose bool
+	}{
+		{"booking quoting merge_conflict with a restart signal", TerminalKindNotPipelineActionable, detail, true, false, true, true},
+		{"booking beside an earlier finding", TerminalKindNotPipelineActionable, detail, false, true, true, true},
+		{"publication verdict classified from text", "", "[not-pipeline-actionable] publication-boundary verdict", false, false, true, false},
+		{"that verdict beside a finding", "", "[not-pipeline-actionable] publication-boundary verdict", false, true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			as := newAttentionProducerScheduler(t)
+			if err := WritePartialDeliveryContext(as.workspaceRoot, issue,
+				PartialDeliveryFile{PR: 5, Criteria: []string{"still open"}, CriteriaFingerprint: cardFingerprint}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.finding {
+				writeBlockedFindingFile(t, as.workspaceRoot, issue, validFinding1255)
+			}
+			addRunning(as, repo, issue, "re-run")
+
+			as.NotifyComplete(repo, issue, false, tc.restart, tc.kind, tc.detail)
+			as.drainBackground()
+
+			if got := failedKind(t, as, repo, issue); got != TerminalKindNotPipelineActionable {
+				t.Fatalf("booked %q, want %q", got, TerminalKindNotPipelineActionable)
+			}
+			assertUncharged(t, as, repo, issue)
+			var card, closable bool
+			for _, req := range openRequests(t, as) {
+				if req.Producer == attention.ProducerNotPipelineActionable {
+					card, closable = true, req.FindOption("close") != nil
+				}
+			}
+			if card != tc.wantCard || closable != tc.wantClose {
+				t.Errorf("card=%v close=%v, want %v/%v", card, closable, tc.wantCard, tc.wantClose)
+			}
+		})
+	}
+}
+
+// #3487: the booking resolves without error text, and only an operator stop
+// outranks it.
+func TestCompletionTerminalKind_PartialNoOp(t *testing.T) {
+	t.Parallel()
+
+	rs := &state.RuntimeState{Stage: state.StageFeatureDev, PartialNoOp: true,
+		StageGateResults: map[string][]state.StageGateResult{
+			"feature-dev": {{TerminalKind: TerminalKindDevProducedNoChanges}}}}
+	if kind, _, _ := completionTerminalKind(rs, false); kind != TerminalKindNotPipelineActionable {
+		t.Errorf("kind = %q, want %q", kind, TerminalKindNotPipelineActionable)
+	}
+	rs.StageOperatorStopped = map[string]bool{"feature-dev": true}
+	rs.StageErrors = map[string]string{"feature-dev": "exit 143"}
+	if kind, _, _ := completionTerminalKind(rs, false); kind != TerminalKindOperatorStop {
+		t.Errorf("kind = %q, want %q", kind, TerminalKindOperatorStop)
 	}
 }

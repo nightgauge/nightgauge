@@ -1770,7 +1770,14 @@ func (as *AutonomousScheduler) runLoop(ctx context.Context) error {
 		// failure accounting, the cascade feed, and its OWN board revert to
 		// a run whose merge already landed — #1650's exact repro.
 		terminalKind, failureDetail, merged := completionTerminalKind(runtime, success)
-		as.onPipelineComplete(repo, issue, success, false, terminalKind, failureDetail, merged)
+		// The booking's flag, not the kind: other not_pipeline_actionable
+		// endings get no close option (#3487).
+		partialNoOp := !success && runtime != nil && runtime.Snapshot().PartialNoOp &&
+			terminalKind == TerminalKindNotPipelineActionable
+		as.completeRun(repo, issue, runCompletion{
+			Success: success, TerminalKind: terminalKind, FailureDetail: failureDetail,
+			Merged: merged, PartialNoOp: partialNoOp,
+		})
 		if !success && !merged {
 			as.recordTransientRunPR(repo, issue, runtime, terminalKind)
 		}
@@ -2106,7 +2113,17 @@ func (as *AutonomousScheduler) OnDispatch(fn func(owner, repo string, issueNumbe
 // Without this fallback, a TS-side regex miss silently routes a quota-
 // exhausted failure into the GENERIC branch, bypassing the global cooldown
 // (#3434) and re-enabling the multi-issue cascade #3434 was meant to fix.
+//
+// An incoming not_pipeline_actionable is read as a structured partial-delivery
+// no-op (#3487): that table rule is `signal: false`, so the extension's text
+// classifier never sends it. The extension does not send it at all yet (#3487
+// steps 3 and 4); this is the Go half of that contract. It is read before any
+// re-derivation, and it outranks a conflict-restart signal, which would retry.
 func (as *AutonomousScheduler) NotifyComplete(repo string, issueNumber int, success bool, conflictRestart bool, terminalFailureKind string, failureDetail string) {
+	partialNoOp := !success && terminalFailureKind == TerminalKindNotPipelineActionable
+	if partialNoOp {
+		conflictRestart = false
+	}
 	if !success {
 		terminalFailureKind = as.gateNotifyTerminalKind(repo, issueNumber, terminalFailureKind, failureDetail)
 	}
@@ -2117,7 +2134,10 @@ func (as *AutonomousScheduler) NotifyComplete(repo string, issueNumber int, succ
 	// signal to thread through here. See terminal_behaviors.json's
 	// board-status-failure-sync note for the fuller "no extension change
 	// owed" analysis this mirrors.
-	as.onPipelineComplete(repo, issueNumber, success, conflictRestart, terminalFailureKind, failureDetail, false)
+	as.completeRun(repo, issueNumber, runCompletion{
+		Success: success, ConflictRestart: conflictRestart, TerminalKind: terminalFailureKind,
+		FailureDetail: failureDetail, PartialNoOp: partialNoOp,
+	})
 }
 
 // gateNotifyTerminalKind applies the host-sleep verdict gate to a kind that
@@ -2927,17 +2947,18 @@ func (as *AutonomousScheduler) Stop() {
 }
 
 // completionTerminalKind derives what the autonomous completion callback
-// passes to onPipelineComplete for a finished run: the terminal kind, the
+// passes to completeRun for a finished run: the terminal kind, the
 // failure detail, and whether the run's own PR already merged. The kind comes
 // from the failed stage's structured verdicts first — operator stop (#1848),
-// then host sleep, then the gate — and only then from the error text.
+// then a partial-delivery no-op booking (#3487), host sleep and the gate — and
+// only then from the error text.
 func completionTerminalKind(runtime *state.RuntimeState, success bool) (terminalKind, failureDetail string, merged bool) {
 	terminalKind = resumeNoOpKind(runtime, success)
 	if !success && runtime != nil {
 		snap := runtime.Snapshot()
 		merged = snap.MergedCommitSha != ""
 		if snap.Stage != "" {
-			if errMsg, ok := snap.StageErrors[string(snap.Stage)]; ok {
+			if errMsg, ok := snap.StageErrors[string(snap.Stage)]; ok || snap.PartialNoOp {
 				// Prefer the failing stage's gate-sourced structured kind
 				// over prose classification of errMsg (Issue #9).
 				gateRan := false
@@ -5647,6 +5668,29 @@ func (as *AutonomousScheduler) enqueueItem(ctx context.Context, item CandidateIt
 // false from the extension/IPC path (NotifyComplete) — that breadcrumb has
 // no extension-side equivalent.
 func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, success bool, conflictRestart bool, terminalFailureKind string, failureDetail string, merged bool) {
+	as.completeRun(repo, issue, runCompletion{
+		Success: success, ConflictRestart: conflictRestart, TerminalKind: terminalFailureKind,
+		FailureDetail: failureDetail, Merged: merged,
+	})
+}
+
+// runCompletion is what a finished run reports to completeRun.
+type runCompletion struct {
+	Success         bool
+	ConflictRestart bool
+	TerminalKind    string
+	FailureDetail   string
+	Merged          bool
+	// PartialNoOp is the structured booking of a partial-delivery no-op
+	// (#3487). Only the two entries that carry that signal set it: the Run
+	// callback and NotifyComplete.
+	PartialNoOp bool
+}
+
+// completeRun is onPipelineComplete with the partial-delivery no-op booking.
+func (as *AutonomousScheduler) completeRun(repo string, issue int, c runCompletion) {
+	success, conflictRestart, terminalFailureKind := c.Success, c.ConflictRestart, c.TerminalKind
+	failureDetail, merged, partialNoOp := c.FailureDetail, c.Merged, c.PartialNoOp
 	// Read the out-of-scope finding before taking as.mu: resolving the run
 	// root may shell out, and nothing here may block under the lock (#2895).
 	outOfScopeFinding := false
@@ -6581,9 +6625,12 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			// else to, and a row left in Ready is dispatched again. Idempotent.
 			as.goTrackedBoardOp(func(genCtx context.Context) { as.moveParkedToBacklog(genCtx, repo, issue) })
 			// A blocked finding owns its own card (#1241); otherwise this is
-			// the only operator surface for the verdict (#3354).
-			if _, ok := as.blockedFindingFor(repo, issue); !ok {
-				as.dispatchAttention(func() { as.raiseNotPipelineActionable(repo, issue, title, detail) })
+			// the only operator surface for the verdict (#3354). A partial
+			// no-op records no finding, so one on disk is an earlier run's and
+			// must not withhold the card that offers close (#3487).
+			_, hasFinding := as.blockedFindingFor(repo, issue)
+			if partialNoOp || !hasFinding {
+				as.dispatchAttention(func() { as.raiseNotPipelineActionable(repo, issue, title, detail, partialNoOp) })
 			}
 			if as.safetyRails != nil {
 				as.safetyRails.RecordNonFaultOutcome(0)

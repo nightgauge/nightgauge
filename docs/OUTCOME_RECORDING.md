@@ -120,6 +120,20 @@ concrete id for attribution.
 Attribution of what actually ran is kept where a concrete id belongs: the run
 record's per-stage `model_selection`.
 
+### A partial-delivery no-op writes no row (#3487)
+
+A partial-delivery re-run booked a no-op writes nothing to
+`history/outcomes.jsonl` on the autonomous path, as for an architecture-approval
+hold: every reader of the corpus counts `success: false` as a failure. The
+`pipeline.notifyComplete` handler skips the row too when the completion carries
+`partialNoOp`; the extension does not send that flag yet, so on the extension
+path such a run still writes its row. The run record
+carries the distinction (`outcome: cancelled`, `outcome_type: no_op`) and the
+cost. The booking's structured flag decides, never the terminal kind: every
+other `not_pipeline_actionable` run writes its row as before. `SKIP PARITY` in
+`internal/orchestrator/testdata/terminal_behaviors.json` lists every skipped
+state.
+
 ### A retry escalation is not a routing miss (#1002)
 
 `Calibrate` excludes any row with `Retries > 0` from the **model-accuracy

@@ -170,18 +170,21 @@ one undiscriminated file. The CLI's `model_refusal_fallback` served model (#91)
 still wins when the swap happened **in `feature-dev`** — that is a real
 measurement of what produced the code.
 
-Two terminal states deliberately record **nothing**, on both paths: a
+Among the terminal states that deliberately record **nothing**, on both paths, are a
 blocked-dependency deferral (#305 — a non-failure that did no work) and a
 `network_unavailable` failure (#3296 — environmental noise, not model signal).
 The two writers key the deferral on different fields, because #305's
 extension-path override clears the terminal kind: `Scheduler.runPipeline` tests
 `terminal_failure_kind == blocked_dependency`, and the `notifyComplete` handler
-tests `record.outcome_type == deferred`. Same two states, and both are covered
-by tests on their own path. Leaving the deferral in on one side is not cosmetic:
+tests `record.outcome_type == deferred`. Both are covered by tests on their own
+path. Leaving the deferral in on one side is not cosmetic:
 a deferral is a failed run at ~$0 that ran no AI stage, so five of them in the
 recent half of a 20-run corpus flip cost-optimization to `closing` ("cost per
 run decreasing") and reliability to `degrading` ("failure rate increasing") —
 credit for savings and blame for failures from runs that never executed.
+
+A partial-delivery no-op records nothing on the autonomous path
+([OUTCOME_RECORDING.md](OUTCOME_RECORDING.md#a-partial-delivery-no-op-writes-no-row-3487)).
 
 #### Guarded denominators, and what mixed history does
 

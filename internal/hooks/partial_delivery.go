@@ -29,7 +29,25 @@ const (
 	NotVerifiableCriteriaHeading = "Not verifiable by the pipeline:"
 )
 
-var partialDeliveryMarkerRE = regexp.MustCompile(`<!-- nightgauge:partial-delivery pr=(\d+) -->`)
+// partialDeliveryMarkerRE matches the marker only at byte 0 of a body, where
+// remainderComment writes it (#3487): no (?m), so a marker an issue author got
+// quoted into a pipeline comment is not a record. The trust filter on the
+// comments stays the authorship check.
+var partialDeliveryMarkerRE = regexp.MustCompile(`^<!-- nightgauge:partial-delivery pr=(\d+) -->`)
+
+// leadingPartialDeliveryMarker returns the PR named by the marker that opens
+// body. Every reader of the marker goes through it.
+func leadingPartialDeliveryMarker(body string) (pr int, ok bool) {
+	m := partialDeliveryMarkerRE.FindStringSubmatch(body)
+	if m == nil {
+		return 0, false
+	}
+	pr, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, false
+	}
+	return pr, true
+}
 
 // PartialDeliveryReader is what PendingPartialDelivery reads: the issue's
 // comments through the trust filter, and the newest merged PR that closes it.
@@ -60,14 +78,10 @@ type PartialDeliveryStatus struct {
 
 // ParsePartialDeliveryComment extracts the PR a remainder comment names and the
 // criteria it left: the unmet list, then the not-verifiable list (#3362).
-// ok is false when body carries no marker.
+// ok is false when body does not open with the marker.
 func ParsePartialDeliveryComment(body string) (pr int, criteria []string, ok bool) {
-	m := partialDeliveryMarkerRE.FindStringSubmatch(body)
-	if m == nil {
-		return 0, nil, false
-	}
-	pr, err := strconv.Atoi(m[1])
-	if err != nil {
+	pr, ok = leadingPartialDeliveryMarker(body)
+	if !ok {
 		return 0, nil, false
 	}
 	criteria = append(sectionBullets(body, RemainingCriteriaHeading), sectionBullets(body, NotVerifiableCriteriaHeading)...)
@@ -76,9 +90,9 @@ func ParsePartialDeliveryComment(body string) (pr int, criteria []string, ok boo
 
 // ParsePartialDeliveryNotVerifiable returns the remaining criteria a marker
 // comment records as not verifiable by the pipeline (#3362). It is nil when
-// body carries no marker or no such list.
+// body does not open with the marker or has no such list.
 func ParsePartialDeliveryNotVerifiable(body string) []string {
-	if !partialDeliveryMarkerRE.MatchString(body) {
+	if _, ok := leadingPartialDeliveryMarker(body); !ok {
 		return nil
 	}
 	return sectionBullets(body, NotVerifiableCriteriaHeading)
@@ -96,9 +110,10 @@ func sectionBullets(body, heading string) []string {
 }
 
 // ParsePartialDeliveryMet returns the criteria a marker comment records as met
-// by its PR (#3318). It is nil when body carries no marker or no met list.
+// by its PR (#3318). It is nil when body does not open with the marker or has
+// no met list.
 func ParsePartialDeliveryMet(body string) []string {
-	if !partialDeliveryMarkerRE.MatchString(body) {
+	if _, ok := leadingPartialDeliveryMarker(body); !ok {
 		return nil
 	}
 	return sectionBullets(body, MetCriteriaHeading)

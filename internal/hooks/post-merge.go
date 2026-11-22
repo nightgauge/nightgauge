@@ -898,17 +898,17 @@ func readyWithheld(input PostMergeInput, labels []string) bool {
 }
 
 // remainderMarker renders the hidden line that records this PR's remainder
-// comment. Criteria cannot forge it: remainderComment escapes "<!--".
+// comment. It must stay the body's first bytes, the only place the readers
+// accept it. Criteria cannot forge it: remainderComment escapes "<!--".
 func remainderMarker(prNumber int) string {
 	return fmt.Sprintf(partialDeliveryMarkerFormat, prNumber)
 }
 
-// remainderCommentIn reports whether a trusted comment already names this PR's
-// remainder.
+// remainderCommentIn reports whether a trusted comment already is this PR's
+// remainder comment: one that opens with its marker.
 func remainderCommentIn(comments []trust.Comment, prNumber int) bool {
-	marker := remainderMarker(prNumber)
 	for _, c := range comments {
-		if strings.Contains(c.Body, marker) {
+		if pr, ok := leadingPartialDeliveryMarker(c.Body); ok && pr == prNumber {
 			return true
 		}
 	}

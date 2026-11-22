@@ -1236,3 +1236,28 @@ func TestPhasePosition(t *testing.T) {
 		t.Fatalf("position = (%d,%d,%v), want (7,17,true)", i, n, ok)
 	}
 }
+
+// #3487: the booking's flag is the only signal its consumers read, and they
+// read it off a snapshot.
+func TestSnapshotCarriesPartialNoOp(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 3487, "item-123", testRunID())
+	if rs.Snapshot().PartialNoOp {
+		t.Fatal("a new run is not a partial no-op")
+	}
+	rs.MarkPartialNoOp()
+	snap := rs.Snapshot()
+	if !snap.PartialNoOp || !snap.Snapshot().PartialNoOp {
+		t.Fatal("the snapshot dropped PartialNoOp")
+	}
+}
+
+// #3487: every retry, escalation, relap and resume begins a stage, so the flag
+// cannot outlive the attempt that set it.
+func TestBeginStageClearsPartialNoOp(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 3487, "item-123", testRunID())
+	rs.MarkPartialNoOp()
+	rs.BeginStage(StagePRCreate)
+	if rs.Snapshot().PartialNoOp {
+		t.Fatal("a stage began and the no-op flag survived it")
+	}
+}

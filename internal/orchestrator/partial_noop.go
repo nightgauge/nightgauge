@@ -22,6 +22,7 @@ package orchestrator
 //     on the issue.
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -53,6 +54,21 @@ const (
 	PartialNoOpActionBook      = "book"
 	PartialNoOpActionClose     = "close"
 )
+
+// partialNoOpSettlementError is the error of a pr-create no-diff settlement that
+// left a partial-delivery re-run's issue open (#3487). It is the structured
+// booking of that stop: the run loop books it and returns before any retry, and
+// the exit-record writer classifies it without reading the text.
+type partialNoOpSettlementError struct{ detail string }
+
+func (e partialNoOpSettlementError) Error() string { return e.detail }
+
+// isPartialNoOpSettlement reports whether err carries that booking. The error
+// is returned by value, and only for a scoped run whose issue stayed open.
+func isPartialNoOpSettlement(err error) bool {
+	var settlement partialNoOpSettlementError
+	return errors.As(err, &settlement)
+}
 
 type partialNoOpDecision struct {
 	Action partialNoOpAction
@@ -98,7 +114,7 @@ func decidePartialNoOp(issue int, scope *state.PartialRerun, rev operatorRevisio
 	detail := fmt.Sprintf("[not-pipeline-actionable] feature-dev: partial-delivery re-run of #%d (after PR #%d) %s, so the run ends as a no-op, not a failure; %d remaining criteria stay open and #%d waits in Backlog for a human [#3163]",
 		issue, scope.PR, why, len(scope.Criteria), issue)
 	if unmet := unmetSummary(remainder); unmet != "" {
-		detail += "; unmet on the merged diff: " + unmet
+		detail += unmetDetailSeparator + unmet
 	}
 	return partialNoOpDecision{Action: partialNoOpBook, Detail: detail}
 }
@@ -111,7 +127,9 @@ type PartialNoOpResult struct {
 	Action string `json:"action"`
 	Detail string `json:"detail,omitempty"`
 	Steer  string `json:"steer,omitempty"`
-	// Remainder is the deterministic re-judge behind a close or a book.
+	// Remainder is the deterministic re-judge of the open criteria, reported
+	// with every action on a scoped run: the pr-create no-diff stop reads it
+	// after feature-dev, when an operator-revised plan still answers relap.
 	Remainder *RemainderVerdict `json:"remainder,omitempty"`
 }
 
@@ -129,7 +147,7 @@ func DecidePartialNoOp(ws string, issue int, scope *state.PartialRerun, relapped
 		partialNoOpClose:     PartialNoOpActionClose,
 	}[d.Action]
 	res := PartialNoOpResult{Action: action, Detail: d.Detail, Steer: d.Steer}
-	if d.Action == partialNoOpClose || d.Action == partialNoOpBook {
+	if d.Action != partialNoOpNotScoped {
 		res.Remainder = &remainder
 	}
 	return res
