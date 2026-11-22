@@ -106,6 +106,9 @@ func NewIssueService(client *Client) *IssueService {
 	}
 }
 
+// HasClient reports whether the service has a client to read and write through.
+func (s *IssueService) HasClient() bool { return s != nil && s.client != nil }
+
 // IssueRelations names the relationship connections of an issue that a read
 // returns: one issue (GetIssueWithRelations) or every issue on a board
 // (BoardService.ListItemsWithRelations, ListOpenItemsWithRelations). Each

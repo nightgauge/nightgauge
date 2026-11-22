@@ -14,6 +14,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- The pre-dispatch repo-affinity check no longer crashes when the scheduler has no forge client: it logs why and dispatches. A scheduler with no workspace root no longer takes its repositories from the workspace around the working directory, so the check, and the test suite's verdict on it, no longer depends on where the checkout lives (#3275).
+
 ## [0.8.7] - 2026-11-22
 
 ### Added

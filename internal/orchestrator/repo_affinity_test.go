@@ -3,6 +3,9 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
@@ -137,5 +140,63 @@ func TestPickNext_SkipsMisfiledIssue(t *testing.T) {
 	}
 	if item == nil || item.Number != 2 {
 		t.Fatalf("PickNext = %+v, want #2 (#1 is misfiled)", item)
+	}
+}
+
+// #3275: a scheduler without a forge client fails open instead of panicking.
+//
+// Serial: redirects the standard logger (via captureLog).
+func TestRepoAffinity_NoClientFailsOpen(t *testing.T) {
+	resolvers := map[string]func(context.Context, string, string) (*gh.Client, error){
+		"no resolver": nil,
+		"resolver fails": func(context.Context, string, string) (*gh.Client, error) {
+			return nil, errors.New("no token")
+		},
+	}
+	for name, resolver := range resolvers {
+		t.Run(name, func(t *testing.T) {
+			s := NewScheduler(nil, SchedulerConfig{})
+			s.WithClientResolver(resolver)
+			s.affinityDeps.repoPaths = twoRepoDeps(nil).repoPaths
+
+			var v affinityVerdict
+			out := captureLog(t, func() { v = s.repoAffinity(context.Background(), "o/r", 1, "") })
+			if v.Action != affinityDispatch || v.Reason != "issue body unavailable" {
+				t.Errorf("verdict = %+v, want a fail-open dispatch", v)
+			}
+			if want := "o/r#1 dispatching (fail-open) — issue body unavailable: no forge client"; !strings.Contains(out, want) {
+				t.Errorf("log = %q, want %q", out, want)
+			}
+		})
+	}
+}
+
+// #3275: without a workspace root the working directory's workspace is not read.
+//
+// Serial: changes the working directory (t.Chdir).
+func TestRepoAffinity_NoRootReadsNoWorkingDirectoryPaths(t *testing.T) {
+	ws := t.TempDir()
+	files := map[string]string{
+		".vscode/nightgauge-workspace.yaml": "repositories:\n  - name: a\n    path: a\n  - name: b\n    path: b\n",
+		"a/.nightgauge/config.yaml":         "owner: o\ndefaultRepo: a\n",
+		"b/.nightgauge/config.yaml":         "owner: o\ndefaultRepo: b\n",
+	}
+	for name, body := range files {
+		path := filepath.Join(ws, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := filepath.Join(ws, "a")
+	t.Chdir(root)
+
+	if got := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: root}).affinityRepoPaths(); len(got) != 2 {
+		t.Fatalf("rooted paths = %v, want both repositories", got)
+	}
+	if got := NewScheduler(nil, SchedulerConfig{}).affinityRepoPaths(); len(got) != 0 {
+		t.Errorf("paths without a root = %v, want none", got)
 	}
 }

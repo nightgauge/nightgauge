@@ -13,6 +13,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/graph"
 	"github.com/nightgauge/nightgauge/internal/graph/extract"
 	"github.com/nightgauge/nightgauge/internal/trust"
@@ -197,7 +198,13 @@ func (s *Scheduler) affinityRepoPaths() map[string]string {
 	if s.execMgr == nil {
 		return nil
 	}
-	return config.WorkspaceRepoPaths(s.execMgr.WorkspaceRoot())
+	root := s.execMgr.WorkspaceRoot()
+	if root == "" {
+		// No root means no workspace: WorkspaceRepoPaths("") would read the
+		// process working directory's (#3275).
+		return nil
+	}
+	return config.WorkspaceRepoPaths(root)
 }
 
 func (s *Scheduler) affinityBody(ctx context.Context, owner, repo string, number int) (string, error) {
@@ -207,6 +214,10 @@ func (s *Scheduler) affinityBody(ctx context.Context, owner, repo string, number
 	svc := s.issueServiceFor(ctx, owner, repo)
 	if svc == nil {
 		return "", fmt.Errorf("no issue service")
+	}
+	// issueServiceFor wraps a missing client in a non-nil service (#3275).
+	if is, ok := svc.(*gh.IssueService); ok && !is.HasClient() {
+		return "", fmt.Errorf("no forge client")
 	}
 	got, err := svc.GetIssuesByNumbersWithoutRelations(ctx, owner, repo, []int{number})
 	if err != nil {
