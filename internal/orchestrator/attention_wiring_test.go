@@ -1887,7 +1887,7 @@ func closeArgs(t *testing.T, req attention.DecisionRequest) (pr int, fingerprint
 	}
 	var args struct {
 		PR          int                            `json:"pr"`
-		Fingerprint string                         `json:"criteria_fingerprint"`
+		Fingerprint string                         `json:"remainder_fingerprint"`
 		Criteria    []attention.RemainderCriterion `json:"criteria"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
@@ -1936,7 +1936,11 @@ func TestNotPipelineActionableCard_RecognisesPartialRerunStops(t *testing.T) {
 			as.NotifyComplete("o/r", 7, false, false, "", detail)
 			as.drainBackground()
 			card := onlyNoOpCard(t, as)
-			if pr, fingerprint, open := closeArgs(t, card); pr != 5 || fingerprint != cardFingerprint || len(open) != 1 || open[0].Text != "A" {
+			wantFingerprint, err := RemainderFingerprint(PartialDeliveryFile{PR: 5, Criteria: []string{"A"}, CriteriaFingerprint: cardFingerprint})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pr, fingerprint, open := closeArgs(t, card); pr != 5 || fingerprint != wantFingerprint || len(open) != 1 || open[0].Text != "A" {
 				t.Errorf("args = %d %q %+v", pr, fingerprint, open)
 			}
 			// The verb decodes these args strictly: the stored card must pass it.

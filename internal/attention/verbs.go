@@ -152,7 +152,7 @@ const (
 	// and has no configured-repo check, so it cannot back this option.
 	//
 	// The repository and the issue come from the persisted request's Context.
-	// The only arguments are `pr`, `criteria` and `criteria_fingerprint`, which
+	// The only arguments are `pr`, `criteria` and `remainder_fingerprint`, which
 	// the producer declared: they fill in the comment and can only make the
 	// close refuse. See ExecuteCloseRemainder, the verb's only executor.
 	VerbIssueCloseRemainder Verb = "issue.closeRemainder"
@@ -728,7 +728,7 @@ func ExecuteCloseRemainder(ctx context.Context, closer RemainderCloser, req *Dec
 	var args struct {
 		PR          int                  `json:"pr"`
 		Criteria    []RemainderCriterion `json:"criteria"`
-		Fingerprint string               `json:"criteria_fingerprint"`
+		Fingerprint string               `json:"remainder_fingerprint"`
 	}
 	// Args hold Go values before the store round-trips them and decoded JSON
 	// after, so both are read through JSON.
@@ -739,13 +739,13 @@ func ExecuteCloseRemainder(ctx context.Context, closer RemainderCloser, req *Dec
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&args); err != nil {
-		return fmt.Errorf("attention: %s accepts only pr, criteria and criteria_fingerprint: %w", VerbIssueCloseRemainder, err)
+		return fmt.Errorf("attention: %s accepts only pr, criteria and remainder_fingerprint: %w", VerbIssueCloseRemainder, err)
 	}
 	if args.PR <= 0 {
 		return fmt.Errorf("attention: %s: request %s names no partial pull request", VerbIssueCloseRemainder, req.ID)
 	}
 	if args.Fingerprint == "" {
-		return fmt.Errorf("attention: %s: request %s has no criteria fingerprint", VerbIssueCloseRemainder, req.ID)
+		return fmt.Errorf("attention: %s: request %s has no remainder fingerprint", VerbIssueCloseRemainder, req.ID)
 	}
 	if len(args.Criteria) == 0 {
 		return fmt.Errorf("attention: %s: request %s lists no open criteria", VerbIssueCloseRemainder, req.ID)

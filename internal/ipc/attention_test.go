@@ -305,6 +305,11 @@ func TestResolveNoOpCard(t *testing.T) {
 			}
 
 			rec := orchestrator.PartialDeliveryFile{PR: 5, Criteria: []string{"A is handled"}}
+			rec.CriteriaFingerprint = preflight.ACFingerprint(remainderBody)
+			cardRecord, err := orchestrator.RemainderFingerprint(rec)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if tc.superseded {
 				rec.PR = 9
 			}
@@ -349,9 +354,9 @@ func TestResolveNoOpCard(t *testing.T) {
 				Options: []attention.Option{
 					{ID: "ack", Label: "Acknowledge", Verb: attention.VerbNoop},
 					{ID: "close", Label: "Close", Verb: attention.VerbIssueCloseRemainder, Args: map[string]any{
-						"pr":                   5,
-						"criteria":             []attention.RemainderCriterion{{Text: "A is handled", Evidence: "undecidable: prose"}},
-						"criteria_fingerprint": preflight.ACFingerprint(remainderBody),
+						"pr":                    5,
+						"criteria":              []attention.RemainderCriterion{{Text: "A is handled", Evidence: "undecidable: prose"}},
+						"remainder_fingerprint": cardRecord,
 					}},
 				},
 				DefaultAction: "ack",

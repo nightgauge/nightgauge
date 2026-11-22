@@ -61,7 +61,7 @@ describe("describeAttentionOption (#3487)", () => {
         option("issue.closeRemainder", {
           pr: 5,
           criteria: [{ text: "A", evidence: "undecidable" }],
-          criteria_fingerprint: "sha256:x",
+          remainder_fingerprint: "sha256:x",
         })
       )
     ).toBe(

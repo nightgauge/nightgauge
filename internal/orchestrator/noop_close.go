@@ -8,6 +8,9 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -39,7 +42,8 @@ const OperatorRemainderClosedMarker = "<!-- nightgauge:operator-closed-remainder
 type RemainderDecision struct {
 	// StateRoot is the repository root that holds partial-delivery-{N}.json.
 	StateRoot string
-	// Fingerprint identifies the issue's criteria the close was offered over.
+	// Fingerprint is RemainderFingerprint of the record the close was offered
+	// over.
 	Fingerprint string
 	// Login is the forge user the close is written as, "" when none is known.
 	// It is the only name the comment may carry. It is the account written
@@ -55,9 +59,10 @@ type RemainderDecision struct {
 // CloseRemainderByOperator closes target as completed because an operator
 // decided its open criteria are met.
 //
-// An open issue is first checked against the card: ErrRemainderRevised when
-// its criteria changed or one was unticked, ErrRemainderSuperseded when the recorded remainder is
-// no longer the card's. Then it gets a comment, the close and the board move
+// An open issue is first checked against the card: ErrRemainderSuperseded
+// when the recorded remainder is no longer the card's, then ErrRemainderRevised
+// when the criteria that record was reconciled from changed or one was
+// unticked. Then it gets a comment, the close and the board move
 // to Done. The comment comes first so a closed issue never lacks it; it states
 // the decision, which holds if the close then fails, and a retry does not
 // repeat it. No box is ticked, as nothing judged the criteria met.
@@ -73,12 +78,12 @@ func CloseRemainderByOperator(ctx context.Context, deps PartialCloseDeps, target
 		return ErrNoCloseDeps
 	}
 	if !strings.EqualFold(target.State, "closed") {
-		if d.Fingerprint == "" || preflight.ACFingerprint(target.Body) != d.Fingerprint {
-			return ErrRemainderRevised
-		}
 		rec, current := currentRemainder(target, d)
 		if !current {
 			return ErrRemainderSuperseded
+		}
+		if preflight.ACFingerprint(target.Body) != rec.CriteriaFingerprint {
+			return ErrRemainderRevised
 		}
 		stillTicked := preflight.TickedACs(target.Body)
 		for _, text := range rec.Ticked {
@@ -105,6 +110,17 @@ func CloseRemainderByOperator(ctx context.Context, deps PartialCloseDeps, target
 	return nil
 }
 
+// RemainderFingerprint identifies one partial-delivery record: a card carries
+// it, so a close is judged against what the card was raised over.
+func RemainderFingerprint(rec PartialDeliveryFile) (string, error) {
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
 // currentRemainder returns the current partial-delivery record, and whether
 // it still holds what the card was raised over. Every run removes or rewrites
 // that record when it starts, so this stands in for retracting the card. An
@@ -116,7 +132,12 @@ func currentRemainder(target PartialCloseTarget, d RemainderDecision) (PartialDe
 		log.Printf("#%d: operator close refused, no current remainder: %v [#3487]", target.Number, err)
 		return rec, false
 	}
-	if rec.PR != target.PR {
+	// The whole record must be the card's: a rewrite can keep the PR, the
+	// criteria text and the body's fingerprint and still change what is ticked.
+	if rec.PR != target.PR || rec.CriteriaFingerprint == "" {
+		return rec, false
+	}
+	if fp, err := RemainderFingerprint(rec); err != nil || fp != d.Fingerprint {
 		return rec, false
 	}
 	recorded := make(map[string]bool, len(rec.Criteria))

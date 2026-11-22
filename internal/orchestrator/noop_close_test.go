@@ -78,20 +78,33 @@ const (
 	operatorCloseBody      = "## Acceptance Criteria\n\n- [ ] " + operatorCloseCriterion + "\n"
 )
 
+// cardOver records rec as reconciled from body and returns the fingerprint a
+// card raised over it carries.
+func cardOver(t *testing.T, root, body string, rec PartialDeliveryFile) string {
+	t.Helper()
+	rec.CriteriaFingerprint = preflight.ACFingerprint(body)
+	if err := WritePartialDeliveryContext(root, 7, rec); err != nil {
+		t.Fatal(err)
+	}
+	fp, err := RemainderFingerprint(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fp
+}
+
 // operatorClose returns a close the card's checks allow.
 func operatorClose(t *testing.T) (*operatorCloseForge, PartialCloseDeps, PartialCloseTarget, RemainderDecision) {
 	t.Helper()
 	root := layouttest.Repo(t)
-	if err := WritePartialDeliveryContext(root, 7, PartialDeliveryFile{PR: 5, Criteria: []string{operatorCloseCriterion}}); err != nil {
-		t.Fatal(err)
-	}
+	card := cardOver(t, root, operatorCloseBody, PartialDeliveryFile{PR: 5, Criteria: []string{operatorCloseCriterion}})
 	f := &operatorCloseForge{}
 	return f,
 		PartialCloseDeps{Issues: f, Comments: f, Board: f, Owner: "o", Repo: "r", ProjectNumber: 3},
 		PartialCloseTarget{Number: 7, NodeID: "I_7", State: "OPEN", Body: operatorCloseBody, PR: 5},
 		RemainderDecision{
 			StateRoot:   root,
-			Fingerprint: preflight.ACFingerprint(operatorCloseBody),
+			Fingerprint: card,
 			Login:       "octocat",
 			PostedAs:    "octocat",
 			Criteria:    []attention.RemainderCriterion{{Text: operatorCloseCriterion, Evidence: "undecidable: prose"}},
@@ -188,20 +201,30 @@ func TestCloseRemainderByOperator_RefusesAStaleCard(t *testing.T) {
 		{name: "unticked since", wantErr: ErrRemainderRevised, stale: func(t *testing.T, tg *PartialCloseTarget, d *RemainderDecision) {
 			const reopened = "The import rejects an empty file"
 			tg.Body = heading + "- [ ] " + operatorCloseCriterion + "\n- [ ] " + reopened + "\n"
-			d.Fingerprint = preflight.ACFingerprint(tg.Body)
-			if err := WritePartialDeliveryContext(d.StateRoot, 7, PartialDeliveryFile{PR: 5, Criteria: []string{operatorCloseCriterion}, Ticked: []string{reopened}}); err != nil {
-				t.Fatal(err)
-			}
+			d.Fingerprint = cardOver(t, d.StateRoot, tg.Body, PartialDeliveryFile{PR: 5, Criteria: []string{operatorCloseCriterion}, Ticked: []string{reopened}})
 		}},
 		{name: "still ticked", calls: "comment close board", stale: func(t *testing.T, tg *PartialCloseTarget, d *RemainderDecision) {
 			const done = "The import rejects an empty file"
 			tg.Body = heading + "- [ ] " + operatorCloseCriterion + "\n- [x] " + done + "\n"
-			d.Fingerprint = preflight.ACFingerprint(tg.Body)
-			if err := WritePartialDeliveryContext(d.StateRoot, 7, PartialDeliveryFile{PR: 5, Criteria: []string{operatorCloseCriterion}, Ticked: []string{done}}); err != nil {
+			d.Fingerprint = cardOver(t, d.StateRoot, tg.Body, PartialDeliveryFile{PR: 5, Criteria: []string{operatorCloseCriterion}, Ticked: []string{done}})
+		}},
+		{name: "rewritten after an untick", wantErr: ErrRemainderSuperseded, stale: func(t *testing.T, tg *PartialCloseTarget, d *RemainderDecision) {
+			const reopened = "The import rejects an empty file"
+			tg.Body = heading + "- [ ] " + operatorCloseCriterion + "\n- [ ] " + reopened + "\n"
+			d.Fingerprint = cardOver(t, d.StateRoot, tg.Body, PartialDeliveryFile{PR: 5, Criteria: []string{operatorCloseCriterion}, Ticked: []string{reopened}})
+			cardOver(t, d.StateRoot, tg.Body, PartialDeliveryFile{PR: 5, Criteria: []string{reopened, operatorCloseCriterion}})
+		}},
+		{name: "rewritten without a fingerprint", wantErr: ErrRemainderSuperseded, stale: func(t *testing.T, _ *PartialCloseTarget, d *RemainderDecision) {
+			rec := PartialDeliveryFile{PR: 5, Criteria: []string{operatorCloseCriterion}}
+			if err := WritePartialDeliveryContext(d.StateRoot, 7, rec); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			if d.Fingerprint, err = RemainderFingerprint(rec); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{name: "no fingerprint", wantErr: ErrRemainderRevised, stale: func(_ *testing.T, _ *PartialCloseTarget, d *RemainderDecision) {
+		{name: "no fingerprint", wantErr: ErrRemainderSuperseded, stale: func(_ *testing.T, _ *PartialCloseTarget, d *RemainderDecision) {
 			d.Fingerprint = ""
 		}},
 		{name: "record removed", wantErr: ErrRemainderSuperseded, stale: func(t *testing.T, _ *PartialCloseTarget, d *RemainderDecision) {
@@ -219,7 +242,7 @@ func TestCloseRemainderByOperator_RefusesAStaleCard(t *testing.T) {
 			record(t, d, 5, "The import rejects an empty file")
 		}},
 		{name: "record holds more", calls: "comment close board", stale: func(t *testing.T, _ *PartialCloseTarget, d *RemainderDecision) {
-			record(t, d, 5, "a criterion the judge found met", operatorCloseCriterion)
+			d.Fingerprint = cardOver(t, d.StateRoot, operatorCloseBody, PartialDeliveryFile{PR: 5, Criteria: []string{"a criterion the judge found met", operatorCloseCriterion}})
 		}},
 		{name: "already closed skips both", calls: "board", stale: func(t *testing.T, tg *PartialCloseTarget, d *RemainderDecision) {
 			tg.State, tg.Body = "closed", "prose only"

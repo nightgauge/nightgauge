@@ -523,7 +523,7 @@ func (as *AutonomousScheduler) raiseNotPipelineActionable(repo string, issue int
 			req.Context.PR = r.pr
 			req.Options = append(req.Options, attention.Option{
 				ID: "close", Label: closeRemainderLabel, Verb: attention.VerbIssueCloseRemainder,
-				Args: map[string]any{"pr": r.pr, "criteria": r.open, "criteria_fingerprint": r.fingerprint},
+				Args: map[string]any{"pr": r.pr, "criteria": r.open, "remainder_fingerprint": r.fingerprint},
 			})
 		}
 	}
@@ -566,9 +566,10 @@ type partialRemainder struct {
 
 // openPartialRemainder re-judges the remainder the issue's partial re-run was
 // scoped to. The record is removed at the start of every unscoped run, so its
-// presence is what identifies a partial re-run. Its fingerprint is of the body
-// its criteria were reconciled from; without one a close could cover a
-// criterion the card never listed, so none is offered. When every criterion is met
+// presence is what identifies a partial re-run. Without the fingerprint of the
+// body its criteria were reconciled from, a close could cover a criterion the
+// card never listed, so none is offered. The card carries the whole record's
+// fingerprint. When every criterion is met
 // (the automatic close failed, or the run disputed its plan) all are returned:
 // the issue is still open on each of them.
 func (as *AutonomousScheduler) openPartialRemainder(repo string, issue int) (partialRemainder, bool) {
@@ -589,6 +590,10 @@ func (as *AutonomousScheduler) openPartialRemainder(repo string, issue int) (par
 	if rec.CriteriaFingerprint == "" {
 		return none(errors.New("its remainder was not reconciled with the issue body and the partial PR"))
 	}
+	fingerprint, err := RemainderFingerprint(rec)
+	if err != nil {
+		return none(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), noOpJudgeTimeout)
 	defer cancel()
 	v := JudgeRemainder(ctx, root, rec.MergeSHA, rec.Criteria)
@@ -600,7 +605,7 @@ func (as *AutonomousScheduler) openPartialRemainder(repo string, issue int) (par
 	for _, c := range shown {
 		open = append(open, attention.RemainderCriterion{Text: c.Text, Evidence: cardEvidence(root, c.Evidence)})
 	}
-	return partialRemainder{pr: rec.PR, fingerprint: rec.CriteriaFingerprint, open: open}, true
+	return partialRemainder{pr: rec.PR, fingerprint: fingerprint, open: open}, true
 }
 
 // cardEvidence keeps the checkout's path out of an evidence line: the card is

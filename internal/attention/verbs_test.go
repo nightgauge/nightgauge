@@ -800,13 +800,13 @@ func TestExecuteCloseRemainder(t *testing.T) {
 	decoded := []any{map[string]any{"text": "A", "evidence": "undecidable"}}
 	typed := []RemainderCriterion{{Text: "A", Evidence: "undecidable"}}
 	opt := Option{ID: "close", Verb: VerbIssueCloseRemainder,
-		Args: map[string]any{"pr": float64(5), "criteria": decoded, "criteria_fingerprint": "sha256:x"}}
+		Args: map[string]any{"pr": float64(5), "criteria": decoded, "remainder_fingerprint": "sha256:x"}}
 	decided := WithResolver(context.Background(), "jane")
 
 	// Args hold Go values before the store round-trips them and decoded JSON after.
 	for name, args := range map[string]map[string]any{
 		"decoded": opt.Args,
-		"typed":   {"pr": 5, "criteria": typed, "criteria_fingerprint": "sha256:x"},
+		"typed":   {"pr": 5, "criteria": typed, "remainder_fingerprint": "sha256:x"},
 	} {
 		rec := &closeRecorder{}
 		o := opt
@@ -850,7 +850,7 @@ func TestExecuteCloseRemainder(t *testing.T) {
 		"unconfigured repo": {req: &base, opt: opt, configured: []string{"o/other"}, want: ErrVerbTargetNotConfigured.Error()},
 		"target in args":    {req: &base, opt: with("issueNumber", 99), want: "accepts only"},
 		"no PR":             {req: &base, opt: with("pr", nil), want: "no partial pull request"},
-		"no fingerprint":    {req: &base, opt: with("criteria_fingerprint", nil), want: "no criteria fingerprint"},
+		"no fingerprint":    {req: &base, opt: with("remainder_fingerprint", nil), want: "no remainder fingerprint"},
 		"no criteria":       {req: &base, opt: with("criteria", nil), want: "lists no open criteria"},
 		"empty criteria":    {req: &base, opt: with("criteria", []any{}), want: "lists no open criteria"},
 		"zero PR":           {req: &base, opt: with("pr", 0), want: "no partial pull request"},
