@@ -1984,6 +1984,50 @@ func TestVerifyACOnMerge_QuotedPaths(t *testing.T) {
 	}
 }
 
+// No section takes another's place, whatever bytes its path holds (#3505).
+func TestParseUnifiedDiff_SectionsKeepTheirPath(t *testing.T) {
+	const victim = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n"
+	for name, c := range map[string]struct {
+		diff string
+		want []string
+	}{
+		"non-UTF-8 quoted names": {
+			"diff --git \"a/q\\\"\xff\" \"b/q\\\"\xff\"\n" + "diff --git \"a/q\\\"\xfe\" \"b/q\\\"\xfe\"\n",
+			[]string{"q\"\xff", "q\"\xfe"},
+		},
+		"edit of a name holding b/": {
+			victim + "diff --git a/x b/f b/x b/f\n--- a/x b/f\t\n+++ b/x b/f\t\n@@ -1 +1 @@\n-a\n+b\n",
+			[]string{"f", "x b/f"},
+		},
+		"deletion of a name holding b/": {
+			victim + "diff --git a/x b/f b/x b/f\ndeleted file mode 100644\n",
+			[]string{"f", "x b/f"},
+		},
+		"rename to a name holding b/": {
+			victim + "diff --git a/o b/x b/f\nrename from o\nrename to x b/f\n",
+			[]string{"f", "x b/f"},
+		},
+		"type change": {
+			"diff --git a/f b/f\ndeleted file mode 100644\n--- a/f\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n" +
+				"diff --git a/f b/f\nnew file mode 120000\n--- /dev/null\n+++ b/f\n@@ -0,0 +1 @@\n+target\n",
+			[]string{"f"},
+		},
+	} {
+		files := parseUnifiedDiff(c.diff)
+		if len(files) != len(c.want) {
+			t.Errorf("%s: read %d files, want %d", name, len(files), len(c.want))
+		}
+		for _, p := range c.want {
+			f := files[p]
+			if f == nil {
+				t.Errorf("%s: no %q", name, p)
+			} else if p == "f" && !reflect.DeepEqual(f.Removed, []string{"old"}) {
+				t.Errorf("%s: f lost its removed line: %+v", name, f)
+			}
+		}
+	}
+}
+
 // A merged diff with no files proves nothing kept (#3505).
 func TestVerifyACOnMerge_NoFiles(t *testing.T) {
 	dir := slugifyRepo(t)

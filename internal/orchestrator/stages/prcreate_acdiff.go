@@ -292,10 +292,21 @@ func (d *ACDiff) headContent(path string) ([]byte, bool) {
 // acUnquotePath undoes the C quoting git gives a path that holds a quote, a
 // backslash or a control byte, which core.quotePath=false does not turn off.
 func acUnquotePath(p string) string {
-	if strings.HasPrefix(p, `"`) {
-		if u, err := strconv.Unquote(p); err == nil {
-			return u
+	if !strings.HasPrefix(p, `"`) {
+		return p
+	}
+	// strconv.Unquote turns a raw byte that is not UTF-8 into U+FFFD, which
+	// would give two files one path, so each high byte is escaped first.
+	var b strings.Builder
+	for i := 0; i < len(p); i++ {
+		if p[i] >= 0x80 {
+			fmt.Fprintf(&b, `\%03o`, p[i])
+		} else {
+			b.WriteByte(p[i])
 		}
+	}
+	if u, err := strconv.Unquote(b.String()); err == nil {
+		return u
 	}
 	return p
 }
@@ -306,7 +317,7 @@ var acHunkRE = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 // It finds paths by the b/ prefix, so callers pass --src-prefix and
 // --dst-prefix: diff.noprefix and diff.mnemonicPrefix change the default.
 func parseUnifiedDiff(out string) map[string]*ACFileDiff {
-	files := map[string]*ACFileDiff{}
+	var sections []*ACFileDiff
 	var cur *ACFileDiff
 	inHunk := false
 	next := 0
@@ -314,15 +325,9 @@ func parseUnifiedDiff(out string) map[string]*ACFileDiff {
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
 			cur = &ACFileDiff{Status: "modified"}
+			sections = append(sections, cur)
 			inHunk = false
-			sep := " b/"
-			if strings.HasSuffix(line, `"`) {
-				sep = ` "b/` // only a quoted path ends in a quote
-			}
-			if i := strings.LastIndex(line, sep); i >= 0 {
-				cur.Path = strings.TrimPrefix(acUnquotePath(line[i+1:]), "b/")
-				files[cur.Path] = cur
-			}
+			cur.Path = acHeaderPath(strings.TrimPrefix(line, "diff --git "))
 		case cur == nil:
 		case !inHunk && strings.HasPrefix(line, "new file mode"):
 			cur.Status = "added"
@@ -332,12 +337,11 @@ func parseUnifiedDiff(out string) map[string]*ACFileDiff {
 			cur.OldPath = acUnquotePath(strings.TrimPrefix(line, "rename from "))
 		case !inHunk && strings.HasPrefix(line, "rename to "):
 			cur.Status = "renamed"
+			cur.Path = acUnquotePath(strings.TrimPrefix(line, "rename to "))
 		case !inHunk && strings.HasPrefix(line, "+++ "):
 			// git ends a header path that holds a space with a tab.
-			if p := acUnquotePath(strings.TrimSuffix(strings.TrimPrefix(line, "+++ "), "\t")); strings.HasPrefix(p, "b/") && p[2:] != cur.Path {
-				delete(files, cur.Path)
+			if p := acUnquotePath(strings.TrimSuffix(strings.TrimPrefix(line, "+++ "), "\t")); strings.HasPrefix(p, "b/") {
 				cur.Path = p[2:]
-				files[cur.Path] = cur
 			}
 		case strings.HasPrefix(line, "@@"):
 			if m := acHunkRE.FindStringSubmatch(line); m != nil {
@@ -355,7 +359,40 @@ func parseUnifiedDiff(out string) map[string]*ACFileDiff {
 			next++
 		}
 	}
+	// Keyed only once every path is final, so no section displaces another.
+	files := map[string]*ACFileDiff{}
+	for _, f := range sections {
+		if f.Path == "" {
+			continue
+		}
+		// A type change is two sections, a delete and an add, of one path.
+		if prev := files[f.Path]; prev != nil {
+			f.Deleted += prev.Deleted
+			f.Removed = append(prev.Removed, f.Removed...)
+			f.Added = append(prev.Added, f.Added...)
+		}
+		files[f.Path] = f
+	}
 	return files
+}
+
+// acHeaderPath reads the destination from what follows "diff --git ". A name
+// may itself hold " b/", so an unrenamed one is read as the half it repeats;
+// a rename's is replaced by its "rename to" line.
+func acHeaderPath(names string) string {
+	if n := (len(names) - len("a/ b/")) / 2; n > 0 {
+		if p := names[len(names)-n:]; names == "a/"+p+" b/"+p {
+			return p
+		}
+	}
+	sep := " b/"
+	if strings.HasSuffix(names, `"`) {
+		sep = ` "b/` // only a quoted path ends in a quote
+	}
+	if i := strings.LastIndex(names, sep); i >= 0 {
+		return strings.TrimPrefix(acUnquotePath(names[i+1:]), "b/")
+	}
+	return ""
 }
 
 // Checker returns the verifier bound to this diff, or nil when the diff is

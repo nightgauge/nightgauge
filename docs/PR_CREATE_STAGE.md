@@ -230,7 +230,8 @@ criterion:
   parses, this one and the merged range below, pass `--src-prefix=a/` and
   `--dst-prefix=b/`, so `diff.noprefix` and `diff.mnemonicPrefix` in a git
   config do not change what is read, and their parser decodes a path git
-  C-quotes (a quote, backslash or control byte in the name) (#3505).
+  C-quotes (a quote, backslash or control byte in the name) byte for byte and
+  keeps every section under its own path (#3505).
 - `feature-validate`: the verdict in `validate-{N}.json`
   `acceptance_criteria_verdicts`, matched by criterion text, or by `index`
   only when the verdict has no text. Evidence that says the criterion is not
