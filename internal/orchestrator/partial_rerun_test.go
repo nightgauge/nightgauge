@@ -750,7 +750,8 @@ func TestReconcilePartialRecord_MergeSHA(t *testing.T) {
 func TestReconcilePartialRecord_CriteriaFingerprint(t *testing.T) {
 	t.Parallel()
 	listed, added := "Listed behaviour is handled", "Added behaviour is handled"
-	body := "## Acceptance criteria\n\n- [ ] " + listed + "\n- [ ] " + added + "\n"
+	done := "Done behaviour is handled"
+	body := "## Acceptance criteria\n\n- [ ] " + listed + "\n- [ ] " + added + "\n- [x] " + done + "\n"
 	down := errors.New("forge down")
 	for _, tc := range []struct {
 		name, body string
@@ -777,6 +778,9 @@ func TestReconcilePartialRecord_CriteriaFingerprint(t *testing.T) {
 			rec := ReconcilePartialRecord(context.Background(), reads, gitWorkspace(t), 3487, []string{listed}, 7, nil)
 			if rec.CriteriaFingerprint != tc.want || bodyReads != 1 {
 				t.Fatalf("fingerprint %q after %d body read(s), want %q from one", rec.CriteriaFingerprint, bodyReads, tc.want)
+			}
+			if tc.want != "" && strings.Join(rec.Ticked, "|") != done {
+				t.Fatalf("ticked = %q, want %q", rec.Ticked, done)
 			}
 			if tc.want != "" && strings.Join(rec.Criteria, "|") != listed+"|"+added {
 				t.Fatalf("scope %q does not cover the fingerprinted body", rec.Criteria)

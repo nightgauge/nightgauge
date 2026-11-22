@@ -368,7 +368,9 @@ runs whose own trace showed the fast-track firing. That was the state of
 `partial_delivery` also carries `criteria_fingerprint?` (Issue #3487): the
 fingerprint of the issue body `criteria` was reconciled from. It is absent
 unless that body had criteria and both it and the partial PR were read. The
-Action Center offers **close** on a no-op card only with it.
+Action Center offers **close** on a no-op card only with it. Beside it,
+`ticked?` lists that body's ticked criteria; the close is refused when one has
+since been unticked.
 
 ### ac-reconcile-{N}.json
 

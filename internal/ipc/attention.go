@@ -924,16 +924,19 @@ func (c remainderCloser) CloseRemainder(ctx context.Context, repo string, issue,
 		StateRoot:   c.server.repoRoot(repo),
 		Fingerprint: fingerprint,
 		Login:       f.login,
+		PostedAs:    f.postedAs,
 		Criteria:    criteria,
 	})
 }
 
 // remainderCloseForge is what one close reads and writes with. login is the
-// forge user the close is written as, "" when that is not a person.
+// forge user the close is written as, "" when that is not a person; postedAs
+// is the author of what it writes, a person or an App's bot.
 type remainderCloseForge struct {
-	deps   orchestrator.PartialCloseDeps
-	reader orchestrator.PartialCloseIssueReader
-	login  string
+	deps     orchestrator.PartialCloseDeps
+	reader   orchestrator.PartialCloseIssueReader
+	login    string
+	postedAs string
 }
 
 // remainderCloseDeps builds that for owner/name: its client, and its own board
@@ -956,6 +959,10 @@ func (s *Server) remainderCloseDeps(ctx context.Context, owner, name string) (re
 		deps:   orchestrator.PartialCloseDeps{Issues: svc, Comments: gh.NewTrustForge(client), Owner: owner, Repo: name},
 		reader: svc,
 		login:  closingLogin(ctx, client),
+	}
+	f.postedAs = f.login
+	if app := client.App(); app != nil {
+		f.postedAs = app.BotLogin()
 	}
 	root := s.repoRoot(owner + "/" + name)
 	project, err := resolveProjectFor(root, owner, name)

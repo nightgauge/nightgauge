@@ -65,6 +65,9 @@ type PartialDeliveryFile struct {
 	// cover every criterion the fingerprint does, and only then may a close
 	// be offered over them (#3487).
 	CriteriaFingerprint string `json:"criteria_fingerprint,omitempty"`
+	// Ticked are that body's ticked criteria, which are never in Criteria.
+	// The fingerprint ignores ticks, so a close checks that they still are.
+	Ticked []string `json:"ticked,omitempty"`
 }
 
 // readPartialDelivery reads repo#issue's pending partial-delivery remainder
@@ -263,12 +266,13 @@ func ReconcilePartialRecord(ctx context.Context, reads PartialScopeReads, ws str
 	// The fingerprint is taken from the reconcile's own body read: a later
 	// read could hold a criterion the scope does not.
 	var fingerprint string
+	var ticked []string
 	if readBody := reads.Body; readBody != nil {
 		reads.Body = func(ctx context.Context) (string, error) {
 			body, err := readBody(ctx)
 			if err == nil {
 				if fp := preflight.ACFingerprint(body); fp != preflight.ACFingerprint("") {
-					fingerprint = fp
+					fingerprint, ticked = fp, preflight.TickedACs(body)
 				}
 			}
 			return body, err
@@ -284,7 +288,7 @@ func ReconcilePartialRecord(ctx context.Context, reads PartialScopeReads, ws str
 			issue, pr, err)
 	} else {
 		rec.MergeSHA = got.MergeSHA
-		rec.CriteriaFingerprint = fingerprint
+		rec.CriteriaFingerprint, rec.Ticked = fingerprint, ticked
 	}
 	return rec
 }

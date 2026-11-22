@@ -16,6 +16,7 @@ import (
 
 // operatorCloseForge is the forge behind one operator close.
 type operatorCloseForge struct {
+	author                   string // who the listed comments are by; octocat when empty
 	comments, closed, synced []string
 	calls                    []string
 	readErr, commentErr      error
@@ -28,7 +29,11 @@ func (f *operatorCloseForge) IssueComments(context.Context, string, string, int)
 	}
 	var out []trust.Comment
 	for _, body := range f.comments {
-		out = append(out, trust.Comment{Body: body})
+		author := f.author
+		if author == "" {
+			author = "octocat"
+		}
+		out = append(out, trust.Comment{Body: body, Author: author})
 	}
 	return out, nil
 }
@@ -88,6 +93,7 @@ func operatorClose(t *testing.T) (*operatorCloseForge, PartialCloseDeps, Partial
 			StateRoot:   root,
 			Fingerprint: preflight.ACFingerprint(operatorCloseBody),
 			Login:       "octocat",
+			PostedAs:    "octocat",
 			Criteria:    []attention.RemainderCriterion{{Text: operatorCloseCriterion, Evidence: "undecidable: prose"}},
 		}
 }
@@ -179,6 +185,22 @@ func TestCloseRemainderByOperator_RefusesAStaleCard(t *testing.T) {
 		{name: "all removed", wantErr: ErrRemainderRevised, stale: func(_ *testing.T, tg *PartialCloseTarget, _ *RemainderDecision) {
 			tg.Body = "prose only"
 		}},
+		{name: "unticked since", wantErr: ErrRemainderRevised, stale: func(t *testing.T, tg *PartialCloseTarget, d *RemainderDecision) {
+			const reopened = "The import rejects an empty file"
+			tg.Body = heading + "- [ ] " + operatorCloseCriterion + "\n- [ ] " + reopened + "\n"
+			d.Fingerprint = preflight.ACFingerprint(tg.Body)
+			if err := WritePartialDeliveryContext(d.StateRoot, 7, PartialDeliveryFile{PR: 5, Criteria: []string{operatorCloseCriterion}, Ticked: []string{reopened}}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "still ticked", calls: "comment close board", stale: func(t *testing.T, tg *PartialCloseTarget, d *RemainderDecision) {
+			const done = "The import rejects an empty file"
+			tg.Body = heading + "- [ ] " + operatorCloseCriterion + "\n- [x] " + done + "\n"
+			d.Fingerprint = preflight.ACFingerprint(tg.Body)
+			if err := WritePartialDeliveryContext(d.StateRoot, 7, PartialDeliveryFile{PR: 5, Criteria: []string{operatorCloseCriterion}, Ticked: []string{done}}); err != nil {
+				t.Fatal(err)
+			}
+		}},
 		{name: "no fingerprint", wantErr: ErrRemainderRevised, stale: func(_ *testing.T, _ *PartialCloseTarget, d *RemainderDecision) {
 			d.Fingerprint = ""
 		}},
@@ -241,6 +263,18 @@ func TestCloseRemainderByOperator_Retry(t *testing.T) {
 	if err := run(); err != nil || len(f.comments) != 2 {
 		t.Fatalf("a forged marker suppressed the comment: err=%v comments=%v", err, f.comments)
 	}
+
+	for name, forge := range map[string]func(*operatorCloseForge, *RemainderDecision){
+		"another author":          func(f *operatorCloseForge, _ *RemainderDecision) { f.author = "mallory" },
+		"posting account unknown": func(_ *operatorCloseForge, d *RemainderDecision) { d.PostedAs = "" },
+	} {
+		f, deps, target, decision = operatorClose(t)
+		f.comments = []string{operatorRemainderClosedComment(target, decision)}
+		forge(f, &decision)
+		if err := run(); err != nil || len(f.comments) != 2 {
+			t.Fatalf("%s: an identical comment suppressed the decision: err=%v comments=%v", name, err, f.comments)
+		}
+	}
 }
 
 func TestOperatorRemainderClosedComment(t *testing.T) {
@@ -253,14 +287,14 @@ func TestOperatorRemainderClosedComment(t *testing.T) {
 	}
 	want := "<!-- nightgauge:operator-closed-remainder pr=5 -->\n" +
 		"## Operator decision: close as completed\n\n" +
-		"`octocat` decided that the criteria left open after PR #5 are met, and chose to close the issue as completed " +
+		"An operator, acting through the `octocat` account, decided that the criteria left open after PR #5 are met, and chose to close the issue as completed " +
 		"from the Action Center. This is a human decision, not the judge's verdict. " +
 		"The criteria that were open, with the judge's evidence:\n\n" +
 		"- The export writes a header row — undecidable: prose\n"
 	if got := comment("octocat"); got != want {
 		t.Errorf("comment =\n%s\nwant\n%s", got, want)
 	}
-	if got := comment("mona_acme"); !strings.Contains(got, "`mona_acme` decided") {
+	if got := comment("mona_acme"); !strings.Contains(got, "through the `mona_acme` account, decided") {
 		t.Errorf("a managed user's login was dropped:\n%s", got)
 	}
 	for _, login := range []string{"", "jane@example.com", "Jane Doe", "helper[bot]", "a`b", "@octocat", "x\ny", strings.Repeat("a", 40)} {

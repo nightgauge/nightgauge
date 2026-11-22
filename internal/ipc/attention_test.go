@@ -401,7 +401,7 @@ func TestResolveNoOpCard(t *testing.T) {
 			if tc.comments == 1 {
 				who := "An operator"
 				if tc.login != "" {
-					who = "`" + tc.login + "`"
+					who = "An operator, acting through the `" + tc.login + "` account,"
 				}
 				for _, want := range []string{who + " decided", "PR #5", "- A is handled — undecidable: prose"} {
 					if !strings.Contains(f.comments[0], want) {
@@ -468,7 +468,7 @@ func TestRemainderCloseDeps(t *testing.T) {
 			if err != nil {
 				t.Fatalf("an unresolved board must not stop the close: %v", err)
 			}
-			if f.deps.Issues == nil || f.deps.Comments == nil || f.reader == nil || f.login != "octocat" ||
+			if f.deps.Issues == nil || f.deps.Comments == nil || f.reader == nil || f.login != "octocat" || f.postedAs != "octocat" ||
 				f.deps.Owner != "o" || f.deps.Repo != tc.repo {
 				t.Fatalf("forge = %+v", f)
 			}

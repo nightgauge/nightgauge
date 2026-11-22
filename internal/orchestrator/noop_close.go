@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
@@ -41,8 +42,12 @@ type RemainderDecision struct {
 	// Fingerprint identifies the issue's criteria the close was offered over.
 	Fingerprint string
 	// Login is the forge user the close is written as, "" when none is known.
-	// It is the only name the comment may carry.
+	// It is the only name the comment may carry. It is the account written
+	// through, which on a relayed resolve need not be the person who decided.
 	Login string
+	// PostedAs is the author the forge gives the close's comment: Login, or a
+	// GitHub App's bot login. "" when unknown.
+	PostedAs string
 	// Criteria are the open criteria the card listed.
 	Criteria []attention.RemainderCriterion
 }
@@ -51,7 +56,7 @@ type RemainderDecision struct {
 // decided its open criteria are met.
 //
 // An open issue is first checked against the card: ErrRemainderRevised when
-// its criteria changed, ErrRemainderSuperseded when the recorded remainder is
+// its criteria changed or one was unticked, ErrRemainderSuperseded when the recorded remainder is
 // no longer the card's. Then it gets a comment, the close and the board move
 // to Done. The comment comes first so a closed issue never lacks it; it states
 // the decision, which holds if the close then fails, and a retry does not
@@ -71,10 +76,18 @@ func CloseRemainderByOperator(ctx context.Context, deps PartialCloseDeps, target
 		if d.Fingerprint == "" || preflight.ACFingerprint(target.Body) != d.Fingerprint {
 			return ErrRemainderRevised
 		}
-		if remainderSuperseded(target, d) {
+		rec, current := currentRemainder(target, d)
+		if !current {
 			return ErrRemainderSuperseded
 		}
-		if err := postOperatorDecision(ctx, deps, target, operatorRemainderClosedComment(target, d)); err != nil {
+		stillTicked := preflight.TickedACs(target.Body)
+		for _, text := range rec.Ticked {
+			if !slices.Contains(stillTicked, text) {
+				// Reopened since the card was raised, so the card never listed it.
+				return ErrRemainderRevised
+			}
+		}
+		if err := postOperatorDecision(ctx, deps, target, d.PostedAs, operatorRemainderClosedComment(target, d)); err != nil {
 			return err
 		}
 		if err := deps.Issues.CloseIssue(ctx, target.NodeID); err != nil {
@@ -92,19 +105,19 @@ func CloseRemainderByOperator(ctx context.Context, deps PartialCloseDeps, target
 	return nil
 }
 
-// remainderSuperseded reports whether the current partial-delivery record no
-// longer holds what the card was raised over. Every run removes or rewrites
+// currentRemainder returns the current partial-delivery record, and whether
+// it still holds what the card was raised over. Every run removes or rewrites
 // that record when it starts, so this stands in for retracting the card. An
-// unreadable record supersedes too; its cause names a local path, so it is
-// logged and not returned.
-func remainderSuperseded(target PartialCloseTarget, d RemainderDecision) bool {
+// unreadable record is not current either; its cause names a local path, so it
+// is logged and not returned.
+func currentRemainder(target PartialCloseTarget, d RemainderDecision) (PartialDeliveryFile, bool) {
 	rec, err := ReadPartialDeliveryContext(d.StateRoot, target.Number)
 	if err != nil {
 		log.Printf("#%d: operator close refused, no current remainder: %v [#3487]", target.Number, err)
-		return true
+		return rec, false
 	}
 	if rec.PR != target.PR {
-		return true
+		return rec, false
 	}
 	recorded := make(map[string]bool, len(rec.Criteria))
 	for _, text := range rec.Criteria {
@@ -112,22 +125,23 @@ func remainderSuperseded(target PartialCloseTarget, d RemainderDecision) bool {
 	}
 	for _, c := range d.Criteria {
 		if !recorded[partialRemainderKey(c.Text)] {
-			return true
+			return rec, false
 		}
 	}
-	return false
+	return rec, true
 }
 
 // postOperatorDecision posts body unless an earlier attempt already did. Only
-// an identical body counts, so a comment forging the marker suppresses nothing.
-func postOperatorDecision(ctx context.Context, deps PartialCloseDeps, target PartialCloseTarget, body string) error {
-	if deps.Comments != nil {
+// an identical body by the posting account counts, so a forged comment
+// suppresses nothing; with that account unknown the comment is posted again.
+func postOperatorDecision(ctx context.Context, deps PartialCloseDeps, target PartialCloseTarget, postedAs, body string) error {
+	if deps.Comments != nil && postedAs != "" {
 		posted, err := deps.Comments.IssueComments(ctx, deps.Owner, deps.Repo, target.Number)
 		if err != nil {
 			return fmt.Errorf("read the comments on #%d: %w", target.Number, err)
 		}
 		for _, c := range posted {
-			if strings.TrimSpace(c.Body) == strings.TrimSpace(body) {
+			if strings.EqualFold(c.Author, postedAs) && strings.TrimSpace(c.Body) == strings.TrimSpace(body) {
 				return nil
 			}
 		}
@@ -144,7 +158,7 @@ func operatorRemainderClosedComment(target PartialCloseTarget, d RemainderDecisi
 	b.WriteString("## Operator decision: close as completed\n\n")
 	who := "An operator"
 	if forgeLoginRE.MatchString(d.Login) {
-		who = "`" + d.Login + "`"
+		who = "An operator, acting through the `" + d.Login + "` account,"
 	}
 	fmt.Fprintf(&b, "%s decided that the criteria left open after PR #%d are met, ", who, target.PR)
 	b.WriteString("and chose to close the issue as completed from the Action Center. " +

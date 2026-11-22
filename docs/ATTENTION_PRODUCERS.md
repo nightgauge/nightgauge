@@ -773,16 +773,19 @@ loop reached, so its observed set is complete.
   The repository and the issue come from the card's `Context`; the only
   arguments are `pr`, `criteria` and `criteria_fingerprint`. Nothing retracts
   the card when a later run starts, so resolving **close** on an open issue is
-  refused, with the card left open, in two cases:
+  refused, with the card left open, in three cases:
   - the issue's criteria no longer match the fingerprint (one added, removed or
     reworded; a tick does not count);
+  - a criterion the record lists as `ticked` is no longer ticked;
   - the current `partial-delivery-{N}.json` no longer names that pull request
     and those criteria.
 
   Otherwise the daemon comments, closes the issue as completed, moves it to
   Done on that repository's board and clears the issue's operator hold. The
-  comment lists the criteria as plain text and names the forge login the close
-  is written as, or "An operator" when that is a GitHub App or unknown; the
+  comment lists the criteria as plain text and says an operator decided, naming
+  the forge account the close is written through unless that is a GitHub App or
+  unknown. It does not say that account decided: a relayed resolve can be a
+  teammate's. The
   resolve actor stays in the attention journal. An issue already closed gets no
   comment or close, only the board move and the released hold. A failed comment or close leaves the card and the
   hold, and a retry does not repeat an identical comment; a failed board move is
