@@ -1908,9 +1908,10 @@ func bookedNoOpDetail() string {
 		RemainderVerdict{Criteria: []CriterionVerdict{{Text: "capped list", Evidence: "undecidable"}}}).Detail
 }
 
-// Each detail main books for a partial re-run reaches the card through main's
-// completion branch.
-func TestNotPipelineActionableCard_RecognisesPartialRerunStops(t *testing.T) {
+// #3487: every partial booking's card offers close on the structured kind,
+// whatever its text. The same text without the kind, as an older build sends
+// it, gets the ack-only card.
+func TestNotPipelineActionableCard_OffersCloseOnTheBooking(t *testing.T) {
 	t.Parallel()
 
 	scope := &state.PartialRerun{PR: 5, Criteria: []string{"A"}}
@@ -1926,16 +1927,37 @@ func TestNotPipelineActionableCard_RecognisesPartialRerunStops(t *testing.T) {
 			"so the run ends as a no-op, not a failure; the remaining criteria stay open on the issue [#3163] — gate",
 		"extension no diff": "[not-pipeline-actionable] pr-create: the feature branch has no diff against its " +
 			"base, so there is nothing to open a PR for; #7 waits in Backlog for a human [#3012]",
-		"wrapped": "stage feature-dev failed: " + booked,
+		"wrapped":                 "stage feature-dev failed: " + booked,
+		"no marker":               "nothing was left to build",
+		"quotes another kind":     booked + " handles [merge-conflict]",
+		"quotes a usage-cap kind": booked + " retries when overloaded",
 	} {
+		// Text that quotes another kind classifies as that kind, so only the
+		// others reach the card at all without the booking.
+		if strings.Contains(detail, "[not-pipeline-actionable]") && !strings.HasPrefix(name, "quotes") {
+			t.Run(name+"/text only", func(t *testing.T) {
+				t.Parallel()
+				as := newAttentionProducerScheduler(t)
+				seedPartialRerun(t, as.workspaceRoot, PartialDeliveryFile{PR: 5, Criteria: []string{"A"}})
+				addRunning(as, "o/r", 7, "re-run")
+				as.NotifyComplete("o/r", 7, false, false, "", detail)
+				as.drainBackground()
+				if card := onlyNoOpCard(t, as); card.FindOption("close") != nil {
+					t.Errorf("text alone offered a close: %+v", card.Options)
+				}
+			})
+		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			as := newAttentionProducerScheduler(t)
 			seedPartialRerun(t, as.workspaceRoot, PartialDeliveryFile{PR: 5, Criteria: []string{"A"}})
 			addRunning(as, "o/r", 7, "re-run")
-			as.NotifyComplete("o/r", 7, false, false, "", detail)
+			as.NotifyComplete("o/r", 7, false, false, TerminalKindNotPipelineActionable, detail)
 			as.drainBackground()
 			card := onlyNoOpCard(t, as)
+			if !strings.Contains(card.Body, "autonomous clear-failures") {
+				t.Errorf("body omits the hold's release step: %q", card.Body)
+			}
 			wantFingerprint, err := RemainderFingerprint(PartialDeliveryFile{PR: 5, Criteria: []string{"A"}, CriteriaFingerprint: cardFingerprint})
 			if err != nil {
 				t.Fatal(err)
@@ -1970,40 +1992,41 @@ func TestNotPipelineActionableCard_OtherEndingsStayAckOnly(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, detail string
+		booked       bool // the structured flag
 		setup        func(t *testing.T, as *AutonomousScheduler)
 	}{
 		{name: "publication boundary", detail: "[not-pipeline-actionable] publication-boundary verdict " + strings.Repeat("d", attentionBlockerMaxBytes)},
 		{name: "empty plan", detail: "[not-pipeline-actionable] plan lists no files to create or modify"},
-		{name: "no marker", detail: "feature-dev: partial-delivery re-run of #7 wrote nothing"},
+		{name: "booking text without the booking", detail: booked},
 		{name: "another ending quoting a stop", detail: "[not-pipeline-actionable] publication-boundary: the issue quotes " + booked},
-		{name: "another issue's number", detail: strings.ReplaceAll(booked, "re-run of #7 ", "re-run of #78 ")},
-		{name: "no record", detail: booked, setup: func(t *testing.T, as *AutonomousScheduler) {
+		{name: "no-diff text without the booking", detail: pmstages.NoDiffBeforePRCreateDetail(7, "feat/7-x", "main", 1)},
+		{name: "no record", booked: true, detail: booked, setup: func(t *testing.T, as *AutonomousScheduler) {
 			if err := RemovePartialDeliveryContext(as.workspaceRoot, 7); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{name: "no diff without a record", detail: pmstages.NoDiffBeforePRCreateDetail(7, "feat/7-x", "main", 1), setup: func(t *testing.T, as *AutonomousScheduler) {
+		{name: "no diff without a record", booked: true, detail: pmstages.NoDiffBeforePRCreateDetail(7, "feat/7-x", "main", 1), setup: func(t *testing.T, as *AutonomousScheduler) {
 			if err := RemovePartialDeliveryContext(as.workspaceRoot, 7); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{name: "corrupt record", detail: booked, setup: func(t *testing.T, as *AutonomousScheduler) {
+		{name: "corrupt record", booked: true, detail: booked, setup: func(t *testing.T, as *AutonomousScheduler) {
 			write(t, as.workspaceRoot, partialDeliveryContextType, "{")
 		}},
-		{name: "no PR", detail: booked, setup: func(t *testing.T, as *AutonomousScheduler) {
+		{name: "no PR", booked: true, detail: booked, setup: func(t *testing.T, as *AutonomousScheduler) {
 			seedPartialRerun(t, as.workspaceRoot, PartialDeliveryFile{Criteria: []string{"still open"}})
 		}},
-		{name: "no criteria", detail: booked, setup: func(t *testing.T, as *AutonomousScheduler) {
+		{name: "no criteria", booked: true, detail: booked, setup: func(t *testing.T, as *AutonomousScheduler) {
 			seedPartialRerun(t, as.workspaceRoot, PartialDeliveryFile{PR: 5})
 		}},
-		{name: "no fingerprint", detail: booked, setup: func(t *testing.T, as *AutonomousScheduler) {
+		{name: "no fingerprint", booked: true, detail: booked, setup: func(t *testing.T, as *AutonomousScheduler) {
 			// A report another read wrote must not stand in for the record's own.
 			write(t, as.workspaceRoot, "ac-reconcile", `{"ac_fingerprint":"sha256:later"}`)
 			if err := WritePartialDeliveryContext(as.workspaceRoot, 7, rec); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{name: "no root", detail: booked, setup: func(_ *testing.T, as *AutonomousScheduler) {
+		{name: "no root", booked: true, detail: booked, setup: func(_ *testing.T, as *AutonomousScheduler) {
 			as.workspaceRoot = ""
 		}},
 	} {
@@ -2014,17 +2037,13 @@ func TestNotPipelineActionableCard_OtherEndingsStayAckOnly(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(t, as)
 			}
-			as.raiseNotPipelineActionable("o/r", 7, "title", tc.detail)
+			as.raiseNotPipelineActionable("o/r", 7, "title", tc.detail, tc.booked)
 			req := onlyNoOpCard(t, as)
 			if len(req.Options) != 1 || req.Context.PR != 0 || req.Context.Blocker != tc.detail ||
 				!strings.HasPrefix(req.Body, tc.detail+"\n\nThe issue is parked in Backlog") || strings.Contains(req.Body, "still open") {
 				t.Errorf("card = %+v, want the ack-only card of any other ending", req)
 			}
 		})
-	}
-
-	if isPartialRerunStop(34, strings.ReplaceAll(booked, "#7", "#348")) {
-		t.Error("#34 matched #348")
 	}
 }
 
@@ -2044,7 +2063,7 @@ func TestNotPipelineActionableCard_OpenRemainder(t *testing.T) {
 			criteria = append(criteria, fmt.Sprintf("criterion-%d is handled", i))
 		}
 		seedPartialRerun(t, as.workspaceRoot, PartialDeliveryFile{PR: 5, Criteria: criteria})
-		as.raiseNotPipelineActionable("o/r", 7, "title", booked)
+		as.raiseNotPipelineActionable("o/r", 7, "title", booked, true)
 		req := onlyNoOpCard(t, as)
 		_, _, open := closeArgs(t, req)
 		if len(open) != len(criteria) {
@@ -2061,7 +2080,7 @@ func TestNotPipelineActionableCard_OpenRemainder(t *testing.T) {
 		}
 
 		seedPartialRerun(t, as.workspaceRoot, PartialDeliveryFile{PR: 9, Criteria: []string{"the later criterion"}})
-		as.raiseNotPipelineActionable("o/r", 7, "title", booked)
+		as.raiseNotPipelineActionable("o/r", 7, "title", booked, true)
 		req = onlyNoOpCard(t, as)
 		if pr, _, open := closeArgs(t, req); pr != 9 || req.Context.PR != 9 || len(open) != 1 || open[0].Text != "the later criterion" {
 			t.Errorf("re-raise kept the previous run's card: %+v", req)
@@ -2070,7 +2089,7 @@ func TestNotPipelineActionableCard_OpenRemainder(t *testing.T) {
 		if err := RemovePartialDeliveryContext(as.workspaceRoot, 7); err != nil {
 			t.Fatal(err)
 		}
-		as.raiseNotPipelineActionable("o/r", 7, "title", "unscoped run")
+		as.raiseNotPipelineActionable("o/r", 7, "title", "unscoped run", false)
 		if req = onlyNoOpCard(t, as); req.FindOption("close") != nil || !strings.Contains(req.Body, "unscoped run") {
 			t.Errorf("an unscoped run kept a stale close: %+v", req)
 		}
@@ -2083,7 +2102,7 @@ func TestNotPipelineActionableCard_OpenRemainder(t *testing.T) {
 		as.workspaceRoot = dir
 		const unmet = "Add `matchHeader` to `scan/scan.go`"
 		seedPartialRerun(t, dir, PartialDeliveryFile{PR: 5, Criteria: []string{closeCrit, unmet}, MergeSHA: merge})
-		as.raiseNotPipelineActionable("o/r", 7, "title", booked)
+		as.raiseNotPipelineActionable("o/r", 7, "title", booked, true)
 		if _, _, open := closeArgs(t, onlyNoOpCard(t, as)); len(open) != 1 || open[0].Text != unmet {
 			t.Errorf("open = %+v, want only the unmet criterion", open)
 		}
@@ -2095,7 +2114,7 @@ func TestNotPipelineActionableCard_OpenRemainder(t *testing.T) {
 		dir, merge := mergedPartialRepo(t, false)
 		as.workspaceRoot = dir
 		seedPartialRerun(t, dir, PartialDeliveryFile{PR: 5, Criteria: []string{closeCrit}, MergeSHA: merge})
-		as.raiseNotPipelineActionable("o/r", 7, "title", PartialCloseFailedDetail(7, 5, fmt.Errorf("forge down")))
+		as.raiseNotPipelineActionable("o/r", 7, "title", PartialCloseFailedDetail(7, 5, fmt.Errorf("forge down")), true)
 		req := onlyNoOpCard(t, as)
 		if _, _, open := closeArgs(t, req); len(open) != 1 || open[0].Text != closeCrit || !strings.Contains(req.Body, "forge down") {
 			t.Errorf("card = %+v", req)
@@ -2117,7 +2136,7 @@ func TestNotPipelineActionableCard_OpenRemainder(t *testing.T) {
 			t.Fatalf("precondition: the booked detail names no path: %q", detail)
 		}
 		seedPartialRerun(t, root, PartialDeliveryFile{PR: 5, Criteria: []string{"A"}, MergeSHA: sha})
-		as.raiseNotPipelineActionable("o/r", 7, "title", detail)
+		as.raiseNotPipelineActionable("o/r", 7, "title", detail, true)
 		req := onlyNoOpCard(t, as)
 		_, _, open := closeArgs(t, req)
 		if strings.Contains(req.Body, root) || strings.Contains(req.Context.Blocker, root) || open[0].Evidence != "undecidable: the merged diff could not be read" {
@@ -2137,7 +2156,7 @@ func TestNotPipelineActionableCard_OpenRemainder(t *testing.T) {
 				criteria = append(criteria, fmt.Sprintf("criterion-%d %s", i, strings.Repeat("é", 300)))
 			}
 			seedPartialRerun(t, as.workspaceRoot, PartialDeliveryFile{PR: 5, Criteria: criteria})
-			as.raiseNotPipelineActionable("o/r", 7, "title", booked+strings.Repeat("é", 5000))
+			as.raiseNotPipelineActionable("o/r", 7, "title", booked+strings.Repeat("é", 5000), true)
 			req := onlyNoOpCard(t, as)
 			if len(req.Body) > attentionBodyMaxBytes || len(req.Context.Blocker) > attentionBlockerMaxBytes {
 				t.Fatalf("body %d blocker %d bytes", len(req.Body), len(req.Context.Blocker))

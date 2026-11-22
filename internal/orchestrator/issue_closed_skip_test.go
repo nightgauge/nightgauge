@@ -105,6 +105,19 @@ func TestIssueClosedStop_NotCountedAsFailedRun(t *testing.T) {
 		t.Fatalf("stats counted the skip: %+v", stats)
 	}
 
+	// A partial no-op is out of the failure total too, on its gate kind alone.
+	// The same terminal kind without it, and a gate no-op, are failures (#3487).
+	noOp, verdict, gateNoOp := skip, skip, skip
+	noOp.TerminalKind, noOp.GateKind = TerminalKindNotPipelineActionable, diagnostics.GateKindPartialNoOp
+	verdict.TerminalKind, verdict.GateKind = TerminalKindNotPipelineActionable, "fail"
+	gateNoOp.TerminalKind, gateNoOp.GateKind = TerminalKindPrematureTurnEnd, "no_op"
+	if !noOp.IsSkip() || verdict.IsSkip() || gateNoOp.IsSkip() {
+		t.Fatalf("IsSkip: no-op=%v verdict=%v gate no-op=%v; want true/false/false", noOp.IsSkip(), verdict.IsSkip(), gateNoOp.IsSkip())
+	}
+	if stats := diagnostics.ComputeStats([]diagnostics.StageExitRecord{noOp, fail, gateNoOp}); len(stats) != 1 || stats[0].N != 2 {
+		t.Fatalf("failure total with a no-op = %+v, want the two failures", stats)
+	}
+
 	// The two packages' notion of a skip kind agree.
 	for _, kind := range []string{TerminalKindIssueClosed, TerminalKindSubagentCrash, TerminalKindStallKill} {
 		r := diagnostics.StageExitRecord{TerminalKind: kind}

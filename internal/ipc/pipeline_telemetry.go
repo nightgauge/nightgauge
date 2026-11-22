@@ -125,8 +125,9 @@ func buildPipelineDoneEvent(runID string, p PipelineNotifyCompleteParams, heldFo
 	if runID == "" {
 		return platform.PipelineEvent{}, false
 	}
-	// An architecture-approval hold is a non-failure too (#2756).
-	success := p.Success || p.Deferred || heldForApproval
+	// An architecture-approval hold (#2756) and a partial-delivery no-op
+	// (#3487) are non-failures too.
+	success := p.Success || p.Deferred || p.PartialNoOp || heldForApproval
 	return platform.PipelineEvent{
 		RunID:           runID,
 		IssueNumber:     p.IssueNumber,

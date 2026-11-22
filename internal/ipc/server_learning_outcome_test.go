@@ -20,7 +20,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +30,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
@@ -905,7 +909,7 @@ func TestLearningOutcomeFor_FromCapturedFailedRunRecord(t *testing.T) {
 // every future caller.
 func TestOutcomeDecision_ThreeDistinctStates(t *testing.T) {
 	seen := map[string]outcomeDecision{}
-	for _, d := range []outcomeDecision{outcomeRecord, outcomeSkipDeferred, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt, outcomeSkipGatePluginMissing, outcomeSkipAwaitingApproval} {
+	for _, d := range []outcomeDecision{outcomeRecord, outcomeSkipDeferred, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt, outcomeSkipGatePluginMissing, outcomeSkipAwaitingApproval, outcomeSkipNoOp} {
 		name := d.String()
 		if name == "" || name == "unset" {
 			t.Errorf("decision %d has no distinct name (%q)", int(d), name)
@@ -1109,5 +1113,208 @@ func TestArchitectureApprovalHold_NonFailureRecord(t *testing.T) {
 	}
 	if _, d := learningOutcomeFor(failed, issueClassification{}, orchestrator.SizeResolution{}, nil, "acme/widget", time.Now()); d != outcomeRecord {
 		t.Errorf("real failure: decision = %s, want %s", d, outcomeRecord)
+	}
+}
+
+// #3487: the extension funnel books a partial-delivery no-op on its structured
+// flag, over the feature-dev gate's empty-diff kind and over text. Without the
+// flag the same runs stay failed and counted.
+func TestNotifyComplete_NoOpIsNotAFailure(t *testing.T) {
+	const booked = "[not-pipeline-actionable] feature-dev: re-run wrote no changes; unmet: handles merge_conflict"
+	for i, tc := range []struct {
+		name, errText, detail, gateKind string
+		flag                            bool
+	}{
+		{"no-op", booked, "", "", true},
+		{"no-op over an empty-diff gate", booked, "", orchestrator.TerminalKindDevProducedNoChanges, true},
+		{"no-op quoting another kind", "unmet: prints [merge-conflict], backs off when overloaded", "", "", true},
+		{"no-diff stop with no stage error", "", booked, "", true},
+		{"booking text without the flag", booked, "", "", false},
+		{"publication verdict", "publication boundary", "", orchestrator.TerminalKindNotPipelineActionable, false},
+		{"first-run gate no-op", "premature turn end: stage exited 0 with no state change", "", "", false},
+		{"empty diff on a first run", "stage gate failed: no changes", "", orchestrator.TerminalKindDevProducedNoChanges, false},
+		{"crash", "stage exited 1", "", "", false},
+		{"crash quoting the marker", "exit 1: agent said " + booked, "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, fake, dir := phaseTelemetryServer(t)
+			runID := fmt.Sprintf("01900be4-0000-7000-8000-%012d", 3487+i)
+			call := func(method string, params map[string]any) {
+				t.Helper()
+				params["repo"], params["issueNumber"], params["runId"] = "nightgauge/acmeapp", 3487, runID
+				raw, err := json.Marshal(params)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.methods[method](t.Context(), raw); err != nil {
+					t.Fatalf("%s: %v", method, err)
+				}
+			}
+			call("pipeline.notifyStageTransition", map[string]any{"stage": "feature-dev", "status": "running"})
+			if tc.gateKind != "" {
+				call("pipeline.recordStageGateResult", map[string]any{"stage": "feature-dev",
+					"result": state.StageGateResult{TerminalKind: tc.gateKind}})
+			}
+			if tc.errText != "" {
+				call("pipeline.notifyStageTransition", map[string]any{"stage": "feature-dev", "status": "failed", "error": tc.errText})
+			}
+
+			complete := map[string]any{"success": false, "totalDurationMs": 1000}
+			if tc.flag {
+				complete["partialNoOp"] = true
+			}
+			if tc.detail != "" {
+				complete["failureDetail"] = tc.detail
+			}
+			call("pipeline.notifyComplete", complete)
+
+			done := eventsOfType(fake.snapshot(), "pipeline_done")
+			if len(done) != 1 || done[0].Success == nil || *done[0].Success != tc.flag {
+				t.Errorf("the handler's pipeline_done = %+v, want one with success %v", done, tc.flag)
+			}
+			records := readHistoryRecords(t, dir)
+			if len(records) != 1 {
+				t.Fatalf("records = %d, want 1", len(records))
+			}
+			rec := records[0]
+			_, recorded := readOutcomes(t, dir)
+			if !tc.flag {
+				if rec.Outcome != "failed" || rec.OutcomeType == orchestrator.OutcomeTypeNoOp || !recorded {
+					t.Errorf("a failure: record = %s/%s recorded=%v", rec.Outcome, rec.OutcomeType, recorded)
+				}
+				return
+			}
+			if rec.Outcome != "cancelled" || rec.OutcomeType != orchestrator.OutcomeTypeNoOp || recorded ||
+				rec.TerminalFailureKind != orchestrator.TerminalKindNotPipelineActionable {
+				t.Errorf("record = %s/%s/%s recorded=%v", rec.Outcome, rec.OutcomeType, rec.TerminalFailureKind, recorded)
+			}
+			exits, err := os.ReadFile(diagnostics.DailyFilePath(dir, time.Now().UTC()))
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(exits), diagnostics.StagePreDispatch) {
+				t.Errorf("a no-op wrote a pre-dispatch failure: %s", exits)
+			}
+			wire, err := platform.V2RunRecordToExecutionHistoryRunRecord(rec, platform.ExecutionHistoryMapperInput{Repo: rec.Repo})
+			if err != nil || wire.Outcome != "cancelled" || wire.OutcomeType == nil || *wire.OutcomeType != orchestrator.OutcomeTypeNoOp {
+				t.Errorf("platform record = %+v (%v)", wire, err)
+			}
+		})
+	}
+}
+
+// #3487: a merge that flips the run to success outranks the no-op flag.
+func TestNotifyComplete_MergeOutranksPartialNoOp(t *testing.T) {
+	dir := layouttest.Repo(t)
+	s := NewServer(nil, WithWorkspaceRoot(dir))
+	for _, step := range []struct {
+		method string
+		params map[string]any
+	}{
+		{"pipeline.notifyStageTransition", map[string]any{"stage": "pr-merge", "status": "running"}},
+		{"pipeline.notifyComplete", map[string]any{"success": false, "prMerged": true, "partialNoOp": true}},
+	} {
+		step.params["repo"], step.params["issueNumber"] = "nightgauge/acmeapp", 3487
+		step.params["runId"] = "01900be4-0000-7000-8000-000000003599"
+		raw, err := json.Marshal(step.params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.methods[step.method](t.Context(), raw); err != nil {
+			t.Fatalf("%s: %v", step.method, err)
+		}
+	}
+	records := readHistoryRecords(t, dir)
+	if len(records) != 1 || records[0].Outcome != "complete" || records[0].OutcomeType == orchestrator.OutcomeTypeNoOp {
+		t.Fatalf("records = %+v, want one complete run", records)
+	}
+}
+
+// #3487: a deferral outranks the no-op flag.
+func TestNotifyComplete_DeferralOutranksPartialNoOp(t *testing.T) {
+	dir := layouttest.Repo(t)
+	s := NewServer(nil, WithWorkspaceRoot(dir))
+	for _, step := range []struct {
+		method string
+		params map[string]any
+	}{
+		{"pipeline.notifyStageTransition", map[string]any{"stage": "issue-pickup", "status": "running"}},
+		{"pipeline.notifyComplete", map[string]any{"success": false, "deferred": true, "partialNoOp": true}},
+	} {
+		step.params["repo"], step.params["issueNumber"] = "nightgauge/acmeapp", 3487
+		step.params["runId"] = "01900be4-0000-7000-8000-000000003600"
+		raw, err := json.Marshal(step.params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.methods[step.method](t.Context(), raw); err != nil {
+			t.Fatalf("%s: %v", step.method, err)
+		}
+	}
+	records := readHistoryRecords(t, dir)
+	if len(records) != 1 || records[0].OutcomeType == orchestrator.OutcomeTypeNoOp || records[0].TerminalFailureKind != "" {
+		t.Fatalf("records = %+v, want one deferral", records)
+	}
+}
+
+// #3487: a no-op keeps the issues it blocks queued. Driven through the real
+// dequeue rule, after the extension has completed the no-op's own queue item.
+func TestNotifyComplete_NoOpHoldsItsQueuedSuccessors(t *testing.T) {
+	const repo = "nightgauge/acmeapp"
+	for i, flag := range []bool{true, false} {
+		t.Run(fmt.Sprintf("flag=%v", flag), func(t *testing.T) {
+			dir := layouttest.Repo(t)
+			// The blocker refresh reads nothing here, so each item keeps its state.
+			offline := gh.NewClientWithHTTPClient(&http.Client{Transport: roundTripFunc3487(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+					Body: io.NopCloser(strings.NewReader(`{"errors":[{"message":"offline"}]}`)), Request: r}, nil
+			})})
+			sched := orchestrator.NewScheduler(offline, orchestrator.SchedulerConfig{})
+			sched.SetTrustGate(permissiveGate())
+			s := NewServer(nil, WithWorkspaceRoot(dir), WithScheduler(sched))
+			s.writer = &bytes.Buffer{}
+			runID := fmt.Sprintf("01900be4-0000-7000-8000-%012d", 34870+i)
+			for _, step := range []struct {
+				method string
+				params map[string]any
+			}{
+				{"pipeline.notifyStageTransition", map[string]any{"stage": "feature-dev", "status": "running"}},
+				{"pipeline.notifyComplete", map[string]any{"success": false, "partialNoOp": flag}},
+			} {
+				step.params["repo"], step.params["issueNumber"], step.params["runId"] = repo, 3487, runID
+				raw, err := json.Marshal(step.params)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.methods[step.method](t.Context(), raw); err != nil {
+					t.Fatalf("%s: %v", step.method, err)
+				}
+			}
+
+			blockedBy := func(state string) []orchestrator.QueueBlockingRef {
+				return []orchestrator.QueueBlockingRef{{Number: 3487, State: state}}
+			}
+			sched.QueueAddItem(
+				orchestrator.QueueItem{Repo: repo, IssueNumber: 3488, BlockedBy: blockedBy("OPEN")},
+				orchestrator.QueueItem{Repo: repo, IssueNumber: 3489},
+			)
+			want := 3488
+			if flag {
+				want = 3489 // the unrelated item fills the freed slot
+			}
+			if got := sched.DequeueIndependent(t.Context(), 1, nil); len(got) != 1 || got[0].IssueNumber != want {
+				t.Fatalf("dequeued %+v, want #%d", got, want)
+			}
+			if !flag {
+				return
+			}
+			// Closing the no-op's issue, which is what the card does, releases it.
+			sched.CompleteQueueItem(repo, 3489)
+			sched.QueueRemove(repo, 3488)
+			sched.QueueAddItem(orchestrator.QueueItem{Repo: repo, IssueNumber: 3488, BlockedBy: blockedBy("CLOSED")})
+			if got := sched.DequeueIndependent(t.Context(), 1, nil); len(got) != 1 || got[0].IssueNumber != 3488 {
+				t.Fatalf("dequeued %+v after the close, want #3488", got)
+			}
+		})
 	}
 }

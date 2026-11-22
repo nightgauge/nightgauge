@@ -446,8 +446,21 @@ func GateReasonWhenNoGate(rec StageExitRecord) string {
 // which this package cannot import; orchestrator's tests hold the two equal.
 var skipTerminalKinds = map[string]bool{"issue_closed": true}
 
+// GateKindPartialNoOp is the gate_kind of an exit whose run was booked a
+// partial-delivery no-op (#3487). It is the structured signal: the same
+// terminal kind without it is a failed exit.
+const GateKindPartialNoOp = "partial_no_op"
+
+// terminalKindNotPipelineActionable mirrors the orchestrator constant of that
+// name, which this package cannot import; orchestrator's tests hold them equal.
+const terminalKindNotPipelineActionable = "not_pipeline_actionable"
+
 // IsSkip reports whether the record is a non-failure skip rather than a
-// failed exit, so failure totals leave it out (#3081).
+// failed exit, so failure totals leave it out (#3081, #3487).
 func (r StageExitRecord) IsSkip() bool {
-	return !r.Success && skipTerminalKinds[r.TerminalKind]
+	if r.Success {
+		return false
+	}
+	return skipTerminalKinds[r.TerminalKind] ||
+		(r.TerminalKind == terminalKindNotPipelineActionable && r.GateKind == GateKindPartialNoOp)
 }

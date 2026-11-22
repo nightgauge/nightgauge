@@ -34,6 +34,10 @@ import (
 //     bootstrap so the autonomous scheduler's full sibling list (including
 //     cross-repo) reaches every diagnostic write.
 //
+//   - A pr-create no-diff settlement of a partial re-run (partialNoOpSettlementError,
+//     #3487) sets gate_kind partial_no_op and terminal_kind
+//     not_pipeline_actionable, whatever the gate or the text says.
+//
 //   - Populated by Go when set on the runtime / err: terminal_kind, via
 //     the same stageFailureText(stageErr, result) the scheduler already
 //     classifies from for the V3 history record (scheduler.go:6199) — so a
@@ -143,6 +147,12 @@ func (s *Scheduler) writeStageExitRecord(
 	// an empty terminal_kind — the same shape as a zero-output hang.
 	if !success && result != nil && result.Cancelled {
 		rec.TerminalKind = TerminalKindOperatorStop
+	} else if !success && isPartialNoOpSettlement(stageErr) {
+		// A settlement is a booking (#3487): it outranks the reconcile gate's
+		// verdict and the text, and diagnostics.IsSkip reads this pair.
+		rec.GateKind = diagnostics.GateKindPartialNoOp
+		rec.GateReason = stageErr.Error()
+		rec.TerminalKind = TerminalKindNotPipelineActionable
 	} else if !success {
 		errText := stageFailureText(stageErr, result)
 		if errText == "" && snap != nil && snap.StageErrors != nil {

@@ -17,12 +17,17 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/hooks"
+	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
+	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
+	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 
@@ -148,5 +153,199 @@ func TestRunPipeline_OrdinaryFailureStillRecordsAnOutcome(t *testing.T) {
 	if got := corpusRowCount(t, root); got != 1 {
 		t.Errorf("corpus has %d rows after an ordinary failure, want 1 — the skips must be scoped to the two non-signal terminal kinds, not disable recording",
 			got)
+	}
+}
+
+// fixedVerdictGate fails its stage with one structured terminal kind.
+type fixedVerdictGate struct{ kind, reason string }
+
+func (fixedVerdictGate) Name() string { return "fixed-verdict" }
+
+func (g fixedVerdictGate) Verify(context.Context, int, string) gates.GateResult {
+	return gates.GateResult{GateName: g.Name(), Kind: gates.KindFail, Reason: g.reason, TerminalKind: g.kind}
+}
+
+// publicationVerdictRun is a re-run scoped to a remainder that a publication
+// verdict stops at planning: not_pipeline_actionable, and no partial no-op.
+func publicationVerdictRun(t *testing.T) (*Scheduler, string) {
+	t.Helper()
+	s, root := partialRerunScheduler(t, &partialRerunRunner{}, false)
+	s.partialDeliveryRead = pendingRemainder(3141, partialRerunCriterion)
+	s.WithStageGates(map[state.PipelineStage]gates.StageGate{
+		state.StageFeaturePlanning: fixedVerdictGate{TerminalKindNotPipelineActionable,
+			"[not-pipeline-actionable] publication-boundary verdict"},
+	})
+	return s, root
+}
+
+// claimsFilesRunner's feature-dev reports a changed file and leaves none on
+// disk, which is what the gate stamps dev_produced_no_changes.
+type claimsFilesRunner struct{ *partialRerunRunner }
+
+func (r claimsFilesRunner) RunStage(ctx context.Context, p StageRunParams) (*StageRunResult, error) {
+	res, err := r.partialRerunRunner.RunStage(ctx, p)
+	if p.Stage != state.StageFeatureDev || err != nil {
+		return res, err
+	}
+	data, err := os.ReadFile(p.OutputFile)
+	if err != nil {
+		return nil, err
+	}
+	var dev map[string]any
+	if err := json.Unmarshal(data, &dev); err != nil {
+		return nil, err
+	}
+	dev["files_changed"] = map[string]any{"created": []string{}, "modified": []string{"internal/x/x.go"}, "deleted": []string{}}
+	if data, err = json.Marshal(dev); err != nil {
+		return nil, err
+	}
+	return res, os.WriteFile(p.OutputFile, data, 0o644)
+}
+
+// emptyDiffPartialRun is a partial re-run whose feature-dev gate stamps the
+// empty diff dev_produced_no_changes before the run is booked a no-op.
+func emptyDiffPartialRun(t *testing.T) (*Scheduler, string) {
+	t.Helper()
+	s, root := partialRerunScheduler(t, claimsFilesRunner{&partialRerunRunner{}}, true)
+	s.partialDeliveryRead = pendingRemainder(3141, partialRerunCriterion)
+	s.noDiffCommenter = &recordingCommenter{}
+	return s, root
+}
+
+// #3487: both the booking and nothing but the booking makes a run a no-op:
+// cancelled/no_op, a success-shaped pipeline_done, a cancelled latch and no
+// corpus row. Driven through runPipeline's real writers.
+//
+// Serial: swaps package var reconcileExecGh (via partialRerunScheduler).
+func TestRunPipeline_PartialNoOpIsNotAFailure(t *testing.T) {
+	const issue = 3487
+	const marker = "[not-pipeline-actionable]"
+	crash := func(errText string) func(*testing.T) (*Scheduler, string) {
+		return func(t *testing.T) (*Scheduler, string) {
+			stubReconcileGhUnreachable(t)
+			root := gitWorkspace(t)
+			return terminalSkipScheduler(t, root, errText), root
+		}
+	}
+	// beforePRCreate reaches the no-diff stop before pr-create.
+	beforePRCreate := func(scoped bool) func(*testing.T) (*Scheduler, string) {
+		return func(t *testing.T) (*Scheduler, string) {
+			runner := &partialRerunRunner{}
+			s, root := partialRerunScheduler(t, runner, false)
+			s.partialDeliveryRead = func(context.Context, string, int) (hooks.PartialDeliveryStatus, error) {
+				return hooks.PartialDeliveryStatus{Criteria: []string{}}, nil
+			}
+			if scoped {
+				s.partialDeliveryRead = pendingRemainder(3141, partialRerunCriterion)
+				// feature-dev leaves a diff, so the run passes its own stop, and
+				// feature-validate reverts it.
+				var made string
+				runner.onStage = func(p StageRunParams) {
+					switch p.Stage {
+					case state.StageFeatureDev:
+						wt := runWorktreeFor(t, root, "issue-3487")
+						if wt == "" {
+							t.Error("feature-dev ran with no run worktree: the fixture cannot leave a diff")
+							return
+						}
+						made = filepath.Join(wt, "change_test.go")
+						if err := os.WriteFile(made, []byte("package x\n"), 0o644); err != nil {
+							t.Error(err)
+						}
+					case state.StageFeatureValidate:
+						if err := os.Remove(made); err != nil {
+							t.Error(err)
+						}
+					}
+				}
+			}
+			s.issueSvc.(*mockIssueSvc).addIssue("acme", "widget", issue, &types.Issue{
+				NodeID: "I_3487", Number: issue, State: "OPEN", Body: "- [ ] " + partialRerunCriterion + "\n",
+			})
+			s.noDiffCommenter = &recordingCommenter{}
+			return s, root
+		}
+	}
+
+	// atPRCreateSettlement is parked by pr-create's own no-diff settlement.
+	atPRCreateSettlement := func(t *testing.T) (*Scheduler, string) {
+		s, root, _ := settlementRun(t, true, &scriptedPRCreateRunner{
+			attempt: func(int) pmstages.PRCreateResult { return noDiffPunt() },
+		})
+		return s, root
+	}
+
+	for _, tc := range []struct {
+		name  string
+		build func(*testing.T) (*Scheduler, string)
+		noOp  bool
+		kind  string // asserted when set
+	}{
+		{"partial no-op over an empty-diff gate", emptyDiffPartialRun, true, TerminalKindNotPipelineActionable},
+		{"partial no-diff stop before pr-create", beforePRCreate(true), true, TerminalKindNotPipelineActionable},
+		{"partial no-diff settlement in pr-create", atPRCreateSettlement, true, TerminalKindNotPipelineActionable},
+		{"unscoped no-diff stop before pr-create", beforePRCreate(false), false, TerminalKindNotPipelineActionable},
+		{"publication verdict on a scoped run", publicationVerdictRun, false, ""},
+		{"first-run gate no-op", crash("premature turn end: stage exited 0 with no state change"), false, ""},
+		{"crash", crash("stage exited 1: the model produced no usable output"), false, ""},
+		{"crash quoting the marker", crash("stage exited 1: agent said " + marker), false, ""},
+		{"text that opens with the marker", crash(marker + " nothing to build"), false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, root := tc.build(t)
+			s.recordOutcomes = true
+			var mu sync.Mutex
+			var done []bool
+			s.telemetryEnabled = true
+			s.telemetrySvc = &hookTelemetry{onEvent: func(e platform.PipelineEvent) {
+				if e.EventType == "pipeline_done" && e.Success != nil {
+					mu.Lock()
+					done = append(done, *e.Success)
+					mu.Unlock()
+				}
+			}}
+			var snap *state.RuntimeState
+			s.OnPipelineComplete(func(_ string, _ int, rt *state.RuntimeState, _ bool) { snap = rt })
+			_, kind := s.runPipeline(context.Background(), types.BoardItem{
+				Number: issue, Repo: "acme/widget", ID: "item-id", NodeID: "I_3487", Title: "no-op", Labels: []string{"type:feature"},
+			})
+
+			if tc.kind != "" && kind != tc.kind {
+				t.Fatalf("kind = %q, want %q", kind, tc.kind)
+			}
+			if snap == nil || snap.PartialNoOp != tc.noOp {
+				t.Fatalf("booking flag != %v (snapshot %v)", tc.noOp, snap != nil)
+			}
+			outcome, outcomeType, rows := "failed", "", 1
+			if tc.noOp {
+				outcome, outcomeType, rows = "cancelled", OutcomeTypeNoOp, 0
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(done) != 1 || done[0] != tc.noOp {
+				t.Errorf("pipeline_done success = %v, want %v", done, tc.noOp)
+			}
+			if got := corpusRowCount(t, root); got != rows {
+				t.Errorf("corpus rows = %d, want %d", got, rows)
+			}
+			files, err := filepath.Glob(filepath.Join(layouttest.PipelineDir(t, root), "history", "20*.jsonl"))
+			if err != nil || len(files) != 1 {
+				t.Fatalf("history files = %v (%v)", files, err)
+			}
+			data, err := os.ReadFile(files[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var rec state.V2RunRecord
+			if err := json.Unmarshal([]byte(splitNonEmptyLines(string(data))[0]), &rec); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Outcome != outcome || (tc.noOp && rec.OutcomeType != outcomeType) || (!tc.noOp && rec.OutcomeType == OutcomeTypeNoOp) {
+				t.Errorf("record = %s/%s, want %s/%s", rec.Outcome, rec.OutcomeType, outcome, outcomeType)
+			}
+			if got := schedulerTerminalOutcome(false, kind, snap.PartialNoOp); got != outcome {
+				t.Errorf("run state = %q, want %q", got, outcome)
+			}
+		})
 	}
 }

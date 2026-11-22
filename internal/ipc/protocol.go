@@ -1533,6 +1533,17 @@ type PipelineNotifyCompleteParams struct {
 	// authoritative history stage record, letting operators read WHY the
 	// expensive LLM path ran from history alone.
 	StagePuntReasons map[string]string `json:"stagePuntReasons,omitempty"`
+	// PartialNoOp marks this completion as a partial-delivery re-run booked a
+	// no-op (#3487). On an unsuccessful, undeferred run the
+	// recording boundary books not_pipeline_actionable ahead of the gate's kind
+	// and the text, with outcome="cancelled", outcome_type="no_op", a
+	// success-shaped pipeline_done and no learning-corpus row. It also calls
+	// Scheduler.HoldNoOpSuccessors, so the queued issues this one blocks stay
+	// queued while it is open; the no-op card's close, a blocker refresh that
+	// reads it closed, or its own re-dispatch releases them. Absent on every
+	// other ending, including other not_pipeline_actionable ones. The extension
+	// does not send it yet (#3487 steps 3 and 4).
+	PartialNoOp bool `json:"partialNoOp,omitempty"`
 	// FailureDetail is the raw failure text the orchestrator observed when
 	// Success is false (#1329) — `PipelineRunResult.error.message`. It is the
 	// ONLY reason available for a run that latched terminal before any stage

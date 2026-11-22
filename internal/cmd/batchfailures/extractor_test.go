@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -151,6 +152,28 @@ func TestExtract_HistoryOnly(t *testing.T) {
 	}
 	if hf.EstimatedCostUSD != 1.5 {
 		t.Errorf("EstimatedCostUSD = %f, want 1.5", hf.EstimatedCostUSD)
+	}
+}
+
+func TestExtract_HistoryPartialNoOpIsNotAFailure(t *testing.T) {
+	dir := layouttest.Repo(t)
+	writeHistoryFile(t, dir, "2026-11-22.jsonl", strings.Join([]string{
+		// The booking leaves its stopping stage failed (#3487).
+		`{"record_type":"run","issue_number":500,"outcome":"cancelled","outcome_type":"no_op","terminal_failure_kind":"not_pipeline_actionable","stages":{"feature-dev":{"status":"failed"}}}`,
+		`{"record_type":"run","issue_number":501,"outcome":"cancelled","terminal_failure_kind":"not_pipeline_actionable","stages":{"feature-dev":{"status":"failed"}}}`,
+		`{"record_type":"run","issue_number":502,"outcome":"failed","outcome_type":"no_op","stages":{"feature-dev":{"status":"failed"}}}`,
+	}, "\n"))
+
+	res, err := Extract(Options{Workdir: dir})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	var listed []int
+	for _, hf := range res.HistoryFailures {
+		listed = append(listed, hf.IssueNumber)
+	}
+	if !slices.Equal(listed, []int{501, 502}) {
+		t.Fatalf("listed issues %v, want [501 502]: only the booked no-op is skipped", listed)
 	}
 }
 

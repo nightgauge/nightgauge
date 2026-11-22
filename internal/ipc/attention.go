@@ -920,13 +920,21 @@ func (c remainderCloser) CloseRemainder(ctx context.Context, repo string, issue,
 	if err != nil {
 		return err
 	}
-	return orchestrator.CloseRemainderByOperator(ctx, f.deps, target, orchestrator.RemainderDecision{
+	if err := orchestrator.CloseRemainderByOperator(ctx, f.deps, target, orchestrator.RemainderDecision{
 		StateRoot:   c.server.repoRoot(repo),
 		Fingerprint: fingerprint,
 		Login:       f.login,
 		PostedAs:    f.postedAs,
 		Criteria:    criteria,
-	})
+	}); err != nil {
+		return err
+	}
+	// The issue is closed: what it blocked dispatches on the next dequeue,
+	// without waiting for a forge read to see the close (#3487).
+	if c.server.scheduler != nil {
+		c.server.scheduler.ReleaseNoOpBlocker(repo, issue)
+	}
+	return nil
 }
 
 // remainderCloseForge is what one close reads and writes with. login is the

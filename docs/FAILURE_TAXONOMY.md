@@ -538,6 +538,49 @@ empty tree, and it is neither a failure nor a deferral:
 | Re-dispatched? | Yes, on blocker close       | Yes — hence the repeat spend | **No.** Labelled and parked       |
 | Raised by      | The pickup dependency check | pr-create's create fallback  | The stage that read the issue     |
 
+One ending of this kind is reported as a no-op instead of a failure (#3487):
+the **partial-delivery no-op**, a re-run scoped to a partial-delivery remainder
+that is booked `not_pipeline_actionable` because it has no diff. The booking
+sets a structured signal (`RuntimeState.PartialNoOp`) where the Go run ends,
+and a stage that begins clears it, so it never outlives the attempt that set
+it. The extension does not book it yet (#3487 steps 3 and 4).
+
+What each Go booking writes to the exit records:
+
+| Go booking                                   | Exit record                                                                            |
+| -------------------------------------------- | -------------------------------------------------------------------------------------- |
+| feature-dev disputed the plan                | None: the run returns before the writer                                                |
+| feature-dev met remainder whose close failed | None: the run returns before the writer                                                |
+| feature-dev left the branch level with base  | None: the run returns before the writer                                                |
+| feature-dev no-op on any other branch        | None: the run returns before the writer                                                |
+| no-diff stop before pr-create                | None: the stage is never dispatched                                                    |
+| pr-create's no-diff settlement               | `success: false`, `gate_kind: partial_no_op`, `terminal_kind: not_pipeline_actionable` |
+
+The settlement is the one booking that reaches the failure path. It returns
+there before any retry, recovery or escalation, and its stage-exit trace event
+carries the same `gate_kind` and `terminal_kind`. `IsSkip` excludes exactly
+that pair from failure totals.
+
+Every consumer reads the signal before the gate's kind and before any text,
+because the gate has already stamped the empty diff `dev_produced_no_changes`
+and the booking's text quotes criteria:
+
+- the run record books `outcome: cancelled`, `outcome_type: no_op` and keeps
+  the terminal kind. `cancelled` is the platform contract's terminal status for
+  a run that ended without failing;
+- `pipeline_done` is success-shaped, and the learning corpus gets no row;
+- the autonomous callback neither charges nor retries it, does not pause the
+  queue, and raises the card that offers close;
+- the scheduler's dequeue holds the queued issues it blocks until it closes:
+  the card's close releases them at once, a close by hand on the next poll
+  that reads it closed. After a daemon restart, pickup's dependency check
+  defers them.
+
+Nothing infers the signal from text or from the kind alone. Every other
+`not_pipeline_actionable` ending (a publication-boundary verdict, an empty
+plan, a declared human-only deliverable, an unscoped no-diff stop) is recorded
+as before, and so is a run without the signal from an older build.
+
 An **empty plan** is another (#3354): a plan with no `files_to_create` or
 `files_to_modify`, other than `verify-and-close`, fails `FeaturePlanningGate`
 with `[not-pipeline-actionable] plan lists no files to create or modify` and the

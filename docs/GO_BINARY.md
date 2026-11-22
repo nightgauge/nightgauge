@@ -1532,7 +1532,8 @@ nightgauge issue operator-revision <number>
 # unless --apply-close, which on "close" posts the evidence comment, ticks the
 # met boxes, closes the issue as completed and moves its board row to Done
 # ("applied": true). A failed close turns the action into "book"; an unresolved
-# board is reported as "board_error".
+# board is reported as "board_error". Every action but "not_scoped" carries
+# the re-judged criteria as "remainder", "relap" included (#3487).
 nightgauge issue partial-noop <number> --pr <N> [--criteria <count>] [--relapped] \
   [--apply-close --repo OWNER/REPO]
 
@@ -3635,6 +3636,8 @@ the clone's pipeline state directory (`nightgauge layout path pipeline`), with a
 context-files fallback.
 Replaces ~150 lines of inline Python in `skills/nightgauge-retro/SKILL.md`
 Phases 2.1, 2.2, and 2.4 (audit row B29).
+A history record booked as a partial-delivery no-op (`outcome: cancelled`,
+`outcome_type: no_op`) is not a failure row (#3487).
 
 ```bash
 # Default: scan current working directory
@@ -5824,6 +5827,8 @@ error):
   blocked-dependency deferrals (#305) and `network_unavailable` failures
   (#3296) — the scheduler keys both on `terminal_failure_kind`, the extension
   keys the deferral on `outcome_type` because #305's override clears the kind.
+  The scheduler also skips a partial-delivery no-op, on its structured booking,
+  and the handler does when the completion carries `partialNoOp` (#3487).
   Neither writes to the IPC server's `workspaceRoot`: that is a mutable pointer to the
   workspace's ACTIVE repo (reassigned by `workspace.setRoot`), so an outcome
   filed there lands in whichever repo happened to own the focused editor.

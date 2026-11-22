@@ -4190,6 +4190,9 @@ func (s *Server) registerMethods() {
 		// #2756: an architecture-approval hold books as a non-failure on the
 		// run state and the live event, matching the run record.
 		approvalHold := !p.Success && !p.Deferred && heldForApproval(res.entry.rs.Snapshot())
+		// #3487: so does a partial-delivery no-op, on the completion's
+		// structured flag only. A merge that flips the run to success wins.
+		partialNoOp := !p.Success && !p.Deferred && p.PartialNoOp
 		groundTruthFlipped := false
 		outcomeFor := func(stage state.PipelineStage) string {
 			if effective := reconcilePrMergeGroundTruth(p.Success, p.PrMerged, string(stage)); effective != p.Success {
@@ -4199,7 +4202,7 @@ func (s *Server) registerMethods() {
 			switch {
 			case p.Success:
 				return "complete"
-			case p.Deferred, approvalHold:
+			case p.Deferred, approvalHold, partialNoOp:
 				return "cancelled"
 			default:
 				return "failed"
@@ -4223,6 +4226,17 @@ func (s *Server) registerMethods() {
 			return nil, err
 		}
 		rt := claimed.rs
+		// Re-read: the claim's pr-merge ground-truth flip can set p.Success.
+		partialNoOp = partialNoOp && !p.Success
+		// Before the slow work below, so no dequeue sees this open issue
+		// unheld once its queue item is gone (#3487).
+		if partialNoOp && s.scheduler != nil {
+			holdRepo := snap.Repo
+			if holdRepo == "" {
+				holdRepo = p.Repo
+			}
+			s.scheduler.HoldNoOpSuccessors(holdRepo, p.IssueNumber)
+		}
 		if groundTruthFlipped {
 			log.Printf(
 				"notifyComplete: #%d reported failed at pr-merge but the PR is MERGED — recording complete (ground truth, #266)",
@@ -4326,6 +4340,10 @@ func (s *Server) registerMethods() {
 				// A typed start refusal outranks prose classification
 				// (#3269): the closed-issue guard's message carries no marker.
 				kind := terminalKindForStartRefusal(p.StartRefusal)
+				// The booking outranks the gate's kind and the text (#3487).
+				if partialNoOp {
+					kind = orchestrator.TerminalKindNotPipelineActionable
+				}
 				if kind == "" {
 					kind = orchestrator.ResolveSnapshotTerminalKind(snap, gateRan, gateTerminalKind, errMsg)
 				}
@@ -4340,7 +4358,9 @@ func (s *Server) registerMethods() {
 				// pre-stage failure wrote `subagent_crash` + `stages: {}` and
 				// the text existed only in the extension's output channel.
 				input.TerminalFailureDetail = errMsg
-				if preStageFailure && !p.Deferred {
+				// A no-diff stop before pr-create leaves no stage error, but
+				// its stages ran: it is no pre-dispatch failure (#3487).
+				if preStageFailure && !p.Deferred && !partialNoOp {
 					writePreDispatchExitRecord(root, recordRepo, p.IssueNumber, snap.RunID, kind, errMsg, p.TotalDurationMs)
 				}
 				// Refine into a first-class outcome_type when the failure is a
@@ -4459,6 +4479,9 @@ func (s *Server) registerMethods() {
 			}
 			// #2756: an architecture-approval hold is a non-failure too.
 			orchestrator.ApplyNonFailureOutcome(&record)
+			if partialNoOp {
+				orchestrator.ApplyPartialNoOpOutcome(&record)
+			}
 			// #1848: a record still booked failed names its stage and reason.
 			orchestrator.EnsureFailureAttribution(&record, string(snap.Stage), errMsg)
 			// #304: derive the learning/calibration outcome from the SAME
@@ -4550,7 +4573,7 @@ func (s *Server) registerMethods() {
 				if err := learning.NewRecorder(root).Record(outcome); err != nil {
 					log.Printf("notifyComplete: record learning outcome failed (non-fatal): %v", err)
 				}
-			case outcomeSkipDeferred, outcomeSkipAwaitingApproval, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt, outcomeSkipGatePluginMissing:
+			case outcomeSkipDeferred, outcomeSkipAwaitingApproval, outcomeSkipNoOp, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt, outcomeSkipGatePluginMissing:
 				log.Printf("notifyComplete: #%d skipping learning outcome (%s)",
 					p.IssueNumber, outcomeVerdict)
 			case outcomeUnset:
