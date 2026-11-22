@@ -50,9 +50,11 @@ record as an issue with its type label, Priority, Size, Status=Backlog and a
 provenance line, under the follow_up_filing gate (fail closed to report-only,
 per-run cap, untrusted-author check). Records already filed are skipped;
 records matching an open issue's title become a provenance comment instead.
-A review record is not filed when this run's pr-<N>.json holds the criterion it
-names unmet (tracked-by-parent), or when it restates another producer's record
-for the same issue and run (duplicate); both are reported.
+A record is not filed when it restates a criterion this run's pr-<N>.json holds
+unmet or an unchecked criterion in the parent issue's body (tracked-by-parent),
+and a review record is not filed when it restates another producer's record for
+the same issue and run (duplicate); both are reported. Report-only and
+--dry-run runs read that body too, best effort, and write nothing to GitHub.
 Filed, deduped, reported, tracked and duplicate records are removed from the
 capture file.
 
@@ -100,16 +102,23 @@ cap refused records; they stay in the capture file. Exit 1: error.`,
 			if dryRun {
 				gate.Mode, gate.Reason = filing.ModeReport, "--dry-run"
 			}
+			// Report and dry-run mode build a filer too, best effort: Materialize
+			// only reads the parent's criteria through it there, so
+			// tracked-by-parent holds in the would-file list (#2872).
 			var filer followup.Filer
 			trusted := false
-			if gate.Files() {
-				ownerPart, repoPart := splitRepo(owner, repo)
-				client, err := clientFromConfig()
-				if err != nil {
-					return fmt.Errorf("create GitHub client: %w", err)
-				}
+			ownerPart, repoPart := splitRepo(owner, repo)
+			client, err := clientFromConfig()
+			switch {
+			case err != nil && gate.Files():
+				return fmt.Errorf("create GitHub client: %w", err)
+			case err != nil:
+				fmt.Fprintf(cmd.ErrOrStderr(), "followup materialize: parent criteria unavailable: %v\n", err)
+			default:
 				filer = followup.NewGitHubFiler(client, ownerPart, repoPart, projectNumber, getOwnerType(cmd))
-				trusted = followup.AuthorTrusted(cmd.Context(), client, workdir, ownerPart, repoPart, number)
+				if gate.Files() {
+					trusted = followup.AuthorTrusted(cmd.Context(), client, workdir, ownerPart, repoPart, number)
+				}
 			}
 
 			track := followup.LoadTracking(runDir, number)
@@ -146,7 +155,7 @@ cap refused records; they stay in the capture file. Exit 1: error.`,
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number (defaults to config)")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory (default: cwd)")
 	cmd.Flags().StringVar(&runDirFlag, "run-dir", "", "Directory holding discovered-work-<N>.json (default: the pipeline state dir)")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Report the would-file list; no forge calls and the capture is kept")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Report the would-file list; only the parent issue's body is read, and the capture is kept")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
 	return cmd
 }

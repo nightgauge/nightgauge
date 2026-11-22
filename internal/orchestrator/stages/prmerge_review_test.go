@@ -181,6 +181,7 @@ type fakeFiling struct {
 	mergesAt int
 	err      error
 	report   bool
+	tracked  bool
 }
 
 func (f *fakeFiling) file(_ context.Context, _, _ string, c *discoveredwork.Capture) (*followup.Result, error) {
@@ -195,6 +196,9 @@ func (f *fakeFiling) file(_ context.Context, _, _ string, c *discoveredwork.Capt
 		if f.report {
 			it = followup.Item{ID: rec.ID, Outcome: followup.OutcomeWouldFile}
 			res.ReportOnly, res.Reason = true, "follow_up_filing.mode defaults to report"
+		}
+		if f.tracked {
+			it = followup.Item{ID: rec.ID, Outcome: followup.OutcomeTrackedByParent}
 		}
 		if f.err != nil && i > 0 {
 			break
@@ -343,6 +347,33 @@ func TestRun_ReportModeRecordsAndMerges(t *testing.T) {
 	capture, err := discoveredwork.Load(dir, 100)
 	if err != nil || capture == nil || len(capture.Records) != 1 {
 		t.Fatalf("capture = %+v, %v", capture, err)
+	}
+}
+
+// A finding the parent's criteria track is still only a report in report mode:
+// the merge goes on and the finding is captured (#2872).
+func TestRun_ReportModeTrackedByParentRecordsAndMerges(t *testing.T) {
+	g := newReviewGh(reviewFileOnly, time.Now())
+	f := &fakeFiling{report: true, tracked: true}
+	r, root := newReviewRunner(t, g, f)
+	res, _ := r.Run(context.Background(), 100, "o/r", root)
+	if res.Path != PathMerged {
+		t.Fatalf("res = %+v", res)
+	}
+	capture, err := discoveredwork.Load(pipelineContextPath(root, ""), 100)
+	if err != nil || capture == nil || len(capture.Records) != 1 {
+		t.Fatalf("capture = %+v, %v", capture, err)
+	}
+}
+
+// When the gate files, tracked-by-parent has no issue that outlives the merge,
+// so it refuses.
+func TestRun_FileModeTrackedByParentRefuses(t *testing.T) {
+	g := newReviewGh(reviewFileOnly, time.Now())
+	r, root := newReviewRunner(t, g, &fakeFiling{tracked: true})
+	res, _ := r.Run(context.Background(), 100, "o/r", root)
+	if res.Path != PathRefused || !strings.HasPrefix(res.Reason, ReasonReviewFilingFailed) || g.mergeCalls != 0 {
+		t.Fatalf("res = %+v, merge calls = %d", res, g.mergeCalls)
 	}
 }
 

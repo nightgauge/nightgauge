@@ -611,6 +611,15 @@ func (r *DeterministicRunner) fileReviewFindings(ctx context.Context, workdir st
 			filed = append(filed, it.IssueNumber)
 		case followup.OutcomeWouldFile:
 			reported[it.ID] = true
+		case followup.OutcomeTrackedByParent:
+			// Report mode files nothing either way, so a finding the parent
+			// tracks is captured like a would-file one (#2872). When the gate
+			// files, it still refuses: the merge may close that parent.
+			if res.ReportOnly {
+				reported[it.ID] = true
+				continue
+			}
+			fallthrough
 		default:
 			problems = append(problems, fmt.Sprintf("%s %s %s", it.Outcome, it.ID, it.Detail))
 		}
