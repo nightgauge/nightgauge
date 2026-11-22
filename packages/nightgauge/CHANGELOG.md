@@ -9,12 +9,6 @@ and this project adheres to
 
 ## [Unreleased]
 
-### Fixed
-
-- The Action Center describes the **close** option on a partial-delivery no-op
-  card: it closes the issue as completed, comments with the criteria that were
-  open and moves it to Done (#3487).
-
 ## [0.8.7] - 2026-11-22
 
 ### Added
@@ -29,6 +23,9 @@ and this project adheres to
 
 ### Fixed
 
+- The Action Center describes the **close** option on a partial-delivery no-op
+  card: it closes the issue as completed, comments with the criteria that were
+  open and moves it to Done (#3487).
 - The dashboard keeps a tab selected from the extension (demo steps, commands)
   when a refresh lands at the same moment, instead of snapping back to the
   previous tab (#3025).
