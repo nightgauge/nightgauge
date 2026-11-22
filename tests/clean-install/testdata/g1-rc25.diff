@@ -1,0 +1,79 @@
+diff --git a/README.md b/README.md
+index f777a85..f3a34a4 100644
+--- a/README.md
++++ b/README.md
+@@ -9,6 +9,6 @@ one real, small issue to drive to a merged pull request.
+ npm test
+ ```
+ 
+-`src/index.js` exports `slugify`. The gate's single issue asks for a second,
+-missing function; see `tests/clean-install/issue.md` in the Nightgauge
++`src/index.js` exports `slugify` and `truncate`. The gate's single issue asks
++for the second function; see `tests/clean-install/issue.md` in the Nightgauge
+ repository.
+diff --git a/src/index.js b/src/index.js
+index 85106ff..22db0e3 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -16,4 +16,21 @@ function slugify(text) {
+     .replace(/^-+|-+$/g, "");
+ }
+ 
+-module.exports = { slugify };
++/**
++ * Shorten text to at most maxLength UTF-16 code units. Text that fits is
++ * returned unchanged; cut text ends with a single "…" (U+2026).
++ */
++function truncate(text, maxLength) {
++  if (typeof text !== "string") {
++    throw new TypeError("truncate: text must be a string");
++  }
++  if (!Number.isInteger(maxLength) || maxLength < 1) {
++    throw new RangeError("truncate: maxLength must be an integer >= 1");
++  }
++  if (text.length <= maxLength) {
++    return text;
++  }
++  return `${text.slice(0, maxLength - 1)}…`;
++}
++
++module.exports = { slugify, truncate };
+diff --git a/test/truncate.test.js b/test/truncate.test.js
+new file mode 100644
+index 0000000..5b4e93a
+--- /dev/null
++++ b/test/truncate.test.js
+@@ -0,0 +1,33 @@
++"use strict";
++
++const test = require("node:test");
++const assert = require("node:assert/strict");
++const { truncate } = require("../src");
++
++test("returns text shorter than the limit unchanged", () => {
++  assert.equal(truncate("hi", 5), "hi");
++});
++
++test("returns text exactly at the limit unchanged", () => {
++  assert.equal(truncate("hello", 5), "hello");
++});
++
++test("cuts long text to the limit, ending with an ellipsis", () => {
++  const result = truncate("hello world", 5);
++  assert.equal(result, "hell\u2026");
++  assert.equal(result.length, 5);
++});
++
++test("returns only the ellipsis when the limit is 1", () => {
++  assert.equal(truncate("hello", 1), "\u2026");
++});
++
++test("rejects non-string text", () => {
++  assert.throws(() => truncate(42, 5), TypeError);
++});
++
++test("rejects a limit that is not an integer >= 1", () => {
++  for (const limit of [0, -1, 1.5, NaN, "5", undefined]) {
++    assert.throws(() => truncate("hi", limit), RangeError);
++  }
++});

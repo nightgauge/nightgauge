@@ -7,10 +7,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -88,6 +90,7 @@ type acDiffLine struct {
 // ACFileDiff is one file's changes against the merge base.
 type ACFileDiff struct {
 	Path    string
+	OldPath string // the base path of a renamed file
 	Status  string // added | modified | deleted | renamed
 	Added   []acDiffLine
 	Deleted int
@@ -109,6 +112,10 @@ type ACDiff struct {
 	// so a criterion comparing a file with another repository's file at a
 	// revision can be decided locally (#3042). Empty means none is known.
 	Repos map[string]string
+	// BaseRev is the revision the diff is taken against: the merge base, or
+	// a range diff's first revision. Unlike FromRev it does not mark a range
+	// diff (#3501).
+	BaseRev string
 	// FromRev and ToRev are set by CollectACDiffRange: the diff is
 	// FromRev..ToRev, and content is read at ToRev, never from the working
 	// tree (#3423).
@@ -198,7 +205,7 @@ func CollectACDiff(ctx context.Context, workdir, base string) (*ACDiff, error) {
 	if err != nil {
 		return nil, fmt.Errorf("git diff %s: %w", mergeBase, err)
 	}
-	d := &ACDiff{Files: parseUnifiedDiff(out), Workdir: workdir, Uncommitted: map[string]bool{}}
+	d := &ACDiff{Files: parseUnifiedDiff(out), Workdir: workdir, Uncommitted: map[string]bool{}, BaseRev: mergeBase}
 	dirty, err := git("diff", "--name-only", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("git diff --name-only HEAD: %w", err)
@@ -303,10 +310,13 @@ func parseUnifiedDiff(out string) map[string]*ACFileDiff {
 			cur.Status = "added"
 		case !inHunk && strings.HasPrefix(line, "deleted file mode"):
 			cur.Status = "deleted"
+		case !inHunk && strings.HasPrefix(line, "rename from "):
+			cur.OldPath = strings.TrimPrefix(line, "rename from ")
 		case !inHunk && strings.HasPrefix(line, "rename to "):
 			cur.Status = "renamed"
 		case !inHunk && strings.HasPrefix(line, "+++ "):
-			if p := strings.TrimPrefix(line, "+++ "); strings.HasPrefix(p, "b/") && p[2:] != cur.Path {
+			// git ends a header path that holds a space with a tab.
+			if p := strings.TrimSuffix(strings.TrimPrefix(line, "+++ "), "\t"); strings.HasPrefix(p, "b/") && p[2:] != cur.Path {
 				delete(files, cur.Path)
 				cur.Path = p[2:]
 				files[cur.Path] = cur
@@ -405,6 +415,12 @@ type acClause struct {
 	// Revisions are 7–40 hex spans naming a commit, decided by comparing the
 	// named file with the named repository's file at that revision.
 	Revisions []string
+	// AfterAnd reports that the clause was split off at ", and", so what
+	// precedes it may share its predicate (#3501).
+	AfterAnd bool
+	// Joined reports that another clause of the criterion is more than a
+	// command's result, so what this one keeps may continue there (#3501).
+	Joined bool
 }
 
 // acBound is one "<op> value" comparison a criterion states.
@@ -604,6 +620,31 @@ func splitACClauses(text string) []string {
 	return out
 }
 
+// parseACClauses parses each clause of text, marking those that follow a
+// ", and" the split consumed and those joined to another clause that is more
+// than a command's result.
+func parseACClauses(text string) []acClause {
+	var out []acClause
+	pos, afterAnd := 0, false
+	for _, raw := range splitACClauses(text) {
+		c := parseACClause(raw)
+		c.AfterAnd = afterAnd
+		out = append(out, c)
+		pos += len(raw)
+		sep := acClauseSplitRE.FindString(text[pos:])
+		afterAnd = strings.HasPrefix(sep, ",")
+		pos += len(sep)
+	}
+	for i := range out {
+		for j, o := range out {
+			if j != i && strings.TrimSpace(o.Raw) != "" && !acResultClauseRE.MatchString(o.Raw) {
+				out[i].Joined = true
+			}
+		}
+	}
+	return out
+}
+
 // acRevisionCtx reports whether the revision wording sits directly before
 // the hex span ("at `abc1234`", "commit `abc1234`", "@`abc1234`").
 func acRevisionCtx(raw, h string) bool {
@@ -733,8 +774,8 @@ func VerifyACAgainstDiff(text string, prior []string, d *ACDiff, tests ACTestSta
 	}
 	inherited := acInheritedPaths(prior, d)
 	var met, unmet []acResult
-	for _, raw := range splitACClauses(text) {
-		r := verifyACClause(parseACClause(raw), inherited, d, tests)
+	for _, c := range parseACClauses(text) {
+		r := verifyACClause(c, inherited, d, tests)
 		switch {
 		case !r.ok:
 		case r.status == ACUnmet:
@@ -2544,13 +2585,209 @@ func acIsPreservation(c acClause) bool {
 // span before it ("`X` remains", "`X` is unchanged").
 var acPreserveObjectRE = regexp.MustCompile(`(?i)^(?:keeps?|do(?:es)? not change)$`)
 
-// acPreservedTokens returns the literal spans a preservation verb governs: the
+// acTestScopeRE matches a test noun phrase after a span and any qualifiers,
+// which can narrow what is preserved to that span's tests (#3501). A noun with file,
+// suite or case always heads its phrase. A lone "test", "tests", "suite",
+// "spec" or "specs" does only when no other noun follows, so "test flag" and
+// "spec version" do not match.
+var acTestScopeRE = regexp.MustCompile(`(?i)^\s+(?:` +
+	`(?:tests?|spec) (?:files?|suites?|cases?)(?:[^A-Za-z0-9_-]|$)` +
+	`|(?:tests?|suite|specs?)(?:\s*(?:[^\sA-Za-z0-9_-]|$)|\s+(?:[a-z]+ly|is|are|was|were|be|been|being|` +
+	`remains?|stays?|keeps?|kept|still|untouched|unchanged|unmodified|intact|green|passing|pass(?:es)?|` +
+	`continues?|must|should|will|can|does|do|has|have|not|that|which|` +
+	`and|or|but|as|at|in|for|from|of|on|to|with|without)\b))`)
+
+// acTestsOnlyRE matches what follows a span when the clause preserves its
+// tests and nothing else: a test noun, then only words saying they are kept.
+// "spec" and a lone "suite" are absent because they can name another thing (a
+// document, a cipher suite).
+var acTestsOnlyRE = regexp.MustCompile(acTestsTail + `))*[\s.!;,)]*$`)
+
+// acTestResultOnlyRE is acTestsOnlyRE for a kept result, so it also takes the
+// words naming one.
+var acTestResultOnlyRE = regexp.MustCompile(acTestsTail + `|passing|green|succeed(?:s|ing)?|working))*[\s.!;,)]*$`)
+
+const acTestsTail = `(?i)^\s+tests?(?: (?:files?|suites?|cases?))?` +
+	`(?:\s+(?:is|are|be|remains?|stays?|must|should|still|left|completely|entirely|and|pass(?:es)?|` +
+	`untouched|unchanged|unmodified|intact|not (?:modified|changed|touched|edited)`
+
+// acTestsLeadRE matches all that may precede a span when its tests are the one
+// thing kept: a command's result ("`npm test` passes with"), the verb keeping
+// them and determiners, each optional. The list is closed, because no list of
+// the words that can join or keep a second thing is complete.
+var acTestsLeadRE = regexp.MustCompile("(?i)^\\s*(?:" + acCommandResult + ` with\s+)?` +
+	`(?:(?:keeps?|do(?:es)? not change)\s+)?(?:(?:the|its|all|existing|current)\s+)*$`)
+
+// acResultClauseRE matches a clause that is only a command's result, which
+// keeps nothing.
+var acResultClauseRE = regexp.MustCompile("(?i)^\\s*(?:and\\s+)?" + acCommandResult + `[\s.!]*$`)
+
+// acCommandResult matches a command span, which holds whitespace and so is
+// never a preserved span, and its passing.
+const acCommandResult = "`[^`\\s]+\\s[^`]*`" + `\s+(?:pass(?:es)?|succeeds?|is green)`
+
+// acPreserveWordRE matches "preserve", which asks for preservation without
+// being a verb that governs a span.
+var acPreserveWordRE = regexp.MustCompile(`(?i)\bpreserv(?:e[sd]?|ing)\b`)
+
+// acMaxQualifiers is how many words may stand between a span and its test noun.
+const acMaxQualifiers = 2
+
+// acQualifierWordRE matches one whitespace-delimited word of letters.
+var acQualifierWordRE = regexp.MustCompile(`^\s+([A-Za-z]+)\s`)
+
+// acNotQualifierRE matches a word that cannot qualify a test noun: a test
+// noun, a conjunction, preposition, article, pronoun, auxiliary or negation,
+// an adverb, or a word in a single "s", which reads as a verb ("needs").
+var acNotQualifierRE = regexp.MustCompile(`(?i)^(?:tests?|suites?|specs?|` +
+	`and|or|nor|plus|but|yet|so|if|unless|while|when|whereas|because|although|though|than|then|` +
+	`albeit|assuming|considering|given|granted|granting|how|however|immediately|lest|now|once|only|` +
+	`provided|providing|save|seeing|since|supposing|till|whenever|whence|whereupon|wherever|whether|` +
+	`whilst|why|amidst|amongst|beneath|notwithstanding|pending|regarding|underneath|versus|` +
+	`apart|aside|bar|barring|beyond|minus|omitting|sans|unlike|` +
+	`about|above|across|after|against|along|alongside|amid|among|around|at|before|behind|below|beside|` +
+	`besides|between|beyond|by|despite|during|except|excluding|for|from|in|including|inside|into|like|near|` +
+	`of|off|on|onto|out|outside|over|per|since|through|throughout|to|toward|under|until|up|upon|via|with|` +
+	`within|without|a|an|the|its|it|their|they|them|this|that|these|those|which|who|whose|what|where|` +
+	`our|we|you|your|all|any|each|every|both|some|is|are|am|was|were|be|been|being|has|have|had|having|` +
+	`do|does|did|can|could|may|might|must|shall|should|will|would|need|not|no|never|` +
+	`[a-z]+ly|[a-z]*[a-rt-z]s)$`)
+
+// acAndOrRE matches a coordinating "and" or "or".
+var acAndOrRE = regexp.MustCompile(`(?i)\b(?:and|or)\b`)
+
+// acTestResultRE matches wording that keeps a test result.
+var acTestResultRE = regexp.MustCompile(`(?i)\b(?:pass(?:es|ing)?|green|succeed(?:s|ing)?|working)\b`)
+
+// acTestContentRE matches wording that keeps content, which decides when a
+// result is named too ("still passes unchanged").
+var acTestContentRE = regexp.MustCompile(`(?i)\b(?:untouched|unchanged|unmodified|intact|not (?:modified|changed|touched|edited)|` +
+	`do(?:es)? not change|without (?:changes?|edits?|modifications?))\b`)
+
+// acPreservedSpan is one reading of a governed span: the span itself, or,
+// when testScoped, the tests that contain it. A testScoped reading without
+// testsOnly may keep more after the span or in another clause, so the span
+// itself is judged as well.
+type acPreservedSpan struct {
+	tok        string
+	testScoped bool
+	testsOnly  bool
+}
+
+// acPreservedTokens returns the distinct text of acPreservedSpans.
+func acPreservedTokens(c acClause) []string {
+	var out []string
+	for _, s := range acPreservedSpans(c) {
+		if !acContains(out, s.tok) {
+			out = append(out, s.tok)
+		}
+	}
+	return out
+}
+
+// acAsksKept reports whether text holds any word asking for preservation.
+func acAsksKept(text string) bool {
+	return len(preflight.ACPreservationVerbs(text)) > 0 ||
+		acTestContentRE.MatchString(text) || acPreserveWordRE.MatchString(text)
+}
+
+// acPluralSingularRE matches "tests" before a singular verb, whose subject is
+// then the span and not its tests ("`X` unlike tests is unchanged").
+var acPluralSingularRE = regexp.MustCompile(`(?i)^\s+tests\s+(?:is|remains|stays)\b`)
+
+// acTestNounAt finds the test noun phrase in the text after a span. It may
+// follow the span directly or after one or two qualifiers ("unit", "browser
+// regression"). Words can pose as qualifiers, so the qualified form also
+// needs a tail that keeps only tests ("`X` needs tests and is unchanged"
+// keeps X).
+func acTestNounAt(after string) (at int, ok bool) {
+	if acTestScopeRE.MatchString(after) {
+		return 0, true
+	}
+	for range acMaxQualifiers {
+		m := acQualifierWordRE.FindStringSubmatchIndex(after[at:])
+		if m == nil {
+			return 0, false
+		}
+		word := after[at+m[2] : at+m[3]]
+		if lw := strings.ToLower(word); lw != "existing" && strings.HasSuffix(lw, "ing") {
+			return 0, false // reads as a verb ("ignoring tests")
+		}
+		if acNotQualifierRE.MatchString(word) || acTestResultRE.MatchString(word) || acAsksKept(word) {
+			return 0, false
+		}
+		at += m[3]
+		tail := after[at:]
+		if !acTestScopeRE.MatchString(tail) {
+			continue
+		}
+		if acPluralSingularRE.MatchString(tail) || !acTailKeepsOnly(acKeptTailRE(tail), tail) {
+			return 0, false
+		}
+		return at, true
+	}
+	return 0, false
+}
+
+// acKeptTailRE returns what may follow a test noun in wording that keeps only
+// tests: result words too, when kept names a result and no content.
+func acKeptTailRE(kept string) *regexp.Regexp {
+	if acTestResultRE.MatchString(kept) && !acTestContentRE.MatchString(kept) {
+		return acTestResultOnlyRE
+	}
+	return acTestsOnlyRE
+}
+
+// acTailKeepsOnly reports whether tail, the text from a test noun, is all
+// allowed by re and has no and/or before it says the tests are kept
+// ("`X` tests and is unchanged" keeps X).
+func acTailKeepsOnly(re *regexp.Regexp, tail string) bool {
+	if !re.MatchString(tail) {
+		return false
+	}
+	end := len(tail)
+	if v := preflight.ACPreservationVerbs(tail); len(v) > 0 {
+		end = v[0][0]
+	}
+	if m := acTestContentRE.FindStringIndex(tail); m != nil {
+		end = min(end, m[0])
+	}
+	return !acAndOrRE.MatchString(tail[:end])
+}
+
+// acObjectLeadRE matches a lead whose verb takes the span as its object.
+var acObjectLeadRE = regexp.MustCompile(`(?i)(?:^|\s)(?:keeps?|do(?:es)? not change)\s+` +
+	`(?:(?:the|its|all|existing|current)\s+)*$`)
+
+// acFiniteTailRE matches a verb that gives a test noun its own predicate
+// ("tests pass", "tests are untouched").
+var acFiniteTailRE = regexp.MustCompile(`(?i)\b(?:is|are|be|remains?|stays?|must|should|pass(?:es)?|succeeds?)\b`)
+
+// acTestScopeAt reports whether the test scope applies to the span sp, and
+// where in c.Raw its noun phrase starts. The scope can turn a strict unmet
+// into met, so it applies only when the span's tests are the one thing kept;
+// any other phrasing keeps the strict verdict. After a verb that takes the span
+// as its object, a qualified noun with its own verb starts another clause
+// whatever the words between ("Keep `X` once tests pass" keeps X), so no list
+// of those words has to be complete.
+func acTestScopeAt(c acClause, sp [4]int) (noun int, ok bool) {
+	at, ok := acTestNounAt(c.Raw[sp[1]:])
+	if !ok || c.AfterAnd || !acTestsLeadRE.MatchString(c.Raw[:sp[0]]) {
+		return sp[1], false
+	}
+	if at > 0 && acObjectLeadRE.MatchString(c.Raw[:sp[0]]) && acFiniteTailRE.MatchString(c.Raw[sp[1]+at:]) {
+		return sp[1], false
+	}
+	return sp[1] + at, true
+}
+
+// acPreservedSpans returns the literal spans a preservation verb governs: the
 // span directly before the verb ("`X` keeps its value", "`X` is unchanged")
 // or, for a transitive verb, directly after it ("keep `X`"), with at most
-// three words and no clause break between. A path, a span holding whitespace
-// (a command such as `npm test`), a placeholder and an expression are never
-// preserved spans.
-func acPreservedTokens(c acClause) []string {
+// three words and no clause break between. A test scope's qualifiers are not
+// counted among the three. A path, a span holding whitespace (a command such
+// as `npm test`), a placeholder and an expression are never preserved spans.
+func acPreservedSpans(c acClause) []acPreservedSpan {
 	lit, _ := acLiteralSpans(c.Tokens)
 	literal := map[string]bool{}
 	for _, t := range lit {
@@ -2562,20 +2799,26 @@ func acPreservedTokens(c acClause) []string {
 	near := func(gap string) bool {
 		return !acUnchangedBreakRE.MatchString(gap) && !strings.Contains(gap, ",") && len(strings.Fields(gap)) <= 3
 	}
-	seen := map[string]bool{}
-	var out []string
-	take := func(sp [4]int) {
-		tok := strings.TrimSpace(acSpanContent(c.Raw[sp[2]:sp[3]]))
-		if literal[tok] && !seen[tok] {
-			seen[tok] = true
-			out = append(out, tok)
+	seen := map[acPreservedSpan]bool{}
+	var out []acPreservedSpan
+	take := func(sp [4]int, verb int) {
+		s := acPreservedSpan{tok: strings.TrimSpace(acSpanContent(c.Raw[sp[2]:sp[3]]))}
+		if noun, ok := acTestScopeAt(c, sp); ok {
+			s.testScoped = true
+			only := acKeptTailRE(c.Raw[min(sp[0], verb):])
+			s.testsOnly = !c.Joined && acTailKeepsOnly(only, c.Raw[noun:])
+		}
+		if literal[s.tok] && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
 		}
 	}
 	for _, v := range preflight.ACPreservationVerbs(c.Raw) {
 		for i := len(spans) - 1; i >= 0; i-- {
 			if spans[i][1] <= v[0] {
-				if near(c.Raw[spans[i][1]:v[0]]) {
-					take(spans[i])
+				from, _ := acTestScopeAt(c, spans[i]) // past any qualifiers
+				if near(c.Raw[from:v[0]]) {
+					take(spans[i], v[0])
 				}
 				break
 			}
@@ -2586,7 +2829,7 @@ func acPreservedTokens(c acClause) []string {
 		for _, sp := range spans {
 			if sp[0] >= v[1] {
 				if near(c.Raw[v[1]:sp[0]]) {
-					take(sp)
+					take(sp, v[0])
 				}
 				break
 			}
@@ -2612,15 +2855,17 @@ func acAdditionPart(c acClause) acClause {
 	return out
 }
 
-// acPreserved answers a preservation clause (#3423): met when every literal
-// span it names exists on the branch and no non-comment line the diff adds or
-// removes contains it; unmet naming the changed line when one does, or when a search
-// that ran finds no such span. A path the clause names need only exist. A
-// file that cannot be read, or a search that did not run, leaves the clause
-// undecided.
+// acPreserved answers a preservation clause (#3423) by acPreservedStrict,
+// except where a span's test scope applies (#3501). Such a span, a kept result
+// included, is judged by acTestsPreserved; unless the clause says only that
+// those tests are kept, a changed line containing the span is still unmet.
+// When any scoped span gets no decision, the whole clause gets the strict
+// verdict: the scope turns a strict unmet into met only on tests it has read,
+// beside no touched file that may be a test it does not know.
+// A path the clause names need only exist.
 func acPreserved(c acClause, d *ACDiff) acResult {
-	tokens := acPreservedTokens(c)
-	if len(tokens) == 0 {
+	spans := acPreservedSpans(c)
+	if len(spans) == 0 {
 		return acResult{}
 	}
 	for _, p := range c.Paths {
@@ -2631,6 +2876,91 @@ func acPreserved(c acClause, d *ACDiff) acResult {
 			return acResult{}
 		}
 	}
+	var tokens []string
+	var scoped []acPreservedSpan
+	for _, s := range spans {
+		if s.testScoped {
+			scoped = append(scoped, s)
+		} else {
+			tokens = append(tokens, s.tok)
+		}
+	}
+	if len(scoped) == 0 {
+		return acPreservedStrict(tokens, c.Paths, d)
+	}
+	strict := func() acResult { return acPreservedStrict(acPreservedTokens(c), c.Paths, d) }
+
+	// Every scoped span is judged before any falls back, so an edited test is
+	// named whatever the others answer.
+	judged, decided := make([]acResult, len(scoped)), true
+	for i, s := range scoped {
+		r := acTestsPreserved(s.tok, d)
+		if r.status == ACUnmet {
+			return r
+		}
+		judged[i] = r
+		decided = decided && r.ok
+	}
+	if !decided {
+		return strict()
+	}
+	var testEv, mayKeep []string
+	for i, s := range scoped {
+		if !s.testsOnly {
+			// The clause may also keep X itself ("tests and behavior", a spec
+			// document): no changed line may contain it, and a change outside
+			// the tests that names it gets the whole strict verdict.
+			mayKeep = append(mayKeep, s.tok)
+			if acChangesOutsideTests(s.tok, d) {
+				if !acContains(tokens, s.tok) {
+					tokens = append(tokens, s.tok)
+				}
+				continue
+			}
+		}
+		testEv = append(testEv, judged[i].evidence)
+	}
+	if r := acChangedLine(mayKeep, d); r.ok {
+		return r
+	}
+	if len(tokens) > 0 {
+		r := acPreservedStrict(tokens, c.Paths, d)
+		switch {
+		case !r.ok:
+			return strict()
+		case r.status == ACUnmet:
+			return r
+		}
+		testEv = append(testEv, r.evidence)
+	}
+	return acAnswer(ACMet, strings.Join(testEv, "; "))
+}
+
+// acPreservedStrict answers preserved spans by their text (#3423): met when
+// each exists on the branch and no non-comment line the diff adds or removes
+// contains it; unmet naming the changed line when one does, or when a search
+// that ran finds no such span. A search that did not run answers nothing.
+func acPreservedStrict(tokens, paths []string, d *ACDiff) acResult {
+	if r := acChangedLine(tokens, d); r.ok {
+		return r
+	}
+	var ev []string
+	for _, tok := range tokens {
+		loc, found, err := acPresentAnywhere(tok, paths, d)
+		if err != nil {
+			return acResult{}
+		}
+		if !found {
+			return acAnswer(ACUnmet, fmt.Sprintf("`%s` is not on the branch, so nothing keeps it", tok), paths...)
+		}
+		ev = append(ev, fmt.Sprintf("`%s` at `%s`", tok, loc))
+	}
+	return acAnswer(ACMet, "the diff changes no line containing "+acList(tokens, 5)+"; kept: "+strings.Join(ev, ", "))
+}
+
+// acChangedLine is unmet naming the first non-comment line the diff adds or
+// removes that contains one of tokens, and no answer when none does.
+func acChangedLine(tokens []string, d *ACDiff) acResult {
 	for _, tok := range tokens {
 		match := acSpanMatcher(tok)
 		for _, p := range d.sortedPaths() {
@@ -2647,18 +2977,339 @@ func acPreserved(c acClause, d *ACDiff) acResult {
 			}
 		}
 	}
-	var ev []string
-	for _, tok := range tokens {
-		loc, found, err := acPresentAnywhere(tok, c.Paths, d)
-		if err != nil {
+	return acResult{}
+}
+
+// acTestFileRE matches a test file by a whole directory name or by its base
+// name, so testdata/, specs/ and testing.go are not test files.
+var acTestFileRE = regexp.MustCompile(`(?:^|/)(?:tests?|__tests__|spec)/` +
+	`|(?:_test|\.test|\.spec)\.[^/]*$` +
+	`|(?:^|/)test_[^/]*\.[^/]*$`)
+
+// acDocExtRE matches a document by its extension, the only thing that keeps a
+// path from being a test file or test-like. A docs directory does not.
+var acDocExtRE = regexp.MustCompile(`(?i)\.(?:md|markdown|rst|adoc|txt)$`)
+
+// acIsTestFile reports whether p is a recognised test file, by its path alone,
+// never by its text.
+func acIsTestFile(p string) bool {
+	return acTestFileRE.MatchString(p) && !acDocExtRE.MatchString(p)
+}
+
+// acTestLikeSubstrings is the whole definition of a test-like path, closed by
+// decision (#3501): add none. A layout outside these five is not a test.
+var acTestLikeSubstrings = []string{"test", "spec", ".cy.", "e2e", "cypress"}
+
+// acIsTestLike reports whether p may be a test file, by its path alone: its
+// lower-cased form holds one of acTestLikeSubstrings and it is no document.
+func acIsTestLike(p string) bool {
+	if acDocExtRE.MatchString(p) {
+		return false
+	}
+	lower := strings.ToLower(p)
+	for _, sub := range acTestLikeSubstrings {
+		if strings.Contains(lower, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// acTestsPreserved answers "`X` tests are untouched" and "`X` tests still
+// pass" (#3501) on the test files that contain X, by path or content, at the
+// base revision: unmet when the diff modifies, empties, deletes or renames
+// one, comments included, and met when it touches none, every candidate was
+// read and acTouchesTestLike finds nothing. The base decides, so an edit that
+// removes X still counts and an added file never does. No such file, a touched
+// test-like one, or any read that is uncertain, is no decision, for which
+// acPreserved gives the strict verdict.
+func acTestsPreserved(tok string, d *ACDiff) acResult {
+	if d.Workdir == "" || d.BaseRev == "" || strings.HasPrefix(d.BaseRev, "-") {
+		return acResult{}
+	}
+	tree, err := acGitList(d.Workdir, nil, "ls-tree", "-r", "--full-tree", "--name-only", "-z", d.BaseRev)
+	if err != nil {
+		return acResult{}
+	}
+	// git grep skips a blob it cannot read and still exits 0 or 1, saying so
+	// only on stderr.
+	var grepErr bytes.Buffer
+	hits, err := acGitList(d.Workdir, &grepErr, "grep", "--no-color", "-l", "-z", "-F", "-e", acGrepLiteral(tok), d.BaseRev)
+	if grepErr.Len() > 0 {
+		return acResult{}
+	}
+	var ee *exec.ExitError
+	if err != nil && (!errors.As(err, &ee) || ee.ExitCode() != 1) {
+		return acResult{} // exit 1 is "no match"; anything else did not answer
+	}
+	inContent := map[string]bool{}
+	for _, h := range hits {
+		p, ok := strings.CutPrefix(h, d.BaseRev+":")
+		if !ok {
 			return acResult{}
 		}
-		if !found {
-			return acAnswer(ACUnmet, fmt.Sprintf("`%s` is not on the branch, so nothing keeps it", tok), c.Paths...)
-		}
-		ev = append(ev, fmt.Sprintf("`%s` at `%s`", tok, loc))
+		inContent[p] = true
 	}
-	return acAnswer(ACMet, "the diff changes no line containing "+acList(tokens, 5)+"; kept: "+strings.Join(ev, ", "))
+	changed := map[string]*ACFileDiff{}
+	for _, p := range d.sortedPaths() {
+		f := d.Files[p]
+		changed[p] = f
+		if f.OldPath != "" {
+			changed[f.OldPath] = f
+		}
+	}
+
+	// The diff's headers lose a path git quotes, so git lists what was touched.
+	args := []string{"diff", "--name-only", "--no-renames", "--no-relative", "-z", d.BaseRev}
+	if d.ToRev != "" {
+		args = append(args, d.ToRev)
+	}
+	listed, err := acGitList(d.Workdir, nil, append(args, "--")...)
+	if err != nil {
+		return acResult{}
+	}
+	touched := map[string]bool{}
+	for _, p := range listed {
+		touched[p] = true
+	}
+
+	name, match := acSpanName(tok), acSpanMatcher(tok)
+	if name == tok && acNameSpanRE.MatchString(tok) {
+		// A bare name is a word here: a `get` test is not one holding "widget".
+		match = func(line string) bool { return acNamesWord(line, tok) }
+	}
+	kept, unread := "", false
+	for _, p := range tree {
+		if !acIsTestFile(p) {
+			continue
+		}
+		f := changed[p]
+		edited := f != nil || touched[p]
+		// git quotes such a path in a diff header, or the header is
+		// ambiguous, so whether the diff touches it is unknown.
+		unclear := strings.Contains(p, " b/") || strings.ContainsFunc(p, func(r rune) bool {
+			return r < 0x20 || r == 0x7f || r == '"' || r == '\\'
+		})
+		contains := acNamesWord(p, name)
+		if !contains && inContent[p] {
+			data, ok := acBlob(d.Workdir, d.BaseRev, p)
+			if !ok {
+				unread = true
+				continue
+			}
+			for _, line := range strings.Split(string(data), "\n") {
+				if match(line) {
+					contains = true
+					break
+				}
+			}
+		}
+		switch {
+		case !contains:
+		case f != nil:
+			action, paths := "modifies `"+p+"`", []string{p}
+			switch {
+			case f.OldPath == p:
+				action = "renames `" + p + "` to `" + f.Path + "`"
+				paths = append(paths, f.Path)
+			case f.Status == "deleted":
+				action = "deletes `" + p + "`"
+			}
+			return acAnswer(ACUnmet, fmt.Sprintf("the diff %s, an existing test file containing `%s`", action, tok), paths...)
+		case edited:
+			return acAnswer(ACUnmet, fmt.Sprintf("the diff modifies, deletes or renames `%s`, an existing test file containing `%s`", p, tok), p)
+		case unclear:
+			unread = true
+		case kept == "":
+			kept = p
+		}
+	}
+	if unread || kept == "" || acTouchesTestLike(tok, d, tree, touched) {
+		return acResult{}
+	}
+	return acAnswer(ACMet, fmt.Sprintf("the diff touches no existing test file containing `%s`; kept: `%s`", tok, kept))
+}
+
+// acTouchesTestLike reports whether the diff edits, empties, deletes or
+// renames a base file that is test-like, not a recognised test file and holds
+// tok in its path, base content or changed lines, or one for which that cannot
+// be read. tree lists the base's files and touched what git says changed.
+// Holding is the strict judge's matcher, not a word match, so every line that
+// judge would flag in such a file reaches it.
+func acTouchesTestLike(tok string, d *ACDiff, tree []string, touched map[string]bool) bool {
+	unknownLayout := func(p string) bool { return acIsTestLike(p) && !acIsTestFile(p) }
+	name, match := acSpanName(tok), acSpanMatcher(tok)
+	inBase := map[string]bool{}
+	for _, p := range tree {
+		inBase[p] = true
+	}
+	inHeaders := map[string]bool{}
+	for _, f := range d.Files {
+		inHeaders[f.Path], inHeaders[f.OldPath] = true, true
+		if !unknownLayout(f.Path) && !unknownLayout(f.OldPath) {
+			continue
+		}
+		base := f.Path
+		if f.OldPath != "" {
+			base = f.OldPath
+		}
+		if !inBase[base] {
+			if f.OldPath != "" {
+				return true // a rename whose base path git quoted
+			}
+			continue // added
+		}
+		for _, p := range []string{f.Path, f.OldPath} {
+			if p != "" && (acNamesWord(p, name) || match(p)) {
+				return true
+			}
+		}
+		for _, l := range f.Added {
+			if match(l.Text) {
+				return true
+			}
+		}
+		// The base content holds every line the diff removes.
+		data, ok := acBlob(d.Workdir, d.BaseRev, base)
+		if !ok || slices.ContainsFunc(strings.Split(string(data), "\n"), match) {
+			return true
+		}
+	}
+	// A path missing from the headers has no changed lines to read.
+	for p := range touched {
+		if !inHeaders[p] && unknownLayout(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// acNameSpanRE matches a span that is a bare name.
+var acNameSpanRE = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$.-]*$`)
+
+// acNamesWord reports whether s, a path or a line, holds name as whole words:
+// at each end it meets the end of s, a character that is no letter or digit,
+// or a case change, so "get" is named by "get_test.go" and "getUser" but not
+// "widget".
+func acNamesWord(s, name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i+len(name) <= len(s); i++ {
+		end := i + len(name)
+		if s[i:end] == name && acWordBreak(s, i) && acWordBreak(s, end) {
+			return true
+		}
+	}
+	return false
+}
+
+// acWordBreak reports whether a word can begin or end at s[i].
+func acWordBreak(s string, i int) bool {
+	if i == 0 || i == len(s) {
+		return true
+	}
+	lower := func(b byte) bool { return b >= 'a' && b <= 'z' }
+	upper := func(b byte) bool { return b >= 'A' && b <= 'Z' }
+	digit := func(b byte) bool { return b >= '0' && b <= '9' }
+	a, b := s[i-1], s[i]
+	switch {
+	case !lower(a) && !upper(a) && !digit(a), !lower(b) && !upper(b) && !digit(b):
+		return true
+	case upper(b):
+		// "getUser", "v2Client", and the last capital of "HTTPClient".
+		return !upper(a) || i+1 < len(s) && lower(s[i+1])
+	}
+	return false
+}
+
+// acChangesOutsideTests reports whether the diff changes a file that is not a
+// recognised test and contains tok, by path, before the change or in a line it adds. A changed
+// file whose base cannot be read counts, because it might.
+func acChangesOutsideTests(tok string, d *ACDiff) bool {
+	name, match := acSpanName(tok), acSpanMatcher(tok)
+	for _, p := range d.sortedPaths() {
+		f := d.Files[p]
+		if acIsTestFile(p) {
+			continue
+		}
+		if acNamesWord(p, name) || acNamesWord(f.OldPath, name) {
+			return true
+		}
+		for _, l := range f.Added {
+			if match(l.Text) {
+				return true
+			}
+		}
+		if f.Status == "added" {
+			continue
+		}
+		base := p
+		if f.OldPath != "" {
+			base = f.OldPath
+		}
+		data, ok := acBlob(d.Workdir, d.BaseRev, base)
+		if !ok {
+			return true
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if match(line) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// acGitList runs a NUL-delimited git listing in workdir, copying git's stderr
+// to stderr when that is not nil.
+func acGitList(workdir string, stderr io.Writer, args ...string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), acDiffTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "submodule.recurse=false"}, args...)...)
+	cmd.Dir = workdir
+	cmd.Stderr = stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	return strings.FieldsFunc(string(out), func(r rune) bool { return r == 0 }), nil
+}
+
+// acSpanName is the text to search for a span by: a call span's last name, a
+// wrapped identifier's name, else the span.
+func acSpanName(tok string) string {
+	if m := acCallSpanRE.FindStringSubmatch(tok); m != nil {
+		return m[1]
+	}
+	if id := acWrappedIdent(tok); id != "" {
+		return id
+	}
+	return tok
+}
+
+// acGrepLiteral is text every line acSpanMatcher(tok) accepts must hold, so a
+// fixed-string pre-filter drops none: a key-value span is searched by its
+// value and an ellipsis span by its longest fixed part.
+func acGrepLiteral(tok string) string {
+	if acCallSpanRE.MatchString(tok) {
+		return acSpanName(tok)
+	}
+	if acEllipsisRE.MatchString(tok) && !acSpreadRE.MatchString(tok) {
+		longest := ""
+		for _, part := range acEllipsisRE.Split(tok, -1) {
+			if len(part) > len(longest) {
+				longest = part
+			}
+		}
+		if strings.TrimSpace(longest) != "" {
+			return longest
+		}
+	}
+	if m := acKeyValueRE.FindStringSubmatch(tok); m != nil {
+		return m[2]
+	}
+	return acSpanName(tok)
 }
 
 // acPresentAnywhere finds tok on the branch: in the named paths first, else
@@ -2680,12 +3331,7 @@ func acPresentAnywhere(tok string, paths []string, d *ACDiff) (string, bool, err
 		}
 		return loc, found, nil
 	}
-	lit := tok
-	if m := acCallSpanRE.FindStringSubmatch(tok); m != nil {
-		lit = m[1]
-	} else if id := acWrappedIdent(tok); id != "" {
-		lit = id
-	}
+	lit := acSpanName(tok)
 	if d.ToRev != "" {
 		return acGitGrepRev(d.Workdir, d.ToRev, "-F", lit, nil)
 	}
@@ -2752,7 +3398,7 @@ func CollectACDiffRange(ctx context.Context, workdir, from, to string) (*ACDiff,
 	}
 	return &ACDiff{
 		Files: parseUnifiedDiff(out), Workdir: workdir, Uncommitted: map[string]bool{},
-		FromRev: from, ToRev: to,
+		BaseRev: from, FromRev: from, ToRev: to,
 	}, nil
 }
 
@@ -2790,11 +3436,15 @@ func acGitGrepRev(workdir, rev, mode, pat string, paths []string) (string, bool,
 // VerifyACOnMerge judges one remaining criterion against a merged diff from
 // CollectACDiffRange (#3423). Only two rules can answer met: a preservation
 // (the diff changed no non-comment line containing the span, and the span
-// exists at the merge) and a removal (the span existed at the first parent and
-// is absent at the merge). Every other outcome — a clause that is neither, a
-// clause naming no span, a span on neither side, a read or grep error — is
-// unmet, with evidence beginning "undecidable:". met is never inferred from a
-// missing answer.
+// exists at the merge; when the span's tests are the one thing kept, the diff
+// touched no test file that contained it at the first parent, or, if that
+// cannot be told or it touched a test-like file of another layout that holds
+// it, the span's own line and presence check decides) and a removal (the span
+// existed at the first parent and is absent at the merge). Every other
+// outcome — a clause that is neither, a clause naming no span, a span on
+// neither side, a read or grep error in the deciding check — is unmet, with
+// evidence beginning "undecidable:". met is never inferred from a missing
+// answer.
 func VerifyACOnMerge(text string, d *ACDiff) (met bool, evidence string) {
 	if d == nil || d.FromRev == "" || d.ToRev == "" || d.Workdir == "" {
 		return false, "undecidable: no merged diff to judge against"
@@ -2806,11 +3456,11 @@ func VerifyACOnMerge(text string, d *ACDiff) (met bool, evidence string) {
 		}
 	}
 	var ev []string
-	for _, raw := range splitACClauses(text) {
-		if strings.TrimSpace(raw) == "" {
+	for _, c := range parseACClauses(text) {
+		if strings.TrimSpace(c.Raw) == "" {
 			continue
 		}
-		ok, e := acJudgeOnMerge(parseACClause(raw), d)
+		ok, e := acJudgeOnMerge(c, d)
 		if !ok {
 			return false, e
 		}

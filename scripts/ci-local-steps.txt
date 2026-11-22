@@ -42,6 +42,7 @@ go test internal/doctor shard 2/2
 go test -race internal/doctor shard 2/2
 gofmt -l ./internal ./cmd
 Go repository-policy tests
+clean-install AC judge replay
 branch-merged-check.sh regression suite
 post-merge-check.sh regression suite
 publish-vsix-set.sh regression suite

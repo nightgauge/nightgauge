@@ -2128,6 +2128,11 @@ run_step --fast "gofmt -l ./internal ./cmd" bash scripts/check-gofmt.sh
 #     the fast subset, where a policy failure costs seconds, not a gate.
 run_step --fast "Go repository-policy tests" go test ./internal/gittest/
 
+# 1a2. Clean-install AC judge replay (#3501): gate G1's fixture, criteria and a
+#      recorded diff through the pr-create judge, offline. Unscoped, because
+#      --changed does not see fixture/ or testdata/ edits as Go inputs.
+run_step "clean-install AC judge replay" go test ./tests/clean-install/
+
 # 1b. branch-merged-check.sh regression suite — the shell-side decision
 #     procedure `git branch -D` reclaim decisions defer to (docs/GIT_WORKFLOW.md
 #     § After Merge). Kept aligned with the Go sweep's own ancestry-acceptance

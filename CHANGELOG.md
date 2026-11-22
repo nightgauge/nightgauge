@@ -17,6 +17,7 @@ changelog, and the release workflow refuses a tag that does not.
 ### Fixed
 
 - The Action Center card for a partial-delivery re-run that found nothing left to build can now close the issue. It lists each open criterion with the judge's evidence and offers **close** beside **ack**: resolving with close comments with the criteria that were open and the forge account the close was made through (or just "An operator"), closes the issue as completed, moves it to Done on its board and releases its hold. A close is refused, and the card stays open, when the issue's criteria or the recorded remainder changed, or a ticked criterion was unticked, after the card was raised. An issue already closed resolves without error. How such a run is reported is unchanged (#3487).
+- pr-create's criteria judge no longer fails a criterion that keeps only a thing's tests, such as "the existing `slugify` tests untouched" or "`slugify` tests still pass", because a README or source line names that thing, so a correct change closes its issue. It fails one when an existing test file containing the name is edited, emptied, deleted or renamed. A criterion that may keep more, whose test files cannot be found or read, or whose change touches a test-like file of another layout containing the name (such as `Tests/SlugifyTests.swift`), keeps the old changed-line check (#3501).
 
 ## [0.8.7] - 2026-11-22
 
