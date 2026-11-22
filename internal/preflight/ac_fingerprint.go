@@ -84,3 +84,15 @@ func NoACsComment(issueNumber int) string {
 		fmt.Sprintf("items; without one, the pull request will say `Refs #%d` and this issue ", issueNumber) +
 		"will not close on merge.\n"
 }
+
+// TickedACs lists the normalized text of body's ticked criteria, the state
+// ACFingerprint deliberately ignores.
+func TickedACs(body string) []string {
+	var ticked []string
+	for _, ac := range parseACs(body) {
+		if ac.state == CheckboxChecked {
+			ticked = append(ticked, NormalizeACText(ac.text))
+		}
+	}
+	return ticked
+}

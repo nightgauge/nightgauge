@@ -53,3 +53,19 @@ describe("describeAttentionOption (#405)", () => {
     );
   });
 });
+
+describe("describeAttentionOption (#3487)", () => {
+  it("names the close, the comment and the board move on the close option", () => {
+    expect(
+      describeAttentionOption(
+        option("issue.closeRemainder", {
+          pr: 5,
+          criteria: [{ text: "A", evidence: "undecidable" }],
+          remainder_fingerprint: "sha256:x",
+        })
+      )
+    ).toBe(
+      "Closes the issue as completed, comments with the criteria that were open, and moves it to Done."
+    );
+  });
+});

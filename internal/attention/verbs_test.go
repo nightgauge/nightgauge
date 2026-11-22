@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -16,7 +18,7 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 		VerbIssueClose, VerbBudgetRaiseCeiling, VerbRunRetryWithEscalation,
 		VerbIssueApproveArchitecture, VerbDependabotEnableAlerts,
 		VerbWorkspaceAddRepo, VerbBlockedFindingClear, VerbPRUpdateBranch,
-		VerbIssueRerunPostMerge, VerbDoctorApplyRemedy, VerbDoctorRecheck, VerbNoop,
+		VerbIssueRerunPostMerge, VerbIssueCloseRemainder, VerbDoctorApplyRemedy, VerbDoctorRecheck, VerbNoop,
 	}
 	for _, v := range registered {
 		if !IsRegisteredVerb(v) {
@@ -772,5 +774,150 @@ func TestExecuteRerunPostMerge_TargetFailureNamesTheCause(t *testing.T) {
 	var cause *VerbCauseError
 	if !errors.As(err, &cause) || !strings.Contains(cause.Cause, "no merged pull request") {
 		t.Fatalf("err = %v, want *VerbCauseError naming the cause", err)
+	}
+}
+
+// --- issue.closeRemainder (#3487) ---------------------------------------------
+
+type closeRecorder struct {
+	calls       int
+	repo        string
+	issue, pr   int
+	fingerprint string
+	criteria    []RemainderCriterion
+	err         error
+}
+
+func (r *closeRecorder) CloseRemainder(_ context.Context, repo string, issue, pr int, fingerprint string, criteria []RemainderCriterion) error {
+	r.calls++
+	r.repo, r.issue, r.pr, r.fingerprint, r.criteria = repo, issue, pr, fingerprint, criteria
+	return r.err
+}
+
+func TestExecuteCloseRemainder(t *testing.T) {
+	configured := []string{"o/app"}
+	base := DecisionRequest{ID: "r1", Producer: ProducerNotPipelineActionable, Context: Context{Repo: "o/app", Issue: 12}}
+	decoded := []any{map[string]any{"text": "A", "evidence": "undecidable"}}
+	typed := []RemainderCriterion{{Text: "A", Evidence: "undecidable"}}
+	opt := Option{ID: "close", Verb: VerbIssueCloseRemainder,
+		Args: map[string]any{"pr": float64(5), "criteria": decoded, "remainder_fingerprint": "sha256:x"}}
+	decided := WithResolver(context.Background(), "jane")
+
+	// Args hold Go values before the store round-trips them and decoded JSON after.
+	for name, args := range map[string]map[string]any{
+		"decoded": opt.Args,
+		"typed":   {"pr": 5, "criteria": typed, "remainder_fingerprint": "sha256:x"},
+	} {
+		rec := &closeRecorder{}
+		o := opt
+		o.Args = args
+		if err := ExecuteCloseRemainder(decided, rec, &base, o, configured); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if rec.calls != 1 || rec.repo != "o/app" || rec.issue != 12 || rec.pr != 5 || rec.fingerprint != "sha256:x" ||
+			!slices.Equal(rec.criteria, typed) {
+			t.Fatalf("%s: closer got %+v", name, rec)
+		}
+	}
+
+	otherProducer, noRepo, noIssue := base, base, base
+	otherProducer.Producer = "owner-action"
+	noRepo.Context.Repo = ""
+	noIssue.Context.Issue = 0
+	with := func(key string, value any) Option {
+		o := opt
+		o.Args = maps.Clone(opt.Args)
+		if value == nil {
+			delete(o.Args, key)
+		} else {
+			o.Args[key] = value
+		}
+		return o
+	}
+	for name, tc := range map[string]struct {
+		req        *DecisionRequest
+		opt        Option
+		want       string
+		configured []string
+		noCloser   bool
+		noResolver bool
+	}{
+		"nil request":       {opt: opt, want: "requires the persisted request"},
+		"wrong verb":        {req: &base, opt: Option{Verb: VerbNoop}, want: "invoked for verb"},
+		"other producer":    {req: &otherProducer, opt: opt, want: "not offered by producer"},
+		"no repo":           {req: &noRepo, opt: opt, want: "names no repository"},
+		"no issue":          {req: &noIssue, opt: opt, want: "names no issue"},
+		"unconfigured repo": {req: &base, opt: opt, configured: []string{"o/other"}, want: ErrVerbTargetNotConfigured.Error()},
+		"target in args":    {req: &base, opt: with("issueNumber", 99), want: "accepts only"},
+		"no PR":             {req: &base, opt: with("pr", nil), want: "no partial pull request"},
+		"no fingerprint":    {req: &base, opt: with("remainder_fingerprint", nil), want: "no remainder fingerprint"},
+		"no criteria":       {req: &base, opt: with("criteria", nil), want: "lists no open criteria"},
+		"empty criteria":    {req: &base, opt: with("criteria", []any{}), want: "lists no open criteria"},
+		"zero PR":           {req: &base, opt: with("pr", 0), want: "no partial pull request"},
+		"PR as a string":    {req: &base, opt: with("pr", "5"), want: "accepts only"},
+		"criteria as text":  {req: &base, opt: with("criteria", "A"), want: "accepts only"},
+		"no resolver":       {req: &base, opt: opt, noResolver: true, want: "needs the person who decided"},
+		"no capability":     {req: &base, opt: opt, noCloser: true, want: "not available on this surface"},
+	} {
+		rec := &closeRecorder{}
+		var closer RemainderCloser = rec
+		if tc.noCloser {
+			closer = nil
+		}
+		repos := configured
+		if tc.configured != nil {
+			repos = tc.configured
+		}
+		ctx := decided
+		if tc.noResolver {
+			ctx = context.Background()
+		}
+		err := ExecuteCloseRemainder(ctx, closer, tc.req, tc.opt, repos)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+		}
+		if rec.calls != 0 {
+			t.Errorf("%s: a refusal reached the closer", name)
+		}
+	}
+
+	err := ExecuteCloseRemainder(decided, &closeRecorder{err: errors.New("forge down")}, &base, opt, configured)
+	var cause *VerbCauseError
+	if !errors.As(err, &cause) || cause.Cause != "forge down" {
+		t.Errorf("err = %v, want *VerbCauseError naming the cause", err)
+	}
+
+	// The verbs other surfaces mirror from this registry (ADR 015 § B).
+	for _, v := range []Verb{"issue.rerunPostMerge", "issue.closeRemainder"} {
+		if !IsRegisteredVerb(v) {
+			t.Errorf("%s is not registered", v)
+		}
+	}
+	if IsCLIExecutableVerb(VerbIssueCloseRemainder) {
+		t.Error("the close needs the daemon's clients")
+	}
+}
+
+// A close of the remainder is one run's observation, so it is no remedy that
+// Raise protects from a downgrade; another verb still is.
+func TestRaise_AckOnlyRaiseReplacesCloseRemainder(t *testing.T) {
+	for verb, wantKept := range map[Verb]bool{VerbIssueCloseRemainder: false, VerbIssueClose: true} {
+		s := newTestStore(t)
+		first := validRequest(mustID(t), "k:close")
+		first.Options = append(first.Options, Option{ID: "close", Label: "Close", Verb: verb})
+		_, id, err := s.Raise(first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.Raise(validRequest(mustID(t), "k:close")); err != nil {
+			t.Fatal(err)
+		}
+		got, found, err := s.Get(id)
+		if err != nil || !found {
+			t.Fatalf("get: found=%v err=%v", found, err)
+		}
+		if kept := got.FindOption("close") != nil; kept != wantKept {
+			t.Errorf("%s: option kept = %v, want %v", verb, kept, wantKept)
+		}
 	}
 }

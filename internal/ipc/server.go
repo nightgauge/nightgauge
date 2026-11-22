@@ -91,6 +91,9 @@ type Server struct {
 	postMergeReruns        sync.Map
 	postMergeRerunWG       sync.WaitGroup
 	postMergeRerunOverride attention.PostMergeRerunner
+	// remainderCloseDepsOverride replaces the forge behind issue.closeRemainder
+	// in tests (#3487).
+	remainderCloseDepsOverride func(ctx context.Context, owner, name string) (remainderCloseForge, error)
 
 	// doctorMu serializes the doctor.* methods; doctorFixer holds the current
 	// scan and is set only by a full scan (internal/ipc/doctor.go).

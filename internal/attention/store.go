@@ -728,6 +728,8 @@ func (s *Store) Raise(req DecisionRequest) (RaiseOutcome, string, error) {
 		// Strictly one-directional: it blocks DOWNGRADES only. A raise that
 		// carries a remedy still replaces (in-place escalation keeps working),
 		// and a raise that ADDS one to a remedy-free card still replaces.
+		// issue.closeRemainder is not a remedy in this sense: see
+		// optionsOfferARemedy.
 		if optionsOfferARemedy(existing.Options) && !optionsOfferARemedy(req.Options) {
 			kept := *existing
 			s.emitLocked(JournalEntry{
@@ -825,7 +827,10 @@ func (s *Store) Raise(req DecisionRequest) (RaiseOutcome, string, error) {
 // new producer inherits the protection without registering anywhere.
 func optionsOfferARemedy(options []Option) bool {
 	for _, opt := range options {
-		if Verb(opt.Verb) != VerbNoop {
+		// A close of the remainder is one run's observation (#3487): its args
+		// are the criteria that run left open. A later run without a remainder
+		// must replace it, or the card would close the issue over a stale list.
+		if v := Verb(opt.Verb); v != VerbNoop && v != VerbIssueCloseRemainder {
 			return true
 		}
 	}
@@ -1197,7 +1202,7 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 		// The deadline is request-scoped by construction: a verb that spawns
 		// something long-lived must detach the context it hands the spawn
 		// (internal/ipc/attention.go does), never keep this one.
-		vctx, cancelVerb := context.WithTimeout(ctx, verbTimeout)
+		vctx, cancelVerb := context.WithTimeout(WithResolver(ctx, actor), verbTimeout)
 		verr := exec.ExecuteVerb(vctx, req, opt)
 		cancelVerb()
 		if verr != nil {
