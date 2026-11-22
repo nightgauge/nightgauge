@@ -226,7 +226,12 @@ criterion:
 - `diff`: `VerifyACAgainstDiff` (`prcreate_acdiff.go`), run against the
   working tree diffed with the merge base of `origin/<base>` (or `<base>`) and
   HEAD, plus untracked deliverable files. Uncommitted work counts, because
-  pr-create reads context before its commit owner runs.
+  pr-create reads context before its commit owner runs. Both diffs the judge
+  parses, this one and the merged range below, pass `--src-prefix=a/` and
+  `--dst-prefix=b/`, so `diff.noprefix` and `diff.mnemonicPrefix` in a git
+  config do not change what is read, and their parser decodes a path git
+  C-quotes (a quote, backslash or control byte in the name) byte for byte and
+  keeps every section under its own path (#3505).
 - `feature-validate`: the verdict in `validate-{N}.json`
   `acceptance_criteria_verdicts`, matched by criterion text, or by `index`
   only when the verdict has no text. Evidence that says the criterion is not
@@ -427,8 +432,9 @@ presence check decides) and a removal (the span existed at the first parent and
 is gone after the merge).
 Everything else is unmet, including
 a presence criterion, a criterion with no code span, a span on neither side, a
-merge commit missing locally, and a read error in the deciding check. When every
-criterion is met,
+merge commit missing locally, and a read error in the deciding check. A merged
+diff with zero files is undecidable, so every criterion judged on it is unmet
+(#3505). When every criterion is met,
 the issue is closed as completed with an evidence comment, its matching boxes
 are ticked and its board row moves to Done; the run ends `issue_closed`, not
 as a failure. When any is unmet, the run is booked `not_pipeline_actionable` with
