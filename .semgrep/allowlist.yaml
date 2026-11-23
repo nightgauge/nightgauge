@@ -73,10 +73,6 @@ entries:
     match: pub run build_runner
     reason: flutterCmd is one of two constants ("flutter", "fvm flutter").
   - rule: ts-exec-interpolated
-    path: packages/nightgauge/src/utils/failureComment.ts
-    match: execAsync(cmd
-    reason: The body is single-quote escaped; to move to execFile with --body-file.
-  - rule: ts-exec-interpolated
     path: packages/nightgauge/src/utils/prDetection.ts
     match: gh pr list
     reason: The issue number is numeric and the repository flag is a validated slug; to move to execFile.
