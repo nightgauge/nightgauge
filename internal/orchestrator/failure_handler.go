@@ -72,6 +72,9 @@ const UnknownFailureStage = "unknown"
 // RunOutcomeFailed is the V2 run record's failed outcome value.
 const RunOutcomeFailed = "failed"
 
+// RunOutcomeCancelled is the V2 run record's cancelled outcome value.
+const RunOutcomeCancelled = "cancelled"
+
 // SignalSourceOperator is the stage exit record's signal_source for a stage
 // the operator stopped, when the producer named no delivering closure (#1848).
 const SignalSourceOperator = "operator"
@@ -135,7 +138,7 @@ func ApplyNonFailureOutcome(rec *state.V2RunRecord) {
 	default:
 		return
 	}
-	rec.Outcome = "cancelled"
+	rec.Outcome = RunOutcomeCancelled
 }
 
 // ApplyPartialNoOpOutcome books a run record as a partial-delivery no-op
@@ -147,7 +150,7 @@ func ApplyPartialNoOpOutcome(rec *state.V2RunRecord) {
 	if rec == nil || rec.TerminalFailureKind != TerminalKindNotPipelineActionable {
 		return
 	}
-	rec.Outcome = "cancelled"
+	rec.Outcome = RunOutcomeCancelled
 	rec.OutcomeType = OutcomeTypeNoOp
 }
 

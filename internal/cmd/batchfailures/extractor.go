@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
 
 // canonicalStages mirrors the ALL_STAGES list from retro Phase 2.1 — the
@@ -235,7 +236,7 @@ func extractHistory(dir string, opts Options, result *Result) error {
 			}
 			// A booked partial-delivery no-op is not a failure, though the
 			// booking leaves its stopping stage failed (#3487).
-			if rec.Outcome == "cancelled" && rec.OutcomeType == "no_op" {
+			if rec.Outcome == orchestrator.RunOutcomeCancelled && rec.OutcomeType == orchestrator.OutcomeTypeNoOp {
 				continue
 			}
 
