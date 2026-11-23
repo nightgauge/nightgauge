@@ -637,9 +637,9 @@ func snapClosesIssue(snap PRCreateSnapshot) bool {
 // closingKeyword is "Closes" only when every acceptance criterion is met.
 func closingKeyword(snap PRCreateSnapshot) string {
 	if snapClosesIssue(snap) {
-		return "Closes"
+		return prKeywordCloses
 	}
-	return "Refs"
+	return prKeywordRefs
 }
 
 func acStatusLabel(status string) string {
@@ -1380,6 +1380,10 @@ func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber i
 			}
 			snap.ACVerdicts = ApplyPriorDeliveries(snap.ACVerdicts, priors, prCreateCommitOnBase(workdir, snap.BaseBranch), snap.BaseBranch, issueCriteria)
 		}
+		// A criterion about the PR's own closing keyword is judged against
+		// the body this stage writes, last, once every other verdict is set
+		// (#3529).
+		snap.ACVerdicts = ResolveOwnKeywordACs(snap.ACVerdicts, issueNumber, forceRefs || snap.DeliveryOrderRefs)
 		snap.ACFingerprint = fingerprint
 		snap.ACScopeUnverified = forceRefs
 	} else {

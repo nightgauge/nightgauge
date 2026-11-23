@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/intelligence/acparse"
 )
 
@@ -158,7 +159,11 @@ func issueCriteria(body string) []issueCriterion {
 
 var spaceRe = regexp.MustCompile(`\s+`)
 
+// normaliseCriterion folds a criterion for comparison. Closing keywords are
+// rewritten to `Refs` first, as stages.UntrustedACText renders criteria in the
+// PR body, so the issue's copy and the PR's compare equal (#3529).
 func normaliseCriterion(s string) string {
+	s = forge.RewriteClosingRefs(s, func(forge.ClosingRef) bool { return true })
 	s = strings.ToLower(s)
 	s = strings.NewReplacer("`", "", "*", "").Replace(s)
 	s = strings.TrimSpace(spaceRe.ReplaceAllString(s, " "))
@@ -225,6 +230,7 @@ func computeRemainder(issueBody, prBody string, priorMet []string) remainderPlan
 	verdicts := prCriteriaVerdicts(prBody)
 	plan := remainderPlan{Found: len(criteria) > 0 || len(verdicts) > 0, Remaining: []string{}}
 	usedVerdict := make([]bool, len(verdicts))
+	keptVerdict := make([]bool, len(verdicts))
 	var kept []string // normalised, for de-duplication
 	allNotVerifiable := true
 	keep := func(text string, notVerifiable bool) {
@@ -292,7 +298,12 @@ func computeRemainder(issueBody, prBody string, priorMet []string) remainderPlan
 		if v.Status == verdictNotVerifiable && metBefore(c.Text) {
 			continue
 		}
-		keep(v.Text, v.Status == verdictNotVerifiable)
+		// The issue's wording, not the PR's rendering of it, listed once per
+		// verdict however many criteria it answers (#3529).
+		if !keptVerdict[match] {
+			keptVerdict[match] = true
+			keep(c.Text, v.Status == verdictNotVerifiable)
+		}
 	}
 	for i, v := range verdicts {
 		if !usedVerdict[i] && v.Status != verdictMet {
