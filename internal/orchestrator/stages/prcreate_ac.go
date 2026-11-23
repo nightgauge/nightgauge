@@ -35,6 +35,9 @@ const (
 	// ACSourceStale marks a criterion the run's ac-reconcile report did not
 	// contain (#3228).
 	ACSourceStale = "ac-reconcile"
+	// ACSourcePRBody marks a criterion about the PR's own closing keyword,
+	// judged against the body pr-create writes (#3529).
+	ACSourcePRBody = "pr-body"
 )
 
 // ACVerdict is the resolved verdict for one acceptance criterion.
@@ -420,6 +423,89 @@ func IssueClosedBy(verdicts []ACVerdict) bool {
 		}
 	}
 	return true
+}
+
+// The keywords pr-create writes before the issue number (closingKeyword).
+const (
+	prKeywordCloses = "Closes"
+	prKeywordRefs   = "Refs"
+)
+
+// acRefsSpanRE parses a code span that is `Refs #N`, the form every closing
+// keyword span takes once forge.RewriteClosingRefs has rewritten it.
+var acRefsSpanRE = regexp.MustCompile(`(?i)^refs?\s*:?\s*#(\d+)$`)
+
+// acOwnKeywordClause reports the keyword (prKeywordCloses or prKeywordRefs) a
+// criterion asks the PR's own description to carry for issue, or "" when it
+// is not such a criterion. Every clause must be about the PR's description,
+// body or title, and every code span must be a keyword before #issue, all of
+// one family (#3529). Closing keywords are recognised by forge's grammar.
+func acOwnKeywordClause(text string, issue int) string {
+	family := ""
+	for _, c := range parseACClauses(text) {
+		if len(c.Tokens) == 0 && len(c.Paths) == 0 && len(c.Headings) == 0 {
+			continue
+		}
+		if !acIsDescriptionClause(c) || len(c.Paths) > 0 || len(c.Headings) > 0 {
+			return ""
+		}
+		for _, tok := range c.Tokens {
+			tok = strings.TrimSpace(tok)
+			rewritten := rewriteAllClosesToRefs(tok)
+			m := acRefsSpanRE.FindStringSubmatch(rewritten)
+			if m == nil || m[1] != strconv.Itoa(issue) {
+				return ""
+			}
+			f := prKeywordRefs
+			if rewritten != tok {
+				f = prKeywordCloses
+			}
+			if family != "" && family != f {
+				return ""
+			}
+			family = f
+		}
+	}
+	return family
+}
+
+// ResolveOwnKeywordACs judges each criterion asking that the PR's description
+// say `Closes #issue` or `Refs #issue` against the keyword pr-create will
+// write, after every other verdict is set (#3529). The diff can never meet
+// such a criterion, and an unmet one forced Refs, so it held its own issue
+// open. A `Closes` criterion is met when every other criterion is met and
+// forceRefs (a Delivery order saying Refs, #3510, or unconfirmed criteria,
+// #3228) is false: the body then says Closes. A `Refs` criterion is met when
+// the body says Refs for another reason. A criterion naming another issue,
+// or both keywords, keeps its verdict.
+func ResolveOwnKeywordACs(verdicts []ACVerdict, issue int, forceRefs bool) []ACVerdict {
+	families := make([]string, len(verdicts))
+	seen := map[string]bool{}
+	otherOpen := false
+	for i, v := range verdicts {
+		families[i] = acOwnKeywordClause(v.Text, issue)
+		if families[i] != "" {
+			seen[families[i]] = true
+		} else if v.Status != ACMet {
+			otherOpen = true
+		}
+	}
+	if len(seen) != 1 {
+		return verdicts
+	}
+	keyword := prKeywordCloses
+	if otherOpen || forceRefs {
+		keyword = prKeywordRefs
+	}
+	out := append([]ACVerdict(nil), verdicts...)
+	for i, f := range families {
+		if f != keyword || out[i].Status == ACMet {
+			continue
+		}
+		out[i] = ACVerdict{Index: out[i].Index, Text: out[i].Text, Status: ACMet, Source: ACSourcePRBody,
+			Evidence: fmt.Sprintf("the PR body says `%s #%d`", keyword, issue), PRNote: out[i].PRNote}
+	}
+	return out
 }
 
 // OpenACs returns every verdict that is not met, in order.

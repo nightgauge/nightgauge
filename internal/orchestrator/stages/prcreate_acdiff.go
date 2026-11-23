@@ -809,6 +809,24 @@ var (
 	acChangelogFileRE = regexp.MustCompile(`(?i)^change_?log(\..*)?$`)
 )
 
+// acPRTextRE matches prose about the pull request's own description, body or
+// title: "the PR description", "the pull request's body", "the PR title"
+// (#3529).
+var acPRTextRE = regexp.MustCompile(`(?i)\b(?:PR|pull[- ]request)(?:'s)?\s+(?:own\s+)?(?:description|body|title)\b`)
+
+// acBareDescriptionRE matches "the description says" with no owner named,
+// which reads as the PR's description only when the clause names no file.
+var acBareDescriptionRE = regexp.MustCompile(`(?i)\b(?:the|its)\s+(?:own\s+)?description\s+(?:says|reads|states|contains|includes|ends|names|cites|carries)\b`)
+
+// acIsDescriptionClause reports whether a clause is about the pull request's
+// own description, body or title (#3529).
+func acIsDescriptionClause(c acClause) bool {
+	if acPRTextRE.MatchString(c.Prose) {
+		return true
+	}
+	return len(c.Paths) == 0 && acBareDescriptionRE.MatchString(c.Prose)
+}
+
 // VerifyACAgainstDiff answers one criterion from the diff and the stage's
 // test run. A runtime or operator criterion resolves not_verifiable with its
 // step named, before any diff rule can claim it. Otherwise each clause goes
@@ -882,6 +900,11 @@ func acInheritedPaths(prior []string, d *ACDiff) []string {
 // files may only add met: the criterion never named those files, so their
 // failing to carry its tokens is no evidence against it (#2669).
 func verifyACClause(c acClause, inherited []string, d *ACDiff, tests ACTestState) acResult {
+	if acIsDescriptionClause(c) {
+		// The PR's own description, body or title is not in the diff, so the
+		// diff can neither meet nor contradict it (#3529).
+		return acResult{}
+	}
 	switch {
 	case acScopeRE.MatchString(c.Prose) && len(c.Paths) > 0:
 		return acScope(c, d)
@@ -2283,7 +2306,10 @@ func acWrappedIdent(tok string) string {
 // span such as `it(...)` matches the same way (#3226). A single identifier
 // wrapped in `{}`, `<>` or `[]` matches that identifier as a whole word, so
 // `{sessionJwt}` matches `[{ sessionJwt: [] }]` but not `sessionJwtX`
-// (#3154). Any other span matches as a literal substring.
+// (#3154). A `{ident}` placeholder joined to the text before it by `/`, `.`
+// or `-`, as in `/files/{sha}/analyse`, stands for one segment: it matches
+// any run of non-space, non-`/` text, so `$sha`, `${sha}` and the literal
+// `{sha}` all count (#3529). Any other span matches as a literal substring.
 func acSpanMatcher(tok string) func(line string) bool {
 	if c := acCallSpanRE.FindStringSubmatch(tok); c != nil {
 		return regexp.MustCompile(`(?:^|[^A-Za-z0-9_$])` + regexp.QuoteMeta(c[1]) +
@@ -2304,11 +2330,50 @@ func acSpanMatcher(tok string) func(line string) bool {
 			return regexp.MustCompile(`(?:^|[^A-Za-z0-9_$])` + regexp.QuoteMeta(id) +
 				`(?:[^A-Za-z0-9_$]|$)`).MatchString
 		}
+		if re := acBracePlaceholderPattern(tok); re != nil {
+			return re.MatchString
+		}
 		return func(line string) bool { return strings.Contains(line, tok) }
 	}
 	re := regexp.MustCompile(`(?:^|[^A-Za-z0-9_])["']?(?i:` + regexp.QuoteMeta(m[1]) +
 		`)["']?\s*[:=]\s*["']?` + regexp.QuoteMeta(m[2]) + `(?:["']|[^A-Za-z0-9_]|$)`)
 	return re.MatchString
+}
+
+// acBracePlaceholderRE finds a `{ident}` placeholder joined to the text
+// before it by `/`, `.` or `-` (#3529). A whole-span `{ident}` is the
+// wrapped-identifier rule's (#3154); `Type{Field}` and `map[K]{}` stay literal.
+var acBracePlaceholderRE = regexp.MustCompile(`[/.\-]\{[A-Za-z_][A-Za-z0-9_]*\}`)
+
+// acBracePlaceholderPattern returns the matcher for a span holding a joined
+// `{ident}` placeholder, each placeholder matching one segment and the rest of
+// the span literal; nil when tok holds none.
+func acBracePlaceholderPattern(tok string) *regexp.Regexp {
+	locs := acBracePlaceholderRE.FindAllStringIndex(tok, -1)
+	if locs == nil {
+		return nil
+	}
+	var b strings.Builder
+	last := 0
+	for _, l := range locs {
+		// l[0] is the separator, kept literal; the placeholder follows it.
+		b.WriteString(regexp.QuoteMeta(tok[last : l[0]+1]))
+		b.WriteString(`[^\s/]+`)
+		last = l[1]
+	}
+	b.WriteString(regexp.QuoteMeta(tok[last:]))
+	return regexp.MustCompile(b.String())
+}
+
+// acBraceGrepLiteral is the longest literal run of a placeholder span.
+func acBraceGrepLiteral(tok string) string {
+	longest := ""
+	for _, part := range acBracePlaceholderRE.Split(tok, -1) {
+		if len(part) > len(longest) {
+			longest = part
+		}
+	}
+	return longest
 }
 
 // acPatternSpanRE matches notation that stands for text rather than being
@@ -3345,7 +3410,8 @@ func acSpanName(tok string) string {
 
 // acGrepLiteral is text every line acSpanMatcher(tok) accepts must hold, so a
 // fixed-string pre-filter drops none: a key-value span is searched by its
-// value and an ellipsis span by its longest fixed part.
+// value, an ellipsis span by its longest fixed part, and a `{ident}`
+// placeholder span by its longest run outside the placeholders (#3529).
 func acGrepLiteral(tok string) string {
 	if acCallSpanRE.MatchString(tok) {
 		return acSpanName(tok)
@@ -3363,6 +3429,11 @@ func acGrepLiteral(tok string) string {
 	}
 	if m := acKeyValueRE.FindStringSubmatch(tok); m != nil {
 		return m[2]
+	}
+	if acWrappedIdent(tok) == "" && acBracePlaceholderRE.MatchString(tok) {
+		if l := acBraceGrepLiteral(tok); strings.TrimSpace(l) != "" {
+			return l
+		}
 	}
 	return acSpanName(tok)
 }

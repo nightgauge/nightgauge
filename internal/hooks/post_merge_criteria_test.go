@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -130,5 +131,43 @@ func TestComputeRemainderPriorMet(t *testing.T) {
 	}
 	if without := computeRemainder(issue, pr, nil); len(without.Remaining) != 2 {
 		t.Errorf("without priorMet Remaining = %q, want the earlier criterion kept", without.Remaining)
+	}
+}
+
+// #3529 B3: pr-create renders a criterion with its closing keyword rewritten
+// to `Refs`, so the remainder matched neither copy to the other and listed
+// both. It lists the criterion once, in the issue body's exact text.
+func TestComputeRemainderClosingKeywordListedOnce(t *testing.T) {
+	const criterion = "B2: The description says `Closes #42`."
+	issue := "## Acceptance criteria\n\n- [x] A1: the widget holds\n- [ ] " + criterion + "\n"
+	pr := "## Acceptance criteria\n\n- ✅ met: A1: the widget holds (diff: a.go)\n\n" +
+		"## ⚠️ Unmet acceptance criteria\n\nThis PR leaves #42 open.\n\n" +
+		"- B2: The description says `Refs #42`.\n  _❔ not verifiable — feature-validate: no PR yet_\n\nRefs #42\n"
+	got := computeRemainder(issue, pr, nil)
+	if !reflect.DeepEqual(got.Remaining, []string{criterion}) {
+		t.Fatalf("Remaining = %q, want exactly the issue's %q", got.Remaining, criterion)
+	}
+	comment := remainderComment(77, got.Remaining, got.NotVerifiable, got.Met, true, false, false, false)
+	if strings.Contains(comment, "Refs #42`") {
+		t.Errorf("comment carries the PR's rewritten copy:\n%s", comment)
+	}
+	if n := strings.Count(comment, "The description says"); n != 1 {
+		t.Errorf("criterion listed %d times, want once:\n%s", n, comment)
+	}
+}
+
+// #3529: the closing-keyword family folds to one form for matching only.
+func TestNormaliseCriterionFoldsClosingKeywords(t *testing.T) {
+	for _, s := range []string{"says `Closes #42`", "says Fixes #42", "says resolved #42", "says Refs #42",
+		"says Closes: #42", "says closes:#42"} {
+		if got := normaliseCriterion(s); got != "says refs #42" {
+			t.Errorf("normaliseCriterion(%q) = %q, want %q", s, got, "says refs #42")
+		}
+	}
+	if got := normaliseCriterion("says Closes acme/x#42"); got != "says refs acme/x#42" {
+		t.Errorf("qualified ref: %q", got)
+	}
+	if got := normaliseCriterion("it closes the door"); got != "it closes the door" {
+		t.Errorf("a keyword with no issue ref folded: %q", got)
 	}
 }
