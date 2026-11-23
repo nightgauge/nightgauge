@@ -2009,21 +2009,65 @@ func (s *Scheduler) resolveRunRoot(repo string) (string, error) {
 		repo, launch)
 }
 
+// errNoForgeClient is returned by every noForgeIssues method.
+var errNoForgeClient = errors.New("no forge client")
+
+// noForgeIssues is the issueGetter issueServiceFor returns when the scheduler
+// has no forge client. Every method fails with errNoForgeClient without
+// touching a network, so callers need no client check of their own (#3514).
+type noForgeIssues struct{}
+
+var _ issueGetter = noForgeIssues{}
+
+func (noForgeIssues) GetIssueWithRelations(context.Context, string, string, int, gh.IssueRelations) (*types.Issue, error) {
+	return nil, errNoForgeClient
+}
+
+func (noForgeIssues) GetIssuesByNumbersWithoutRelations(context.Context, string, string, []int) (map[int]*types.Issue, error) {
+	return nil, errNoForgeClient
+}
+
+func (noForgeIssues) GetDependencyStates(context.Context, string, string, []int) (map[int]string, error) {
+	return nil, errNoForgeClient
+}
+
+func (noForgeIssues) GetEpicProgress(context.Context, string) (*types.EpicProgress, error) {
+	return nil, errNoForgeClient
+}
+
+func (noForgeIssues) GetEpicProgressByNumber(context.Context, string, string, int) (*types.EpicProgress, error) {
+	return nil, errNoForgeClient
+}
+
+func (noForgeIssues) CloseIssue(context.Context, string) error { return errNoForgeClient }
+
+func (noForgeIssues) RemoveBlockedBy(context.Context, forge.IssueRef, forge.IssueRef) error {
+	return errNoForgeClient
+}
+
 // issueServiceFor returns an issueGetter scoped to (owner, repo). When a
 // clientResolver is wired it resolves a repo-specific client (correct token /
-// configured github_user); otherwise it returns the default issueSvc. Resolver
-// errors are non-fatal — we log and fall back so a transient resolver failure
-// never blocks enqueue outright.
+// configured github_user); otherwise it falls back to the default issueSvc.
+// Resolver errors are non-fatal — we log and fall back so a transient resolver
+// failure never blocks enqueue outright. A fallback *gh.IssueService with no
+// client becomes noForgeIssues, whose methods fail with errNoForgeClient
+// instead of dereferencing the nil client (#3514). A nil issueSvc stays nil.
 func (s *Scheduler) issueServiceFor(ctx context.Context, owner, repo string) issueGetter {
-	if s.clientResolver == nil {
-		return s.issueSvc
-	}
-	client, err := s.clientResolver(ctx, owner, repo)
-	if err != nil || client == nil {
+	if s.clientResolver != nil {
+		client, err := s.clientResolver(ctx, owner, repo)
+		if err == nil && client != nil {
+			return gh.NewIssueService(client)
+		}
+		if err == nil {
+			err = errNoForgeClient
+		}
 		log.Printf("WARN: client resolver failed for %s/%s (%v) — using default client", owner, repo, err)
-		return s.issueSvc
 	}
-	return gh.NewIssueService(client)
+	if is, ok := s.issueSvc.(*gh.IssueService); ok && !is.HasClient() {
+		log.Printf("WARN: no forge client for %s/%s — issue reads and writes fail with %q", owner, repo, errNoForgeClient)
+		return noForgeIssues{}
+	}
+	return s.issueSvc
 }
 
 // WithPRMergeRunner overrides the deterministic-first runner for the pr-merge
