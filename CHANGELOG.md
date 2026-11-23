@@ -17,7 +17,6 @@ changelog, and the release workflow refuses a tag that does not.
 ### Fixed
 
 - Runs started from the VS Code extension now book a partial-delivery re-run with nothing left to build the same way. The extension no longer charges it as a failure or halts its queue, even when the open criteria quote another failure's words. It fills the freed slot and starts the issues the no-op blocked once it closes, from the card's close or a close by hand. The run is audited as completed with outcome `no_op`, its exit record carries gate kind `partial_no_op`, and it runs no auto-retro and stays off the Failed issues list. The issue comment and the slot card still read as a failure (#3487).
-- A partial-delivery marker counts only at the start of a comment, where the pipeline writes it, so criterion text quoted into a comment can no longer forge a partial-delivery record (#3487).
 - `nightgauge doctor`'s orphaned-process report now takes the PID it excludes as itself from its caller instead of reading it internally, so a doctor test whose fixture PID matched the test binary's own PID no longer silently loses a finding; `TestForeignCwdHolder_StaleWorktree` failed in merge-group CI this way (#3490).
 
 ## [0.8.7] - 2026-11-22

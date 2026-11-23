@@ -235,9 +235,11 @@ describe("HeadlessOrchestrator books a pr-create refusal (#3487)", () => {
 
 describe("readPartialNoOpDecision's boundary guard (#3487)", () => {
   const met = { text: "A", met: true, evidence: "diff hunk" };
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const decide = async (remainder: unknown) => {
     binaryStdout.value = JSON.stringify({ action: "book", remainder });
-    const orch = new HeadlessOrchestrator(null as never, null as never) as any;
+    logger.warn.mockClear();
+    const orch = new HeadlessOrchestrator(null as never, logger as never) as any;
     orch.resolvePostMergeNwo = vi.fn().mockResolvedValue({ owner: "", repo: "" });
     return orch.readPartialNoOpDecision(3487, { pr: 5, criteria: 1 }, false);
   };
@@ -245,6 +247,7 @@ describe("readPartialNoOpDecision's boundary guard (#3487)", () => {
   it("keeps a remainder whose every field has its type", async () => {
     const remainder = { all_met: false, criteria: [met, { ...met, met: false }] };
     expect(await decide(remainder)).toEqual({ action: "book", remainder });
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -258,6 +261,10 @@ describe("readPartialNoOpDecision's boundary guard (#3487)", () => {
     const decision = await decide(remainder);
     expect(decision).toEqual({ action: "book" });
     expect(isPartialNoOpRemainder(remainder)).toBe(false);
+    // A malformed remainder is a contract fault at the binary boundary: logged.
+    expect(logger.warn).toHaveBeenCalledWith("Partial no-op remainder malformed — dropping it", {
+      issueNumber: 3487,
+    });
   });
 
   it("passes --apply-close only when asked to close", async () => {

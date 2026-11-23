@@ -560,8 +560,8 @@ export interface PipelineRunResult {
   /**
    * The run was booked a partial-delivery no-op (#3487): the one structured
    * signal, set only at that booking and read ahead of any gate kind or text.
-   * `remainder` is the judge's verdict on the criteria left open, which the
-   * no-op comment lists. Other `not_pipeline_actionable` endings never set it.
+   * `remainder` is the judge's verdict on the criteria left open, carried for
+   * the no-op comment #3487 step 4 adds. Other `not_pipeline_actionable` endings never set it.
    */
   partialNoOp?: { remainder?: PartialNoOpRemainder };
   /** Set when the run ended blocked — PR unmerged behind a non-retryable blocker (#190) */
@@ -9346,9 +9346,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       });
       const parsed = JSON.parse(String(stdout)) as PartialNoOpDecision;
       if (typeof parsed?.action !== "string") return null;
-      // The no-op comment reads every field of the remainder (#3487); one of
-      // another shape costs the list, never the comment.
-      if (parsed.remainder && !isPartialNoOpRemainder(parsed.remainder)) delete parsed.remainder;
+      // The remainder is carried for the no-op comment (#3487 step 4); one of
+      // another shape is a contract fault at this boundary: it costs the list,
+      // never the booking, and is logged so the loss can be diagnosed.
+      if (parsed.remainder && !isPartialNoOpRemainder(parsed.remainder)) {
+        this.logger.warn("Partial no-op remainder malformed — dropping it", { issueNumber });
+        delete parsed.remainder;
+      }
       return parsed;
     } catch (err) {
       this.logger.warn("Partial no-op decision unavailable — booking the no-op", {
@@ -9362,8 +9366,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   /**
    * The booking for a run a deterministic runner refused (#3487). Only the
    * pr-create no-diff stop of a partial-delivery re-run is a partial no-op; an
-   * unscoped one is booked as before. The remainder is read for the comment
-   * and nothing is closed.
+   * unscoped one is booked as before. The remainder is carried for #3487 step
+   * 4's comment and nothing is closed.
    */
   private async partialNoOpAtRefusal(
     issueNumber: number,
