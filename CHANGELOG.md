@@ -14,11 +14,6 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
-### Fixed
-
-- pr-create no longer closes a multi-step issue whose `## Delivery order` section says each PR refs it. With every criterion met it now writes `Refs #N` and says why, and pr-merge's check-criteria promotion no longer turns that back into `Closes` (#3510).
-- The release VirusTotal scan no longer reports a reanalysis whose report moved to a date newer than the lookup's, but outside the file's reanalysis window, as a report that "stayed" at the old date after three file reads. Such a report is now polled to the analysis deadline, as its log line says; a report that really has not moved still stops after three reads. Which of the two exit-2 messages a scan printed used to depend on machine load (#3519).
-
 ## [0.8.7] - 2026-11-22
 
 ### Added
@@ -38,6 +33,9 @@ changelog, and the release workflow refuses a tag that does not.
 - The tested Claude Code version is now 2.1.316, the version the install-docs gate was proven on: the `claude-headless` `max_tested` pin, its flag-contract `--help` capture, the install-docs gate and the clean-install image all use it (#3047).
 
 ### Fixed
+
+- pr-create no longer closes a multi-step issue whose `## Delivery order` section says each PR refs it. With every criterion met it now writes `Refs #N` and says why, and pr-merge's check-criteria promotion no longer turns that back into `Closes` (#3510).
+- The release VirusTotal scan no longer reports a reanalysis whose report moved to a date newer than the lookup's, but outside the file's reanalysis window, as a report that "stayed" at the old date after three file reads. Such a report is now polled to the analysis deadline, as its log line says; a report that really has not moved still stops after three reads. Which of the two exit-2 messages a scan printed used to depend on machine load (#3519).
 
 - The release VirusTotal scan now requests every first-sight Microsoft `!ml` reanalysis before it polls any of them, and gives the batch one deadline: `VT_ML_RECHECK_TIMEOUT` (default 3600 seconds) after the last request. Every report that arrives by then is judged by the full rules: a persisting finding fails the scan, otherwise each re-check that missed the deadline is named in one HARNESS ERROR (exit 2). Before, the re-checks ran one at a time and the first slow one ended the run, after which a re-run judged the remaining files' `!ml` labels at once and could never pass. No finding is waived. The rc-scan and release scan timeouts grow by 60 minutes to cover the deadline, and the quota estimate now counts seven requests per re-check (#3519).
 - Runs started from the VS Code extension now book a partial-delivery re-run with nothing left to build the same way. The extension no longer charges it as a failure or halts its queue, even when the open criteria quote another failure's words. It fills the freed slot and starts the issues the no-op blocked once it closes, from the card's close or a close by hand. The run is audited as completed with outcome `no_op`, its exit record carries gate kind `partial_no_op`, and it runs no auto-retro and stays off the Failed issues list. It posts an issue comment of its own instead of the Pipeline Failure Report: it says nothing was left to build, lists each open criterion with the judge's reason, and names the two ways forward (close the issue from its card's close, or revise the criteria and move it to Ready). Criterion text in that comment is quoted so it cannot inject markup, local paths are removed from it, and the comment is posted without a shell. The slot card and the tree item show the run as a no-op, the Output Window tab no longer shows an error, and notifications label it no-op (#3487).
