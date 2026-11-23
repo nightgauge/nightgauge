@@ -887,6 +887,9 @@ export const ExecutionHistoryRunRecordV2Schema = z.object({
       // A stop on an issue that was already closed (#3081): a skip, paired
       // with outcome="cancelled" and terminal_failure_kind issue_closed.
       "issue_closed",
+      // A partial-delivery re-run booked a no-op (#3487): paired with
+      // outcome="cancelled" and terminal_failure_kind not_pipeline_actionable.
+      "no_op",
     ])
     .optional(),
 

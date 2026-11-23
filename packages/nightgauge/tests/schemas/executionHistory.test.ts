@@ -366,7 +366,8 @@ describe("ExecutionHistory Schemas", () => {
     });
 
     it("accepts the skip and hold outcome types and the durable plan and backtracks (#3081)", () => {
-      for (const outcomeType of ["issue_closed", "awaiting_approval"]) {
+      // no_op: a partial-delivery re-run booked a no-op (#3487).
+      for (const outcomeType of ["issue_closed", "awaiting_approval", "no_op"]) {
         const result = ExecutionHistoryRunRecordV2Schema.safeParse({
           ...validV2RunRecord,
           outcome: "cancelled",

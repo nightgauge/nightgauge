@@ -557,6 +557,13 @@ export interface PipelineRunResult {
    * instead of hardcoding "unclassified" into the generic failure branch.
    */
   terminalKind?: string;
+  /**
+   * The run was booked a partial-delivery no-op (#3487): the one structured
+   * signal, set only at that booking and read ahead of any gate kind or text.
+   * `remainder` is the judge's verdict on the criteria left open, carried for
+   * the no-op comment #3487 step 4 adds. Other `not_pipeline_actionable` endings never set it.
+   */
+  partialNoOp?: { remainder?: PartialNoOpRemainder };
   /** Set when the run ended blocked — PR unmerged behind a non-retryable blocker (#190) */
   blocked?: BlockedTerminalState;
   /**
@@ -1388,11 +1395,41 @@ export function decideProgressGatedEscalation(
   return { escalate: delta > 0, current, delta };
 }
 
+/** The exit record's gate kind for a partial no-op; Go's diagnostics.GateKindPartialNoOp (#3487). */
+export const GATE_KIND_PARTIAL_NO_OP = "partial_no_op";
+
+/** Go's deterministic re-judge of a partial-delivery remainder (#3423). */
+export interface PartialNoOpRemainder {
+  all_met: boolean;
+  criteria: Array<{ text: string; met: boolean; evidence: string }>;
+}
+
+/**
+ * The boundary guard on the binary's remainder (#3487): every field the
+ * no-op reads, `all_met` and each criterion's `met` included, has its type.
+ */
+export function isPartialNoOpRemainder(value: unknown): value is PartialNoOpRemainder {
+  const remainder = value as Partial<PartialNoOpRemainder> | null;
+  const criteria = remainder?.criteria;
+  return (
+    typeof remainder?.all_met === "boolean" &&
+    Array.isArray(criteria) &&
+    criteria.every(
+      (c) =>
+        typeof c?.text === "string" &&
+        typeof c?.met === "boolean" &&
+        typeof c?.evidence === "string"
+    )
+  );
+}
+
 /** `nightgauge issue partial-noop --json` (#3163, #3423). */
 export interface PartialNoOpDecision {
   action: "not_scoped" | "relap" | "dispute" | "book" | "close";
   detail?: string;
   steer?: string;
+  /** Present on every action but `not_scoped` (#3487). */
+  remainder?: PartialNoOpRemainder;
   /** `--apply-close` closed the issue: its remainder is met on the merged diff (#3423). */
   applied?: boolean;
 }
@@ -1957,6 +1994,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // #3269: the typed start refusal, so Go books a closed-issue refusal
         // issue_closed instead of classifying the guard's prose as a crash.
         startRefusal: result.success ? undefined : result.startRefusal,
+        // #3487: the booking, so Go does not read it out of the gate or the text.
+        partialNoOp: !result.success && result.partialNoOp ? true : undefined,
       });
     } catch {
       /* telemetry is best-effort; the run outcome is recorded regardless */
@@ -9270,10 +9309,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * re-run (#3163): `nightgauge issue partial-noop`, the same
    * `decidePartialNoOp` the Go scheduler runs. Null when it cannot be read;
    * the caller then books the no-op.
+   *
+   * @param applyClose pass `--apply-close`, so the binary closes the issue
+   *   when every remaining criterion is met (#3423). False for pr-create's
+   *   refusal (#3487), which only reads the remainder and closes nothing.
    */
   private async readPartialNoOpDecision(
     issueNumber: number,
-    scope: { pr: number; criteria: number }
+    scope: { pr: number; criteria: number },
+    applyClose = true
   ): Promise<PartialNoOpDecision | null> {
     try {
       const binary = await BinaryResolver.fromVSCode().resolve();
@@ -9291,15 +9335,25 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // #3423: Go re-judges the remainder against the earlier PR's merged
       // diff and, when every criterion is met, closes the issue itself. The
       // extension never closes on its own reading.
-      const { owner, repo } = await this.resolvePostMergeNwo(issueNumber);
-      if (owner && repo) args.push("--apply-close", "--repo", `${owner}/${repo}`);
+      if (applyClose) {
+        const { owner, repo } = await this.resolvePostMergeNwo(issueNumber);
+        if (owner && repo) args.push("--apply-close", "--repo", `${owner}/${repo}`);
+      }
       const { stdout } = await execFileAsync(binary, args, {
         cwd: this.getWorkingDirectory(),
         encoding: "utf-8",
         timeout: 30_000,
       });
       const parsed = JSON.parse(String(stdout)) as PartialNoOpDecision;
-      return typeof parsed?.action === "string" ? parsed : null;
+      if (typeof parsed?.action !== "string") return null;
+      // The remainder is carried for the no-op comment (#3487 step 4); one of
+      // another shape is a contract fault at this boundary: it costs the list,
+      // never the booking, and is logged so the loss can be diagnosed.
+      if (parsed.remainder && !isPartialNoOpRemainder(parsed.remainder)) {
+        this.logger.warn("Partial no-op remainder malformed — dropping it", { issueNumber });
+        delete parsed.remainder;
+      }
+      return parsed;
     } catch (err) {
       this.logger.warn("Partial no-op decision unavailable — booking the no-op", {
         issueNumber,
@@ -9307,6 +9361,24 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       });
       return null;
     }
+  }
+
+  /**
+   * The booking for a run a deterministic runner refused (#3487). Only the
+   * pr-create no-diff stop of a partial-delivery re-run is a partial no-op; an
+   * unscoped one is booked as before. The remainder is carried for #3487 step
+   * 4's comment and nothing is closed.
+   */
+  private async partialNoOpAtRefusal(
+    issueNumber: number,
+    stage: PipelineStage,
+    terminalKind: string
+  ): Promise<PipelineRunResult["partialNoOp"]> {
+    if (stage !== "pr-create" || terminalKind !== "not_pipeline_actionable") return undefined;
+    const scope = this.partialRerunIssues.get(issueNumber);
+    if (!scope) return undefined;
+    const decision = await this.readPartialNoOpDecision(issueNumber, scope, /* applyClose */ false);
+    return { remainder: decision?.remainder };
   }
 
   /**
@@ -9330,7 +9402,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     decision: PartialNoOpDecision | null = null
   ):
     | { action: "relap"; steer: string }
-    | { action: "book"; terminalKind: "not_pipeline_actionable"; error: Error }
+    | {
+        action: "book";
+        terminalKind: "not_pipeline_actionable";
+        error: Error;
+        remainder?: PartialNoOpRemainder;
+      }
     | { action: "close"; terminalKind: "issue_closed"; error: Error }
     | null {
     if (stage !== "feature-dev" || !gateFail.noOp || !partialRerun) return null;
@@ -9356,6 +9433,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       action: "book",
       terminalKind: "not_pipeline_actionable",
       error: new Error(`${detail} — ${gateFail.error.message}`),
+      remainder: decision?.remainder,
     };
   }
 
@@ -12188,6 +12266,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // into the stage exit record and the PipelineRunResult so a
     // harness/bookkeeping fault classifies as such instead of "unclassified".
     let gateTerminalKind: string | undefined;
+    // Set only where the run is booked a partial-delivery no-op (#3487).
+    let partialNoOpEnding: PipelineRunResult["partialNoOp"];
     let budgetExceeded = false;
     // #253: true when the between-stage ceiling check performed a controlled
     // stop. Suppresses the completion reconcile's pr-merge reclassification —
@@ -12867,7 +12947,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         pending.startedAt,
         gateFailed
           ? {
-              kind: "fail",
+              // Go's exit-record totals skip on this kind, not on the text (#3487).
+              kind: partialNoOpEnding ? GATE_KIND_PARTIAL_NO_OP : "fail",
               reason: error?.message ?? "stage post-condition gate failed",
               terminalKind: gateTerminalKind,
             }
@@ -12878,6 +12959,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     try {
       for (let stageIndex = 0; stageIndex < STAGE_ORDER.length; stageIndex++) {
         flushPendingStageExit();
+        // A no-op ends the run it books, so an attempt that begins is not one
+        // (#3487). Cleared after the flush, which reads the previous one's.
+        partialNoOpEnding = undefined;
         const stage = STAGE_ORDER[stageIndex];
         // Check if aborted
         if (this.abortController?.signal.aborted) {
@@ -13533,6 +13617,20 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           error = outcome.error;
           if (outcome.kind === "refused" && outcome.terminalKind) {
             gateTerminalKind = outcome.terminalKind;
+            partialNoOpEnding = await this.partialNoOpAtRefusal(
+              issueNumber,
+              stage,
+              outcome.terminalKind
+            );
+            if (partialNoOpEnding) {
+              // A refusal runs no skill and so holds no exit record. This one
+              // does, for the loop's exit flush to write as partial_no_op.
+              pendingStageExit = {
+                stage,
+                result: { success: false, stage, durationMs: Date.now() - stageStartTime },
+                startedAt: stageStartTime,
+              };
+            }
           }
           return "break";
         };
@@ -14387,6 +14485,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             if (partialNoOp) {
               gateKind = partialNoOp.terminalKind;
               gateError = partialNoOp.error;
+              if (partialNoOp.action === "book") {
+                partialNoOpEnding = { remainder: partialNoOp.remainder };
+              }
               this.logger.warn(
                 partialNoOp.action === "close"
                   ? "Partial-delivery re-run: feature-dev wrote no changes and every remaining criterion is met on the merged diff — closed as completed (#3423)"
@@ -14975,7 +15076,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // Emit pipeline.completed or pipeline.failed and dispose audit client (Issue #1582)
       if (this.auditClient && this.auditCorrelationId) {
         const totalDurationMs = Date.now() - startTime;
-        if (failedStage) {
+        // A booked partial-delivery no-op is not a failure (#3487): it is
+        // audited completed, with its outcome named, never pipeline.failed.
+        if (failedStage && !partialNoOpEnding) {
           this.auditClient.enqueue({
             action: "pipeline.failed",
             resourceType: "pipeline",
@@ -14998,6 +15101,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               issueNumber,
               totalDurationMs,
               stagesCompleted: completedStages,
+              ...(failedStage && partialNoOpEnding ? { outcome: "no_op" } : {}),
               timestamp: new Date().toISOString(),
             },
           });
@@ -15310,7 +15414,21 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // Skip classification if early-exit already set the outcome (Issue #708)
     // Non-critical: failures log warnings but never break the pipeline
     let classifiedOutcome: PipelineOutcomeType | undefined;
-    if (shippedButOverbudget) {
+    if (partialNoOpEnding && failedStage) {
+      // A booked partial no-op (#3487) outranks every artifact: the failed
+      // stage and its gate are how the run found nothing left to build.
+      classifiedOutcome = "no-op";
+      if (this.stateService) {
+        try {
+          await this.stateService.setOutcomeType(classifiedOutcome);
+        } catch (err) {
+          this.logger.warn("Failed to record no-op outcome", {
+            issueNumber,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    } else if (shippedButOverbudget) {
       classifiedOutcome = "shipped-but-overbudget";
       if (this.stateService) {
         try {
@@ -15585,7 +15703,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // Auto-retro analysis on pipeline failure (Issue #1408)
     // Fire-and-forget: never awaited, never blocks failure reporting.
     // Non-critical: errors are caught inside AutoRetroService.
-    if (failedStage) {
+    // A booked partial-delivery no-op is not a failure (#3487), and its text
+    // quotes the gate's, which the retro would classify as one.
+    if (failedStage && !partialNoOpEnding) {
       // Thread the orchestrator's terminal failure reason into the retro so
       // the classifier sees the authoritative verdict instead of starving on
       // the subagent log alone (#3926).
@@ -15626,6 +15746,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       failedStage,
       error,
       terminalKind: gateTerminalKind,
+      partialNoOp: pipelineComplete ? undefined : partialNoOpEnding,
       blocked: this.blockedTerminalState ?? undefined,
       totalDurationMs: Date.now() - startTime,
       outcomeType: classifiedOutcome,

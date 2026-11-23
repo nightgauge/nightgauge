@@ -9,6 +9,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- A partial-delivery re-run with nothing left to build is no longer treated as
+  a failure. It no longer halts the queue or joins the Failed issues list, the
+  freed slot is filled, and issues waiting on it start once it is closed, from
+  its card's Close or by hand. Its issue comment and slot card are unchanged
+  for now (#3487).
+
 ## [0.8.7] - 2026-11-22
 
 ### Added

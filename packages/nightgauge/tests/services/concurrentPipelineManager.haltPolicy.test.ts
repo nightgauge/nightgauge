@@ -22,13 +22,81 @@
  * below fail.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { classifyTerminalKind, signalTerminalKind } from "@nightgauge/sdk";
-import { resolveHaltKind } from "../../src/services/ConcurrentPipelineManager";
+import {
+  ConcurrentPipelineManager,
+  resolveHaltKind,
+} from "../../src/services/ConcurrentPipelineManager";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
-vi.mock("vscode", () => ({ window: {}, workspace: {}, EventEmitter: class {} }));
+vi.mock("vscode", () => ({
+  EventEmitter: class {
+    event = () => ({ dispose: () => {} });
+    fire() {}
+    dispose() {}
+  },
+  workspace: { workspaceFolders: [{ uri: { fsPath: "/test-repo" } }] },
+  window: {
+    showErrorMessage: vi.fn().mockResolvedValue(undefined),
+    showWarningMessage: vi.fn().mockResolvedValue(undefined),
+    showInformationMessage: vi.fn().mockResolvedValue(undefined),
+  },
+  commands: { executeCommand: vi.fn().mockResolvedValue(undefined) },
+}));
+vi.mock("../../src/utils/WorktreeManager", () => ({
+  WorktreeManager: vi.fn(function () {
+    return {
+      create: async (issueNumber: number, branch: string) => ({
+        path: `/test-repo/.worktrees/issue-${issueNumber}`,
+        branch,
+        issueNumber,
+        exists: true,
+      }),
+      cleanup: async () => undefined,
+      cleanupOrphans: async () => 0,
+      listActive: async () => [],
+      getRepoRoot: () => "/test-repo",
+      getWorktreePath: (n: number) => `/test-repo/.worktrees/issue-${n}`,
+    };
+  }),
+}));
+vi.mock("../../src/utils/nightgaugeConfig", () => ({
+  getConcurrentPipelineConfig: () => ({ maxConcurrent: 1 }),
+}));
+vi.mock("../../src/utils/inReviewGuard", () => ({
+  moveToInReviewIfPRBacked: async () => "skipped",
+}));
+// No git and no forge: a real `gh` skips the halt once #3487 itself is closed.
+vi.mock("child_process", async (importActual) => {
+  const answer = (...args: unknown[]) => {
+    const done = args[args.length - 1] as (err: null, out: object) => void;
+    done(null, { stdout: "", stderr: "" });
+  };
+  return { ...(await importActual<object>()), exec: answer, execFile: answer };
+});
+
+const postFailureComment = vi.hoisted(() => vi.fn());
+vi.mock("../../src/utils/failureComment", () => ({
+  postFailureComment,
+  ARCHITECTURE_APPROVAL_REQUIRED_MARKER: "ARCHITECTURE APPROVAL REQUIRED",
+  BLOCKED_DEPENDENCY_MARKER: "[blocked-dependency]",
+  HOST_SLEPT_MARKER: "[host-slept]",
+}));
+
+const autonomousPauseRepo = vi.hoisted(() => vi.fn());
+vi.mock("../../src/services/IpcClient", () => ({
+  IpcClient: {
+    getInstance: () => ({
+      gitComposeBranchName: async (n: number) => ({ name: `fix/${n}-no-op` }),
+      autonomousStatus: async () => ({ status: "running" }),
+      autonomousPause: async () => undefined,
+      autonomousPauseRepo,
+    }),
+  },
+}));
 
 const CPM_PATH = path.resolve(__dirname, "../../src/services/ConcurrentPipelineManager.ts");
 const source = readFileSync(CPM_PATH, "utf-8");
@@ -345,4 +413,153 @@ describe("host_slept keys on the structured verdict, not echoed text (#3273)", (
     expect(source).toContain("stage_host_slept?.[");
     expect(source).toContain('if (haltKind === "host_slept")');
   });
+});
+
+describe("a partial-delivery no-op is read from its booking, never from text (#3487)", () => {
+  const repo = "nightgauge/nightgauge";
+  const booking = "[not-pipeline-actionable] wrote no changes; unmet on the merged diff: handles ";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fakeCloneLayout("/test-repo");
+  });
+
+  /**
+   * Settle one real slot on `result`, through its whole finally, at concurrency
+   * 1 with one more item pending behind it.
+   */
+  async function settle(result: Record<string, unknown>) {
+    const item = (issueNumber: number) => [
+      { issueNumber, title: "queued", position: 1, status: "pending", repoName: repo },
+    ];
+    const clear = vi.fn().mockResolvedValue(undefined);
+    const drain = vi.fn().mockResolvedValue([]);
+    const started: number[] = [];
+    const queue = {
+      dequeueIndependent: vi
+        .fn()
+        .mockResolvedValueOnce(item(3487))
+        .mockResolvedValueOnce(item(3488))
+        .mockResolvedValue([]),
+      updateActiveSlots: async () => undefined,
+      drainBlockedSuccessors: drain,
+      enqueue: async () => null,
+      clear,
+      getQueue: async () => ({ items: [], status: "idle" }),
+    };
+    let finish: (value: unknown) => void = () => {};
+    const run = new Promise((resolve) => (finish = resolve));
+    const getState = vi.fn().mockResolvedValue(null);
+    const factory = () => ({
+      orchestrator: {
+        setWorktreeOverride: vi.fn(),
+        setRunRepoRoot: vi.fn(),
+        setRepoOverride: vi.fn(),
+        setUnattended: vi.fn(),
+        resolveRunRepoSlug: async () => repo,
+        runPipeline: (issueNumber: number) => {
+          started.push(issueNumber);
+          // The pending item, once started, just runs.
+          return issueNumber === 3487 ? run : new Promise(() => {});
+        },
+        stop: vi.fn(),
+        dispose: vi.fn(),
+      },
+      stateService: {
+        onStateChanged: () => ({ dispose: vi.fn() }),
+        onPhaseStart: () => ({ dispose: vi.fn() }),
+        onPhaseComplete: () => ({ dispose: vi.fn() }),
+        onUnifiedTokenUsage: () => ({ dispose: vi.fn() }),
+        getState,
+        beginRun: vi.fn(),
+        endRun: vi.fn(),
+        getRunId: () => null,
+        initEmpty: vi.fn(),
+        setMeta: vi.fn(),
+        dispose: vi.fn(),
+      },
+    });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const manager = new ConcurrentPipelineManager(
+      "/test-repo",
+      queue as never,
+      factory as never,
+      logger as never,
+      { maxConcurrent: 1 }
+    );
+    const onSlotFailed = vi.fn();
+    manager.setCallbacks({ onSlotFailed });
+
+    await manager.fillSlots();
+    finish({
+      success: false,
+      completedStages: [],
+      skippedStages: [],
+      deferredStages: [],
+      failedStage: "feature-dev",
+      totalDurationMs: 20_000,
+      ...result,
+    });
+    await manager.settleForTest(3487);
+    // Long enough for a refill to start: the negative cases assert there is none.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return { clear, drain, started, kind: onSlotFailed.mock.calls[0][5] };
+  }
+
+  it("fills the freed slot at concurrency 1, and leaves the successors queued", async () => {
+    const { started, drain, clear } = await settle({
+      partialNoOp: {},
+      terminalKind: "not_pipeline_actionable",
+      error: new Error(`${booking}x`),
+    });
+    await vi.waitFor(() => expect(started).toEqual([3487, 3488]));
+    expect(drain).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a real failure", { error: new Error("stage exited 1") }],
+    [
+      "a publication verdict",
+      {
+        terminalKind: "not_pipeline_actionable",
+        error: new Error("[not-pipeline-actionable] publication-boundary verdict"),
+      },
+    ],
+  ])("treats %s as before: drains, and does not refill", async (_name, result) => {
+    const { started, drain } = await settle(result);
+    expect(drain).toHaveBeenCalledTimes(1);
+    expect(started).toEqual([3487]);
+  });
+
+  it("gives onSlotFailed the structured kind of a booking", async () => {
+    const { kind } = await settle({
+      partialNoOp: {},
+      terminalKind: "not_pipeline_actionable",
+      error: new Error(`${booking}x`),
+    });
+    expect(kind).toBe("not_pipeline_actionable");
+  });
+
+  it("gives onSlotFailed no kind for a publication verdict", async () => {
+    const { kind } = await settle({
+      terminalKind: "not_pipeline_actionable",
+      error: new Error("[not-pipeline-actionable] publication-boundary verdict"),
+    });
+    expect(kind).toBeUndefined();
+  });
+
+  // The table's own markers: `[merge-conflict]` is merge_conflict's only one.
+  it.each(["merge_conflict [merge-conflict]", "pr_merge_unmerged"])(
+    "does not halt on a booking that quotes %s; the same text unflagged still halts",
+    async (quoted) => {
+      const error = new Error(`${booking}${quoted}`);
+      const booked = await settle({ partialNoOp: {}, error });
+      expect(booked.clear).not.toHaveBeenCalled();
+      expect(autonomousPauseRepo).not.toHaveBeenCalled();
+
+      await settle({ error });
+      expect(autonomousPauseRepo).toHaveBeenCalledTimes(1);
+    }
+  );
 });

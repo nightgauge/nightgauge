@@ -82,6 +82,19 @@ const golden: { cases: { input: string; kind: string; signal: string }[] } = JSO
 );
 
 describe("terminal-kind signal parity (extension)", () => {
+  // #3487: Go's NotifyComplete reads this kind as the structured no-op booking,
+  // so no text may ever produce it on the signal.
+  it("never signals not_pipeline_actionable from text", () => {
+    const named = [...table.rules, ...table.signal_extensions].filter(
+      (r) => r.kind === "not_pipeline_actionable"
+    );
+    expect(named).toHaveLength(1);
+    expect((named[0] as TableRule).signal).toBe(false);
+    for (const text of ["[not-pipeline-actionable] nothing left", "not_pipeline_actionable"]) {
+      expect(classifyTerminalKindForSignal(text)).toBeUndefined();
+    }
+  });
+
   it("signals exactly what the corpus pins, row by row", () => {
     // Both bounds in one assertion. Flipping `signal` on any table rule turns
     // every row that rule wins red, in this suite and in the Go and SDK ones —
@@ -240,15 +253,19 @@ describe("terminal-kind signal parity (extension)", () => {
     ]);
     // #3269: the one permitted source besides the classifier is `terminalKind`,
     // the onSlotFailed parameter ConcurrentPipelineManager fills ONLY from the
-    // typed run result (startRefusalTerminalKind). It is not a text matcher, and
-    // Go books the same kind from the same field on pipeline.notifyComplete.
+    // typed run result (slotTerminalKind: the #3487 partial no-op booking, else
+    // startRefusalTerminalKind). It is not a text matcher, and Go books the
+    // same kind from the same fields on pipeline.notifyComplete.
     const managerSrc = readFileSync(
       path.resolve(__dirname, "../../src/services/ConcurrentPipelineManager.ts"),
       "utf-8"
     );
     expect(managerSrc).toMatch(
-      /slotError,\s*slotCostUsd,\s*slot\.repo,\s*startRefusalTerminalKind\(result\.startRefusal\)/
+      /slotError,\s*slotCostUsd,\s*slot\.repo,\s*slotTerminalKind\(result\)/
     );
+    const slotKindBody = managerSrc.match(/export function slotTerminalKind\([\s\S]*?\n}/)?.[0];
+    expect(slotKindBody).toContain("startRefusalTerminalKind(result.startRefusal)");
+    expect(slotKindBody).not.toMatch(/classify|error|\.terminalKind/);
 
     const assignments = src.match(/terminalFailureKind\s*(?:=[^=]|\+=|\?\?=|\|\|=|&&=)/g) ?? [];
     expect(

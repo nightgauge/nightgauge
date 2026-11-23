@@ -28,12 +28,14 @@
  * @see docs/STAGE_GATES.md — the `skill-said-success` failure mode
  * @see docs/STAGE_EXIT_DIAGNOSTIC.md — the record this writes
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
 import type { Logger } from "../../src/utils/logger";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
+import { AutoRetroService } from "../../src/services/AutoRetroService";
+import { AuditEventClient } from "@nightgauge/sdk";
 
 const ISSUE = 125;
 
@@ -53,7 +55,20 @@ vi.mock("../../src/services/IpcClient", () => ({
 vi.mock("../../src/utils/nightgaugeConfig", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/utils/nightgaugeConfig")>()),
   getSkipAuthPreflight: () => true,
+  // #3487: audit is on only where a test turns it on.
+  getAuditConfig: () => ({
+    enabled: auditEnabled.value,
+    batchSize: 100,
+    flushIntervalMs: 3_600_000,
+    offlineQueuePath: "/tmp/exit-record-gate-truth-audit.json",
+    offlineQueueMaxSize: 10,
+    retryMaxAttempts: 0,
+    retryBackoffMs: 0,
+    timeoutMs: 1_000,
+  }),
 }));
+
+const auditEnabled = vi.hoisted(() => ({ value: false }));
 
 vi.mock("../../src/utils/rateLimitCircuitBreaker", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/utils/rateLimitCircuitBreaker")>()),
@@ -334,6 +349,162 @@ describe("HeadlessOrchestrator — exit records must record the POST-GATE outcom
     expect(result.failedStage).toBe("feature-dev");
     const records = exitRecordSuccessByStage();
     expect(records.get("feature-dev")).toBe(false);
+  });
+
+  // #3487: both partial-delivery bookings, driven through the real stage loop.
+  it.each(["feature-dev", "pr-create"] as const)(
+    "records a partial no-op booked at %s as partial_no_op, and does not retry it",
+    async (bookedAt) => {
+      validateVerdict.value = "passed";
+      mockSkills();
+      const state = createMockStateService();
+      const orch = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 } as never);
+      const loop = orch as any;
+      const remainder = { all_met: false, criteria: [{ text: "A", met: false, evidence: "e" }] };
+      vi.spyOn(loop, "partialRerunPromptTrailer").mockImplementation(async (_n, stage) => {
+        if (stage === "feature-dev") loop.partialRerunIssues.set(ISSUE, { pr: 5, criteria: 1 });
+        return "";
+      });
+      vi.spyOn(loop, "readPartialNoOpDecision").mockResolvedValue({ action: "book", remainder });
+      vi.spyOn(loop, "runPostConditionGate").mockImplementation(async (stage) =>
+        stage === bookedAt && stage === "feature-dev"
+          ? { error: new Error("dev context records zero file changes"), noOp: true }
+          : null
+      );
+      loop.partialRerunIssues.set(ISSUE, { pr: 5, criteria: 1 });
+      const runStage = loop.runStage.bind(loop);
+      vi.spyOn(loop, "runStage").mockImplementation(async (...args: unknown[]) => {
+        loop.partialRerunIssues.set(ISSUE, { pr: 5, criteria: 1 });
+        return runStage(...args);
+      });
+      const deterministic = vi
+        .spyOn(loop, "runDeterministicPrStage")
+        .mockImplementation(async (stage) =>
+          stage === "pr-create"
+            ? {
+                kind: "refused",
+                error: new Error("[not-pipeline-actionable] no diff"),
+                terminalKind: "not_pipeline_actionable",
+              }
+            : { kind: "llm" }
+        );
+
+      const result = await orch.runPipeline(ISSUE);
+
+      expect(result).toMatchObject({
+        success: false,
+        failedStage: bookedAt,
+        partialNoOp: { remainder },
+        outcomeType: "no-op",
+      });
+      expect(vi.mocked(state.setOutcomeType)).toHaveBeenCalledWith("no-op");
+      const records = recordStageExit.mock.calls.filter((c) => c[ARG.stage] === bookedAt);
+      expect(records).toHaveLength(1);
+      expect(records[0][ARG.success]).toBe(false);
+      expect(records[0]).toContain("partial_no_op");
+      expect(records[0]).toContain("not_pipeline_actionable");
+      // The booking's text quotes the gate, which the retro would read as a failure.
+      expect(vi.mocked(AutoRetroService.runAfterFailure)).not.toHaveBeenCalled();
+
+      const ran = vi.mocked(runStageSkillHeadless).mock.calls.map((c) => c[0]);
+      if (bookedAt === "pr-create") {
+        expect(ran).not.toContain("pr-create");
+        expect(deterministic.mock.calls.filter((c) => c[0] === "pr-create")).toHaveLength(1);
+      } else {
+        expect(ran.filter((s) => s === "feature-dev")).toHaveLength(1);
+      }
+    }
+  );
+
+  it("still runs the failure retro for a feature-dev gate no-op on a first run (#3487)", async () => {
+    validateVerdict.value = "passed";
+    mockSkills();
+    const orch = new HeadlessOrchestrator(createMockStateService(), mockLogger, {
+      contextFileWaitMs: 0,
+    } as never);
+    vi.spyOn(orch as any, "runPostConditionGate").mockImplementation(async (stage) =>
+      stage === "feature-dev"
+        ? { error: new Error("dev context records zero file changes"), noOp: true }
+        : null
+    );
+
+    const result = await orch.runPipeline(ISSUE);
+
+    expect(result.failedStage).toBe("feature-dev");
+    expect(result.partialNoOp).toBeUndefined();
+    expect(vi.mocked(AutoRetroService.runAfterFailure)).toHaveBeenCalledTimes(1);
+  });
+
+  describe("audit of a partial-delivery no-op (#3487)", () => {
+    let enqueued: Array<{ action: string; metadata: Record<string, unknown> }>;
+    beforeEach(() => {
+      auditEnabled.value = true;
+      enqueued = [];
+      vi.spyOn(AuditEventClient.prototype, "enqueue").mockImplementation((e: unknown) => {
+        enqueued.push(e as (typeof enqueued)[number]);
+      });
+      vi.spyOn(AuditEventClient.prototype, "dispose").mockImplementation(async function (
+        this: unknown
+      ) {
+        clearInterval((this as { flushTimer?: ReturnType<typeof setInterval> }).flushTimer);
+      });
+    });
+    afterEach(() => {
+      auditEnabled.value = false;
+      vi.mocked(AuditEventClient.prototype.enqueue).mockRestore();
+      vi.mocked(AuditEventClient.prototype.dispose).mockRestore();
+    });
+
+    const terminal = () =>
+      enqueued.filter((e) => e.action === "pipeline.failed" || e.action === "pipeline.completed");
+
+    it("sends pipeline.completed with outcome no_op, never pipeline.failed", async () => {
+      validateVerdict.value = "passed";
+      mockSkills();
+      const orch = new HeadlessOrchestrator(createMockStateService(), mockLogger, {
+        contextFileWaitMs: 0,
+      } as never);
+      const loop = orch as any;
+      vi.spyOn(loop, "partialRerunPromptTrailer").mockImplementation(async () => {
+        loop.partialRerunIssues.set(ISSUE, { pr: 5, criteria: 1 });
+        return "";
+      });
+      vi.spyOn(loop, "readPartialNoOpDecision").mockResolvedValue({ action: "book" });
+      vi.spyOn(loop, "runPostConditionGate").mockImplementation(async (stage) =>
+        stage === "feature-dev"
+          ? {
+              error: new Error("merge_conflict [merge-conflict] quoted by a criterion"),
+              noOp: true,
+            }
+          : null
+      );
+
+      const result = await orch.runPipeline(ISSUE);
+
+      expect(result.partialNoOp).toBeDefined();
+      expect(terminal()).toHaveLength(1);
+      expect(terminal()[0].action).toBe("pipeline.completed");
+      expect(terminal()[0].metadata.outcome).toBe("no_op");
+    });
+
+    it("still sends pipeline.failed for a first-run gate no-op", async () => {
+      validateVerdict.value = "passed";
+      mockSkills();
+      const orch = new HeadlessOrchestrator(createMockStateService(), mockLogger, {
+        contextFileWaitMs: 0,
+      } as never);
+      vi.spyOn(orch as any, "runPostConditionGate").mockImplementation(async (stage) =>
+        stage === "feature-dev"
+          ? { error: new Error("dev context records zero file changes"), noOp: true }
+          : null
+      );
+
+      const result = await orch.runPipeline(ISSUE);
+
+      expect(result.partialNoOp).toBeUndefined();
+      expect(terminal().map((e) => e.action)).toEqual(["pipeline.failed"]);
+      expect(terminal()[0].metadata.outcome).toBeUndefined();
+    });
   });
 
   it("stages that pass their gates still record success=true (the healthy baseline stays intact)", async () => {

@@ -24,6 +24,7 @@ import type { NotifyStageProgressParams } from "../services/ipcNotifyParams";
 import { handleIpcRejection } from "../services/ipcRejection";
 import { handleGoPipelineComplete, type GoPipelineCompleteDeps } from "./pipelineComplete";
 import { handleInteractivePipelineComplete } from "./pipelineFinish";
+import { settleSequentialFailedList } from "./slotEnding";
 import { Logger, createMainLogger, installLogDiskSink } from "../utils/logger";
 import { setRunningWorktreePathsProvider } from "../utils/skillRunner";
 import { StatusBarManager } from "../utils/statusBar";
@@ -1985,6 +1986,9 @@ export async function initializeServices(
           // nothing, or exactly the kind Go will write into the run record.
           // #3269: a kind the run result names structurally (a closed-issue
           // start refusal → issue_closed) outranks the text classification.
+          // #3487: a partial-delivery no-op arrives with the structured kind
+          // not_pipeline_actionable (slotTerminalKind), which Go books as the
+          // no-op: no failure charged, no retry, and its close card kept.
           const terminalFailureKind = terminalKind ?? classifyTerminalKindForSignal(errMsg);
           // #3431: forward the raw failure text so the autonomous
           // scheduler can extract `resetsAt=<unix>` from the
@@ -2351,6 +2355,9 @@ export async function initializeServices(
   // Initialize CompletedIssuesService for completed/failed issue tracking (Issue #301)
   const completedIssuesService = CompletedIssuesService.getInstance(context.workspaceState);
   context.subscriptions.push(completedIssuesService);
+  // The issue the sequential run's last stage error put on the Failed list, so
+  // its completion can settle the list (#3487). Reset by that completion.
+  let sequentialFailedIssue: number | null = null;
 
   // Connect TreeProvider to CompletedIssuesService for completed/failed sections
   treeProvider.setCompletedIssuesService(completedIssuesService);
@@ -2405,6 +2412,7 @@ export async function initializeServices(
         // Mark the current run as failed so the onStateChanged null-transition
         // handler skips addCompleted() when state.json is later cleared.
         currentRunHadFailure = true;
+        sequentialFailedIssue = issueNumber;
         const state = lastPipelineState;
         if (state && state.issue_number === issueNumber) {
           completedIssuesService.addFailed(
@@ -3208,6 +3216,13 @@ export async function initializeServices(
         outputWindow.removeStallWarnings(stage);
       },
       onPipelineComplete: (result) => {
+        // #3487: a partial-delivery no-op is not a failure. Its gate's stage
+        // error put the issue on the Failed list; take it off, on the
+        // booking's structured field only.
+        if (sequentialFailedIssue !== null) {
+          settleSequentialFailedList(result, sequentialFailedIssue, completedIssuesService);
+          sequentialFailedIssue = null;
+        }
         // Terminal platform telemetry (pipeline_done) is emitted inside
         // HeadlessOrchestrator.firePipelineComplete via the run's state service,
         // so it covers every completion path uniformly. This callback only

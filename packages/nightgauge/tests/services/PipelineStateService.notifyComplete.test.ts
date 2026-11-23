@@ -76,6 +76,25 @@ describe("PipelineStateService.notifyPipelineComplete — prMerged forwarding (#
     });
   });
 
+  it("forwards a partial-delivery no-op booking (#3487)", async () => {
+    await make().notifyPipelineComplete({
+      success: false,
+      totalDurationMs: 10,
+      stagesRun: [],
+      partialNoOp: true,
+    });
+
+    const [, params] = callSpy.mock.calls[0] as [string, Record<string, unknown>];
+    expect(params).toMatchObject({ partialNoOp: true });
+  });
+
+  it("sends no partialNoOp for a failure without the booking (#3487)", async () => {
+    await make().notifyPipelineComplete({ success: false, totalDurationMs: 10, stagesRun: [] });
+
+    const [, params] = callSpy.mock.calls[0] as [string, Record<string, unknown>];
+    expect(params).not.toHaveProperty("partialNoOp");
+  });
+
   it("defaults prMerged=false when the run's PR did not merge", async () => {
     await make().notifyPipelineComplete({
       success: true,

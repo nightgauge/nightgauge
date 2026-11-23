@@ -97,7 +97,11 @@ export type PipelineOutcomeType =
   // must never be booked as `failure`/subagent_crash. The issue stays
   // eligible; the Go blocker-close requeue re-dispatches it once the blocker
   // closes.
-  | "deferred";
+  | "deferred"
+  // A partial-delivery re-run booked a no-op (#3487): nothing was left to
+  // build and the issue waits for a human. NOT a failure, and not
+  // `skill-no-op`, where a skill claimed work it did not do.
+  | "no-op";
 
 export type StageExecutionMode = "headless" | "interactive" | "automatic" | "manual";
 
@@ -1664,6 +1668,11 @@ export class PipelineStateService implements vscode.Disposable {
      * Go books "issue-closed" as issue_closed, not a crash.
      */
     startRefusal?: string;
+    /**
+     * #3487: the run was booked a partial-delivery no-op
+     * (`PipelineRunResult.partialNoOp`). Go books it cancelled / no_op.
+     */
+    partialNoOp?: boolean;
   }): Promise<void> {
     // A terminal claim needs a run to close (Decision 3's terminal class), so
     // an identity-less service has nothing to claim and sends nothing — the
@@ -1693,6 +1702,7 @@ export class PipelineStateService implements vscode.Disposable {
         stagePuntReasons: result.stagePuntReasons ?? {},
         ...(result.failureDetail ? { failureDetail: result.failureDetail } : {}),
         ...(result.startRefusal ? { startRefusal: result.startRefusal } : {}),
+        ...(result.partialNoOp ? { partialNoOp: true } : {}),
         ...(meta?.budget_estimate_source
           ? {
               budgetEstimateUsd: meta.budget_estimate_usd ?? 0,

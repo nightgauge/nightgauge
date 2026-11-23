@@ -126,8 +126,8 @@ A partial-delivery re-run booked a no-op writes nothing to
 `history/outcomes.jsonl` on the autonomous path, as for an architecture-approval
 hold: every reader of the corpus counts `success: false` as a failure. The
 `pipeline.notifyComplete` handler skips the row too when the completion carries
-`partialNoOp`; the extension does not send that flag yet, so on the extension
-path such a run still writes its row. The run record
+`partialNoOp`, which the extension sends for such a run, so neither path
+writes its row. The run record
 carries the distinction (`outcome: cancelled`, `outcome_type: no_op`) and the
 cost. The booking's structured flag decides, never the terminal kind: every
 other `not_pipeline_actionable` run writes its row as before. `SKIP PARITY` in
