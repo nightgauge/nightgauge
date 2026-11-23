@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/trust"
 	"github.com/nightgauge/nightgauge/internal/workspacetest"
@@ -182,5 +183,94 @@ func TestRepoAffinity_NoRootReadsNoWorkingDirectoryPaths(t *testing.T) {
 	}
 	if got := NewScheduler(nil, SchedulerConfig{}).affinityRepoPaths(); len(got) != 0 {
 		t.Errorf("paths without a root = %v, want none", got)
+	}
+}
+
+// #3514: issueServiceFor substitutes noForgeIssues for a client-less fallback.
+//
+// Serial: the resolver arm logs through the standard logger (via captureLog).
+func TestIssueServiceFor_NoForgeClient(t *testing.T) {
+	resolvers := map[string]func(context.Context, string, string) (*gh.Client, error){
+		"no resolver": nil,
+		"resolver fails": func(context.Context, string, string) (*gh.Client, error) {
+			return nil, errors.New("no token")
+		},
+		"resolver returns nil client": func(context.Context, string, string) (*gh.Client, error) {
+			return nil, nil
+		},
+	}
+	for name, resolver := range resolvers {
+		t.Run(name, func(t *testing.T) {
+			s := NewScheduler(nil, SchedulerConfig{})
+			s.WithClientResolver(resolver)
+			var svc issueGetter
+			captureLog(t, func() { svc = s.issueServiceFor(context.Background(), "o", "r") })
+			if _, ok := svc.(noForgeIssues); !ok {
+				t.Errorf("issueServiceFor = %T, want noForgeIssues", svc)
+			}
+		})
+	}
+	t.Run("nil issueSvc stays nil", func(t *testing.T) {
+		s := NewScheduler(nil, SchedulerConfig{})
+		s.issueSvc = nil
+		if got := s.issueServiceFor(context.Background(), "o", "r"); got != nil {
+			t.Errorf("issueServiceFor = %T, want nil", got)
+		}
+	})
+	t.Run("mock passes through", func(t *testing.T) {
+		s := NewScheduler(nil, SchedulerConfig{})
+		mock := noForgeMock{}
+		s.issueSvc = mock
+		if got := s.issueServiceFor(context.Background(), "o", "r"); got != issueGetter(mock) {
+			t.Errorf("issueServiceFor = %T, want the mock", got)
+		}
+	})
+}
+
+// noForgeMock is a distinct issueGetter so the pass-through arm cannot be
+// confused with the sentinel.
+type noForgeMock struct{ noForgeIssues }
+
+// #3514: affinityBody reports errNoForgeClient without a forge call.
+//
+// Serial: issueServiceFor logs the missing client through the standard logger.
+func TestAffinityBody_NoForgeClient(t *testing.T) {
+	s := NewScheduler(nil, SchedulerConfig{})
+	body, err := s.affinityBody(context.Background(), "o", "r", 1)
+	if !errors.Is(err, errNoForgeClient) || body != "" {
+		t.Errorf("affinityBody = (%q, %v), want (\"\", errNoForgeClient)", body, err)
+	}
+}
+
+// #3514: every noForgeIssues method fails with errNoForgeClient, so no caller
+// reads a missing forge as an empty result.
+func TestNoForgeIssues_AllMethodsFail(t *testing.T) {
+	t.Parallel()
+	ctx, n := context.Background(), noForgeIssues{}
+	calls := map[string]func() error{
+		"GetIssueWithRelations": func() error {
+			_, err := n.GetIssueWithRelations(ctx, "o", "r", 1, 0)
+			return err
+		},
+		"GetIssuesByNumbersWithoutRelations": func() error {
+			_, err := n.GetIssuesByNumbersWithoutRelations(ctx, "o", "r", []int{1})
+			return err
+		},
+		"GetDependencyStates": func() error {
+			_, err := n.GetDependencyStates(ctx, "o", "r", []int{1})
+			return err
+		},
+		"GetEpicProgress": func() error { _, err := n.GetEpicProgress(ctx, "id"); return err },
+		"GetEpicProgressByNumber": func() error {
+			_, err := n.GetEpicProgressByNumber(ctx, "o", "r", 1)
+			return err
+		},
+		"CloseIssue":      func() error { return n.CloseIssue(ctx, "id") },
+		"RemoveBlockedBy": func() error { return n.RemoveBlockedBy(ctx, forge.IssueRef{}, forge.IssueRef{}) },
+	}
+	for name, call := range calls {
+		if err := call(); !errors.Is(err, errNoForgeClient) {
+			t.Errorf("%s err = %v, want errNoForgeClient", name, err)
+		}
 	}
 }

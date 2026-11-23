@@ -13,7 +13,6 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
-	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/graph"
 	"github.com/nightgauge/nightgauge/internal/graph/extract"
 	"github.com/nightgauge/nightgauge/internal/trust"
@@ -214,10 +213,6 @@ func (s *Scheduler) affinityBody(ctx context.Context, owner, repo string, number
 	svc := s.issueServiceFor(ctx, owner, repo)
 	if svc == nil {
 		return "", fmt.Errorf("no issue service")
-	}
-	// issueServiceFor wraps a missing client in a non-nil service (#3275).
-	if is, ok := svc.(*gh.IssueService); ok && !is.HasClient() {
-		return "", fmt.Errorf("no forge client")
 	}
 	got, err := svc.GetIssuesByNumbersWithoutRelations(ctx, owner, repo, []int{number})
 	if err != nil {
