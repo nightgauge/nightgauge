@@ -127,8 +127,8 @@ func applyPrStageNoDiffSettlement(ctx context.Context, out *prStageResultJSON, i
 }
 
 // newPrStageNoDiffSettler resolves the issue's node id and runs the shared
-// orchestrator.SettleNoDiff. A failed lookup settles with no node id, which
-// records nothing and parks the issue.
+// orchestrator.SettleNoDiff with a reader of the issue body. A failed lookup
+// settles with no node id, which records nothing and parks the issue.
 func newPrStageNoDiffSettler(client *gh.Client, repo string) prStageNoDiffSettler {
 	return func(ctx context.Context, issueNumber int, res pmstages.PRCreateResult) (string, bool) {
 		svc := gh.NewIssueService(client)
@@ -139,7 +139,10 @@ func newPrStageNoDiffSettler(client *gh.Client, repo string) prStageNoDiffSettle
 		} else if issue != nil {
 			nodeID = issue.NodeID
 		}
-		return orchestrator.SettleNoDiff(ctx, svc, svc, nodeID, issueNumber, res)
+		// The settle reads the body afresh, only when every criterion is
+		// met, to check its Delivery order (#3510).
+		return orchestrator.SettleNoDiff(ctx, svc, svc, nodeID,
+			orchestrator.IssueBodyReader(svc, owner, name, issueNumber), issueNumber, res)
 	}
 }
 

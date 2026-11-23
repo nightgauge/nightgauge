@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	stagecontext "github.com/nightgauge/nightgauge/internal/execution/context"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -148,7 +149,7 @@ func TestCloseMetRemainder(t *testing.T) {
 	issues, board := &fakeCloseIssues{}, &fakeCloseBoard{}
 	deps := PartialCloseDeps{Issues: issues, Board: board, Owner: "o", Repo: "r", ProjectNumber: 5}
 	body := "## Acceptance criteria\n\n- [x] Part A is done\n- [ ] " + closeCrit + "\n- [ ] Unrelated\n"
-	target := PartialCloseTarget{Number: 3423, NodeID: "I_1", Body: body, PR: 3422}
+	target := PartialCloseTarget{Number: 3423, NodeID: "I_1", Body: body, PR: 3422, BodyRead: true}
 	res, err := CloseMetRemainder(context.Background(), deps, target, metVerdict())
 	if err != nil || !res.Closed || !res.Board.Done() {
 		t.Fatalf("all met: res=%+v err=%v, want closed with the board Done", res, err)
@@ -197,6 +198,68 @@ func TestCloseMetRemainder(t *testing.T) {
 	if err != nil || !res.Closed || len(res.Ticked) != 0 || res.Board != hooks.BoardSyncNotAttempted {
 		t.Errorf("tick failed, no board: res=%+v err=%v, want closed, nothing ticked, board not attempted", res, err)
 	}
+}
+
+// #3510: a met remainder on an issue whose Delivery order says refs, or whose
+// body was not read, is held: no comment, tick or close, and Held says why.
+// A plain Delivery order closes exactly as before.
+func TestCloseMetRemainder_DeliveryOrderHold(t *testing.T) {
+	t.Parallel()
+	criteria := "## Acceptance criteria\n\n- [ ] " + closeCrit + "\n\n"
+	for name, tc := range map[string]struct {
+		body     string
+		bodyRead bool
+		held     string
+	}{
+		"refs":           {criteria + "## Delivery order\n\n1. Step one. Each PR refs #3423.\n", true, HoldDeliveryOrderRefs},
+		"unreadable":     {"", false, HoldIssueBodyUnread},
+		"unread but set": {criteria, false, HoldIssueBodyUnread},
+		"no refs":        {criteria + "## Delivery order\n\n1. One PR closes it.\n", true, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			issues, board := &fakeCloseIssues{}, &fakeCloseBoard{}
+			deps := PartialCloseDeps{Issues: issues, Board: board, Owner: "o", Repo: "r", ProjectNumber: 5}
+			target := PartialCloseTarget{Number: 3423, NodeID: "I_1", Body: tc.body, PR: 3422, BodyRead: tc.bodyRead}
+			res, err := CloseMetRemainder(context.Background(), deps, target, metVerdict())
+			if err != nil {
+				t.Fatalf("err=%v", err)
+			}
+			if res.Held != tc.held {
+				t.Errorf("Held=%q, want %q", res.Held, tc.held)
+			}
+			if tc.held != "" {
+				if res.Closed || len(issues.comments)+len(issues.edits)+len(issues.closed)+len(board.statuses) != 0 {
+					t.Errorf("held close wrote: res=%+v comments=%d edits=%d closed=%d board=%v", res, len(issues.comments), len(issues.edits), len(issues.closed), board.statuses)
+				}
+				return
+			}
+			if !res.Closed || len(issues.closed) != 1 || len(issues.comments) != 1 {
+				t.Errorf("plain body: res=%+v closed=%d comments=%d, want closed as before", res, len(issues.closed), len(issues.comments))
+			}
+		})
+	}
+}
+
+// ReadPartialCloseTarget marks the body read; a failed read returns no target.
+func TestReadPartialCloseTarget_BodyRead(t *testing.T) {
+	t.Parallel()
+	tgt, err := ReadPartialCloseTarget(context.Background(), fakeCloseReader{iss: &types.Issue{NodeID: "I_1", Body: "b"}}, "o", "r", 7, 5)
+	if err != nil || !tgt.BodyRead || tgt.Body != "b" {
+		t.Errorf("read: %+v err=%v, want BodyRead", tgt, err)
+	}
+	if tgt, err := ReadPartialCloseTarget(context.Background(), fakeCloseReader{err: errors.New("502")}, "o", "r", 7, 5); err == nil || tgt.BodyRead {
+		t.Errorf("failed read: %+v err=%v, want an error and no read body", tgt, err)
+	}
+}
+
+type fakeCloseReader struct {
+	iss *types.Issue
+	err error
+}
+
+func (f fakeCloseReader) GetIssueWithRelations(context.Context, string, string, int, gh.IssueRelations) (*types.Issue, error) {
+	return f.iss, f.err
 }
 
 // AC 9: a model's claim never closes. dev-{N}.json and the stage output may
@@ -270,6 +333,14 @@ func TestEndPartialRemainderMet(t *testing.T) {
 	if detail, kind := s.endPartialRemainderMet(context.Background(), item, 3422, metVerdict()); kind != TerminalKindNotPipelineActionable ||
 		detail != PartialCloseFailedDetail(3423, 3422, errors.New("forge down")) {
 		t.Errorf("close failed: kind=%s detail=%q", kind, detail)
+	}
+	// #3510: a held close ends not_pipeline_actionable with the held detail.
+	s.partialRemainderClose = func(context.Context, types.BoardItem, int, RemainderVerdict) (PartialCloseResult, error) {
+		return PartialCloseResult{Held: HoldDeliveryOrderRefs}, nil
+	}
+	if detail, kind := s.endPartialRemainderMet(context.Background(), item, 3422, metVerdict()); kind != TerminalKindNotPipelineActionable ||
+		detail != PartialCloseHeldDetail(3423, 3422, HoldDeliveryOrderRefs) || !strings.Contains(detail, "Delivery order says refs") {
+		t.Errorf("held: kind=%s detail=%q", kind, detail)
 	}
 }
 

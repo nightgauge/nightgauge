@@ -1531,7 +1531,10 @@ nightgauge issue operator-revision <number>
 # planning-{N}.json, dev-{N}.json and partial-delivery-{N}.json; local only
 # unless --apply-close, which on "close" posts the evidence comment, ticks the
 # met boxes, closes the issue as completed and moves its board row to Done
-# ("applied": true). A failed close turns the action into "book"; an unresolved
+# ("applied": true). A failed close turns the action into "book". So does a
+# held close (#3510): an issue whose Delivery order says refs, or whose body
+# could not be read, is left untouched, "applied" stays false and "close.held"
+# is "delivery_order_refs" or "issue_body_unread". An unresolved
 # board is reported as "board_error". Every action but "not_scoped" carries
 # the re-judged criteria as "remainder", "relap" included (#3487).
 nightgauge issue partial-noop <number> --pr <N> [--criteria <count>] [--relapped] \

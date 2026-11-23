@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/hooks"
+	"github.com/nightgauge/nightgauge/internal/intelligence/acparse"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 )
 
@@ -65,7 +66,7 @@ func (r *DeterministicRunner) judgeCheckCriteria(ctx context.Context, gh ghClien
 	closes := false
 	if issueBody, err := bc.IssueBody(ctx, issueNumber); err != nil {
 		log.Printf("pr-merge: #%d stays Refs: read issue body: %v", issueNumber, err)
-	} else if promoted, ok := promoteRefsToCloses(newBody, issueNumber); ok && !DeliveryOrderSaysRefs(issueBody) && checkCriteriaClose(issueBody, newBody, readACReconcile(workdir, issueNumber)) {
+	} else if promoted, ok := promoteRefsToCloses(newBody, issueNumber); ok && !acparse.DeliveryOrderSaysRefs(issueBody) && checkCriteriaClose(issueBody, newBody, readACReconcile(workdir, issueNumber)) {
 		newBody, closes = promoted, true
 	}
 	if err := bc.EditPRBody(ctx, prNumber, newBody); err != nil {

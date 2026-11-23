@@ -65,15 +65,22 @@ func (f *noopIssues) EditIssue(context.Context, string, string) (*types.Issue, e
 func (f *noopIssues) CloseIssue(context.Context, string) error { f.closed++; return nil }
 
 // stubCloseFactory replaces partialCloseDepsFactory for one test and counts
-// its calls.
+// its calls. The target's body reads as plain (no Delivery-order refs).
 func stubCloseFactory(t *testing.T, issues *noopIssues, boardErr, err error) *int {
+	t.Helper()
+	return stubCloseFactoryBody(t, issues, "", true, boardErr, err)
+}
+
+// stubCloseFactoryBody is stubCloseFactory with the target's body and
+// whether it was read set (#3510).
+func stubCloseFactoryBody(t *testing.T, issues *noopIssues, body string, bodyRead bool, boardErr, err error) *int {
 	t.Helper()
 	calls := 0
 	prev := partialCloseDepsFactory
 	partialCloseDepsFactory = func(_ context.Context, _, _ string, number, pr int) (orchestrator.PartialCloseDeps, orchestrator.PartialCloseTarget, error, error) {
 		calls++
 		return orchestrator.PartialCloseDeps{Issues: issues},
-			orchestrator.PartialCloseTarget{Number: number, NodeID: "I_1", PR: pr}, boardErr, err
+			orchestrator.PartialCloseTarget{Number: number, NodeID: "I_1", PR: pr, Body: body, BodyRead: bodyRead}, boardErr, err
 	}
 	t.Cleanup(func() { partialCloseDepsFactory = prev })
 	return &calls
@@ -126,6 +133,30 @@ func TestIssuePartialNoOp_ApplyClose(t *testing.T) {
 	if out, _ = runNoop(t, apply); out.Action != orchestrator.PartialNoOpActionBook || out.Applied ||
 		out.Detail != orchestrator.PartialCloseFailedDetail(3423, 3422, errors.New("forge down")) || issues.closed != 0 {
 		t.Fatalf("factory error: %+v — want book with the shared failure detail", out)
+	}
+
+	// #3510: a Delivery order that says refs, or an unread body, holds the
+	// close: nothing is written and the run books with the held detail.
+	for name, tc := range map[string]struct {
+		body     string
+		bodyRead bool
+		held     string
+	}{
+		"refs":   {"## Delivery order\n\nEach PR refs #3423.\n", true, orchestrator.HoldDeliveryOrderRefs},
+		"unread": {"", false, orchestrator.HoldIssueBodyUnread},
+	} {
+		issues = &noopIssues{}
+		stubCloseFactoryBody(t, issues, tc.body, tc.bodyRead, nil, nil)
+		if out, _ = runNoop(t, apply); out.Action != orchestrator.PartialNoOpActionBook || out.Applied ||
+			out.Close == nil || out.Close.Held != tc.held || out.Close.Closed ||
+			out.Detail != orchestrator.PartialCloseHeldDetail(3423, 3422, tc.held) || issues.closed != 0 || issues.comments != 0 {
+			t.Fatalf("%s: %+v, closed %d comments %d — want book, held %q, nothing written", name, out, issues.closed, issues.comments, tc.held)
+		}
+	}
+	issues = &noopIssues{}
+	stubCloseFactoryBody(t, issues, "## Delivery order\n\nOne PR closes it.\n", true, nil, nil)
+	if out, _ = runNoop(t, apply); !out.Applied || out.Close == nil || !out.Close.Closed || out.Close.Held != "" || issues.closed != 1 {
+		t.Fatalf("plain Delivery order: %+v — want closed as before", out)
 	}
 
 	noRepo := apply

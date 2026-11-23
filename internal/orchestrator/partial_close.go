@@ -150,6 +150,11 @@ type PartialCloseTarget struct {
 	Body   string
 	State  string
 	PR     int
+	// BodyRead is true only when Body was read from the forge
+	// (ReadPartialCloseTarget sets it). A target without it holds every
+	// close: an unread body cannot show the Delivery order is not refs
+	// (#3510).
+	BodyRead bool
 }
 
 // PartialCloseComments lists an issue's comments; *gh.TrustForge satisfies it.
@@ -174,21 +179,56 @@ func ReadPartialCloseTarget(ctx context.Context, r PartialCloseIssueReader, owne
 	if iss == nil || iss.NodeID == "" {
 		return PartialCloseTarget{}, ErrNoIssueToClose
 	}
-	return PartialCloseTarget{Number: number, NodeID: iss.NodeID, Body: iss.Body, State: iss.State, PR: pr}, nil
+	return PartialCloseTarget{Number: number, NodeID: iss.NodeID, Body: iss.Body, State: iss.State, PR: pr, BodyRead: true}, nil
 }
 
 // PartialCloseResult reports what a close did.
 type PartialCloseResult struct {
-	Ticked []int                  `json:"ticked,omitempty"`
+	Ticked []int `json:"ticked,omitempty"`
+	// Held names why a met remainder was left open instead of closed
+	// (HoldDeliveryOrderRefs or HoldIssueBodyUnread); empty otherwise.
+	Held   string                 `json:"held,omitempty"`
 	Closed bool                   `json:"closed"`
 	Board  hooks.BoardSyncOutcome `json:"board,omitempty"`
+}
+
+// Reasons a close holds instead of closing (#3510).
+const (
+	// HoldDeliveryOrderRefs: the issue body's Delivery order says refs, so
+	// only a human closes the issue.
+	HoldDeliveryOrderRefs = "delivery_order_refs"
+	// HoldIssueBodyUnread: the issue body could not be read, so the
+	// Delivery order cannot be checked.
+	HoldIssueBodyUnread = "issue_body_unread"
+)
+
+// deliveryOrderHold returns why an issue with this body must not be closed
+// by the pipeline, or "" when it may be: its Delivery order says refs, or its
+// body was not read (#3510).
+func deliveryOrderHold(body string, bodyRead bool) string {
+	switch {
+	case !bodyRead:
+		return HoldIssueBodyUnread
+	case acparse.DeliveryOrderSaysRefs(body):
+		return HoldDeliveryOrderRefs
+	}
+	return ""
+}
+
+// holdPhrase renders a hold reason for a comment or detail.
+func holdPhrase(issue int, reason string) string {
+	if reason == HoldIssueBodyUnread {
+		return fmt.Sprintf("#%d's body could not be read to check its Delivery order", issue)
+	}
+	return fmt.Sprintf("#%d's Delivery order says refs", issue)
 }
 
 // CloseMetRemainder closes an issue whose remainder v found all met: it posts
 // the evidence comment, ticks each matching unchecked box, closes the issue
 // as completed, and moves its board row to Done. It refuses a verdict that is
-// not all met. A comment or close failure is returned and the issue stays
-// open; a failed tick or board sync is logged, as the issue is closed either
+// not all met. An issue whose Delivery order says refs, or whose body was not
+// read, is held: nothing is written and res.Held names why (#3510). A comment
+// or close failure is returned and the issue stays open; a failed tick or board sync is logged, as the issue is closed either
 // way and the run's booking moves the board.
 func CloseMetRemainder(ctx context.Context, deps PartialCloseDeps, target PartialCloseTarget, v RemainderVerdict) (PartialCloseResult, error) {
 	var res PartialCloseResult
@@ -200,6 +240,9 @@ func CloseMetRemainder(ctx context.Context, deps PartialCloseDeps, target Partia
 	}
 	if deps.Issues == nil {
 		return res, ErrNoCloseDeps
+	}
+	if res.Held = deliveryOrderHold(target.Body, target.BodyRead); res.Held != "" {
+		return res, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, partialCloseTimeout)
 	defer cancel()
@@ -275,6 +318,14 @@ func PartialCloseFailedDetail(issue, pr int, err error) string {
 		issue, pr, err, issue)
 }
 
+// PartialCloseHeldDetail is the not_pipeline_actionable detail for a met
+// remainder whose close was held (#3510): the issue stays open for a human.
+// The scheduler and `nightgauge issue partial-noop --apply-close` share it.
+func PartialCloseHeldDetail(issue, pr int, reason string) string {
+	return fmt.Sprintf("[not-pipeline-actionable] feature-dev: partial-delivery re-run of #%d (after PR #%d): every remaining criterion is met on the merged diff, but %s, so #%d stays open for a human [#3510]",
+		issue, pr, holdPhrase(issue, reason), issue)
+}
+
 // maxUnmetInDetail caps the unmet criteria a booking detail lists.
 const maxUnmetInDetail = 5
 
@@ -348,11 +399,17 @@ func (s *Scheduler) closePartialRemainder(ctx context.Context, item types.BoardI
 
 // endPartialRemainderMet runs the close for a met remainder and returns the
 // stage detail and terminal kind the run ends with: issue_closed (a
-// non-failure) once closed, not_pipeline_actionable when the close failed.
+// non-failure) once closed, not_pipeline_actionable when the close failed or
+// was held (#3510).
 func (s *Scheduler) endPartialRemainderMet(ctx context.Context, item types.BoardItem, pr int, v RemainderVerdict) (detail, kind string) {
 	res, err := s.closePartialRemainder(ctx, item, pr, v)
 	if err != nil {
 		detail = PartialCloseFailedDetail(item.Number, pr, err)
+		log.Printf("#%d: %s", item.Number, detail)
+		return detail, TerminalKindNotPipelineActionable
+	}
+	if res.Held != "" {
+		detail = PartialCloseHeldDetail(item.Number, pr, res.Held)
 		log.Printf("#%d: %s", item.Number, detail)
 		return detail, TerminalKindNotPipelineActionable
 	}

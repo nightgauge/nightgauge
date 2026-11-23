@@ -5,6 +5,24 @@ import (
 	"strings"
 )
 
+// NoDiffClosedLine is the last line of a no-diff comment that closes the issue.
+// NoDiffHeldLine replaces it when a Delivery order holds the close (#3510).
+const NoDiffClosedLine = "Every acceptance criterion is met, so the issue is closed.\n"
+
+// NoDiffHeldLine is the line that replaces NoDiffClosedLine when every
+// criterion is met but the close is held; why names the hold (#3510).
+func NoDiffHeldLine(why string) string {
+	return fmt.Sprintf("Every acceptance criterion is met, but %s, so the issue stays open for a human to close (#3510).\n", why)
+}
+
+// NoDiffHeldDetail is the not_pipeline_actionable detail for a no-diff run
+// whose criteria are all met but whose close is held; why names the hold
+// (#3510).
+func NoDiffHeldDetail(issueNumber int, branch, base, why string) string {
+	return fmt.Sprintf("[not-pipeline-actionable] pr-create: branch %s has no diff against %s and every acceptance criterion is met, but %s, so #%d stays open for a human [#3510]",
+		branch, base, why, issueNumber)
+}
+
 // NoDiffOutcome settles a run whose branch has no diff against its base
 // (#2941). The #2942 specimen re-ran a `Refs` partial delivery whose code was
 // already on main and opened a +0/-0 PR of nothing but merges of main; the
@@ -38,7 +56,7 @@ func NoDiffOutcome(issueNumber int, branch, base string, verdicts []ACVerdict) (
 		b.WriteString("\n")
 	}
 	if closeIssue {
-		b.WriteString("Every acceptance criterion is met, so the issue is closed.\n")
+		b.WriteString(NoDiffClosedLine)
 		return true, b.String()
 	}
 	open := OpenACs(verdicts)

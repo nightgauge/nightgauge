@@ -6032,7 +6032,7 @@ func (e remainderCardExecutor) CloseRemainder(ctx context.Context, repo string, 
 	owner, name := splitOwnerRepo(repo)
 	return CloseRemainderByOperator(ctx,
 		PartialCloseDeps{Issues: e.forge, Comments: e.forge, Board: e.forge, Owner: owner, Repo: name, ProjectNumber: 3},
-		PartialCloseTarget{Number: issue, NodeID: "I_3487", State: "OPEN", Body: e.body, PR: pr},
+		PartialCloseTarget{Number: issue, NodeID: "I_3487", State: "OPEN", Body: e.body, PR: pr, BodyRead: true},
 		RemainderDecision{StateRoot: e.root, Fingerprint: fingerprint, Login: "octocat", PostedAs: "octocat", Criteria: criteria})
 }
 

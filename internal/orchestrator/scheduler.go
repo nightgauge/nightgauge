@@ -12683,7 +12683,8 @@ func (s *Scheduler) tryDeterministicPRCreate(
 
 // settleNoDiffRun ends a pr-create whose branch is level with its base
 // (#2941). It comments the criteria on the issue and closes it when every one
-// is met; otherwise the comment names what is unmet and the returned text
+// is met and its Delivery order does not say refs (#3510); otherwise the
+// comment names what is unmet and the returned text
 // parks the issue, which the autonomous scheduler moves to Backlog so it
 // cannot loop through Ready. A comment or close that fails leaves the issue
 // open and parked: closing on an unrecorded verdict is the worse error. A
@@ -12698,7 +12699,14 @@ func (s *Scheduler) settleNoDiffRun(ctx context.Context, scope *state.PartialRer
 	if s.issueSvc != nil {
 		closer = s.issueSvc
 	}
-	detail, closed := SettleNoDiff(ctx, commenter, closer, item.NodeID, item.Number, res)
+	// The issue body is read only when every criterion is met, to check its
+	// Delivery order; no issue service leaves it unread, which holds (#3510).
+	var issueBody func(context.Context) (string, error)
+	if s.issueSvc != nil {
+		owner, name := splitRepo(item.Repo)
+		issueBody = IssueBodyReader(s.issueSvc, owner, name, item.Number)
+	}
+	detail, closed := SettleNoDiff(ctx, commenter, closer, item.NodeID, issueBody, item.Number, res)
 	log.Printf("#%d: pr-create deterministic path: %s", item.Number, detail)
 	if !closed && scope != nil {
 		return partialNoOpSettlementError{detail: detail}

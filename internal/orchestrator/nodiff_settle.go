@@ -2,12 +2,34 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/acparse"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
+
+// IssueBodyReader returns a reader of owner/repo#number's body for
+// SettleNoDiff, or nil (which holds the close) when r is nil. A nil issue
+// reads as an error (#3510).
+func IssueBodyReader(r PartialCloseIssueReader, owner, repo string, number int) func(context.Context) (string, error) {
+	if r == nil {
+		return nil
+	}
+	return func(ctx context.Context) (string, error) {
+		iss, err := r.GetIssueWithRelations(ctx, owner, repo, number, gh.NoRelations)
+		if err != nil {
+			return "", err
+		}
+		if iss == nil {
+			return "", fmt.Errorf("issue %s/%s#%d not found", owner, repo, number)
+		}
+		return iss.Body, nil
+	}
+}
 
 // NoDiffCommenter posts the no-diff criteria comment on the issue.
 type NoDiffCommenter interface {
@@ -27,11 +49,33 @@ type NoDiffCloser interface {
 // is the worse error. A nil commenter or an empty nodeID records nothing and
 // returns the open-issue detail.
 //
+// When every criterion is met, issueBody is read before anything is written:
+// an issue whose Delivery order says refs, or whose body cannot be read (a nil
+// reader or an error), is not closed (#3510). The comment is still posted and
+// says why the issue stays open. issueBody is not called otherwise.
+//
 // It is shared by the scheduler and the `pr-stage create` verb the extension
 // drives, so both paths reach the same verdict.
 func SettleNoDiff(ctx context.Context, commenter NoDiffCommenter, closer NoDiffCloser,
-	nodeID string, issueNumber int, res pmstages.PRCreateResult) (detail string, closed bool) {
+	nodeID string, issueBody func(context.Context) (string, error), issueNumber int,
+	res pmstages.PRCreateResult) (detail string, closed bool) {
 	closeIt, comment := pmstages.NoDiffOutcome(issueNumber, res.Branch, res.BaseBranch, res.ACVerdicts)
+	held := ""
+	if closeIt {
+		body, read := "", false
+		if issueBody != nil {
+			if b, err := issueBody(ctx); err != nil {
+				log.Printf("#%d: pr-create no-diff: could not read the issue body to check its Delivery order: %v", issueNumber, err)
+			} else {
+				body, read = b, true
+			}
+		}
+		if held = deliveryOrderHold(body, read); held != "" {
+			closeIt = false
+			comment = strings.TrimSuffix(comment, pmstages.NoDiffClosedLine) +
+				pmstages.NoDiffHeldLine(holdPhrase(issueNumber, held))
+		}
+	}
 	if commenter != nil && nodeID != "" {
 		if err := commenter.AddComment(ctx, nodeID, comment); err != nil {
 			log.Printf("#%d: pr-create no-diff: could not comment the criteria: %v", issueNumber, err)
@@ -44,6 +88,9 @@ func SettleNoDiff(ctx context.Context, commenter NoDiffCommenter, closer NoDiffC
 				closed = true
 			}
 		}
+	}
+	if held != "" {
+		return pmstages.NoDiffHeldDetail(issueNumber, res.Branch, res.BaseBranch, holdPhrase(issueNumber, held)), false
 	}
 	detail = pmstages.NoDiffTerminalDetail(issueNumber, res.Branch, res.BaseBranch, closed,
 		len(pmstages.OpenACs(res.ACVerdicts)))

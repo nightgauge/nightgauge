@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- An issue whose Delivery order says `refs` is no longer closed by the pipeline once every criterion is met. The met-remainder close (including `nightgauge issue partial-noop --apply-close`, which now reports `close.held`), the no-diff settle and the operator no-op close now leave it open, and now also leave an issue open when its body cannot be read; the operator close returns an error saying to close the issue by hand or edit the Delivery order. A `Refs` merge that leaves nothing unmet now keeps the issue In review instead of returning it to Ready (#3510).
 - `nightgauge followup materialize` no longer folds a follow-up into an open issue whose author fails the trust gate; it picks the next qualifying trusted issue or files the follow-up on its own. A record whose `discovered-work` marker is already in its parent issue's body is now reported `tracked-by-parent` in file mode and in report mode and `--dry-run`, instead of `already-exists` or `would-file` (#2872).
 
 ## [0.8.7] - 2026-11-22
