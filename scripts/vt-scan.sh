@@ -69,8 +69,10 @@
 # newer report: on 2026-11-11 such a poll ran to VT_ANALYSIS_TIMEOUT (#3202).
 # The scan now stops at once with exit 2, so the step is re-run. A completed
 # analysis with a newer date means the file object lags behind it, so the file
-# is polled until its date moves or the timeout ends; the old report is never
-# judged. `queued` and `in-progress` keep polling; any other status is exit 2.
+# is read up to LAG_FILE_POLLS more times, then the scan stops with exit 2; the
+# old report is never judged. A report that moved past the lookup's but sits
+# outside its window is not lagging: it is polled to the timeout (#3519).
+# `queued` and `in-progress` keep polling; any other status is exit 2.
 #
 # GET /analyses/{id} can answer 404 for an analysis VirusTotal accepted: on
 # rc.11 the upload was accepted, its analysis object 404'd, and the file's
@@ -754,6 +756,7 @@ for sha in $UNIQUE; do
 done
 
 # File reads allowed after a completed, newer analysis before the scan stops.
+# A read whose report moved past the lookup's, outside its window, is not counted.
 LAG_FILE_POLLS=3
 
 # --- 2. Per submitted file: poll its report until the new analysis lands -----
@@ -774,7 +777,7 @@ LAG_FILE_POLLS=3
 AWAIT_DEADLINE=""
 await_report() {
   local sha="$1" before="$2" source="$3" aid="$4" extra="${5:-"{}"}"
-  local path deadline gap next analysis_newer analysis_gone lag_polls facts pdate status adate first
+  local path deadline gap next analysis_newer analysis_gone lag_polls report_outside_window facts pdate status adate first
   path="$(awk -F'\t' -v s="$sha" '$1 == s { print $3; exit }' "$INDEX")"
   if [ -n "$AWAIT_DEADLINE" ]; then
     deadline="$AWAIT_DEADLINE"
@@ -802,6 +805,7 @@ await_report() {
     gap=$((gap * 2))
     [ "$gap" -le "$POLL_MAX_INTERVAL" ] || gap="$POLL_MAX_INTERVAL"
     if [ "$next" = file ]; then
+      report_outside_window=0
       if [ "$HTTP_STATUS" = "200" ]; then
         facts="$(file_facts "$sha" "$path")" || exit 2
         pdate="${facts%%$'\t'*}"
@@ -819,10 +823,15 @@ await_report() {
             break
           fi
           echo "  $path ($sha): its report dated $(utc "$pdate") is newer than the lookup's but outside its window; still polling"
+          report_outside_window=1
         fi
       fi
       if [ "$analysis_gone" = 1 ]; then
         # The analysis object is gone: only the file's own report can decide.
+        :
+      elif [ "$report_outside_window" = 1 ]; then
+        # The report moved past the lookup's but sits outside its window: it is
+        # not lagging, so it polls on to the deadline (#3519).
         :
       elif [ "$analysis_newer" = 1 ]; then
         # The analysis completed with a newer date, yet the file has not moved.
@@ -878,9 +887,10 @@ done <"$SUBMITTED"
 
 # --- 3. One re-check of each first-sight Microsoft !ml finding ---------------
 # One delay for the whole batch, measured from the end of the poll pass. Then
-# every reanalysis is requested before any re-check is polled, and the polls
-# share one deadline, ML_RECHECK_TIMEOUT after the last request: one slow
-# reanalysis cannot stop the run before the others are requested (#3519).
+# the reanalysis request (POST /files/{sha}/analyse) is sent for every pending
+# file before any re-check is polled, and the polls share one deadline,
+# ML_RECHECK_TIMEOUT after the last request: one slow reanalysis cannot stop
+# the run before the others are requested (#3519).
 # Every report that arrives is judged by the full rules. Never a second.
 ML_SUBMITTED="$WORK/ml-submitted.tsv"
 ML_INCOMPLETE="$WORK/ml-incomplete.tsv"
