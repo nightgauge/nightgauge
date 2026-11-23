@@ -14,6 +14,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- `nightgauge doctor`'s orphaned-process report now takes the PID it excludes as itself from its caller instead of reading it internally, so a doctor test whose fixture PID matched the test binary's own PID no longer silently loses a finding; `TestForeignCwdHolder_StaleWorktree` failed in merge-group CI this way (#3490).
+
 ## [0.8.7] - 2026-11-22
 
 ### Added

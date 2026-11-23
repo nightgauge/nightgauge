@@ -25,6 +25,10 @@ import (
 
 const capturedTablePath = "testdata/orphaned-processes/ps-snapshot.txt"
 
+// noSelfPID excludes no row as "this process": real PIDs are never 0, so a
+// fixture PID cannot collide with it the way it can with os.Getpid() (#3490).
+const noSelfPID = 0
+
 func loadCapturedProcessTable(t *testing.T) string {
 	t.Helper()
 	data, err := os.ReadFile(capturedTablePath)
@@ -270,7 +274,7 @@ func TestClassifyProcesses_AServeDaemonWhoseHeartbeatWentColdIsAnOrphan(t *testi
 	procs := parseRows(t, derivedRow(t, 4156, "10-00:00:00", "serve --workspace /Users/operator/Repositories/nightgauge"))
 
 	claimed := sidecarPIDs(r.dir, scanClock)
-	scan := classifyProcesses(procs, claimed, os.Getpid())
+	scan := classifyProcesses(procs, claimed, noSelfPID)
 
 	if claimed[4156] {
 		t.Error("a sidecar 31 hours cold still claimed its PID — ownership is progress, not presence")
@@ -349,7 +353,7 @@ func TestStaleServeClaims_NameTheWorkspaceAColdClaimBelongedTo(t *testing.T) {
 	}
 	// …and it reaches the operator, which is the only place attribution counts.
 	procs := parseRows(t, derivedRow(t, 4156, "10-00:00:00", "serve --workspace "+cold))
-	fs, _ := orphanedProcessReport(procs, sidecarPIDs(r.dir, scanClock), stale, nil)
+	fs, _ := orphanedProcessReport(procs, sidecarPIDs(r.dir, scanClock), stale, nil, noSelfPID)
 	text := findingsText(fs)
 	if !strings.Contains(text, cold) {
 		t.Errorf("the orphan report does not name the workspace whose claim went cold: %q", text)
@@ -359,7 +363,7 @@ func TestStaleServeClaims_NameTheWorkspaceAColdClaimBelongedTo(t *testing.T) {
 func TestClassifyProcesses_SidecarOwnedRunIsNotAnOrphan(t *testing.T) {
 	procs := parseRows(t, derivedRow(t, 5150, "02-07:00:00", "pipeline run --issue 341"))
 
-	scan := classifyProcesses(procs, map[int]bool{5150: true}, os.Getpid())
+	scan := classifyProcesses(procs, map[int]bool{5150: true}, noSelfPID)
 
 	if len(scan.Orphans) != 0 {
 		t.Fatalf("a sidecar-claimed PID must not be reported: %+v", scan.Orphans)
@@ -427,7 +431,7 @@ func TestClassifyProcesses_TheIncidentSpecimenIsAnOrphan(t *testing.T) {
 	procs := parseRows(t, derivedRow(t, 7788, "01-07:12:03", "autonomous run --dry-run"))
 
 	claimed := sidecarPIDs(r.dir, scanClock)
-	scan := classifyProcesses(procs, claimed, os.Getpid())
+	scan := classifyProcesses(procs, claimed, noSelfPID)
 
 	if claimed[7788] {
 		t.Error("a 31-hour-cold sidecar still claimed its own PID — ownership is presence, not progress")
@@ -616,7 +620,7 @@ func TestClassifyProcesses_AgeFloorBoundary(t *testing.T) {
 	}
 	for _, tt := range tests {
 		procs := parseRows(t, derivedRow(t, 6001, tt.etime, "pipeline run --issue 341"))
-		scan := classifyProcesses(procs, map[int]bool{}, os.Getpid())
+		scan := classifyProcesses(procs, map[int]bool{}, noSelfPID)
 		gotOrphan := len(scan.Orphans) == 1
 		if gotOrphan != tt.wantOrphan {
 			t.Errorf("etime %s: orphan=%v, want %v", tt.etime, gotOrphan, tt.wantOrphan)
@@ -635,7 +639,7 @@ func TestOrphanedProcessReport_OneFindingPerProcess(t *testing.T) {
 		rows = append(rows, derivedRow(t, 9000+i, "05-00:00:00", "pipeline run --issue 341"))
 	}
 
-	fs, detail := orphanedProcessReport(parseRows(t, rows...), map[int]bool{}, nil, nil)
+	fs, detail := orphanedProcessReport(parseRows(t, rows...), map[int]bool{}, nil, nil, noSelfPID)
 
 	if len(fs) != 12 {
 		t.Fatalf("got %d findings, want one per orphaned process (12)", len(fs))
@@ -658,7 +662,7 @@ func TestOrphanedProcessReport_OneFindingPerProcess(t *testing.T) {
 func TestOrphanedProcessReport_NamesEvidenceAndRefusesToAct(t *testing.T) {
 	fs, _ := orphanedProcessReport(
 		parseRows(t, derivedRow(t, 7788, "01-07:12:03", "autonomous run --dry-run")),
-		map[int]bool{}, nil, nil)
+		map[int]bool{}, nil, nil, noSelfPID)
 	text := findingsText(fs)
 
 	for _, want := range []string{"7788", "31h", "autonomous run --dry-run", "refused unless it is still a nightgauge binary owned by you"} {
@@ -680,7 +684,7 @@ func TestOrphanedProcessReport_HealthyPathWritesAnOKEntry(t *testing.T) {
 		t.Fatal("the captured table did not parse")
 	}
 
-	fs, detail := orphanedProcessReport(procs, map[int]bool{capturedServeRow(t).PID: true}, nil, nil)
+	fs, detail := orphanedProcessReport(procs, map[int]bool{capturedServeRow(t).PID: true}, nil, nil, noSelfPID)
 	text := findingsText(fs)
 
 	if len(fs) != 0 {
@@ -958,7 +962,7 @@ func TestForeignCwdHolder_Flagged(t *testing.T) {
 		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
-	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc, noSelfPID)
 	text := findingsText(fs)
 
 	if len(fs) == 0 {
@@ -971,15 +975,10 @@ func TestForeignCwdHolder_Flagged(t *testing.T) {
 	}
 }
 
-// TestForeignCwdHolder_StaleWorktree reproduces the headline #519 incident
-// with a REAL removed worktree — `git worktree add` followed by `git worktree
-// remove --force`, the shape a leftover interactive-harness shell actually
-// sits in — rather than a directory that was never a worktree at all. Before
-// the fix, worktreeDirContaining started with filepath.EvalSymlinks(cwd),
-// which fails ENOENT once the directory is gone, so the removed-worktree
-// holder was silently invisible and this test could not go red for the real
-// incident (adversarial review of #519, finding 1).
-func TestForeignCwdHolder_StaleWorktree(t *testing.T) {
+// staleWorktreeFixture builds the live (42488) and REMOVED (42489) worktree
+// holders shared by the StaleWorktree tests.
+func staleWorktreeFixture(t *testing.T) ([]runningProcess, *foreignCwdScan) {
+	t.Helper()
 	r, liveWorktree := foreignCwdFixture(t)
 
 	staleWorktree := filepath.Join(r.dir, ".nightgauge", "worktrees", "issue-489")
@@ -1003,8 +1002,21 @@ func TestForeignCwdHolder_StaleWorktree(t *testing.T) {
 		RepoRoots:    repoRoots,
 		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
+	return procs, fc
+}
 
-	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+// TestForeignCwdHolder_StaleWorktree reproduces the headline #519 incident
+// with a REAL removed worktree — `git worktree add` followed by `git worktree
+// remove --force`, the shape a leftover interactive-harness shell actually
+// sits in — rather than a directory that was never a worktree at all. Before
+// the fix, worktreeDirContaining started with filepath.EvalSymlinks(cwd),
+// which fails ENOENT once the directory is gone, so the removed-worktree
+// holder was silently invisible and this test could not go red for the real
+// incident (adversarial review of #519, finding 1).
+func TestForeignCwdHolder_StaleWorktree(t *testing.T) {
+	procs, fc := staleWorktreeFixture(t)
+
+	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc, noSelfPID)
 	text := findingsText(fs)
 
 	liveTag := "[cwd inside worktree issue-488]"
@@ -1037,7 +1049,7 @@ func TestForeignCwdHolder_YoungLiveHolderNotFlagged(t *testing.T) {
 		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
-	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc, noSelfPID)
 	text := findingsText(fs)
 
 	if len(fs) != 0 {
@@ -1070,7 +1082,7 @@ func TestForeignCwdHolder_CrossRepoIssueNumberIsNotConflated(t *testing.T) {
 		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
-	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc, noSelfPID)
 	text := findingsText(fs)
 
 	if !strings.Contains(text, "[cwd inside REMOVED worktree issue-488]") {
@@ -1097,7 +1109,7 @@ func TestForeignCwdHolder_ExtensionWorktreeBaseIsScanned(t *testing.T) {
 		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
-	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc, noSelfPID)
 	text := findingsText(fs)
 
 	if !strings.Contains(text, "[cwd inside worktree issue-490]") {
@@ -1235,7 +1247,7 @@ func TestOrphanedProcesses_OtherWorkspaceIsNotEvaluated(t *testing.T) {
 		derivedRow(t, 4242, "03:00:00", "run --issue 2087 --adapter opencode"),
 	)
 	scope := classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/other/ws"}, nil)
-	fs, detail := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope)
+	fs, detail := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope, os.Getpid())
 	text := findingsText(fs)
 	if len(fs) != 0 {
 		t.Fatalf("process in another workspace was reported: %s", text)
@@ -1246,7 +1258,7 @@ func TestOrphanedProcesses_OtherWorkspaceIsNotEvaluated(t *testing.T) {
 
 	// The same process, in THIS workspace, is still an orphan.
 	scope = classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/this/ws/sub"}, nil)
-	if fs, _ := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope); len(fs) == 0 {
+	if fs, _ := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope, os.Getpid()); len(fs) == 0 {
 		t.Error("an idle, unclaimed three-hour run in this workspace must still be reported")
 	}
 }
@@ -1276,7 +1288,7 @@ func TestOrphanedProcesses_NohupLiveRunIsNotAnOrphan(t *testing.T) {
 	)
 	parents := map[int]int{4242: 1, 5000: 4242}
 	scope := classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/this/ws"}, parents)
-	fs, detail := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope)
+	fs, detail := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope, os.Getpid())
 	text := findingsText(fs)
 	if len(fs) != 0 {
 		t.Fatalf("a live nohup'd run with a child process was reported as orphaned: %s", text)
@@ -1486,5 +1498,29 @@ func TestLookupCwdsDarwin_AWedgedLsofIsANamedTimeout(t *testing.T) {
 		if !errors.As(err, &timeout) {
 			t.Fatalf("buildForeignCwdScan lost the scanTimeoutError through its wrap: %v", err)
 		}
+	}
+}
+
+// TestForeignCwdHolder_StaleWorktree_SelfPIDCollision pins #3490: the report
+// excludes the caller's own PID, so when the test binary's PID equalled a
+// fixture PID (42489 on a busy Linux runner) the REMOVED holder vanished.
+// self is now injected; a colliding self drops the row, noSelfPID keeps it.
+func TestForeignCwdHolder_StaleWorktree_SelfPIDCollision(t *testing.T) {
+	procs, fc := staleWorktreeFixture(t)
+	staleTag := "[cwd inside REMOVED worktree issue-489]"
+	liveTag := "[cwd inside worktree issue-488]"
+
+	collided, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc, 42489)
+	if text := findingsText(collided); strings.Contains(text, staleTag) {
+		t.Errorf("self=42489 must exclude the REMOVED holder as this process: %q", text)
+	}
+
+	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc, noSelfPID)
+	text := findingsText(fs)
+	if !strings.Contains(text, staleTag) || !strings.Contains(text, liveTag) {
+		t.Fatalf("with no self collision both holders must be reported: %q", text)
+	}
+	if strings.Index(text, staleTag) > strings.Index(text, liveTag) {
+		t.Errorf("the REMOVED holder must sort first: %q", text)
 	}
 }

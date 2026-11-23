@@ -645,7 +645,7 @@ func processTableReport(startDir, raw string, claimed map[int]bool, staleServe m
 		return unverifiableProcessScan(fmt.Errorf(
 			"the process table parsed, but the cwd-inside-worktree half could not run: %w", cwdErr))
 	}
-	return orphanedProcessReportScoped(procs, claimed, staleServe, fc, buildProcessScope(startDir, procs, bounds))
+	return orphanedProcessReportScoped(procs, claimed, staleServe, fc, buildProcessScope(startDir, procs, bounds), os.Getpid())
 }
 
 // listsPID reports whether pid appears in the parsed table.
@@ -686,8 +686,12 @@ func unverifiableProcessScan(cause error) ([]Finding, string) {
 // fc is the second, unrelated half added by #519: foreign (non-nightgauge)
 // processes whose cwd sits inside a pipeline worktree. nil means that half did
 // not run (no worktrees root, or the cwd source was unavailable).
-func orphanedProcessReport(procs []runningProcess, claimed map[int]bool, staleServe map[int]string, fc *foreignCwdScan) ([]Finding, string) {
-	return orphanedProcessReportScoped(procs, claimed, staleServe, fc, processScope{})
+//
+// self is the PID excluded as "this process". The caller passes it rather than
+// the report reading os.Getpid(): a test fixture PID that collided with the
+// test binary's own PID silently dropped a finding (#3490).
+func orphanedProcessReport(procs []runningProcess, claimed map[int]bool, staleServe map[int]string, fc *foreignCwdScan, self int) ([]Finding, string) {
+	return orphanedProcessReportScoped(procs, claimed, staleServe, fc, processScope{}, self)
 }
 
 // codeForeignCwdHolder is a non-nightgauge process whose cwd sits inside a
@@ -695,12 +699,14 @@ func orphanedProcessReport(procs []runningProcess, claimed map[int]bool, staleSe
 // binary, so it is never offered a terminate remedy.
 const codeForeignCwdHolder = "NGD032"
 
-func orphanedProcessReportScoped(procs []runningProcess, claimed map[int]bool, staleServe map[int]string, fc *foreignCwdScan, scope processScope) ([]Finding, string) {
+// orphanedProcessReportScoped is orphanedProcessReport limited to scope; self
+// is excluded from both halves (see orphanedProcessReport, #3490).
+func orphanedProcessReportScoped(procs []runningProcess, claimed map[int]bool, staleServe map[int]string, fc *foreignCwdScan, scope processScope, self int) ([]Finding, string) {
 	const check = "orphaned_processes"
-	scan := classifyProcessesScoped(procs, claimed, os.Getpid(), scope)
+	scan := classifyProcessesScoped(procs, claimed, self, scope)
 	var holders []foreignCwdHolder
 	if fc != nil {
-		holders = classifyForeignCwdHolders(procs, fc.Cwds, fc.RepoRoots, fc.ActiveByRepo, os.Getpid())
+		holders = classifyForeignCwdHolders(procs, fc.Cwds, fc.RepoRoots, fc.ActiveByRepo, self)
 	}
 	detail := fmt.Sprintf("%d nightgauge process(es): %d owned, %d recent, %d orphaned",
 		scan.Scanned, scan.Owned, scan.Recent, len(scan.Orphans))
