@@ -205,15 +205,25 @@ only Microsoft findings ending in `!ml` (no other engine, no unnamed count, no
 YARA match, no non-benign Code insights verdict), the report is not judged.
 After the poll pass the scan waits `VT_ML_RECHECK_DELAY` once for the batch
 (default 3600 seconds, the shortest gap measured above after which such a
-finding cleared), asks for one reanalysis of each such file, and judges it by
-every rule. A finding that persists fails the scan. There is never a second
+finding cleared), then asks for one reanalysis of every such file before it
+polls any of them (#3519). The re-checks share one deadline,
+`VT_ML_RECHECK_TIMEOUT` (default 3600 seconds) after the last reanalysis
+request, and every report that arrives by then is judged by every rule. A
+finding that persists in any of them fails the scan (exit 1). Otherwise a
+re-check that missed the deadline is exit 2, one HARNESS ERROR naming every
+such file; a re-run then finds those files known to VirusTotal and judges their
+latest report, the reanalysis this run requested. Before #3519 the re-checks
+ran one after another, each under its own
+`VT_ANALYSIS_TIMEOUT`: one slow reanalysis stopped the run before the next was
+requested, and the re-run saw those files as already known and judged their
+`!ml` labels at once, so it could never pass. There is never a second
 re-check. A Microsoft `!ml` finding beside any other finding, and any finding
 on a file VirusTotal already knew, fail at once as before. The report lists
 each re-checked file under `judged_on_reanalysis` (first-sight findings and
 both dates), its `source` is `reanalysed-after-ml`, and the summary names it.
 rc-scan and release.yml's scan step carry 60 more minutes of timeout for the
-delay. Nothing is called a false positive, nothing is submitted to a vendor,
-and nothing is allowlisted.
+delay and 60 more for the batch deadline. Nothing is called a false positive,
+nothing is submitted to a vendor, and nothing is allowlisted.
 
 ## Dependencies that move the Microsoft model's score
 
@@ -534,9 +544,10 @@ the chosen RC (#3213), not on every RC tag push.
 Before its first lookup, every `vt-scan.sh` run reads the key's remaining
 daily quota (one request, `GET /users/{key}/overall_quotas`). It estimates its
 own cost as if VirusTotal knew none of its files: one lookup, one upload (two
-over 32 MB) and one poll per unique file, five more per unique file of any
-kind for a first-sight `!ml` re-check (a reanalysis and about four backed-off
-polls), plus the quota read, capped at
+over 32 MB) and one poll per unique file, seven more per unique file of any
+kind for a first-sight `!ml` re-check (a reanalysis and the six polls sent at
+the default backoff when it completes within 15 minutes), plus the quota read,
+capped at
 `VT_MAX_REQUESTS`. When fewer requests remain today, the scan stops with a
 HARNESS ERROR naming both numbers, before it spends anything else. An answer
 it cannot read is logged and the scan continues; a 429 on it is a HARNESS
@@ -561,12 +572,13 @@ ERROR. The report records `quota_remaining` and `quota_estimate`.
 - **The six margin binaries: about 24.** Each is new to VirusTotal: a lookup,
   `upload_url` (they are over 32 MB), the upload and a poll.
 - **Headroom: about 26**, shared by first-sight `!ml` re-checks (#3398) and
-  polls of slow analyses. A re-check is a reanalysis plus about four backed-off
-  polls, so the headroom holds about five when the text window has run out;
+  polls of slow analyses. A re-check is a reanalysis plus up to six polls
+  within 15 minutes, so the headroom holds about three when the text window
+  has run out;
   more re-checks than that end the scan at the budget with a HARNESS ERROR.
   The budget stays at 160 so two RC scans and a release fit in the day's 500:
   the release scan's own budget is 180 (`VT_MAX_REQUESTS: "180"` on
-  `release.yml`'s scan step), about 130 for its files and 50 for ten
+  `release.yml`'s scan step), about 130 for its files and 50 for seven
   re-checks.
   On slow analyses: a report counts as
   reanalysed only when its date is later than the lookup's and within the

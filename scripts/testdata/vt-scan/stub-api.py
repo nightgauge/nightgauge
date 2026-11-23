@@ -58,6 +58,10 @@ Run-wide state and failures are selected by files in <state-dir>:
                        then completes
   pending-<sha256>     the same as pending-polls, for that file only; it wins
                        over pending-polls (a replay records polls per file)
+  recheck-never-complete-<sha256>
+                       once that file has one completed analysis, later
+                       analyses of it never complete: its first-sight upload
+                       completes, its re-check stalls (#3519)
   fold-analyse-dated   with fold-analyse, the completed analysis is dated now
                        (VirusTotal dates an analysis at creation); the file's
                        date still does not move
@@ -271,6 +275,8 @@ def poll_file(sha):
         return
     PENDING[sha] += 1
     if flag("never-complete") or PENDING[sha] <= pending_polls(sha):
+        return
+    if flag("recheck-never-complete-" + sha) and ANALYSIS_COUNT.get(sha, 0) >= 1:
         return
     del PENDING[sha]
     age = 0

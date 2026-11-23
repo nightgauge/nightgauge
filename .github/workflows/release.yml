@@ -129,8 +129,9 @@ jobs:
     # inside the VSIXs and tarballs), roughly 3 requests each, at the free
     # key's 4 requests/min. That is about 130 of the 500 requests a day.
     # Plus one 60-minute VT_ML_RECHECK_DELAY when a first-sight Microsoft !ml
-    # finding is re-checked (#3398).
-    timeout-minutes: 180
+    # finding is re-checked (#3398), and the re-check batch's 60-minute
+    # VT_ML_RECHECK_TIMEOUT (#3519).
+    timeout-minutes: 240
     environment: production
 
     permissions:
@@ -749,14 +750,15 @@ jobs:
       - name: VirusTotal scan of the draft; publish only when clean
         # ~40 unique files x ~3 requests = ~130 requests at 4/min, about 33
         # minutes (see the job's timeout note); 80 leaves room for slow analyses,
-        # and 60 more cover one VT_ML_RECHECK_DELAY re-check (#3398).
-        timeout-minutes: 140
+        # 60 more cover one VT_ML_RECHECK_DELAY re-check (#3398), and 60 more
+        # the re-check batch's VT_ML_RECHECK_TIMEOUT (#3519).
+        timeout-minutes: 200
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VT_API_KEY: ${{ secrets.VT_API_KEY }}
           TAG: ${{ steps.version.outputs.tag }}
           # ~130 for the files plus 50 for first-sight !ml re-checks (#3398),
-          # five requests each, room for ten. Two 160-request RC scans and this
+          # seven requests each, room for seven. Two 160-request RC scans and this
           # one fit in the key's 500 a day (docs/RELEASE_BINARIES.md).
           VT_MAX_REQUESTS: "180"
         run: |

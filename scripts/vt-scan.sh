@@ -130,10 +130,19 @@
 # answered 404 on its lookup) and its first report's only findings are named
 # Microsoft results ending in !ml, with no YARA match, no non-benign Code
 # insights verdict and no unnamed engine count, that report is not judged. After
-# the poll pass the scan waits VT_ML_RECHECK_DELAY once for the batch, asks for
-# one reanalysis of each such file (POST .../analyse, counted as a reanalysis,
-# then polls) and judges that report by every rule above: a finding that
-# persists is exit 1. There is never a second re-check. Any other finding, a
+# the poll pass the scan waits VT_ML_RECHECK_DELAY once for the batch, then asks
+# for one reanalysis of every such file (POST .../analyse, counted as a
+# reanalysis) before it polls any of them. The re-checks then share one
+# deadline, VT_ML_RECHECK_TIMEOUT after the last reanalysis request; each
+# report that arrives is judged by every rule above (#3519). A finding that
+# persists in any of them is exit 1. Otherwise a re-check that did not complete
+# by the deadline is exit 2, one HARNESS ERROR naming every such file; no
+# finding is waived and nothing incomplete passes. A re-run then finds those
+# files known to VirusTotal and judges their latest report, the reanalysis this
+# run requested. Before #3519 the re-checks ran one at a time and the first slow
+# one stopped the run before the others were requested, so a re-run judged
+# their first-sight !ml labels at once and could never pass.
+# There is never a second re-check. Any other finding, a
 # Microsoft !ml finding beside any other, and any finding on a file VirusTotal
 # already knew are judged at once, as before. The report's
 # judged_on_reanalysis lists each re-checked file with its first-sight findings
@@ -170,7 +179,8 @@
 #   VT_API_BASE            API root. Default https://www.virustotal.com/api/v3.
 #                          Overridden only by the offline test suites.
 #   VT_MIN_INTERVAL        Seconds between requests. Default 15 (4/min).
-#   VT_ANALYSIS_TIMEOUT    Seconds to wait for one file's analysis. Default 1800.
+#   VT_ANALYSIS_TIMEOUT    Seconds to wait for one file's analysis in the first
+#                          pass. Default 1800.
 #   VT_HTTP_TIMEOUT        Seconds per HTTP request. Default 600.
 #   VT_POLL_MAX_INTERVAL   Longest wait between polls of one analysis. The
 #                          first wait is VT_MIN_INTERVAL and each later one
@@ -187,6 +197,9 @@
 #   VT_ML_RECHECK_DELAY    Seconds to wait before re-checking first-sight
 #                          Microsoft !ml findings. Default 3600, the shortest
 #                          measured gap after which such a finding cleared.
+#   VT_ML_RECHECK_TIMEOUT  Seconds after the last re-check reanalysis request
+#                          within which every re-checked file's report must
+#                          arrive. Default 3600.
 #
 # Exit: 0 every file clean; 1 any finding; 2 HARNESS ERROR.
 #
@@ -204,6 +217,7 @@ REUSE_MAX_AGE="${VT_REUSE_MAX_AGE:-86400}"
 REUSE_MAX_AGE_TEXT="${VT_REUSE_MAX_AGE_TEXT:-1209600}"
 MIN_ENGINES="${VT_MIN_ENGINES:-40}"
 ML_RECHECK_DELAY="${VT_ML_RECHECK_DELAY:-3600}"
+ML_RECHECK_TIMEOUT="${VT_ML_RECHECK_TIMEOUT:-3600}"
 LARGE_FILE_BYTES=33554432 # 32 MB: above this, POST /files refuses the upload.
 # VirusTotal answers GET /files/upload_url with a URL on this host. It is the
 # only origin besides the API's own that may receive the key.
@@ -321,6 +335,7 @@ done
 [ "$REUSE_MAX_AGE_TEXT" -eq 0 ] || [ "$REUSE_MAX_AGE_TEXT" -ge "$REUSE_MAX_AGE" ] ||
   harness "VT_REUSE_MAX_AGE_TEXT ($REUSE_MAX_AGE_TEXT) is below VT_REUSE_MAX_AGE ($REUSE_MAX_AGE); set it to 0 to turn the text window off"
 [[ "$ML_RECHECK_DELAY" =~ ^[0-9]{1,6}$ ]] || harness "VT_ML_RECHECK_DELAY must be a whole number of seconds"
+[[ "$ML_RECHECK_TIMEOUT" =~ ^[0-9]{1,6}$ ]] || harness "VT_ML_RECHECK_TIMEOUT must be a whole number of seconds"
 [[ "$MIN_ENGINES" =~ ^[0-9]{1,3}$ ]] && [ "$MIN_ENGINES" -gt 0 ] ||
   harness "VT_MIN_ENGINES must be a whole number above 0"
 # A cap below the floor would poll faster than the 4/min spacing allows.
@@ -475,9 +490,10 @@ echo "vt-scan: ${#FILES[@]} file(s), $(printf '%s\n' "$UNIQUE" | wc -l | tr -d '
 # the first-sight ML re-check (any kind: the !ml findings seen include
 # Trojan:Script labels on text files), plus this quota read, capped at
 # VT_MAX_REQUESTS because the run never sends more.
-# One re-check is a reanalysis plus the backed-off polls of await_report, which
-# alternate file and analysis-object reads at 15, 30, 60, 120 s: about four.
-RECHECK_REQUESTS=5
+# One re-check is a reanalysis plus the polls await_report sends at the default
+# backoff (gaps of 15, 30, 60, 120, 240, 300 s, so polls at 15, 45, 105, 225,
+# 465 and 765 s) when the re-check completes within 15 minutes: six polls.
+RECHECK_REQUESTS=7
 QUOTA_ESTIMATE="$(awk -F'\t' -v big="$LARGE_FILE_BYTES" -v max="$MAX_REQUESTS" -v rc="$RECHECK_REQUESTS" '
   !seen[$1]++ { n += (($2 > big) ? 4 : 3) + rc }
   END { n += 1; print (n < max) ? n : max }' "$INDEX")"
@@ -749,11 +765,22 @@ LAG_FILE_POLLS=3
 # first pass and the first-sight ML re-check share it. An uploaded file whose
 # first report carries only Microsoft !ml findings is not judged here: it is
 # listed in $ML_PENDING for one re-check (FIRST-SIGHT MICROSOFT !ml FINDINGS).
+#
+# Batch mode, used only by the re-check: when AWAIT_DEADLINE holds an absolute
+# epoch it replaces the per-file now + ANALYSIS_TIMEOUT, and reaching it records
+# the file in $ML_INCOMPLETE and returns instead of exiting 2, so the rest of
+# the batch is still judged. The deadline is checked after each poll, so every
+# file gets at least one poll. Empty (the first pass): exit 2 on the timeout.
+AWAIT_DEADLINE=""
 await_report() {
   local sha="$1" before="$2" source="$3" aid="$4" extra="${5:-"{}"}"
   local path deadline gap next analysis_newer analysis_gone lag_polls facts pdate status adate first
   path="$(awk -F'\t' -v s="$sha" '$1 == s { print $3; exit }' "$INDEX")"
-  deadline=$(($(date +%s) + ANALYSIS_TIMEOUT))
+  if [ -n "$AWAIT_DEADLINE" ]; then
+    deadline="$AWAIT_DEADLINE"
+  else
+    deadline=$(($(date +%s) + ANALYSIS_TIMEOUT))
+  fi
   gap="$MIN_INTERVAL"
   next="file"
   analysis_newer=0
@@ -834,8 +861,14 @@ await_report() {
       *) harness "analysis of $path ($sha) answered status '${status:-none}', not queued, in-progress or completed" ;;
       esac
     fi
-    [ "$(date +%s)" -lt "$deadline" ] ||
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      if [ -n "$AWAIT_DEADLINE" ]; then
+        printf '%s\t%s\n' "$sha" "$path" >>"$ML_INCOMPLETE"
+        echo "  re-check of $path ($sha) did not complete by the batch deadline"
+        return 0
+      fi
       harness "analysis of $path ($sha) did not complete within ${ANALYSIS_TIMEOUT}s"
+    fi
   done
 }
 
@@ -844,8 +877,15 @@ while IFS=$'\t' read -r sha before source aid; do
 done <"$SUBMITTED"
 
 # --- 3. One re-check of each first-sight Microsoft !ml finding ---------------
-# One delay for the whole batch, measured from the end of the poll pass, then
-# one reanalysis per pending file, judged by the full rules. Never a second.
+# One delay for the whole batch, measured from the end of the poll pass. Then
+# every reanalysis is requested before any re-check is polled, and the polls
+# share one deadline, ML_RECHECK_TIMEOUT after the last request: one slow
+# reanalysis cannot stop the run before the others are requested (#3519).
+# Every report that arrives is judged by the full rules. Never a second.
+ML_SUBMITTED="$WORK/ml-submitted.tsv"
+ML_INCOMPLETE="$WORK/ml-incomplete.tsv"
+: >"$ML_SUBMITTED"
+: >"$ML_INCOMPLETE"
 if [ -s "$ML_PENDING" ]; then
   echo "vt-scan: $(wc -l <"$ML_PENDING" | tr -d ' ') file(s) with a first-sight Microsoft !ml finding; reanalysing after ${ML_RECHECK_DELAY}s"
   sleep "$ML_RECHECK_DELAY"
@@ -855,17 +895,32 @@ if [ -s "$ML_PENDING" ]; then
     vt_request POST "$API_BASE/files/$sha/analyse"
     expect_analysis "POST /files/$sha/analyse for $path"
     echo "  reanalysing $path ($sha): first analysed $(utc "$before") with only Microsoft !ml findings"
-    await_report "$sha" "$before" reanalysed-after-ml "$ANALYSIS_ID" "$(jq -c '{first_sight: .}' <<<"$first")"
+    printf '%s\t%s\t%s\t%s\n' "$sha" "$before" "$first" "$ANALYSIS_ID" >>"$ML_SUBMITTED"
   done <"$ML_PENDING"
+  AWAIT_DEADLINE=$(($(date +%s) + ML_RECHECK_TIMEOUT))
+  echo "vt-scan: every reanalysis requested; re-checks must complete by $(utc "$AWAIT_DEADLINE") (${ML_RECHECK_TIMEOUT}s)"
+  while IFS=$'\t' read -r sha before first aid; do
+    await_report "$sha" "$before" reanalysed-after-ml "$aid" "$(jq -c '{first_sight: .}' <<<"$first")"
+  done <"$ML_SUBMITTED"
+  AWAIT_DEADLINE=""
 fi
+# One "path (sha)" per re-check that missed the batch deadline, comma-joined.
+ML_INCOMPLETE_LIST="$(awk -F'\t' '{ printf "%s%s (%s)", (NR > 1 ? ", " : ""), $2, $1 }' "$ML_INCOMPLETE")"
+ML_INCOMPLETE_MSG="first-sight !ml re-check did not complete within ${ML_RECHECK_TIMEOUT}s of the last reanalysis request: $ML_INCOMPLETE_LIST"
 
 if [ "$FINDINGS" -gt 0 ]; then
   REPORT_STATUS="findings"
   write_report
   print_reanalysis_notes
+  [ -z "$ML_INCOMPLETE_LIST" ] ||
+    echo "vt-scan: $ML_INCOMPLETE_MSG" >&2
   print_summary
   echo "vt-scan: $FINDINGS finding(s). Nothing may publish until the owner decides." >&2
   exit 1
+fi
+if [ -n "$ML_INCOMPLETE_LIST" ]; then
+  print_reanalysis_notes
+  harness "$ML_INCOMPLETE_MSG"
 fi
 REPORT_STATUS="clean"
 write_report

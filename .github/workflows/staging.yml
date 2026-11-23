@@ -512,8 +512,10 @@ jobs:
     # binaries (#3192) about 24 more, about 21 minutes at the free key's 4
     # requests/min, plus backed-off polls of slow analyses, plus one
     # VT_ML_RECHECK_DELAY (60 minutes) when a file uploaded in this run carries
-    # only a first-sight Microsoft !ml finding and is re-checked (#3398).
-    timeout-minutes: 160
+    # only a first-sight Microsoft !ml finding and is re-checked (#3398), plus
+    # the re-check batch's VT_ML_RECHECK_TIMEOUT (60 minutes, #3519), so the
+    # scan's own exit 2 fires before the job is cancelled.
+    timeout-minutes: 220
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -541,8 +543,8 @@ jobs:
           # about 52 for the RC's files, about 58 more when the text files'
           # 14-day window has run out (the rc.3 replay: 111 against 52), 24 for
           # the margin binaries, and the remaining 26 for slow polls and the
-          # first-sight !ml re-checks (#3398): a reanalysis plus about four
-          # backed-off polls each. Past it the scan
+          # first-sight !ml re-checks (#3398): a reanalysis plus up to six
+          # polls each within 15 minutes, so about three. Past it the scan
           # is a HARNESS ERROR; the day's 500 keep room for a second RC and a
           # release (#3202).
           VT_MAX_REQUESTS: "160"
