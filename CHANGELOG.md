@@ -14,6 +14,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Security
+
+- A repository cloned beside a checkout can no longer move that checkout's workspace root, and with it its Action Center store, by listing it in a committed workspace manifest. A sibling manifest's claim now counts only when both checkouts' git `origin` remotes name the same forge host and owner, or when the manifest root is listed in the new machine-tier key `workspace.trusted_roots`; otherwise the claim is ignored, logged once, and the checkout is its own workspace. Ancestor manifests are unchanged. A workspace whose members lack a shared `origin` owner must add its root to `workspace.trusted_roots` (#3495).
+
 ### Fixed
 
 - Runs started from the VS Code extension now book a partial-delivery re-run with nothing left to build the same way. The extension no longer charges it as a failure or halts its queue, even when the open criteria quote another failure's words. It fills the freed slot and starts the issues the no-op blocked once it closes, from the card's close or a close by hand. The run is audited as completed with outcome `no_op`, its exit record carries gate kind `partial_no_op`, and it runs no auto-retro and stays off the Failed issues list. The issue comment and the slot card still read as a failure (#3487).

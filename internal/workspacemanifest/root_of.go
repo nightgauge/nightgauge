@@ -24,8 +24,14 @@ import (
 //  1. the nearest ancestor of the checkout (the checkout included) whose
 //     manifest parses and either sits in the checkout or lists it;
 //  2. a sibling directory of the checkout, in sorted name order, whose manifest
-//     parses and lists it;
+//     parses and lists it, and whose claim is trusted (see siblingClaimTrusted:
+//     same origin host and owner, or listed in the machine config's
+//     workspace.trusted_roots). An untrusted claim is logged once and skipped;
 //  3. the checkout itself.
+//
+// Only a sibling claim costs more than a filesystem walk: it reads the
+// machine config, runs `git config` in the checkout and each claiming
+// sibling, and writes a refused claim to stderr once per process.
 //
 // A manifest that does not parse is ignored. A repository listed by two
 // workspaces' manifests resolves deterministically by that order.
@@ -54,13 +60,25 @@ func RootOf(mainCheckout string) string {
 		}
 	}
 	slices.Sort(names)
+	var (
+		resolved      bool
+		trustedRoots  []string
+		checkoutOwner remoteOwner
+	)
 	for _, name := range names {
 		s := filepath.Join(parent, name)
 		if s == c {
 			continue
 		}
 		if m := loadQuiet(s); m != nil && lists(m, c) {
-			return canonicalPath(s)
+			root := canonicalPath(s)
+			if !resolved {
+				trustedRoots, checkoutOwner, resolved = machineTrustedRoots(), originOwner(c), true
+			}
+			if siblingClaimTrusted(root, trustedRoots, checkoutOwner) {
+				return root
+			}
+			logRefusedClaim(root, c)
 		}
 	}
 	return c

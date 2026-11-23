@@ -21,6 +21,10 @@ import (
 // (`path: ../r<i>`), the shape of a real Nightgauge workspace. The Action Center
 // store is keyed by workspace (#3453), so these repositories share one store
 // while a repository from Repo has a store of its own.
+//
+// Every repository gets an origin under one owner
+// (https://github.com/workspace-owner/r<i>.git), so the sibling claims are
+// trusted (#3495).
 func WorkspaceRepos(t testing.TB, n int) []string {
 	t.Helper()
 	if n < 1 {
@@ -39,6 +43,10 @@ func WorkspaceRepos(t testing.TB, n int) []string {
 			t.Fatal(err)
 		}
 		repos[i] = gittest.InitRepo(t, dir, "-q")
+		// One forge owner for every member: RootOf honours a sibling's
+		// manifest claim only when the origins agree (#3495).
+		gittest.Run(t, repos[i], "remote", "add", "origin",
+			fmt.Sprintf("https://github.com/workspace-owner/%s.git", name))
 		manifest += fmt.Sprintf("  - name: %s\n    path: %s\n    role: primary\n", name, rel)
 	}
 	path := workspacemanifest.ManifestPath(repos[0])

@@ -73,6 +73,10 @@ var MachineTierKeys = []string{
 	// from this tier alone.
 	"pipeline.logs.max_size_mb",
 	"pipeline.logs.max_age_days",
+	// workspace.trusted_roots lets a sibling manifest claim a checkout whose
+	// origin owner differs (#3495). internal/workspacemanifest reads it from
+	// this tier alone: a committed file must not grant that trust.
+	"workspace.trusted_roots",
 }
 
 // machineConfigPathHook lets tests override the resolved machine-tier path;
