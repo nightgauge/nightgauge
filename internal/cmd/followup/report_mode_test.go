@@ -42,7 +42,7 @@ func TestReviewFiling_ReportModeAppliesParentBody(t *testing.T) {
 		42: {Body: "- [ ] Waiter honours the configured ceiling on retry\n"},
 	})
 	cfg := &config.Config{Owner: githubtest.Owner, DefaultRepo: githubtest.Repo}
-	file := ReviewFiling(fake.Client(), cfg)
+	file := ReviewFiling(fake.Client(), cfg, nil)
 	capt := capture(t, "Waiter honours the configured ceiling on retry")
 
 	res, err := file(context.Background(), t.TempDir(), githubtest.Owner+"/"+githubtest.Repo, capt)
@@ -70,7 +70,7 @@ func TestReviewFiling_ReportModeAppliesParentBody(t *testing.T) {
 func TestReviewFiling_ReportModeUnreadableParentReports(t *testing.T) {
 	fake := githubtest.New(t, map[int]githubtest.Issue{42: {}})
 	fake.Unreadable = []int{42}
-	file := ReviewFiling(fake.Client(), &config.Config{Owner: githubtest.Owner, DefaultRepo: githubtest.Repo})
+	file := ReviewFiling(fake.Client(), &config.Config{Owner: githubtest.Owner, DefaultRepo: githubtest.Repo}, nil)
 	res, err := file(context.Background(), t.TempDir(), "", capture(t, "Waiter honours the configured ceiling on retry"))
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestReviewFiling_FileModeGuardsStayFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := githubtest.New(t, map[int]githubtest.Issue{})
-	file := ReviewFiling(fake.Client(), &config.Config{Owner: githubtest.Owner, DefaultRepo: githubtest.Repo})
+	file := ReviewFiling(fake.Client(), &config.Config{Owner: githubtest.Owner, DefaultRepo: githubtest.Repo}, nil)
 	for _, repo := range []string{"not-a-repo", "someone/undeclared"} {
 		res, err := file(context.Background(), workdir, repo, capture(t, "Logger drops the run id"))
 		if err == nil || res != nil {
@@ -160,7 +160,7 @@ func TestReviewFiling_ReportModeMarkerInParentBody(t *testing.T) {
 	fake := githubtest.New(t, map[int]githubtest.Issue{
 		42: {Body: Marker(capt.Records[0]) + "\n- [x] Stage lines carry their correlation field\n"},
 	})
-	file := ReviewFiling(fake.Client(), &config.Config{Owner: githubtest.Owner, DefaultRepo: githubtest.Repo})
+	file := ReviewFiling(fake.Client(), &config.Config{Owner: githubtest.Owner, DefaultRepo: githubtest.Repo}, nil)
 	res, err := file(context.Background(), t.TempDir(), githubtest.Owner+"/"+githubtest.Repo, capt)
 	if err != nil {
 		t.Fatal(err)

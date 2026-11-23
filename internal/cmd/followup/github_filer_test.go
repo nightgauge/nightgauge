@@ -3,11 +3,15 @@ package followup
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/cmd/discoveredwork"
+	"github.com/nightgauge/nightgauge/internal/config"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/github/githubtest"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -312,5 +316,118 @@ func TestGitHubFiler_SubsystemTrustedPickStillMeetsThePriorityGuard(t *testing.T
 	}
 	if n != 0 {
 		t.Fatalf("picked #%d, want 0: a critical record outranks P2", n)
+	}
+}
+
+// TestReviewFiling_UsesResolvedClient (#2837): the parent read goes through
+// the client the resolver returns for the capture's repository, not the
+// startup client; an empty repo resolves cfg.Owner/cfg.DefaultRepo first.
+func TestReviewFiling_UsesResolvedClient(t *testing.T) {
+	startup := githubtest.New(t, map[int]githubtest.Issue{42: {}})
+	startup.Unreadable = []int{42}
+	repoB := githubtest.New(t, map[int]githubtest.Issue{
+		42: {Body: "- [ ] Waiter honours the configured ceiling on retry\n"},
+	})
+	cfg := &config.Config{Owner: githubtest.Owner, DefaultRepo: githubtest.Repo}
+	for _, repo := range []string{githubtest.Owner + "/" + githubtest.Repo, ""} {
+		var gotOwner, gotRepo string
+		resolve := func(_ context.Context, owner, name string) (*gh.Client, error) {
+			gotOwner, gotRepo = owner, name
+			return repoB.Client(), nil
+		}
+		res, err := ReviewFiling(startup.Client(), cfg, resolve)(context.Background(), t.TempDir(), repo,
+			capture(t, "Waiter honours the configured ceiling on retry"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotOwner != githubtest.Owner || gotRepo != githubtest.Repo {
+			t.Fatalf("repo %q: resolver called with %s/%s", repo, gotOwner, gotRepo)
+		}
+		if got := outcomes(res); got[0] != OutcomeTrackedByParent {
+			t.Fatalf("repo %q: outcomes = %v, want the resolved client's parent read", repo, got)
+		}
+	}
+}
+
+// TestReviewFiling_NoResolvedClientKeepsStartup: a nil resolver and a
+// (nil, nil) one both keep the startup client.
+func TestReviewFiling_NoResolvedClientKeepsStartup(t *testing.T) {
+	startup := githubtest.New(t, map[int]githubtest.Issue{
+		42: {Body: "- [ ] Waiter honours the configured ceiling on retry\n"},
+	})
+	cfg := &config.Config{Owner: githubtest.Owner, DefaultRepo: githubtest.Repo}
+	none := func(context.Context, string, string) (*gh.Client, error) { return nil, nil }
+	for name, resolve := range map[string]ClientResolver{"nil": nil, "nil-nil": none} {
+		res, err := ReviewFiling(startup.Client(), cfg, resolve)(context.Background(), t.TempDir(), "",
+			capture(t, "Waiter honours the configured ceiling on retry"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := outcomes(res); got[0] != OutcomeTrackedByParent {
+			t.Fatalf("%s: outcomes = %v", name, got)
+		}
+	}
+}
+
+// TestReviewFiling_ResolverErrorFailsFileModeOnly: file mode refuses to file
+// under the startup identity; report mode falls back to it.
+func TestReviewFiling_ResolverErrorFailsFileModeOnly(t *testing.T) {
+	startup := githubtest.New(t, map[int]githubtest.Issue{
+		42: {Body: "- [ ] Waiter honours the configured ceiling on retry\n"},
+	})
+	cfg := &config.Config{Owner: githubtest.Owner, DefaultRepo: githubtest.Repo, ProjectNumber: 1}
+	failing := func(context.Context, string, string) (*gh.Client, error) { return nil, errors.New("no token") }
+	file := ReviewFiling(startup.Client(), cfg, failing)
+	capt := capture(t, "Waiter honours the configured ceiling on retry")
+
+	res, err := file(context.Background(), t.TempDir(), "", capt)
+	if err != nil {
+		t.Fatalf("report mode: %v", err)
+	}
+	if got := outcomes(res); got[0] != OutcomeTrackedByParent {
+		t.Fatalf("report mode outcomes = %v", got)
+	}
+
+	workdir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workdir, ".nightgauge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, ".nightgauge", "config.yaml"),
+		[]byte("follow_up_filing:\n  mode: file\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err = file(context.Background(), workdir, "", capt)
+	if err == nil || !strings.Contains(err.Error(), "no token") || res != nil {
+		t.Fatalf("file mode: res = %+v, err = %v, want a resolver refusal", res, err)
+	}
+	if m := startup.Mutations(); len(m) != 0 {
+		t.Fatalf("file mode mutated under the startup client: %v", m)
+	}
+}
+
+// TestReviewFiling_SecondaryRepoResolvesItsOwnClient (#2837): a capture for a
+// repository other than the startup one asks the resolver for that owner/name.
+func TestReviewFiling_SecondaryRepoResolvesItsOwnClient(t *testing.T) {
+	startup := githubtest.New(t, map[int]githubtest.Issue{42: {}})
+	startup.Unreadable = []int{42}
+	repoB := githubtest.New(t, map[int]githubtest.Issue{
+		42: {Body: "- [ ] Waiter honours the configured ceiling on retry\n"},
+	})
+	cfg := &config.Config{Owner: githubtest.Owner, DefaultRepo: githubtest.Repo}
+	var gotOwner, gotRepo string
+	resolve := func(_ context.Context, owner, name string) (*gh.Client, error) {
+		gotOwner, gotRepo = owner, name
+		return repoB.Client(), nil
+	}
+	res, err := ReviewFiling(startup.Client(), cfg, resolve)(context.Background(), t.TempDir(),
+		"other-owner/B", capture(t, "Waiter honours the configured ceiling on retry"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotOwner != "other-owner" || gotRepo != "B" {
+		t.Fatalf("resolver called with %s/%s, want other-owner/B", gotOwner, gotRepo)
+	}
+	if got := outcomes(res); got[0] != OutcomeTrackedByParent {
+		t.Fatalf("outcomes = %v, want the resolved client's parent read", got)
 	}
 }

@@ -370,7 +370,7 @@ func newPrStageMergeRunner(cfg *config.Config) *pmstages.DeterministicRunner {
 		pipeline, pr = cfg.Pipeline, cfg.PR
 		var resolver gh.TokenResolver = cfg
 		if client, err := gh.NewClientFromConfig(resolver, cfg.Owner, ""); err == nil {
-			runner.SetReviewFiling(followup.ReviewFiling(client, cfg))
+			runner.SetReviewFiling(followup.ReviewFiling(client, cfg, nil))
 		}
 	}
 	runner.SetMergeQueueWaitTimeout(pipeline.ResolveMergeQueueWaitTimeout())

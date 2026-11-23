@@ -32,6 +32,10 @@ func TrustedBots(workdir string) []string {
 	return nil
 }
 
+// ClientResolver returns the GitHub client scoped to owner/repo. (nil, nil)
+// means no per-repository client is available.
+type ClientResolver func(ctx context.Context, owner, repo string) (*gh.Client, error)
+
 // ReviewFiling returns the pr-merge enqueue gate's filer (#2730): Materialize
 // against the live forge, under the same Rule 5 controls as the post-merge
 // stage, for a capture of review findings. The gate calls it before the merge
@@ -41,7 +45,13 @@ func TrustedBots(workdir string) []string {
 // for the parent's body, so tracked-by-parent applies there too. That read
 // needs no project board, so report mode tolerates an unresolved project, and
 // when the repository is not owner/name the report runs without the read.
-func ReviewFiling(client *gh.Client, cfg *config.Config) func(ctx context.Context, workdir, repo string, capture *discoveredwork.Capture) (*Result, error) {
+//
+// resolve picks the client for the capture's repository (#2837), so a
+// secondary repository's findings are filed under its own identity. A nil
+// resolver, or one returning (nil, nil), keeps client. A resolver error fails
+// file mode closed (filing under the wrong identity is the defect) and falls
+// back to client in report mode, which only reads.
+func ReviewFiling(client *gh.Client, cfg *config.Config, resolve ClientResolver) func(ctx context.Context, workdir, repo string, capture *discoveredwork.Capture) (*Result, error) {
 	return func(ctx context.Context, workdir, repo string, capture *discoveredwork.Capture) (*Result, error) {
 		gate := filing.ResolveGate(workdir)
 		// A pr-{N}.json restored for a dispatched PR carries no pr_url.
@@ -59,13 +69,23 @@ func ReviewFiling(client *gh.Client, cfg *config.Config) func(ctx context.Contex
 		if err != nil && gate.Files() {
 			return nil, err
 		}
+		repoClient := client
+		if resolve != nil {
+			c, rerr := resolve(ctx, owner, name)
+			switch {
+			case rerr != nil && gate.Files():
+				return nil, fmt.Errorf("resolve client for %s/%s: %w", owner, name, rerr)
+			case rerr == nil && c != nil:
+				repoClient = c
+			}
+		}
 		// Report mode makes no board call, so an unresolved project (0) is fine.
-		filer := NewGitHubFiler(client, owner, name, project, gh.ParseOwnerType(cfg.OwnerType)).
+		filer := NewGitHubFiler(repoClient, owner, name, project, gh.ParseOwnerType(cfg.OwnerType)).
 			WithTrustedBots(TrustedBots(workdir))
 		if !gate.Files() {
 			return Materialize(ctx, capture, gate, false, Tracking{}, filer)
 		}
-		trusted := AuthorTrusted(ctx, client, workdir, owner, name, capture.IssueNumber)
+		trusted := AuthorTrusted(ctx, repoClient, workdir, owner, name, capture.IssueNumber)
 		return Materialize(ctx, capture, gate, trusted, Tracking{}, filer)
 	}
 }
