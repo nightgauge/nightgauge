@@ -413,3 +413,32 @@ func TestRejudgeCheckCriteria_BulletWithoutStatus(t *testing.T) {
 		t.Errorf("body:\n%s", got)
 	}
 }
+
+// #3510: a passing check criterion does not promote Refs to Closes when the
+// issue's Delivery order section says each PR refs it.
+func TestCheckAC_DeliveryOrderRefsKeepsRefs(t *testing.T) {
+	dir := writeBackstopContext(t, checkCrit)
+	if err := setPRContextCloses(dir, 7, false); err != nil {
+		t.Fatal(err)
+	}
+	snap := cleanOpen
+	snap.StatusCheckRollup = success("integration-tests")
+	b := &bodyGh{
+		queueGh:   queueGh{fakeGh: fakeGh{preMerge: snap, postMerge: PRViewSnapshot{State: "MERGED"}}},
+		prBody:    checkPRBody(nil, checkCrit),
+		issueBody: checkIssueBody(checkCrit) + "\n## Delivery order\n\n1. Step one; each PR refs #7.\n",
+	}
+	res, err := newBackstopRunner(directBodyGh{b}).Run(context.Background(), 7, "", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Path != PathMerged {
+		t.Fatalf("res = %+v", res)
+	}
+	if v := readClosesIssue(t, dir); v == true {
+		t.Errorf("pr-7.json closes_issue = true, want false")
+	}
+	if BodyClosesIssue(b.prBody, "o/r", 7) || !strings.Contains(b.prBody, "Refs #7") {
+		t.Errorf("a Refs delivery order must keep Refs #7:\n%s", b.prBody)
+	}
+}

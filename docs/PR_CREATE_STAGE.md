@@ -387,6 +387,14 @@ it from the check's conclusion after the CI wait and can turn `Refs #<N>`
 into `Closes #<N>`: see
 [Check-named criteria at merge](PR_MERGE_STAGE.md#check-named-criteria-at-merge-3424).
 
+A multi-step issue can ask each PR to reference it rather than close it
+(#3510). When the issue body's first heading starting with "Delivery order"
+heads a section containing the whole word `refs` (case-insensitive; the
+section ends at the next heading of the same or higher level outside a code
+fence), `DeliveryOrderSaysRefs` holds and pr-create says `Refs #<N>` even with
+every criterion met, explaining why under the unmet heading. pr-merge's
+check-criteria promotion honours the same rule.
+
 `IssueClosedBy` writes `Closes #<N>` only when there is at least one criterion
 and every one is `met`. Any `unmet` or `not_verifiable` criterion, or no
 criteria at all, gives `Refs #<N>`. Met criteria render under

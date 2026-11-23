@@ -39,7 +39,8 @@ type unmetItem struct {
 // judgeCheckCriteria re-judges the PR body's open check-named criteria from
 // snap's status rollup, rewrites the body once, and promotes it to close the
 // issue when every criterion is then met under the post-merge hook's own
-// remainder rule and no issue criterion is uncovered.
+// remainder rule, no issue criterion is uncovered, and the issue's Delivery
+// order section does not say each PR refs it (#3510).
 // Fails closed toward `Refs`: a client without prBodyClient, a failed PR-body
 // read or a failed edit leaves the body as it was; a failed issue-body read
 // still records the re-judged verdicts but keeps `Refs`.
@@ -64,7 +65,7 @@ func (r *DeterministicRunner) judgeCheckCriteria(ctx context.Context, gh ghClien
 	closes := false
 	if issueBody, err := bc.IssueBody(ctx, issueNumber); err != nil {
 		log.Printf("pr-merge: #%d stays Refs: read issue body: %v", issueNumber, err)
-	} else if promoted, ok := promoteRefsToCloses(newBody, issueNumber); ok && checkCriteriaClose(issueBody, newBody, readACReconcile(workdir, issueNumber)) {
+	} else if promoted, ok := promoteRefsToCloses(newBody, issueNumber); ok && !DeliveryOrderSaysRefs(issueBody) && checkCriteriaClose(issueBody, newBody, readACReconcile(workdir, issueNumber)) {
 		newBody, closes = promoted, true
 	}
 	if err := bc.EditPRBody(ctx, prNumber, newBody); err != nil {
