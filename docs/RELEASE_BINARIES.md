@@ -591,7 +591,9 @@ ERROR. The report records `quota_remaining` and `quota_estimate`.
   reanalysis. A newer analysis may mean the file object lags, so the file is
   read up to three more times; if its date still has not moved, the scan stops
   with exit 2 the same way (VirusTotal dates an analysis when it is created, so
-  a folded one can look newer). An analysis object that answers 404 (rc.11:
+  a folded one can look newer). A report that did move past the lookup's but
+  sits outside the file's window is not lagging: it is polled until the
+  timeout, never judged. An analysis object that answers 404 (rc.11:
   the upload was accepted, the analysis 404'd, and the file's report later
   showed a newer date) is not fatal: the file alone is polled until its
   report is newer and inside its window, then judged like any other, or the

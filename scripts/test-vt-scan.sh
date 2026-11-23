@@ -433,15 +433,20 @@ grep -q "^POST /api/v3/files/$ELF_SHA/analyse " "$STATE/requests.log" && [ "$fol
   bad "stale executable: ${fold_secs}s, requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(jq -c '.files' "$REPORT" 2>/dev/null)"
 # 19-window. A newer report still has to fall inside the file's window: an
 # executable's reanalysis dated two days ago (newer than its 3-day-old lookup)
-# is not judged reanalysed; the poll runs on to the timeout.
+# is not judged reanalysed; the poll runs on to the timeout. The report moved,
+# so it is not lagging: the timeout outlasts the lag bound's 3 file reads
+# (LAG_FILE_POLLS, about 5s at 1s polls). The old code stopped after at most 4
+# file reads past the reanalysis request; this one must read on to the timeout.
 printf '172800\n' >"$STATE/analysis-age"
-seed_scan 259200 "$ELF" VT_MIN_INTERVAL=1 VT_POLL_MAX_INTERVAL=1 VT_ANALYSIS_TIMEOUT=4
+seed_scan 259200 "$ELF" VT_MIN_INTERVAL=1 VT_POLL_MAX_INTERVAL=1 VT_ANALYSIS_TIMEOUT=10
 rm -f "$STATE/analysis-age"
-expect "a newer executable report outside 24 hours is not judged -> exit 2" 2 "did not complete within 4s"
-grep -qF 'newer than the lookup' <<<"$OUT" &&
+expect "a newer executable report outside 24 hours is not judged -> exit 2" 2 "did not complete within 10s"
+grep -qF 'newer than the lookup' <<<"$OUT" && ! grep -qF 'its report stayed at' <<<"$OUT" &&
+  [ "$(awk -v p="POST /api/v3/files/$ELF_SHA/analyse " -v f="GET /api/v3/files/$ELF_SHA " \
+    'index($0, p) == 1 { a = 1 } a && index($0, f) == 1 { n++ } END { print n + 0 }' "$STATE/requests.log")" -gt 4 ] &&
   jq -e '[.files[] | select(.source == "reanalysed")] | length == 0' "$REPORT" >/dev/null &&
   ok "window guard: a 2-day-old reanalysis of an executable never passes" ||
-  bad "window guard: report $(jq -c '.files' "$REPORT" 2>/dev/null)"
+  bad "window guard: requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(jq -c '.files' "$REPORT" 2>/dev/null)"
 # 19-lag. A completed analysis newer than the file's report means the file
 # object lags: the old report must never be judged as a folded reanalysis.
 scan -- "$CLEAN"
@@ -645,6 +650,17 @@ expect "VT_ML_RECHECK_DELAY not in seconds -> exit 2" 2 "HARNESS ERROR: VT_ML_RE
 # 19-ml batch (#3519): every reanalysis is requested before any re-check is
 # polled, and the re-checks share one deadline. A slow one is named as
 # incomplete (exit 2) without stopping the others from being judged.
+# recheck_posts_before_polls N: the last run sent exactly N reanalysis requests
+# (POST /files/{sha}/analyse), and every one of them before any GET, so no
+# re-check was polled until every pending file had been submitted (AC1).
+recheck_posts_before_polls() {
+  local pat='^POST /api/v3/files/[0-9a-f]*/analyse' first_post last_post first_get
+  [ "$(grep -c "$pat" "$STATE/requests.log")" = "$1" ] || return 1
+  first_post="$(grep -n "$pat" "$STATE/requests.log" | sed -n 1p | cut -d: -f1)"
+  last_post="$(grep -n "$pat" "$STATE/requests.log" | tail -1 | cut -d: -f1)"
+  first_get="$(awk -v n="$first_post" 'NR > n && /^GET / { print NR; exit }' "$STATE/requests.log")"
+  [ -n "$first_get" ] && [ "$last_post" -lt "$first_get" ]
+}
 MLSLOW="$(art ml-slow.bin 'payload VT-STUB-MS-ML-FIRST slow')"
 MLSLOW_SHA="$(shasum -a 256 "$MLSLOW" | cut -d' ' -f1)"
 MLFIRST2="$(art ml-first-two.bin 'payload VT-STUB-MS-ML-FIRST two')"
@@ -653,11 +669,7 @@ ML_BATCH_ENV=(VT_MIN_INTERVAL=1 VT_POLL_MAX_INTERVAL=1 VT_ML_RECHECK_DELAY=0 "VT
 touch "$STATE/recheck-never-complete-$MLSLOW_SHA"
 scan "${ML_BATCH_ENV[@]}" -- "$MLSLOW" "$MLFIRST"
 expect "a slow re-check beside a clean one -> exit 2 naming the slow file" 2 "HARNESS ERROR: first-sight !ml re-check did not complete within ${ML_BATCH_TIMEOUT}s of the last reanalysis request: $MLSLOW ($MLSLOW_SHA)"
-first_post="$(grep -n '^POST /api/v3/files/[0-9a-f]*/analyse' "$STATE/requests.log" | sed -n 1p | cut -d: -f1)"
-last_post="$(grep -n '^POST /api/v3/files/[0-9a-f]*/analyse' "$STATE/requests.log" | tail -1 | cut -d: -f1)"
-first_get="$(awk -v n="${first_post:-0}" 'NR > n && /^GET / { print NR; exit }' "$STATE/requests.log")"
-[ "$(grep -c '^POST /api/v3/files/[0-9a-f]*/analyse' "$STATE/requests.log")" = 2 ] &&
-  [ -n "$first_get" ] && [ "$last_post" -lt "$first_get" ] &&
+recheck_posts_before_polls 2 &&
   ! grep -qF "HARNESS ERROR: first-sight !ml re-check did not complete within ${ML_BATCH_TIMEOUT}s of the last reanalysis request: $MLSLOW ($MLSLOW_SHA), " <<<"$OUT" &&
   grep -qF "judged on a reanalysis after a first-sight Microsoft !ml finding: $MLFIRST ($MLFIRST_SHA)" <<<"$OUT" &&
   jq -e --arg f "$MLFIRST" '.status == "error" and (.judged_on_reanalysis | length) == 1
@@ -668,24 +680,32 @@ first_get="$(awk -v n="${first_post:-0}" 'NR > n && /^GET / { print NR; exit }' 
   bad "slow re-check: requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(jq -c '{status, error, files}' "$REPORT" 2>/dev/null)"
 scan "${ML_BATCH_ENV[@]}" -- "$MLSLOW" "$MLKEEP"
 expect "a slow re-check beside a persisting finding -> exit 1" 1 "engine Microsoft: malicious Trojan:Script/Wacatac.B!ml"
-[ "$(report_status)" = "findings" ] &&
+[ "$(report_status)" = "findings" ] && recheck_posts_before_polls 2 &&
   grep -qF "did not complete within ${ML_BATCH_TIMEOUT}s of the last reanalysis request: $MLSLOW ($MLSLOW_SHA)" <<<"$OUT" &&
   ok "slow re-check beside a finding: the finding wins, the slow file is still named" ||
-  bad "slow re-check beside a finding: report $(jq -c '{status, error}' "$REPORT" 2>/dev/null)"
+  bad "slow re-check beside a finding: requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(jq -c '{status, error}' "$REPORT" 2>/dev/null)"
 MLSLOW2="$(art ml-slow-two.bin 'payload VT-STUB-MS-ML-FIRST slow two')"
 MLSLOW2_SHA="$(shasum -a 256 "$MLSLOW2" | cut -d' ' -f1)"
 touch "$STATE/recheck-never-complete-$MLSLOW2_SHA"
 scan "${ML_BATCH_ENV[@]}" -- "$MLSLOW" "$MLSLOW2"
 expect "two slow re-checks -> exit 2, one HARNESS ERROR naming both" 2 "HARNESS ERROR: first-sight !ml re-check did not complete within ${ML_BATCH_TIMEOUT}s of the last reanalysis request: $MLSLOW ($MLSLOW_SHA), $MLSLOW2 ($MLSLOW2_SHA)"
-[ "$(grep -c '^HARNESS ERROR:' <<<"$OUT")" = 1 ] && ok "two slow re-checks: a single HARNESS ERROR line" ||
-  bad "two slow re-checks: $(grep '^HARNESS ERROR:' <<<"$OUT")"
+[ "$(grep -c '^HARNESS ERROR:' <<<"$OUT")" = 1 ] && recheck_posts_before_polls 2 &&
+  ok "two slow re-checks: a single HARNESS ERROR line, both reanalyses sent before any poll" ||
+  bad "two slow re-checks: $(grep '^HARNESS ERROR:' <<<"$OUT"), requests $(tr '\n' ' ' <"$STATE/requests.log")"
 rm -f "$STATE/recheck-never-complete-$MLSLOW_SHA" "$STATE/recheck-never-complete-$MLSLOW2_SHA"
 scan "${ML_BATCH_ENV[@]}" -- "$MLFIRST" "$MLFIRST2"
 expect "two first-sight !ml files clean on re-check -> exit 0" 0 "every file clean"
-[ "$(wc -l <"$STATE/analyses.log" | tr -d ' ')" = 2 ] &&
+[ "$(wc -l <"$STATE/analyses.log" | tr -d ' ')" = 2 ] && recheck_posts_before_polls 2 &&
   jq -e '[.files[].source] == ["reanalysed-after-ml", "reanalysed-after-ml"]' "$REPORT" >/dev/null &&
   ok "batch re-check, all clean: each file reanalysed once and judged" ||
-  bad "batch re-check, all clean: analyses $(cat "$STATE/analyses.log" 2>/dev/null), report $(jq -c '.files' "$REPORT" 2>/dev/null)"
+  bad "batch re-check, all clean: requests $(tr '\n' ' ' <"$STATE/requests.log"), analyses $(cat "$STATE/analyses.log" 2>/dev/null), report $(jq -c '.files' "$REPORT" 2>/dev/null)"
+MLFIRST3="$(art ml-first-three.bin 'payload VT-STUB-MS-ML-FIRST three')"
+scan "${ML_BATCH_ENV[@]}" -- "$MLFIRST" "$MLFIRST2" "$MLFIRST3"
+expect "three first-sight !ml files clean on re-check -> exit 0" 0 "every file clean"
+recheck_posts_before_polls 3 &&
+  jq -e '[.files[].source] == ["reanalysed-after-ml", "reanalysed-after-ml", "reanalysed-after-ml"]' "$REPORT" >/dev/null &&
+  ok "three-file batch: all three reanalyses sent before any re-check poll, each judged" ||
+  bad "three-file batch: requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(jq -c '.files' "$REPORT" 2>/dev/null)"
 scan VT_ML_RECHECK_TIMEOUT=1h -- "$CLEAN"
 expect "VT_ML_RECHECK_TIMEOUT not in seconds -> exit 2" 2 "HARNESS ERROR: VT_ML_RECHECK_TIMEOUT"
 
