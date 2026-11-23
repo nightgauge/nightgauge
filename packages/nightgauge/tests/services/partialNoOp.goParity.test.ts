@@ -1,5 +1,5 @@
 /**
- * #3487 step 3: the extension books a partial-delivery no-op with the same
+ * #3487 steps 3 and 4: the extension books a partial-delivery no-op with the same
  * values the Go path does. Read from the Go sources, so a rename on either side
  * fails here instead of drifting.
  */
@@ -11,9 +11,9 @@ import { GATE_KIND_PARTIAL_NO_OP } from "../../src/services/HeadlessOrchestrator
 import {
   NO_OP_CLOSE_OPTION_ID,
   NO_OP_CLOSE_VERB,
-  PARTIAL_NO_OP_TERMINAL_KIND,
   slotTerminalKind,
 } from "../../src/services/ConcurrentPipelineManager";
+import { PARTIAL_NO_OP_OUTCOME, PARTIAL_NO_OP_TERMINAL_KIND } from "../../src/services/partialNoOp";
 
 const repoRoot = path.resolve(__dirname, "../../../..");
 const goSource = (rel: string) => readFileSync(path.join(repoRoot, rel), "utf-8");
@@ -33,6 +33,12 @@ describe("partial-delivery no-op: Go/TypeScript parity (#3487)", () => {
     );
     expect(PARTIAL_NO_OP_TERMINAL_KIND).toBe(go);
     expect(slotTerminalKind({ partialNoOp: {} })).toBe(go);
+  });
+
+  it("books the same outcome", () => {
+    expect(PARTIAL_NO_OP_OUTCOME).toBe(
+      goConst("internal/orchestrator/failure_handler.go", "OutcomeTypeNoOp")
+    );
   });
 
   it("writes the same exit-record gate kind", () => {

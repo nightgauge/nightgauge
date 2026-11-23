@@ -60,6 +60,7 @@ import {
 import { formatCost } from "../utils/formatCost";
 import { slotKey } from "../utils/epicRef";
 import { resolveMainRepoRoot } from "../utils/adaptiveBudgetLoader";
+import { PARTIAL_NO_OP_LABEL, PARTIAL_NO_OP_STATE_OUTCOME } from "./partialNoOp";
 
 // Re-export so existing imports (tests/services/DiscordService.test.ts) still resolve.
 export { redactSecrets };
@@ -700,6 +701,10 @@ function baseOutcomeDisplay(outcomeType: string | undefined): {
       // A human must change repo config; no retry clears it. Naming the
       // blocker class is the whole point of the outcome (#190).
       return { color: COLOR_WARNING, label: "Blocked — repo config" };
+    case PARTIAL_NO_OP_STATE_OUTCOME:
+      // A partial-delivery re-run found nothing left to build (#3487): not a
+      // failure, so grey like a deferral, and the label says no-op.
+      return { color: COLOR_NEUTRAL, label: PARTIAL_NO_OP_LABEL };
     case "deferred":
       // Nothing ran and nothing crashed — pickup deferred on open blockers
       // (#189/#305). Grey, like cancelled: a non-event, not a failure.
@@ -777,6 +782,8 @@ export function determineAction(state: PipelineStateSnapshot): string | null {
       return "Re-run when ready — issue and branch preserved";
     case "budget-ceiling":
       return "Increase budget limit or re-run with higher ceiling";
+    case PARTIAL_NO_OP_STATE_OUTCOME:
+      return "No-op: close the issue as met from its Action Center card, or revise its criteria and move it to Ready";
     case "skill-no-op":
       // The skill exited 0 but the gate detected nothing changed (#3267).
       // Operator should investigate the failed gate's reason in the run

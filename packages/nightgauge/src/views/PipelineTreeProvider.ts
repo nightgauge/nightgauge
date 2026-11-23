@@ -33,7 +33,7 @@ import type { Tier } from "../platform/types";
 import type { IpcClientGenerated } from "../services/IpcClient.generated";
 import { CompletedIssueTreeItem } from "./items/CompletedIssueTreeItem";
 import { FailedIssueTreeItem } from "./items/FailedIssueTreeItem";
-import { ConcurrentSlotTreeItem } from "./items/ConcurrentSlotTreeItem";
+import { ConcurrentSlotTreeItem, type SlotStatus } from "./items/ConcurrentSlotTreeItem";
 import type { IssueQueueService } from "../services/IssueQueueService";
 import type { QueueState } from "../types/queue";
 import type { WorkspaceThrottle } from "../services/WorkspaceThrottle";
@@ -1296,13 +1296,10 @@ export class PipelineTreeProvider
   }
 
   /**
-   * Mark a concurrent slot as completed or failed.
+   * Set a concurrent slot's terminal status: completed, failed, or no-op for
+   * a booked partial-delivery no-op (#3487).
    */
-  updateConcurrentSlotStatus(
-    issueNumber: number,
-    status: "completed" | "failed",
-    repo?: string
-  ): void {
+  updateConcurrentSlotStatus(issueNumber: number, status: SlotStatus, repo?: string): void {
     const slot = this.concurrentSlots.get(slotKey(repo, issueNumber));
     if (slot) {
       slot.setSlotStatus(status);

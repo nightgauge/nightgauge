@@ -31,6 +31,7 @@ import type {
   SlotStageStatus,
   QueuedCardData,
 } from "./SlotCardTypes";
+import { slotCardStatus } from "./SlotCardTypes";
 import type { QueueState, ActiveSlot } from "../../types/queue";
 import type { UsageLimitsService } from "../../services/UsageLimitsService";
 import type { AdapterUsageService } from "../../services/usage/AdapterUsageService";
@@ -1136,11 +1137,11 @@ export class Dashboard implements vscode.Disposable {
         (s) => s.status === "complete" || s.status === "skipped" || s.status === "deferred"
       ).length;
 
-      const status: SlotCardData["status"] = snapshot?.paused
-        ? "paused"
-        : stages.some((s) => s.status === "failed")
-          ? "failed"
-          : "running";
+      const status = slotCardStatus({
+        paused: snapshot?.paused,
+        noOp: snapshot?.noOp,
+        stages,
+      });
 
       return {
         slotIndex: active.slotIndex,
@@ -4192,6 +4193,13 @@ export class Dashboard implements vscode.Disposable {
     // Prime the cache so the first render has data even before the first event.
     void this.refreshQueueState();
     void this.refreshMaxConcurrent();
+  }
+
+  /**
+   * Show a slot's run as a partial-delivery no-op (#3487) rather than a failure.
+   */
+  markSlotNoOp(issueNumber: number, repo?: string): void {
+    this.slotsTracker?.markNoOp(issueNumber, repo);
   }
 
   /**

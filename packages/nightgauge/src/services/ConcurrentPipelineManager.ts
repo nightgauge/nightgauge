@@ -197,13 +197,6 @@ export function startRefusalTerminalKind(refusal: string | undefined): string | 
 }
 
 /**
- * The terminal kind a booked partial-delivery no-op carries (#3487); Go's
- * orchestrator.TerminalKindNotPipelineActionable, pinned by
- * tests/services/partialNoOp.goParity.test.ts.
- */
-export const PARTIAL_NO_OP_TERMINAL_KIND = "not_pipeline_actionable" satisfies TerminalFailureKind;
-
-/**
  * The no-op card's close option (#3487): its id and verb, as Go's
  * attention_wiring.go offers them (attention.VerbIssueCloseRemainder).
  */
@@ -220,7 +213,7 @@ export const NO_OP_CLOSE_VERB = "issue.closeRemainder";
 export function slotTerminalKind(
   result: Pick<PipelineRunResult, "partialNoOp" | "startRefusal">
 ): string | undefined {
-  if (result.partialNoOp) return PARTIAL_NO_OP_TERMINAL_KIND;
+  if (result.partialNoOp !== undefined) return PARTIAL_NO_OP_TERMINAL_KIND;
   return startRefusalTerminalKind(result.startRefusal);
 }
 
@@ -243,6 +236,7 @@ import { IpcClient } from "./IpcClient";
 import { confirmAndReportPrivateRun, visibilityOption, withVisibility } from "./RunVisibility";
 import type { AbandonedDispatchSituation, AttentionEvent, QueueHandBackRef } from "./IpcClientBase";
 import type { TerminalFailureKind } from "../schemas/executionHistory";
+import { endedPartialNoOp, PARTIAL_NO_OP_TERMINAL_KIND } from "./partialNoOp";
 
 /** Upper bound on how long a Stop waits for Go to record the stop (#1848). */
 const OPERATOR_STOP_NOTIFY_TIMEOUT_MS = 1_000;
@@ -2483,7 +2477,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           failedStage: result.failedStage,
           costUsd: slotCostUsd,
         };
-        if (result.partialNoOp) {
+        if (endedPartialNoOp(result)) {
           this.logger.info("Concurrent pipeline slot ended a partial-delivery no-op", ending);
         } else {
           this.logger.warn("Concurrent pipeline slot failed", ending);
@@ -2760,7 +2754,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // them when it closes. Decided on the booking alone: the text quotes
         // criteria, which can carry another kind's words (merge_conflict,
         // pr_merge_unmerged).
-        const endedNoOp = !pipelineSucceeded && pipelineResult?.partialNoOp !== undefined;
+        const endedNoOp = pipelineResult !== undefined && endedPartialNoOp(pipelineResult);
         if (
           !pipelineSucceeded &&
           !pipelineDeferred &&
@@ -3235,7 +3229,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // the open criteria, which can carry another kind's words
       // (merge_conflict, pr_merge_unmerged), so classifying it would halt the
       // queue on a run that did nothing wrong. The caller fills the slot.
-      if (pipelineResult?.partialNoOp !== undefined) {
+      if (pipelineResult !== undefined && endedPartialNoOp(pipelineResult)) {
         this.logger.info(
           "Skipping haltQueueOnSlotFailure — partial-delivery no-op; nothing is left to build",
           { failedIssue: slot.issueNumber }

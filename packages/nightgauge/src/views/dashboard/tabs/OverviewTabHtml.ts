@@ -25,6 +25,7 @@ import type {
   QueuedCardData,
   SlotStageStatus,
 } from "../SlotCardTypes";
+import { PARTIAL_NO_OP_LABEL } from "../../../services/partialNoOp";
 
 /**
  * Generate adapter status bar widget HTML (Issue #1056)
@@ -117,7 +118,7 @@ function slotCardRepoColorClass(repoShort: string): string {
 /**
  * Render a single active-slot card with live pipeline telemetry.
  */
-function renderSlotCard(slot: SlotCardData): string {
+export function renderSlotCard(slot: SlotCardData): string {
   const elapsedMs = slot.startedAt ? Date.now() - new Date(slot.startedAt).getTime() : 0;
   const elapsedLabel = slot.startedAt ? formatDuration(elapsedMs) : "—";
   // #3819: the TOKENS headline is fresh model I/O only — it deliberately
@@ -145,7 +146,9 @@ function renderSlotCard(slot: SlotCardData): string {
       ? "Completed"
       : slot.status === "failed"
         ? "Failed"
-        : "Waiting for next stage";
+        : slot.status === "no-op"
+          ? PARTIAL_NO_OP_LABEL
+          : "Waiting for next stage";
 
   const phaseLabel = slot.currentPhase
     ? `${escapeHtml(slot.currentPhase.name)} (${slot.currentPhase.index}/${slot.currentPhase.total})`
@@ -751,6 +754,7 @@ export function getOverviewTabStyles(): string {
     .slot-card-running { border-left-color: var(--vscode-charts-blue); }
     .slot-card-completed { border-left-color: var(--vscode-charts-green); }
     .slot-card-failed { border-left-color: var(--vscode-charts-red); }
+    .slot-card-no-op { border-left-color: var(--vscode-disabledForeground); }
     .slot-card-paused { border-left-color: var(--vscode-charts-yellow); }
     .slot-card-preparing { border-left-color: var(--vscode-charts-purple); }
     .slot-card.has-issues { border-left-color: var(--vscode-charts-orange); }

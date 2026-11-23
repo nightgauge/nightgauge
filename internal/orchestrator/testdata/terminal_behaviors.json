@@ -102,7 +102,7 @@
     },
     {
       "name": "pipeline-done-telemetry",
-      "note": "#3455: both paths stamp the run's PR (prNumber/prUrl) on it. #2756: both paths emit an architecture_approval_required hold as a non-failure (Success=true), like a deferral, so the live view never paints a deliberate human pause red. Go keys it on terminalFailureKind via IsNonFailureTerminalKind; the extension on the terminating stage's gate-sourced kind (heldForApproval), the same source as the run record's terminal_failure_kind. #3487: Go emits a partial-delivery no-op as a non-failure on the booking's flag alone (RuntimeState.PartialNoOp), and notifyComplete honours a partialNoOp flag, which the extension sends for such a run (#3487 step 3), so both paths emit it as a non-failure. The extension's own live surfaces (slot card, notifications) still present it as a failure until #3487 step 4.",
+      "note": "#3455: both paths stamp the run's PR (prNumber/prUrl) on it. #2756: both paths emit an architecture_approval_required hold as a non-failure (Success=true), like a deferral, so the live view never paints a deliberate human pause red. Go keys it on terminalFailureKind via IsNonFailureTerminalKind; the extension on the terminating stage's gate-sourced kind (heldForApproval), the same source as the run record's terminal_failure_kind. #3487: Go emits a partial-delivery no-op as a non-failure on the booking's flag alone (RuntimeState.PartialNoOp), and notifyComplete honours a partialNoOp flag, which the extension sends for such a run (#3487 step 3), so both paths emit it as a non-failure. Both paths agree on the live surfaces too (#3487 step 4): the extension marks the slot no-op on its tree item and dashboard slot card, settles its Output Window tab complete rather than error, raises no failure notification, and posts the no-op comment, not the failure report.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "s.emitRunEvent(context.Background(), snap, platform.PipelineEvent{"
@@ -619,7 +619,7 @@
       "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
       "begin": "terminal-parity:begin runSlotPipeline-finally",
       "end": "terminal-parity:end runSlotPipeline-finally",
-      "sha256": "14fb791ee6b46e6710d14ebcbe084e7f3c77ae5879c76039a8f3d88eaf88eaf7"
+      "sha256": "1eb9f0798d21d2e821b84a0f2fd0e156b53bfc6cbf1968ea50c96a0c16018880"
     },
     {
       "id": "extension-force-clear-funnel",

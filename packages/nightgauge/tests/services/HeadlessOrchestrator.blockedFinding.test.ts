@@ -96,7 +96,11 @@ vi.mock("../../src/services/BinaryResolver", () => ({
   BinaryResolver: { fromVSCode: () => ({ resolve: async () => null }) },
 }));
 
-/** Every shell command the run issued, so the `gh issue comment` can be found. */
+/**
+ * Every command the run issued, so the `gh issue comment` can be found. An
+ * `execFile` call is recorded as its file and arguments joined by spaces: the
+ * comment is posted that way, never through a shell (#3487).
+ */
 const { shellCommands } = vi.hoisted(() => ({ shellCommands: [] as string[] }));
 
 vi.mock("child_process", async () => {
@@ -115,8 +119,9 @@ vi.mock("child_process", async () => {
   };
 
   const execFileMock: any = vi.fn();
-  execFileMock[kCustom] = (_cmd: string, args: string[]) => {
+  execFileMock[kCustom] = (file: string, args: string[]) => {
     const a = args ?? [];
+    shellCommands.push([file, ...a].join(" "));
     if (a[0] === "repo" && a.includes(".nameWithOwner")) {
       return Promise.resolve({ stdout: "TestOrg/test-repo", stderr: "" });
     }

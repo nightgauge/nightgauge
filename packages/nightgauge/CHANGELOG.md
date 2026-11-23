@@ -14,8 +14,11 @@ and this project adheres to
 - A partial-delivery re-run with nothing left to build is no longer treated as
   a failure. It no longer halts the queue or joins the Failed issues list, the
   freed slot is filled, and issues waiting on it start once it is closed, from
-  its card's Close or by hand. Its issue comment and slot card are unchanged
-  for now (#3487).
+  its card's Close or by hand. Its issue comment says nothing was left to
+  build, lists each open criterion with the judge's reason and names the two
+  ways forward, instead of the Pipeline Failure Report. The slot card and the
+  tree item show it as a no-op, the Output Window tab no longer shows an error,
+  and Slack, Discord and Mattermost label it no-op (#3487).
 
 ## [0.8.7] - 2026-11-22
 

@@ -17,6 +17,7 @@ import type { PipelineStateService, PipelineState } from "../../services/Pipelin
 import type { StagePhase } from "../../schemas/pipelineState";
 import { formatEpicRef, slotKey } from "../../utils/epicRef";
 import { fromRuntimeState } from "./stageActivity";
+import { PARTIAL_NO_OP_LABEL } from "../../services/partialNoOp";
 
 /** How often running stages re-render elapsed and idle with no event (#1897). */
 const ACTIVITY_TICK_MS = 30_000;
@@ -54,7 +55,11 @@ function orderPhasesByRegistry(
     .map((entry) => entry.phase);
 }
 
-type SlotStatus = "running" | "completed" | "failed";
+/**
+ * `no-op`: the run was a partial-delivery re-run that found nothing left to
+ * build (#3487) — neither a success nor a failure.
+ */
+export type SlotStatus = "running" | "completed" | "failed" | "no-op";
 
 const STAGE_ORDER: PipelineStage[] = [
   "pipeline-start",
@@ -106,6 +111,8 @@ function getStatusIcon(status: SlotStatus): vscode.ThemeIcon {
       return new vscode.ThemeIcon("check", new vscode.ThemeColor("charts.green"));
     case "failed":
       return new vscode.ThemeIcon("error", new vscode.ThemeColor("charts.red"));
+    case "no-op":
+      return new vscode.ThemeIcon("circle-slash");
   }
 }
 
@@ -545,6 +552,7 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
     this.status = status;
     this.iconPath = getStatusIcon(status);
     this.contextValue = `concurrentSlot.${status}`;
+    if (status === "no-op") this.description = PARTIAL_NO_OP_LABEL;
     this.collapsibleState =
       status === "running"
         ? vscode.TreeItemCollapsibleState.Expanded

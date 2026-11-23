@@ -24,7 +24,7 @@ import type { NotifyStageProgressParams } from "../services/ipcNotifyParams";
 import { handleIpcRejection } from "../services/ipcRejection";
 import { handleGoPipelineComplete, type GoPipelineCompleteDeps } from "./pipelineComplete";
 import { handleInteractivePipelineComplete } from "./pipelineFinish";
-import { settleSequentialFailedList } from "./slotEnding";
+import { failedSlotSurfaces, settleSequentialFailedList } from "./slotEnding";
 import { Logger, createMainLogger, installLogDiskSink } from "../utils/logger";
 import { setRunningWorktreePathsProvider } from "../utils/skillRunner";
 import { StatusBarManager } from "../utils/statusBar";
@@ -1898,18 +1898,34 @@ export async function initializeServices(
         disposeDashboardSlotStateSubscription(key);
         // Remove preparing placeholder if worktree creation failed
         treeProvider.removePreparingSlot(issueNumber, repoSlug);
-        slotOutputManager!.markCompleted(issueNumber, false, repoSlug);
-        // Flip the Output Window tab badge to the terminal "error" state
-        // with the final cost. Mirror of the onSlotCompleted wiring above.
-        outputWindow.notifySlotCompleted(slotIndex, "error", costUsd);
-        treeProvider.updateConcurrentSlotStatus(issueNumber, "failed", repoSlug);
+        // #3487 step 4: a booked partial-delivery no-op is not a failure, so
+        // no surface presents it as one: the tree and the dashboard card say
+        // no-op, the Output Window tab settles complete rather than error (it
+        // has no no-op state, and the run ended as booked), and no failure
+        // notification is raised (the notifiers label the run from its
+        // outcome, which the booking set to no-op).
+        const surfaces = failedSlotSurfaces(terminalKind);
+        slotOutputManager!.markCompleted(issueNumber, surfaces.outputSuccess, repoSlug);
+        // Flip the Output Window tab badge to its terminal state with the
+        // final cost. Mirror of the onSlotCompleted wiring above.
+        outputWindow.notifySlotCompleted(slotIndex, surfaces.badge, costUsd);
+        treeProvider.updateConcurrentSlotStatus(issueNumber, surfaces.treeStatus, repoSlug);
+        if (surfaces.noOp) dashboard.markSlotNoOp(issueNumber, repoSlug);
         notifier!.unsubscribeFromSlot(issueNumber, repoSlug); // Issue #1750, #2408
-        logger.warn("Concurrent slot failed", {
-          slotIndex,
-          issueNumber,
-          error: error.message,
-          costUsd,
-        });
+        if (surfaces.noOp) {
+          logger.info("Concurrent slot ended a partial-delivery no-op", {
+            slotIndex,
+            issueNumber,
+            costUsd,
+          });
+        } else {
+          logger.warn("Concurrent slot failed", {
+            slotIndex,
+            issueNumber,
+            error: error.message,
+            costUsd,
+          });
+        }
         updateConcurrentStatusBar();
         // Invalidate only the affected statuses for this repo. A failed slot
         // may have moved the issue into in-progress before failing, so invalidate

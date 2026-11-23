@@ -562,6 +562,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
     .slot-card-running { border-left-color: var(--vscode-charts-blue); }
     .slot-card-completed { border-left-color: var(--vscode-charts-green); }
     .slot-card-failed { border-left-color: var(--vscode-charts-red); }
+    .slot-card-no-op { border-left-color: var(--vscode-disabledForeground); }
     .slot-card-paused { border-left-color: var(--vscode-charts-yellow); }
     .slot-card-preparing { border-left-color: var(--vscode-charts-purple); }
     .slot-card.has-issues { border-left-color: var(--vscode-charts-orange); }
@@ -7289,6 +7290,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
     .slot-card-running { border-left-color: var(--vscode-charts-blue); }
     .slot-card-completed { border-left-color: var(--vscode-charts-green); }
     .slot-card-failed { border-left-color: var(--vscode-charts-red); }
+    .slot-card-no-op { border-left-color: var(--vscode-disabledForeground); }
     .slot-card-paused { border-left-color: var(--vscode-charts-yellow); }
     .slot-card-preparing { border-left-color: var(--vscode-charts-purple); }
     .slot-card.has-issues { border-left-color: var(--vscode-charts-orange); }
@@ -14064,6 +14066,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
     .slot-card-running { border-left-color: var(--vscode-charts-blue); }
     .slot-card-completed { border-left-color: var(--vscode-charts-green); }
     .slot-card-failed { border-left-color: var(--vscode-charts-red); }
+    .slot-card-no-op { border-left-color: var(--vscode-disabledForeground); }
     .slot-card-paused { border-left-color: var(--vscode-charts-yellow); }
     .slot-card-preparing { border-left-color: var(--vscode-charts-purple); }
     .slot-card.has-issues { border-left-color: var(--vscode-charts-orange); }
@@ -20684,6 +20687,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
     .slot-card-running { border-left-color: var(--vscode-charts-blue); }
     .slot-card-completed { border-left-color: var(--vscode-charts-green); }
     .slot-card-failed { border-left-color: var(--vscode-charts-red); }
+    .slot-card-no-op { border-left-color: var(--vscode-disabledForeground); }
     .slot-card-paused { border-left-color: var(--vscode-charts-yellow); }
     .slot-card-preparing { border-left-color: var(--vscode-charts-purple); }
     .slot-card.has-issues { border-left-color: var(--vscode-charts-orange); }

@@ -148,6 +148,8 @@ export interface SlotRuntimeSnapshot {
   repo?: string;
   startedAt?: string;
   paused?: boolean;
+  /** The run ended a booked partial-delivery no-op (#3487), set by {@link markNoOp}. */
+  noOp?: boolean;
   hasIssues?: boolean;
   currentStage?: PipelineStage;
   currentPhase?: SlotPhaseSummary;
@@ -331,6 +333,18 @@ export class PipelineSlotsTracker implements vscode.Disposable {
     if (delta.outputTokens) snap.outputTokens += delta.outputTokens;
     if (delta.cacheReadTokens) snap.cacheReadTokens += delta.cacheReadTokens;
     if (delta.costUsd) snap.costUsd += delta.costUsd;
+  }
+
+  /**
+   * Mark a slot's run as a booked partial-delivery no-op (#3487), so its card
+   * reads no-op rather than failed. The mark goes with the snapshot when the
+   * slot is forgotten, so a later run of the issue starts unmarked.
+   */
+  markNoOp(issueNumber: number, repo?: string): void {
+    const snap = this.getSnapshot(issueNumber, repo);
+    if (!snap || snap.noOp) return;
+    snap.noOp = true;
+    this._onChanged.fire();
   }
 
   /**

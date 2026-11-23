@@ -14,7 +14,25 @@ import type { PipelineStage } from "@nightgauge/sdk";
 export type SlotStageStatus =
   "pending" | "running" | "complete" | "failed" | "skipped" | "deferred";
 
-export type SlotCardStatus = "preparing" | "running" | "paused" | "completed" | "failed";
+/**
+ * `no-op`: a partial-delivery re-run that found nothing left to build (#3487).
+ * Its gate failed a stage, but the run is not a failure and is not shown as one.
+ */
+export type SlotCardStatus = "preparing" | "running" | "paused" | "completed" | "failed" | "no-op";
+
+/**
+ * The card status a slot's runtime snapshot states. A booked no-op outranks
+ * the failed stage its gate left behind; a pause outranks both.
+ */
+export function slotCardStatus(snapshot: {
+  paused?: boolean;
+  noOp?: boolean;
+  stages: ReadonlyArray<{ status: SlotStageStatus }>;
+}): SlotCardStatus {
+  if (snapshot.paused) return "paused";
+  if (snapshot.noOp) return "no-op";
+  return snapshot.stages.some((s) => s.status === "failed") ? "failed" : "running";
+}
 
 export interface SlotStageSummary {
   stage: PipelineStage;

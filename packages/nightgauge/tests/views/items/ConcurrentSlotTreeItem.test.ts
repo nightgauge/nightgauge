@@ -320,3 +320,24 @@ describe("ConcurrentSlotTreeItem — issue-level description", () => {
 // Phase downgrade tests for #3255 live in
 // `ConcurrentSlotTreeItem.phaseDowngrade.test.ts` so they can run without the
 // stubbed StageTreeItem mock used in the description-only tests above.
+
+describe("ConcurrentSlotTreeItem — partial-delivery no-op status (#3487)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("shows a no-op slot as no-op, not with the failure icon", async () => {
+    const { ConcurrentSlotTreeItem } =
+      await import("../../../src/views/items/ConcurrentSlotTreeItem");
+    const { PARTIAL_NO_OP_LABEL } = await import("../../../src/services/partialNoOp");
+    const item = new ConcurrentSlotTreeItem(0, 3487, "My Issue", makeStateService(3487) as any);
+    item.setSlotStatus("no-op");
+    expect((item.iconPath as { id: string }).id).toBe("circle-slash");
+    expect(item.contextValue).toBe("concurrentSlot.no-op");
+    expect(item.description).toBe(PARTIAL_NO_OP_LABEL);
+
+    const failed = new ConcurrentSlotTreeItem(1, 3488, "Other", makeStateService(3488) as any);
+    failed.setSlotStatus("failed");
+    expect((failed.iconPath as { id: string }).id).toBe("error");
+  });
+});

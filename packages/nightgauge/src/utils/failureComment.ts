@@ -1,6 +1,9 @@
 /**
  * Post a detailed diagnostic comment on a GitHub issue when a pipeline fails.
  *
+ * A run booked as a partial-delivery no-op (#3487) is not a failure: it gets
+ * its own comment instead, chosen by `endedPartialNoOp`.
+ *
  * The comment includes stage timeline, cost breakdown, error details, backtrack
  * history, model escalations, and actionable recommendations so failures can be
  * diagnosed without digging through logs.
@@ -9,7 +12,8 @@
  */
 
 import { PIPELINE_STATE_DISPLAY } from "./cloneLayout";
-import { exec } from "child_process";
+import { execFile } from "child_process";
+import { homedir } from "os";
 import { promisify } from "util";
 import type { PipelineStage } from "@nightgauge/sdk";
 import { isHeavyweightModel } from "@nightgauge/sdk";
@@ -17,8 +21,10 @@ import type { Logger } from "./logger";
 import type { BlockedFinding } from "./blockedFinding";
 import type { PipelineState, BacktrackRecord } from "../services/PipelineStateService";
 import type { PipelineRunResult } from "../services/HeadlessOrchestrator";
+import { endedPartialNoOp } from "../services/partialNoOp";
+import { redactSecrets } from "./redaction";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Sentinel embedded in the pipeline error message when feature-dev is halted by
@@ -114,25 +120,33 @@ interface FailureCommentOptions {
 }
 
 /**
- * Post a diagnostic failure comment on the GitHub issue.
+ * Post the run's comment on the GitHub issue: the failure report, or the
+ * partial-delivery no-op comment when the run was booked as one (#3487).
  * Non-blocking: logs errors but never throws.
  */
 export async function postFailureComment(opts: FailureCommentOptions): Promise<void> {
   const { issueNumber, result, state, repoOverride, cwd, logger } = opts;
 
+  const noOp = endedPartialNoOp(result);
   try {
-    const body = buildCommentBody(issueNumber, result, state);
+    const body = noOp
+      ? buildPartialNoOpBody(issueNumber, result)
+      : buildCommentBody(issueNumber, result, state);
     await postIssueComment({ issueNumber, body, repoOverride, cwd });
-    logger.info("Posted pipeline failure comment on issue", {
-      issueNumber,
-      repo: repoOverride ?? "default",
-    });
+    logger.info(
+      noOp
+        ? "Posted partial-delivery no-op comment on issue"
+        : "Posted pipeline failure comment on issue",
+      { issueNumber, repo: repoOverride ?? "default" }
+    );
   } catch (err) {
     // Non-blocking — never prevent pipeline cleanup
-    logger.warn("Failed to post failure comment on issue", {
-      issueNumber,
-      error: err instanceof Error ? err.message : String(err),
-    });
+    logger.warn(
+      noOp
+        ? "Failed to post partial-delivery no-op comment on issue"
+        : "Failed to post failure comment on issue",
+      { issueNumber, error: err instanceof Error ? err.message : String(err) }
+    );
   }
 }
 
@@ -143,6 +157,10 @@ export async function postFailureComment(opts: FailureCommentOptions): Promise<v
  * failure comment on repo targeting, quoting or timeout — the same reason
  * `ProposedCeilingUSD` is one function rather than two call sites that agree
  * today.
+ *
+ * The body travels as one argument-array element to `execFile`, never through
+ * a shell (#3487): a criterion quoted into a no-op comment is issue-authored
+ * text, and a shell string would let it run.
  */
 async function postIssueComment(opts: {
   issueNumber: number;
@@ -151,17 +169,11 @@ async function postIssueComment(opts: {
   cwd: string;
 }): Promise<void> {
   const repoArgs = opts.repoOverride ? ["--repo", opts.repoOverride] : [];
-  const escapedBody = opts.body.replace(/'/g, "'\\''");
-  const cmd = [
+  await execFileAsync(
     "gh",
-    "issue",
-    "comment",
-    String(opts.issueNumber),
-    ...repoArgs,
-    "--body",
-    `'${escapedBody}'`,
-  ].join(" ");
-  await execAsync(cmd, { cwd: opts.cwd, timeout: 30_000 });
+    ["issue", "comment", String(opts.issueNumber), ...repoArgs, "--body", opts.body],
+    { cwd: opts.cwd, timeout: 30_000 }
+  );
 }
 
 /**
@@ -254,6 +266,127 @@ function buildBlockedFindingBody(finding: BlockedFinding): string {
   );
 
   return sections.join("\n");
+}
+
+/**
+ * The comment for a partial-delivery re-run booked as a no-op (#3487): an
+ * earlier PR delivered the work, and the remaining criteria name nothing left
+ * to build. Not a failure report: no "Failed Stage", no error block. It lists
+ * each criterion still open with the judge's reason and names the two ways
+ * forward. Criterion and evidence text is issue- or model-authored, so it is
+ * redacted, bounded and quoted inert, and the whole body is scrubbed of local
+ * paths.
+ */
+function buildPartialNoOpBody(issueNumber: number, result: PipelineRunResult): string {
+  const remainder = result.partialNoOp?.remainder;
+  const open = remainder?.criteria.filter((c) => !c.met) ?? [];
+  const openSection = !remainder
+    ? [
+        "The judge's list of open criteria was not available for this run; the criteria " +
+          "still open are the unchecked ones in the issue body.",
+      ]
+    : open.length === 0
+      ? ["The judge found no criterion still open."]
+      : open.map(
+          (c) =>
+            `- ${quoteUntrusted(c.text)}\n` +
+            `  - _Judge:_ ${quoteUntrusted(c.evidence || "no reason recorded")}`
+        );
+  const body = [
+    "## ⏹️ Nothing Left to Build — Partial-Delivery No-op\n",
+    "This re-run found **nothing left to build**: an earlier pull request already delivered " +
+      "this issue's work, and the criteria still open name no change this pipeline can make. " +
+      "The run ended as a no-op, **not a failure**: no failure was charged and it will not " +
+      "retry on its own.\n",
+    "### Criteria still open",
+    "",
+    ...openSection,
+    "",
+    "### Ways forward",
+    "",
+    "- **The remaining criteria are met:** resolve this issue's Action Center card with " +
+      "**close**, which closes the issue as completed.",
+    "- **They are not:** revise the criteria in the issue body so they name the work still " +
+      "to do, then move the issue to **Ready**.",
+    "",
+    "<sub>",
+    `Pipeline run at ${new Date().toISOString()} · Issue #${issueNumber}`,
+    "This comment was auto-generated by the Nightgauge pipeline.",
+    "</sub>",
+  ].join("\n");
+  return scrubLocalPaths(body);
+}
+
+/** The most of one criterion or judge reason the no-op comment quotes. */
+const MAX_QUOTED_LENGTH = 500;
+
+/**
+ * One criterion or judge reason, ready for the public no-op comment: secrets
+ * redacted, local paths removed, bounded, then quoted inert.
+ */
+function quoteUntrusted(text: string): string {
+  return quoteCriterion(truncate(scrubLocalPaths(redactSecrets(text)), MAX_QUOTED_LENGTH));
+}
+
+/** Markdown punctuation that changes how a line renders. */
+const MARKDOWN_PUNCTUATION = /[\\`*_[\]()#|!~+\-{}.]/g;
+
+/**
+ * Quote issue-authored text so it renders as inert text (#3487): HTML,
+ * including an HTML comment and a forged `<!-- nightgauge:... -->` marker,
+ * becomes entities, markdown punctuation is backslash-escaped, an `@` is
+ * broken with a zero-width space so it mentions nobody, and newlines collapse
+ * so the text cannot open a block of its own.
+ */
+export function quoteCriterion(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/[\r\n]+/g, " ")
+    .replace(MARKDOWN_PUNCTUATION, (ch) => `\\${ch}`)
+    .replace(/@/g, "@\u200B")
+    .trim();
+}
+
+/** What a scrubbed path reads as: no markup in HTML or markdown. */
+export const LOCAL_PATH_PLACEHOLDER = "\u2039local path\u203A";
+
+/** Escape a string for use inside a RegExp. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Characters that end a path in prose: whitespace, quotes, a backtick,
+ * brackets and angle brackets.
+ */
+const PATH_END = "\\s\"'`()<>\\[\\]";
+
+/**
+ * Absolute roots that hold local, per-machine paths, as RegExp sources: user
+ * homes on macOS and Linux, root's home, and the temporary directories
+ * (`/private/...`, `/tmp/...`, `/var/folders/...`).
+ */
+const LOCAL_PATH_ROOTS = [
+  `/Users/[^/${PATH_END}]+`,
+  `/home/[^/${PATH_END}]+`,
+  "/root(?=/)",
+  "/private/",
+  "/tmp/",
+  "/var/folders/",
+];
+
+/**
+ * Remove absolute local paths from a comment (#3487): the home directory
+ * (which covers the worktree root under it) and any path under
+ * {@link LOCAL_PATH_ROOTS}, wherever it starts, including directly after `(`,
+ * `"`, `'`, `=`, `:` or a backtick. The path runs to {@link PATH_END}.
+ */
+export function scrubLocalPaths(text: string, home: string = homedir()): string {
+  const roots = home && home !== "/" ? [escapeRegExp(home), ...LOCAL_PATH_ROOTS] : LOCAL_PATH_ROOTS;
+  const pattern = new RegExp(`(?:${roots.join("|")})[^${PATH_END}]*`, "g");
+  return text.replace(pattern, LOCAL_PATH_PLACEHOLDER);
 }
 
 function buildCommentBody(

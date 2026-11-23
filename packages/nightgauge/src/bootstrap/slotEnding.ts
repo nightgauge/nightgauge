@@ -6,17 +6,36 @@
  * kind or the failure text: that text quotes the open criteria, which can carry
  * another kind's words.
  *
- * The live surfaces (slot card, Output Window badge, notifications) are #3487
- * step 4 and are not decided here.
+ * The predicate is the shared one in services/partialNoOp.ts.
  */
 
 import type { PipelineRunResult } from "../services/HeadlessOrchestrator";
+import { endedPartialNoOp, PARTIAL_NO_OP_TERMINAL_KIND } from "../services/partialNoOp";
 
-/** Whether the run ended a booked partial-delivery no-op, not a failure. */
-export function endedPartialNoOp(
-  result: Pick<PipelineRunResult, "success" | "partialNoOp">
-): boolean {
-  return !result.success && result.partialNoOp !== undefined;
+/** How the live surfaces present a slot that did not succeed. */
+export interface FailedSlotSurfaces {
+  /** Whether the run ended a booked partial-delivery no-op. */
+  noOp: boolean;
+  /** The tree item's terminal status. */
+  treeStatus: "failed" | "no-op";
+  /** The Output Window tab badge. */
+  badge: "error" | "complete";
+  /** Whether the slot's output channel is marked successful. */
+  outputSuccess: boolean;
+}
+
+/**
+ * The live surfaces for a slot `onSlotFailed` reports (#3487 step 4). The
+ * structured kind is the only input: the manager passes
+ * {@link PARTIAL_NO_OP_TERMINAL_KIND} only from `slotTerminalKind`, for a run
+ * booked a partial-delivery no-op. Every other ending, a first-run gate no-op
+ * and a crash included, keeps the failure presentation.
+ */
+export function failedSlotSurfaces(terminalKind: string | undefined): FailedSlotSurfaces {
+  if (terminalKind === PARTIAL_NO_OP_TERMINAL_KIND) {
+    return { noOp: true, treeStatus: "no-op", badge: "complete", outputSuccess: true };
+  }
+  return { noOp: false, treeStatus: "failed", badge: "error", outputSuccess: false };
 }
 
 /** The slice of CompletedIssuesService a sequential run's ending touches. */
