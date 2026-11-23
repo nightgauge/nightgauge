@@ -5123,10 +5123,10 @@ nightgauge followup materialize <issue-number> [flags]
 | `--dry-run` | Report the would-file list; reads only the parent's body, keeps the capture |
 | `--json`    | Emit `{issue, gate, report_only, reason, items[], refused}`                 |
 
-Per record: an issue, open or closed, whose body already carries the
-`<!-- discovered-work: id=… issue=#N -->` marker is `already-exists` (detail
-`marker on closed #M` for a closed one); the parent #N's own body is read first,
-so a parent already carrying the record never depends on the search index. An
+Per record: an issue other than the parent, open or closed, whose body already
+carries the `<!-- discovered-work: id=… issue=#N -->` marker is
+`already-exists` (detail `marker on closed #M` for a closed one). A marker in
+the parent #N's own body is `tracked-by-parent` (below). An
 open issue with the same normalized title gets a provenance comment (`deduped`).
 An open issue in the same subsystem gets the record appended as a new
 `## Part <letter>` section with the marker, the `Discovered in #N` back-link and
@@ -5138,7 +5138,7 @@ the kill switch or an untrusted issue author make every record `would-file`
 with no forge write, unless it is `tracked-by-parent` or `duplicate`. The
 parent's body is still read, best effort, so `tracked-by-parent` below holds
 there too; marker and title lookups do not run. When no GitHub client can be
-built, the command prints `followup materialize: parent criteria unavailable: <error>`
+built, the command prints `followup materialize: parent body unavailable: <error>`
 on stderr, reports without the read, and exits 0.
 
 A subsystem candidate qualifies only on one of (#2872):
@@ -5158,12 +5158,17 @@ qualifies; then an epic sibling wins, then board Status Ready over Backlog, then
 the stronger signal (file, program, labels), and the lowest number decides only
 among equals. Epics, human-only issues and issues In progress, In review or
 Done are never folded into, and a record more urgent than the pick's board
-Priority is filed on its own.
+Priority is filed on its own. A pick whose author fails the trust gate (a
+trusted author, a bot in `autonomous.trusted_bots`, or a writer's approval; a
+failed lookup counts as untrusted) is never folded into: the next qualifying
+candidate is picked, or the record is filed on its own (#2872).
 
 Before that, in either mode, a record is not filed when another record or the
 parent already tracks it (#3186, #2872):
 
-- `tracked-by-parent`: from any producer, its summary or `criterion` restates a
+- `tracked-by-parent`: from any producer, its marker is already in the parent
+  issue's current body, whatever the criterion under it says (detail
+  `marker in #N's body`), or its summary or `criterion` restates a
   criterion this run's `pr-<N>.json` lists with status `unmet` (its run id equal
   to that file's `run_id`, absent equals absent; detail `criterion unmet on #N;
 the PR says Refs`), or an unchecked `- [ ]` criterion in the parent issue's

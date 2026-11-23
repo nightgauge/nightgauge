@@ -347,7 +347,7 @@ as `followup materialize` and under the same
 controls. A finding the gate cannot track refuses the merge with
 `review-filing-failed`, including one over `follow_up_filing.max_per_run`. Filed
 findings are recorded in the ledger, so a retry does not file twice. In report
-mode nothing is filed (the parent's criteria are read, best effort, so
+mode nothing is filed (the parent's body is read, best effort, so
 tracked-by-parent applies): every finding, tracked or not, goes to
 `discovered-work-{N}.json` and the merge proceeds, because that mode is the
 operator's choice.

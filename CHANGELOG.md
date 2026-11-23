@@ -14,6 +14,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- `nightgauge followup materialize` no longer folds a follow-up into an open issue whose author fails the trust gate; it picks the next qualifying trusted issue or files the follow-up on its own. A record whose `discovered-work` marker is already in its parent issue's body is now reported `tracked-by-parent` in file mode and in report mode and `--dry-run`, instead of `already-exists` or `would-file` (#2872).
+
 ## [0.8.7] - 2026-11-22
 
 ### Added

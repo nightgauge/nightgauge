@@ -18,6 +18,11 @@ type countingFiler struct {
 	issueReads     map[int]int
 	placementReads map[int]int
 	edits          map[int]int
+	trustReads     map[int]int
+	// search maps a query to its hits; untrusted names authors the trust gate
+	// refuses.
+	search    map[string][]types.Issue
+	untrusted map[int]bool
 	// placementErr and editErr, when set, fail those calls.
 	placementErr, editErr error
 }
@@ -29,8 +34,17 @@ func newCountingFiler(issues map[int]*types.Issue) *countingFiler {
 			subs:       map[int]*parentSubsystem{},
 			issues:     map[int]*types.Issue{},
 			placements: map[int]gh.BoardPlacement{},
+			trusted:    map[int]bool{},
 		},
 		issueReads: map[int]int{}, placementReads: map[int]int{}, edits: map[int]int{},
+		trustReads: map[int]int{}, search: map[string][]types.Issue{}, untrusted: map[int]bool{},
+	}
+	c.searchIssues = func(_ context.Context, q string, _ int) ([]types.Issue, error) {
+		return c.search[q], nil
+	}
+	c.candidateTrusted = func(_ context.Context, n int) bool {
+		c.trustReads[n]++
+		return !c.untrusted[n]
 	}
 	byNode := map[string]int{}
 	for n, is := range issues {
@@ -72,7 +86,7 @@ func partRecord(id string, issue int) discoveredwork.Record {
 }
 
 // TestGitHubFiler_ReadsTheSharedParentOnce: two records with one parent look
-// up their markers and the parent's criteria, and the parent is read once.
+// up their markers and the parent's body, and the parent is read once.
 func TestGitHubFiler_ReadsTheSharedParentOnce(t *testing.T) {
 	recs := []discoveredwork.Record{partRecord("dw-a", 7), partRecord("dw-b", 7)}
 	body := Marker(recs[0]) + "\n" + Marker(recs[1]) + "\n- [ ] one criterion\n"
@@ -86,12 +100,12 @@ func TestGitHubFiler_ReadsTheSharedParentOnce(t *testing.T) {
 		if found.Number != 7 {
 			t.Fatalf("want %s found on #7, got %+v", rec.ID, found)
 		}
-		got, err := f.ParentCriteria(ctx, 7)
+		got, err := f.ParentBody(ctx, 7)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got) != 1 {
-			t.Fatalf("want one unchecked criterion, got %q", got)
+		if got != body {
+			t.Fatalf("want the parent's body, got %q", got)
 		}
 	}
 	if f.issueReads[7] != 1 {
@@ -111,7 +125,7 @@ func TestGitHubFiler_ReadsACandidatesPlacementOnce(t *testing.T) {
 	})
 	ctx := context.Background()
 	// The marker lookup reads the parent first; the subsystem lookup reuses it.
-	if _, err := f.ParentCriteria(ctx, 7); err != nil {
+	if _, err := f.ParentBody(ctx, 7); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
@@ -140,7 +154,7 @@ func TestGitHubFiler_AppendPartRefreshesTheMemo(t *testing.T) {
 	issues := map[int]*types.Issue{7: {Number: 7, NodeID: "N7", State: issueOpen, Body: "# Parent\n"}}
 	f := newCountingFiler(issues)
 	ctx := context.Background()
-	if _, err := f.ParentCriteria(ctx, 7); err != nil { // memoizes the old body
+	if _, err := f.ParentBody(ctx, 7); err != nil { // memoizes the old body
 		t.Fatal(err)
 	}
 	issues[7].Body = "# Parent\n\nedited by a human\n" // changes after the memo
@@ -172,7 +186,7 @@ func TestGitHubFiler_AppendPartRefreshesTheMemo(t *testing.T) {
 func TestGitHubFiler_FailedReadIsNotMemoized(t *testing.T) {
 	f := newCountingFiler(map[int]*types.Issue{})
 	for range 2 {
-		if _, err := f.ParentCriteria(context.Background(), 5); err == nil {
+		if _, err := f.ParentBody(context.Background(), 5); err == nil {
 			t.Fatal("want an error")
 		}
 	}
@@ -218,7 +232,85 @@ func TestNewGitHubFiler_WiresTheMemo(t *testing.T) {
 	if g.issues == nil || g.placements == nil || g.subs == nil {
 		t.Fatal("a memo map is nil")
 	}
-	if g.fetchIssue == nil || g.fetchPlacement == nil || g.editIssue == nil {
+	if g.trusted == nil {
+		t.Fatal("the trust memo is nil")
+	}
+	if g.fetchIssue == nil || g.fetchPlacement == nil || g.editIssue == nil ||
+		g.searchIssues == nil || g.candidateTrusted == nil {
 		t.Fatal("a forge seam is nil")
+	}
+}
+
+// fileMatchFiler is a parent #7 with no labels or epic, and two open issues
+// that qualify by naming the record's file: #20 by an untrusted author (the
+// lower number, which PickSubsystemIssue prefers among equals) and #30.
+func fileMatchFiler(withTrusted bool) *countingFiler {
+	issues := map[int]*types.Issue{7: {Number: 7, NodeID: "N7", State: issueOpen}}
+	f := newCountingFiler(issues)
+	hits := []types.Issue{{Number: 20, URL: "u20", State: issueOpen, Body: "Breaks in internal/x/store.go"}}
+	if withTrusted {
+		hits = append(hits, types.Issue{Number: 30, URL: "u30", State: issueOpen, Body: "Tidy internal/x/store.go"})
+	}
+	f.search[`"internal/x/store.go" in:body`] = hits
+	f.untrusted[20] = true
+	return f
+}
+
+// TestGitHubFiler_SubsystemSkipsUntrustedCandidate: a candidate that
+// qualifies by file match but whose author fails the trust gate is never
+// returned; the next qualifying trusted candidate is (#2872).
+func TestGitHubFiler_SubsystemSkipsUntrustedCandidate(t *testing.T) {
+	f := fileMatchFiler(true)
+	n, url, err := f.FindOpenInSubsystem(context.Background(), 7, []string{"internal/x/store.go"}, "low")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 30 || url != "u30" {
+		t.Fatalf("picked #%d (%s), want the trusted #30", n, url)
+	}
+	if f.trustReads[20] != 1 || f.trustReads[30] != 1 {
+		t.Fatalf("trust reads = %v, want #20 and #30 once each", f.trustReads)
+	}
+}
+
+// TestGitHubFiler_SubsystemUntrustedOnlyFilesAlone: when the only qualifying
+// candidate is untrusted, nothing is returned, so the record is filed on its
+// own.
+func TestGitHubFiler_SubsystemUntrustedOnlyFilesAlone(t *testing.T) {
+	f := fileMatchFiler(false)
+	n, _, err := f.FindOpenInSubsystem(context.Background(), 7, []string{"internal/x/store.go"}, "low")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("picked the untrusted #%d, want 0", n)
+	}
+}
+
+// TestGitHubFiler_SubsystemTrustDecidedOncePerRun: two records considering
+// the same candidates ask the trust gate about each once.
+func TestGitHubFiler_SubsystemTrustDecidedOncePerRun(t *testing.T) {
+	f := fileMatchFiler(true)
+	for range 2 {
+		if n, _, err := f.FindOpenInSubsystem(context.Background(), 7, []string{"internal/x/store.go"}, "low"); err != nil || n != 30 {
+			t.Fatalf("n=%d err=%v", n, err)
+		}
+	}
+	if f.trustReads[20] != 1 || f.trustReads[30] != 1 {
+		t.Fatalf("trust reads = %v, want one each", f.trustReads)
+	}
+}
+
+// TestGitHubFiler_SubsystemTrustedPickStillMeetsThePriorityGuard: after the
+// untrusted pick is dropped, the trusted one is still refused when the record
+// outranks its board Priority, so the record is filed on its own.
+func TestGitHubFiler_SubsystemTrustedPickStillMeetsThePriorityGuard(t *testing.T) {
+	f := fileMatchFiler(true)
+	n, _, err := f.FindOpenInSubsystem(context.Background(), 7, []string{"internal/x/store.go"}, "critical")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("picked #%d, want 0: a critical record outranks P2", n)
 	}
 }

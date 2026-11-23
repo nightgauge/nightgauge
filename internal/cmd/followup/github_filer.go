@@ -19,12 +19,17 @@ import (
 // (trusted author, trusted bot or a writer's approval). A lookup failure is
 // untrusted: the materializer then reports instead of filing.
 func AuthorTrusted(ctx context.Context, client *gh.Client, workdir, owner, repo string, number int) bool {
-	var bots []string
-	if cfg, err := config.Load(workdir); err == nil && cfg != nil && cfg.Autonomous != nil {
-		bots = cfg.Autonomous.TrustedBots
-	}
-	d := trust.NewGate(gh.NewTrustForge(client), bots).Decide(ctx, trust.Subject{Owner: owner, Repo: repo, Number: number})
+	d := trust.NewGate(gh.NewTrustForge(client), TrustedBots(workdir)).Decide(ctx, trust.Subject{Owner: owner, Repo: repo, Number: number})
 	return d.Eligible
+}
+
+// TrustedBots is workdir's autonomous.trusted_bots, or nil when the config
+// cannot be read.
+func TrustedBots(workdir string) []string {
+	if cfg, err := config.Load(workdir); err == nil && cfg != nil && cfg.Autonomous != nil {
+		return cfg.Autonomous.TrustedBots
+	}
+	return nil
 }
 
 // ReviewFiling returns the pr-merge enqueue gate's filer (#2730): Materialize
@@ -33,7 +38,7 @@ func AuthorTrusted(ctx context.Context, client *gh.Client, workdir, owner, repo 
 // because the post-merge stage depends on the run surviving the merge.
 //
 // The gate decides report versus file. In report mode the forge is only read,
-// for the parent's criteria, so tracked-by-parent applies there too. That read
+// for the parent's body, so tracked-by-parent applies there too. That read
 // needs no project board, so report mode tolerates an unresolved project, and
 // when the repository is not owner/name the report runs without the read.
 func ReviewFiling(client *gh.Client, cfg *config.Config) func(ctx context.Context, workdir, repo string, capture *discoveredwork.Capture) (*Result, error) {
@@ -55,7 +60,8 @@ func ReviewFiling(client *gh.Client, cfg *config.Config) func(ctx context.Contex
 			return nil, err
 		}
 		// Report mode makes no board call, so an unresolved project (0) is fine.
-		filer := NewGitHubFiler(client, owner, name, project, gh.ParseOwnerType(cfg.OwnerType))
+		filer := NewGitHubFiler(client, owner, name, project, gh.ParseOwnerType(cfg.OwnerType)).
+			WithTrustedBots(TrustedBots(workdir))
 		if !gate.Files() {
 			return Materialize(ctx, capture, gate, false, Tracking{}, filer)
 		}
@@ -88,6 +94,14 @@ type GitHubFiler struct {
 	fetchIssue     func(ctx context.Context, number int) (*types.Issue, error)
 	fetchPlacement func(ctx context.Context, number int) (gh.BoardPlacement, error)
 	editIssue      func(ctx context.Context, nodeID, body string) error
+	// searchIssues runs FindOpenInSubsystem's searches; candidateTrusted asks
+	// the trust gate whether issue number's author is eligible (#2872). Tests
+	// replace both. trusted memoizes candidateTrusted across the run, and
+	// trustedBots is the configured autonomous.trusted_bots the gate uses.
+	searchIssues     func(ctx context.Context, query string, limit int) ([]types.Issue, error)
+	candidateTrusted func(ctx context.Context, number int) bool
+	trusted          map[int]bool
+	trustedBots      []string
 }
 
 // parentSubsystem is what FindOpenInSubsystem reads once per parent.
@@ -109,6 +123,7 @@ func NewGitHubFiler(client *gh.Client, owner, repo string, projectNumber int, ow
 		subs:       map[int]*parentSubsystem{},
 		issues:     map[int]*types.Issue{},
 		placements: map[int]gh.BoardPlacement{},
+		trusted:    map[int]bool{},
 	}
 	g.fetchIssue = func(ctx context.Context, n int) (*types.Issue, error) {
 		return g.issueSvc.GetIssue(ctx, g.owner, g.repo, n)
@@ -120,7 +135,37 @@ func NewGitHubFiler(client *gh.Client, owner, repo string, projectNumber int, ow
 		_, err := g.issueSvc.EditIssue(ctx, nodeID, body)
 		return err
 	}
+	g.searchIssues = func(ctx context.Context, q string, limit int) ([]types.Issue, error) {
+		return g.issueSvc.SearchIssues(ctx, g.owner, g.repo, q, limit)
+	}
+	// One gate per run, built on first use so WithTrustedBots applies and its
+	// per-author permission cache is shared. A lookup failure is untrusted:
+	// the record is then filed on its own.
+	var gate *trust.Gate
+	g.candidateTrusted = func(ctx context.Context, n int) bool {
+		if gate == nil {
+			gate = trust.NewGate(g.trustF, g.trustedBots)
+		}
+		return gate.Decide(ctx, trust.Subject{Owner: g.owner, Repo: g.repo, Number: n}).Eligible
+	}
 	return g
+}
+
+// WithTrustedBots sets the bots the fold-candidate trust gate accepts as
+// authors (autonomous.trusted_bots) and returns g.
+func (g *GitHubFiler) WithTrustedBots(bots []string) *GitHubFiler {
+	g.trustedBots = bots
+	return g
+}
+
+// candidateAuthorTrusted decides a fold candidate's author once per run.
+func (g *GitHubFiler) candidateAuthorTrusted(ctx context.Context, number int) bool {
+	if t, ok := g.trusted[number]; ok {
+		return t
+	}
+	t := g.candidateTrusted(ctx, number)
+	g.trusted[number] = t
+	return t
 }
 
 // getIssue reads issue number once per run. A failed read is not cached.
@@ -197,13 +242,13 @@ const issueOpen = "OPEN"
 // markerSearchLimit bounds the results FindByMarker reads.
 const markerSearchLimit = 20
 
-// ParentCriteria returns the unchecked criteria in issue number's body.
-func (g *GitHubFiler) ParentCriteria(ctx context.Context, number int) ([]string, error) {
+// ParentBody returns issue number's body.
+func (g *GitHubFiler) ParentBody(ctx context.Context, number int) (string, error) {
 	is, err := g.getIssue(ctx, number)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	return UncheckedCriteria(is.Body), nil
+	return is.Body, nil
 }
 
 // FindOpenByTitle matches the normalized title exactly; a search hit with a
@@ -361,8 +406,11 @@ func (g *GitHubFiler) parentInputs(ctx context.Context, parent int) (*parentSubs
 // carrying one of the parent's non-broad component:* or program:* labels, or
 // open under the parent's epic), reads the board placement of the qualifying
 // ones (at most maxPlacementReads; a qualifying candidate past that bound is
-// dropped, never folded into blind), and picks with PickSubsystemIssue. It
-// returns 0 when nothing qualifies, and also when the pick's board Priority is
+// dropped, never folded into blind), and picks with PickSubsystemIssue. A pick
+// whose author fails the trust gate (as AuthorTrusted decides; a failed
+// lookup is untrusted) is dropped and the next qualifying candidate picked, so
+// a follow-up is never written into an untrusted issue (#2872). It returns 0
+// when nothing trusted qualifies, and also when the pick's board Priority is
 // one priority outranks: that follow-up is filed on its own.
 func (g *GitHubFiler) FindOpenInSubsystem(ctx context.Context, parent int, files []string, priority string) (int, string, error) {
 	ps, err := g.parentInputs(ctx, parent)
@@ -402,7 +450,7 @@ func (g *GitHubFiler) FindOpenInSubsystem(ctx context.Context, parent int, files
 		add(is)
 	}
 	for _, q := range queries {
-		issues, err := g.issueSvc.SearchIssues(ctx, g.owner, g.repo, q, subsystemSearchLimit)
+		issues, err := g.searchIssues(ctx, q, subsystemSearchLimit)
 		if err != nil {
 			return 0, "", err
 		}
@@ -428,6 +476,10 @@ func (g *GitHubFiler) FindOpenInSubsystem(ctx context.Context, parent int, files
 		c.BoardStatus, c.Priority = placement.Status, placement.Priority
 	}
 	n, url := PickSubsystemIssue(sub, cands)
+	for n != 0 && !g.candidateAuthorTrusted(ctx, n) {
+		cands[seen[n]].Number = 0
+		n, url = PickSubsystemIssue(sub, cands)
+	}
 	if n == 0 || Outranks(priority, cands[seen[n]].Priority) {
 		return 0, "", nil
 	}

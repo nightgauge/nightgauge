@@ -37,10 +37,10 @@ type Filer interface {
 	// FindByMarker returns an existing issue, open or closed, whose body
 	// carries marker, or a zero Found.
 	FindByMarker(ctx context.Context, marker string) (Found, error)
-	// ParentCriteria returns the unchecked "- [ ]" criteria in issue number's
-	// current body. Materialize treats an error as no criteria, so the record
-	// is filed.
-	ParentCriteria(ctx context.Context, number int) ([]string, error)
+	// ParentBody returns issue number's current body. Materialize reads the
+	// record's marker and the unchecked "- [ ]" criteria from it, and treats an
+	// error as an empty body, so the record is filed.
+	ParentBody(ctx context.Context, number int) (string, error)
 	// FindOpenByTitle returns an open issue whose normalized title equals
 	// title's, or 0.
 	FindOpenByTitle(ctx context.Context, title string) (int, string, error)
@@ -82,10 +82,11 @@ const (
 	OutcomeWouldFile     = "would-file"
 	OutcomeRefused       = "refused"
 	OutcomeInvalid       = "invalid"
-	// OutcomeTrackedByParent is a record, from any producer, restating one of
-	// the issue's own acceptance criteria that this run's PR holds unmet or the
-	// issue's body leaves unchecked: the parent already tracks it, so no issue
-	// is filed (#3186, #2872).
+	// OutcomeTrackedByParent is a record, from any producer, whose marker is
+	// in the parent issue's current body, or which restates one of the issue's
+	// own acceptance criteria that this run's PR holds unmet or the issue's
+	// body leaves unchecked: the parent already tracks it, so no issue is
+	// filed (#3186, #2872).
 	OutcomeTrackedByParent = "tracked-by-parent"
 	// OutcomeDuplicate is a review record naming the gap another producer
 	// recorded for the same issue and run (#3186).
@@ -454,22 +455,23 @@ func CommentBody(rec discoveredwork.Record) string {
 // Materialize decides and performs filing for capture. A nil or empty
 // capture is a silent no-op. In report mode, or for an untrusted author
 // without allow_untrusted_authors, every valid record that is not tracked or
-// a duplicate is would-file, and the Filer is only read for the parent's
-// criteria (ParentCriteria), so tracked-by-parent holds there too; a nil Filer
-// skips that check. In file mode records already filed (marker) are skipped,
+// a duplicate is would-file, and the Filer is only read for the parent's body
+// (ParentBody), so tracked-by-parent holds there too; a nil Filer skips that
+// check. In file mode records already filed (marker) are skipped,
 // records matching an open issue's title become a provenance
 // comment, records with an open issue in the same subsystem are appended to
 // it as a new part (folded), and at most gate.Cap issues are created: the rest
 // are refused and a *filing.CapError is returned with the result.
 //
 // Before any of that, in either mode, a record from any producer is not filed
-// when it restates a criterion this run's PR holds unmet or the parent's body
-// leaves unchecked (tracked-by-parent), and a review record is not filed when
-// it restates a valid record another producer wrote for the same issue and run
-// (duplicate). Both are reported and consumed, never dropped silently (#3186,
-// #2872). A marker on a closed issue, or in the parent's own body, is
-// already-exists; a record more urgent than the subsystem pick's board
-// Priority is filed instead of folded.
+// when its marker is in the parent's current body, whatever the criterion
+// under it says, or when it restates a criterion this run's PR holds unmet or
+// the parent's body leaves unchecked (tracked-by-parent), and a review record
+// is not filed when it restates a valid record another producer wrote for the
+// same issue and run (duplicate). Both are reported and consumed, never
+// dropped silently (#3186, #2872). A marker found only on another issue, open
+// or closed, is already-exists; a record more urgent than the subsystem pick's
+// board Priority is filed instead of folded.
 func Materialize(ctx context.Context, capture *discoveredwork.Capture, gate filing.Gate, authorTrusted bool, track Tracking, f Filer) (*Result, error) {
 	res := &Result{Gate: gate, Items: []Item{}}
 	if capture == nil || len(capture.Records) == 0 {
@@ -491,19 +493,27 @@ func Materialize(ctx context.Context, capture *discoveredwork.Capture, gate fili
 		}
 	}
 
-	// The parent's own unchecked criteria, read once. An unreadable body tracks
-	// nothing, so the record is filed: the safe direction.
-	parentCriteria := map[int][]string{}
-	criteriaOf := func(n int) []string {
+	// The parent's body, read once per parent before this run writes anything.
+	// An unreadable body tracks nothing, so the record is filed: the safe
+	// direction.
+	type parentRead struct {
+		body     string
+		criteria []string
+	}
+	parents := map[int]parentRead{}
+	parentOf := func(n int) parentRead {
 		if f == nil || n <= 0 {
-			return nil
+			return parentRead{}
 		}
-		if c, ok := parentCriteria[n]; ok {
-			return c
+		if p, ok := parents[n]; ok {
+			return p
 		}
-		c, _ := f.ParentCriteria(ctx, n)
-		parentCriteria[n] = c
-		return c
+		var p parentRead
+		if b, err := f.ParentBody(ctx, n); err == nil {
+			p = parentRead{body: b, criteria: UncheckedCriteria(b)}
+		}
+		parents[n] = p
+		return p
 	}
 
 	var toCreate []int // indexes into res.Items
@@ -522,7 +532,14 @@ func Materialize(ctx context.Context, capture *discoveredwork.Capture, gate fili
 			res.Items = append(res.Items, it)
 			continue
 		}
-		if why := trackedByParent(rec, track, criteriaOf(rec.IssueNumber)); why != "" {
+		parent := parentOf(rec.IssueNumber)
+		if strings.Contains(parent.body, Marker(rec)) {
+			it.Outcome = OutcomeTrackedByParent
+			it.Detail = fmt.Sprintf("marker in #%d's body", rec.IssueNumber)
+			res.Items = append(res.Items, it)
+			continue
+		}
+		if why := trackedByParent(rec, track, parent.criteria); why != "" {
 			it.Outcome = OutcomeTrackedByParent
 			it.Detail = why
 			res.Items = append(res.Items, it)

@@ -233,8 +233,8 @@ func TestMaterialize_MarkerOnClosedIssue(t *testing.T) {
 }
 
 // One parent body holding a feature-dev record's and a review record's markers
-// leaves both already-exists.
-func TestMaterialize_MarkersInParentBodyAreAlreadyExists(t *testing.T) {
+// leaves both tracked-by-parent (#2872).
+func TestMaterialize_MarkersInParentBodyAreTrackedByParent(t *testing.T) {
 	dir := t.TempDir()
 	run := "run-1"
 	for i, stage := range []string{"feature-dev", reviewProducer} {
@@ -258,7 +258,7 @@ func TestMaterialize_MarkersInParentBodyAreAlreadyExists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(outcomes(res), ","); got != "already-exists,already-exists" {
+	if got := strings.Join(outcomes(res), ","); got != "tracked-by-parent,tracked-by-parent" {
 		t.Fatalf("outcomes = %s", got)
 	}
 }
