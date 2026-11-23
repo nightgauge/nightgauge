@@ -532,19 +532,19 @@ scan -- "$CLEAN" "$MAL"
 first="$(sed -n 1p "$STATE/requests.log")"
 [ "$first" = "GET /api/v3/users/<key>/overall_quotas key=ok" ] &&
   [ "$(grep -c '/overall_quotas' "$STATE/requests.log")" = 1 ] &&
-  jq -e '.quota_remaining == 500 and .quota_estimate == 17 and .requests_by_class.quota == 1' "$REPORT" >/dev/null &&
-  grep -qF "daily quota: 500 requests left today, this scan may need 17" <<<"$OUT" &&
-  ok "quota fits: read once, first, with the key in the path; report records 500 left, estimate 17" ||
+  jq -e '.quota_remaining == 500 and .quota_estimate == 21 and .requests_by_class.quota == 1' "$REPORT" >/dev/null &&
+  grep -qF "daily quota: 500 requests left today, this scan may need 21" <<<"$OUT" &&
+  ok "quota fits: read once, first, with the key in the path; report records 500 left, estimate 21" ||
   bad "quota fits: first request '$first', report $(jq -c '{quota_remaining, quota_estimate, requests_by_class}' "$REPORT" 2>/dev/null)"
-printf '16\n' >"$STATE/quota-remaining"
+printf '20\n' >"$STATE/quota-remaining"
 scan -- "$CLEAN" "$MAL"
 rm -f "$STATE/quota-remaining"
-expect "quota does not fit -> exit 2 naming both numbers" 2 "HARNESS ERROR: daily quota too small: VirusTotal reports 16 requests left today, this scan may need 17"
+expect "quota does not fit -> exit 2 naming both numbers" 2 "HARNESS ERROR: daily quota too small: VirusTotal reports 20 requests left today, this scan may need 21"
 [ "$(wc -l <"$STATE/requests.log" | tr -d ' ')" = "1" ] && ! grep -q '^GET /api/v3/files/' "$STATE/requests.log" &&
-  jq -e '.status == "error" and .quota_remaining == 16 and .quota_estimate == 17' "$REPORT" >/dev/null &&
+  jq -e '.status == "error" and .quota_remaining == 20 and .quota_estimate == 21' "$REPORT" >/dev/null &&
   ok "quota does not fit: only the quota read was sent, no lookup" ||
   bad "quota does not fit: requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(jq -c '{status, quota_remaining, quota_estimate}' "$REPORT" 2>/dev/null)"
-printf '17\n' >"$STATE/quota-remaining"
+printf '21\n' >"$STATE/quota-remaining"
 scan -- "$CLEAN" "$MAL"
 rm -f "$STATE/quota-remaining"
 expect "quota exactly fits -> the scan runs (exit 1 on the finding)" 1 "engine StubEngineA: malicious"
@@ -641,6 +641,53 @@ expect "a known file with !ml -> exit 1, no re-check" 1 "engine Microsoft: malic
   bad "known file with !ml: analyses $(cat "$STATE/analyses.log" 2>/dev/null), report $(jq -c '.files' "$REPORT" 2>/dev/null)"
 scan VT_ML_RECHECK_DELAY=1h -- "$CLEAN"
 expect "VT_ML_RECHECK_DELAY not in seconds -> exit 2" 2 "HARNESS ERROR: VT_ML_RECHECK_DELAY"
+
+# 19-ml batch (#3519): every reanalysis is requested before any re-check is
+# polled, and the re-checks share one deadline. A slow one is named as
+# incomplete (exit 2) without stopping the others from being judged.
+MLSLOW="$(art ml-slow.bin 'payload VT-STUB-MS-ML-FIRST slow')"
+MLSLOW_SHA="$(shasum -a 256 "$MLSLOW" | cut -d' ' -f1)"
+MLFIRST2="$(art ml-first-two.bin 'payload VT-STUB-MS-ML-FIRST two')"
+ML_BATCH_TIMEOUT=3
+ML_BATCH_ENV=(VT_MIN_INTERVAL=1 VT_POLL_MAX_INTERVAL=1 VT_ML_RECHECK_DELAY=0 "VT_ML_RECHECK_TIMEOUT=$ML_BATCH_TIMEOUT")
+touch "$STATE/recheck-never-complete-$MLSLOW_SHA"
+scan "${ML_BATCH_ENV[@]}" -- "$MLSLOW" "$MLFIRST"
+expect "a slow re-check beside a clean one -> exit 2 naming the slow file" 2 "HARNESS ERROR: first-sight !ml re-check did not complete within ${ML_BATCH_TIMEOUT}s of the last reanalysis request: $MLSLOW ($MLSLOW_SHA)"
+first_post="$(grep -n '^POST /api/v3/files/[0-9a-f]*/analyse' "$STATE/requests.log" | sed -n 1p | cut -d: -f1)"
+last_post="$(grep -n '^POST /api/v3/files/[0-9a-f]*/analyse' "$STATE/requests.log" | tail -1 | cut -d: -f1)"
+first_get="$(awk -v n="${first_post:-0}" 'NR > n && /^GET / { print NR; exit }' "$STATE/requests.log")"
+[ "$(grep -c '^POST /api/v3/files/[0-9a-f]*/analyse' "$STATE/requests.log")" = 2 ] &&
+  [ -n "$first_get" ] && [ "$last_post" -lt "$first_get" ] &&
+  ! grep -qF "HARNESS ERROR: first-sight !ml re-check did not complete within ${ML_BATCH_TIMEOUT}s of the last reanalysis request: $MLSLOW ($MLSLOW_SHA), " <<<"$OUT" &&
+  grep -qF "judged on a reanalysis after a first-sight Microsoft !ml finding: $MLFIRST ($MLFIRST_SHA)" <<<"$OUT" &&
+  jq -e --arg f "$MLFIRST" '.status == "error" and (.judged_on_reanalysis | length) == 1
+    and .judged_on_reanalysis[0].file == $f
+    and ([.files[] | select(.file == $f)][0] | .source == "reanalysed-after-ml" and (.findings | length) == 0)' \
+    "$REPORT" >/dev/null &&
+  ok "slow re-check: both reanalyses sent before any re-check poll; the clean one is judged" ||
+  bad "slow re-check: requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(jq -c '{status, error, files}' "$REPORT" 2>/dev/null)"
+scan "${ML_BATCH_ENV[@]}" -- "$MLSLOW" "$MLKEEP"
+expect "a slow re-check beside a persisting finding -> exit 1" 1 "engine Microsoft: malicious Trojan:Script/Wacatac.B!ml"
+[ "$(report_status)" = "findings" ] &&
+  grep -qF "did not complete within ${ML_BATCH_TIMEOUT}s of the last reanalysis request: $MLSLOW ($MLSLOW_SHA)" <<<"$OUT" &&
+  ok "slow re-check beside a finding: the finding wins, the slow file is still named" ||
+  bad "slow re-check beside a finding: report $(jq -c '{status, error}' "$REPORT" 2>/dev/null)"
+MLSLOW2="$(art ml-slow-two.bin 'payload VT-STUB-MS-ML-FIRST slow two')"
+MLSLOW2_SHA="$(shasum -a 256 "$MLSLOW2" | cut -d' ' -f1)"
+touch "$STATE/recheck-never-complete-$MLSLOW2_SHA"
+scan "${ML_BATCH_ENV[@]}" -- "$MLSLOW" "$MLSLOW2"
+expect "two slow re-checks -> exit 2, one HARNESS ERROR naming both" 2 "HARNESS ERROR: first-sight !ml re-check did not complete within ${ML_BATCH_TIMEOUT}s of the last reanalysis request: $MLSLOW ($MLSLOW_SHA), $MLSLOW2 ($MLSLOW2_SHA)"
+[ "$(grep -c '^HARNESS ERROR:' <<<"$OUT")" = 1 ] && ok "two slow re-checks: a single HARNESS ERROR line" ||
+  bad "two slow re-checks: $(grep '^HARNESS ERROR:' <<<"$OUT")"
+rm -f "$STATE/recheck-never-complete-$MLSLOW_SHA" "$STATE/recheck-never-complete-$MLSLOW2_SHA"
+scan "${ML_BATCH_ENV[@]}" -- "$MLFIRST" "$MLFIRST2"
+expect "two first-sight !ml files clean on re-check -> exit 0" 0 "every file clean"
+[ "$(wc -l <"$STATE/analyses.log" | tr -d ' ')" = 2 ] &&
+  jq -e '[.files[].source] == ["reanalysed-after-ml", "reanalysed-after-ml"]' "$REPORT" >/dev/null &&
+  ok "batch re-check, all clean: each file reanalysed once and judged" ||
+  bad "batch re-check, all clean: analyses $(cat "$STATE/analyses.log" 2>/dev/null), report $(jq -c '.files' "$REPORT" 2>/dev/null)"
+scan VT_ML_RECHECK_TIMEOUT=1h -- "$CLEAN"
+expect "VT_ML_RECHECK_TIMEOUT not in seconds -> exit 2" 2 "HARNESS ERROR: VT_ML_RECHECK_TIMEOUT"
 
 # 20. The request budget stops the run before it sends past VT_MAX_REQUESTS.
 scan VT_MAX_REQUESTS=2 -- "$CLEAN"
