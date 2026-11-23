@@ -549,8 +549,12 @@ it. The extension books it the same way: HeadlessOrchestrator sets
 reading the text, does not halt the queue, and the freed slot is filled. Its
 exit record carries `gate_kind: partial_no_op`. It is audited
 `pipeline.completed` with `outcome: no_op`, runs no auto-retro and stays off a
-sequential run's Failed list. The extension's issue comment and live surfaces
-still present it as a failure (#3487 step 4).
+sequential run's Failed list. Its issue comment is not the failure report: it
+says nothing was left to build, lists each open criterion with the judge's
+reason (quoted inert, local paths removed), and names the two ways forward.
+The tree item and dashboard slot card show it as a no-op, the Output Window
+tab settles complete rather than error, and notifications label it no-op,
+never failed (#3487 step 4).
 
 What each Go booking writes to the exit records:
 

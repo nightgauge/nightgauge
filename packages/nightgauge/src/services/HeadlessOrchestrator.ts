@@ -231,6 +231,12 @@ import {
   postBlockedFindingComment,
 } from "../utils/failureComment";
 import {
+  endedPartialNoOp,
+  PARTIAL_NO_OP_OUTCOME,
+  PARTIAL_NO_OP_STATE_OUTCOME,
+  PARTIAL_NO_OP_TERMINAL_KIND,
+} from "./partialNoOp";
+import {
   blockedFindingPath,
   describeBlockedFinding,
   readBlockedFinding,
@@ -1995,7 +2001,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // issue_closed instead of classifying the guard's prose as a crash.
         startRefusal: result.success ? undefined : result.startRefusal,
         // #3487: the booking, so Go does not read it out of the gate or the text.
-        partialNoOp: !result.success && result.partialNoOp ? true : undefined,
+        partialNoOp: endedPartialNoOp(result) ? true : undefined,
       });
     } catch {
       /* telemetry is best-effort; the run outcome is recorded regardless */
@@ -9374,7 +9380,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     stage: PipelineStage,
     terminalKind: string
   ): Promise<PipelineRunResult["partialNoOp"]> {
-    if (stage !== "pr-create" || terminalKind !== "not_pipeline_actionable") return undefined;
+    if (stage !== "pr-create" || terminalKind !== PARTIAL_NO_OP_TERMINAL_KIND) return undefined;
     const scope = this.partialRerunIssues.get(issueNumber);
     if (!scope) return undefined;
     const decision = await this.readPartialNoOpDecision(issueNumber, scope, /* applyClose */ false);
@@ -9404,7 +9410,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     | { action: "relap"; steer: string }
     | {
         action: "book";
-        terminalKind: "not_pipeline_actionable";
+        terminalKind: typeof PARTIAL_NO_OP_TERMINAL_KIND;
         error: Error;
         remainder?: PartialNoOpRemainder;
       }
@@ -9431,7 +9437,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           `so the run ends as a no-op, not a failure; the remaining criteria stay open on the issue [#3163]`;
     return {
       action: "book",
-      terminalKind: "not_pipeline_actionable",
+      terminalKind: PARTIAL_NO_OP_TERMINAL_KIND,
       error: new Error(`${detail} — ${gateFail.error.message}`),
       remainder: decision?.remainder,
     };
@@ -15101,7 +15107,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               issueNumber,
               totalDurationMs,
               stagesCompleted: completedStages,
-              ...(failedStage && partialNoOpEnding ? { outcome: "no_op" } : {}),
+              ...(failedStage && partialNoOpEnding ? { outcome: PARTIAL_NO_OP_OUTCOME } : {}),
               timestamp: new Date().toISOString(),
             },
           });
@@ -15417,7 +15423,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     if (partialNoOpEnding && failedStage) {
       // A booked partial no-op (#3487) outranks every artifact: the failed
       // stage and its gate are how the run found nothing left to build.
-      classifiedOutcome = "no-op";
+      classifiedOutcome = PARTIAL_NO_OP_STATE_OUTCOME;
       if (this.stateService) {
         try {
           await this.stateService.setOutcomeType(classifiedOutcome);

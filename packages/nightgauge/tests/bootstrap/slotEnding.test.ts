@@ -6,7 +6,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { endedPartialNoOp, settleSequentialFailedList } from "../../src/bootstrap/slotEnding";
+import { settleSequentialFailedList } from "../../src/bootstrap/slotEnding";
+import { endedPartialNoOp } from "../../src/services/partialNoOp";
 
 describe("settleSequentialFailedList (#3487)", () => {
   it("takes a partial-delivery no-op off the Failed issues list", () => {
