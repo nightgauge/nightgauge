@@ -680,7 +680,8 @@ override, as `config.MachineConfigDir` already does for config.
 > synced only its own checkout's store, so a card raised in a sibling repository or a linked
 > worktree never reached the platform. The key is the first 16 hex characters of the SHA-256 of
 > the canonical workspace root: the directory whose `.vscode/nightgauge-workspace.yaml` sits in
-> the main checkout, or above it, or in a sibling directory, and lists it; otherwise the main
+> the main checkout, or above it, or in a sibling directory, and lists it (a sibling only when
+> its origin names the same forge owner or the machine config trusts it, #3495); otherwise the main
 > checkout itself. A linked or pipeline worktree resolves through its main checkout. The store is
 > not one per machine: two workspace daemons on one machine must not resolve, expire or upload
 > each other's cards (ADR-019), and separate directories keep that boundary with no per-card

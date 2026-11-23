@@ -1496,6 +1496,19 @@ declaring the workspace broken.
 
 ## Troubleshooting
 
+### Sibling Repository Uses Its Own Action Center Store
+
+**Symptoms**: stderr shows `workspacemanifest: ignoring "<root>"'s manifest claim on
+"<checkout>"`, and cards raised in a `path: ../repo` member do not appear in the
+workspace's Action Center.
+
+**Cause**: a sibling's manifest claims a checkout only when both git `origin` remotes name the
+same forge host and owner, or the root is in the machine config's `workspace.trusted_roots`
+(#3495). A fork member or a member with no `origin` fails the first test.
+
+**Solution**: add the workspace root to `workspace.trusted_roots`; see
+[Sibling Manifest Trust](CONFIGURATION.md#sibling-manifest-trust).
+
 ### Workspace Not Detected
 
 **Symptoms**: Repository switcher not shown, single-repo behavior

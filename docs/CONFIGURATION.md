@@ -6808,6 +6808,28 @@ Nightgauge detects workspace type using this priority order:
    multi-workspace mode
 3. **Fallback**: Single repository mode (existing behavior)
 
+### Sibling Manifest Trust
+
+A checkout belongs to the workspace of an ancestor manifest that lists it. A
+manifest in a **sibling** directory (`path: ../repo`) claims the checkout only
+when that claim rests on evidence the sibling cannot commit (#3495):
+
+- both checkouts' git `origin` remotes name the same forge host and owner
+  (`https`, `ssh://` and `git@host:` forms match, case-insensitively); or
+- the manifest root is listed in `workspace.trusted_roots` in the machine-tier
+  `config.yaml`. The key is read from that file alone and ignored elsewhere.
+
+Otherwise the claim is refused and logged once per process, and the checkout
+is its own workspace (its own Action Center store). A workspace whose members
+have no `origin`, or whose origins differ (a fork), trusts its root explicitly:
+
+```yaml
+# machine-tier config.yaml
+workspace:
+  trusted_roots:
+    - /Users/me/src/my-workspace # absolute paths only
+```
+
 ### Schema
 
 ```yaml
