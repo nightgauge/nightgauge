@@ -109,7 +109,8 @@ export interface HistoryIndexEntry {
     | "partial"
     | "deferred"
     | "awaiting_approval"
-    | "issue_closed";
+    | "issue_closed"
+    | "no_op";
   /** What aborted a failed V3 run; retained for crash-vs-phantom identity (#447). */
   terminal_failure_kind?: TerminalFailureKind;
   /** True when this run resumed a previously-failed pipeline (Issue #1261) */

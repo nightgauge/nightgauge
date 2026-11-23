@@ -147,6 +147,12 @@ export interface NotifyCompleteParams {
    * "issue-closed" to the issue_closed terminal kind (a non-failure).
    */
   startRefusal?: string;
+  /**
+   * #3487: the run result's partial-delivery no-op booking. Go books it
+   * not_pipeline_actionable ahead of the gate's kind and the text, as
+   * cancelled / no_op.
+   */
+  partialNoOp?: boolean;
   /** The run being claimed terminal. Accepted and ignored until step 4. */
   runId: string;
   /** "private" for a run started private (#2400); raises it before its record. */

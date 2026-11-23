@@ -206,14 +206,14 @@ view, clearly labelled in the UI, and is not the audit log.
 
 #### Pipeline Activity (Client)
 
-| Action               | Description                                   |
-| -------------------- | --------------------------------------------- |
-| `pipeline.started`   | An automated pipeline run began               |
-| `pipeline.completed` | A pipeline run finished successfully          |
-| `pipeline.failed`    | A pipeline run ended in failure               |
-| `stage.started`      | A single pipeline stage began execution       |
-| `stage.completed`    | A single pipeline stage finished successfully |
-| `stage.failed`       | A single pipeline stage failed                |
+| Action               | Description                                                                                                         |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `pipeline.started`   | An automated pipeline run began                                                                                     |
+| `pipeline.completed` | A pipeline run finished successfully, or ended a partial-delivery no-op (`outcome: "no_op"` in its metadata, #3487) |
+| `pipeline.failed`    | A pipeline run ended in failure                                                                                     |
+| `stage.started`      | A single pipeline stage began execution                                                                             |
+| `stage.completed`    | A single pipeline stage finished successfully                                                                       |
+| `stage.failed`       | A single pipeline stage failed                                                                                      |
 
 #### Source Control (Client)
 

@@ -724,7 +724,9 @@ else:
   a conflict-restart signal and raises the card that offers close. The
   scheduler holds the queued issues it blocks until the issue closes: the
   card's close releases them at once, and a close by hand on the next poll
-  that reads the blocker as closed.
+  that reads the blocker as closed. The extension's queue wakes those
+  successors the same way: on the card's close, and on a 30-second poll while
+  an item waits on a blocker and no slot is running.
 
 The board status is deliberately **not** a release signal. The sideline's board
 move is asynchronous, so at reconcile time the row can still read the status it

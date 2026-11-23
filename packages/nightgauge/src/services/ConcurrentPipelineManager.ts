@@ -31,6 +31,13 @@ const execFileAsync = promisify(execFile);
  */
 const ABORT_ALL_TIMEOUT_MS = 30_000;
 
+/**
+ * How often an idle manager refreshes the blockers of queued items (#3487).
+ * Fixed: as long as the autonomous scheduler's default scan interval, but it
+ * does not follow that setting.
+ */
+const BLOCKER_POLL_MS = 30_000;
+
 /** The longest delay setTimeout honours (2^31 - 1 ms, about 24.8 days). */
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
@@ -189,6 +196,34 @@ export function startRefusalTerminalKind(refusal: string | undefined): string | 
   return refusal === "issue-closed" ? "issue_closed" : undefined;
 }
 
+/**
+ * The terminal kind a booked partial-delivery no-op carries (#3487); Go's
+ * orchestrator.TerminalKindNotPipelineActionable, pinned by
+ * tests/services/partialNoOp.goParity.test.ts.
+ */
+export const PARTIAL_NO_OP_TERMINAL_KIND = "not_pipeline_actionable" satisfies TerminalFailureKind;
+
+/**
+ * The no-op card's close option (#3487): its id and verb, as Go's
+ * attention_wiring.go offers them (attention.VerbIssueCloseRemainder).
+ */
+export const NO_OP_CLOSE_OPTION_ID = "close";
+export const NO_OP_CLOSE_VERB = "issue.closeRemainder";
+
+/**
+ * The terminal kind a slot's run result states structurally: its
+ * partial-delivery no-op booking (#3487), else its typed start refusal.
+ * Undefined means no structured kind, and only then is text classified.
+ * `terminalKind` is deliberately not read: other `not_pipeline_actionable`
+ * endings and other gate kinds keep the text classification.
+ */
+export function slotTerminalKind(
+  result: Pick<PipelineRunResult, "partialNoOp" | "startRefusal">
+): string | undefined {
+  if (result.partialNoOp) return PARTIAL_NO_OP_TERMINAL_KIND;
+  return startRefusalTerminalKind(result.startRefusal);
+}
+
 import type { IssueQueueService } from "./IssueQueueService";
 import type { HeadlessOrchestrator } from "./HeadlessOrchestrator";
 import type { PipelineRunResult, RequestedPin } from "./HeadlessOrchestrator";
@@ -206,7 +241,7 @@ import type { WorkspaceManager } from "./WorkspaceManager";
 import { throttleInForce, type WorkspaceThrottle } from "./WorkspaceThrottle";
 import { IpcClient } from "./IpcClient";
 import { confirmAndReportPrivateRun, visibilityOption, withVisibility } from "./RunVisibility";
-import type { AbandonedDispatchSituation, QueueHandBackRef } from "./IpcClientBase";
+import type { AbandonedDispatchSituation, AttentionEvent, QueueHandBackRef } from "./IpcClientBase";
 import type { TerminalFailureKind } from "../schemas/executionHistory";
 
 /** Upper bound on how long a Stop waits for Go to record the stop (#1848). */
@@ -613,6 +648,14 @@ export class BranchCollisionError extends Error {
 }
 
 /**
+ * Whether the item is pending behind a blocker (#3487). The recorded state is
+ * not read: a refresh can persist CLOSED without dispatching the item.
+ */
+function waitsOnBlocker(item: QueueItem): boolean {
+  return item.status === "pending" && (item.blockedBy?.length ?? 0) > 0;
+}
+
+/**
  * ConcurrentPipelineManager manages N pipeline "slots" for parallel execution.
  *
  * PATH WARNING (#257): this class — not the Go scheduler — is the execution
@@ -687,6 +730,21 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * wake the item sat pending while the daemon reserved a slot for it.
    */
   private pendingFillTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The next blocker poll, armed while a pending item has a blocker (#3487). */
+  private blockerPollTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Subscribed with the first armed poll: a blocker card's close (#3487). */
+  private blockerCloseSubscription: vscode.Disposable | null = null;
+  /**
+   * Slots that left {@link slots} but have not finished settling (#3487). A
+   * halt drains the queue after that point, so the blocker wake waits for it.
+   */
+  private readonly settlingSlots = new Set<PipelineSlot>();
+  /**
+   * A stop-after-current drained (#3487). It leaves pending items queued, so
+   * the blocker wake waits until something else fills or resumes.
+   */
+  private stoppedAfterCurrent = false;
+  private isDisposed = false;
   /**
    * TOMBSTONES: platform runs cancelled before their slot opened (#2344).
    *
@@ -1121,6 +1179,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   async fillSlots(): Promise<number> {
     if (this.isShuttingDown || this.windowEnding) return 0;
+    this.stoppedAfterCurrent = false;
     if (this.authCircuitOpen) {
       this.logger.warn(
         "fillSlots skipped — auth circuit breaker is open (Claude Code session expired)"
@@ -2194,6 +2253,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // surfacing as an unhandled rejection.
     void runPromise
       .finally(() => {
+        this.settlingSlots.delete(slot);
         if (this.lifecyclePromises.get(lifecycleKey) === runPromise) {
           this.lifecyclePromises.delete(lifecycleKey);
         }
@@ -2306,8 +2366,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         slot,
         result.success
           ? undefined
-          : (startRefusalTerminalKind(result.startRefusal) ??
-              classifyTerminalKind(result.error?.message ?? ""))
+          : (slotTerminalKind(result) ?? classifyTerminalKind(result.error?.message ?? ""))
       );
       pipelineDeferred = result.deferred ?? false;
       isAlreadyResolved = result.outcomeType === "already-resolved";
@@ -2418,12 +2477,17 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           OPERATOR_STOP_TERMINAL_KIND
         );
       } else {
-        this.logger.warn("Concurrent pipeline slot failed", {
+        const ending = {
           slotIndex: slot.index,
           issueNumber: slot.issueNumber,
           failedStage: result.failedStage,
           costUsd: slotCostUsd,
-        });
+        };
+        if (result.partialNoOp) {
+          this.logger.info("Concurrent pipeline slot ended a partial-delivery no-op", ending);
+        } else {
+          this.logger.warn("Concurrent pipeline slot failed", ending);
+        }
 
         // Circuit breaker: if the slot failed at issue-pickup with an auth
         // error (Claude Code session expired), trip the breaker to prevent
@@ -2462,7 +2526,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           slotError,
           slotCostUsd,
           slot.repo,
-          startRefusalTerminalKind(result.startRefusal)
+          slotTerminalKind(result)
         );
       }
       // The dispatch reported its OWN outcome. Set only here and in the catch
@@ -2676,6 +2740,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // #3969: delete the local feature branch only on a clean success (PR
         // merged). On failure/cancel the branch is preserved for resume/recovery.
         const deleteMergedBranch = pipelineSucceeded && !slot.userCancelled;
+        this.settlingSlots.add(slot);
         await this.cleanupSlot(slot, preserveWorktree, deleteMergedBranch);
 
         // If the pipeline failed and was part of a sequential epic, drain all
@@ -2689,9 +2754,17 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // @see Issue #1819 - sequential epic ordering
         // Skip on a deferral (#305): the predecessor didn't fail, so successors
         // stay queued — draining them would strand work behind a transient block.
+        // Skip on a partial-delivery no-op (#3487) for the same reason; Go's
+        // dequeue holds them while the issue stays open (HoldNoOpSuccessors,
+        // set by this run's pipeline.notifyComplete), and watchBlockers wakes
+        // them when it closes. Decided on the booking alone: the text quotes
+        // criteria, which can carry another kind's words (merge_conflict,
+        // pr_merge_unmerged).
+        const endedNoOp = !pipelineSucceeded && pipelineResult?.partialNoOp !== undefined;
         if (
           !pipelineSucceeded &&
           !pipelineDeferred &&
+          !endedNoOp &&
           !isAlreadyResolved &&
           !this.isShuttingDown &&
           !slot.userCancelled
@@ -2733,13 +2806,19 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // scheduler continues to the next candidate instead of halting the queue
         // / pausing autonomous. The onSlotDeferred handler already freed the Go
         // slot with a non-failure `blocked_dependency` signal.
+        //
+        // A partial-delivery no-op (#3487) halts nothing either:
+        // haltQueueOnSlotFailure reads its booking first and returns "no-op",
+        // and the slot it freed is filled, or a queue running at concurrency 1
+        // stops on it.
         if (
           !pipelineSucceeded &&
           !pipelineDeferred &&
           !this.isShuttingDown &&
           !slot.userCancelled
         ) {
-          await this.haltQueueOnSlotFailure(slot, pipelineResult);
+          const halt = await this.haltQueueOnSlotFailure(slot, pipelineResult);
+          if (halt === "no-op" && !this.isShuttingDown) await this.fillSlots();
         } else if (!this.isShuttingDown) {
           await this.fillSlots();
         }
@@ -2757,6 +2836,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
             issueNumber: slot.issueNumber,
           });
           this.isShuttingDown = false;
+          this.stoppedAfterCurrent = true;
           void vscode.commands.executeCommand(
             "setContext",
             "nightgauge.stopAfterCurrentQueue",
@@ -3137,11 +3217,32 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     else this.runawayStreaks.set(key, streak);
   }
 
+  /**
+   * Halt the queue on a slot failure, unless its ending is one of the skips
+   * below.
+   *
+   * @returns `"no-op"` for a booked partial-delivery no-op (#3487): nothing
+   *   was halted and the caller fills the freed slot. Undefined otherwise,
+   *   whether the queue was halted or the failure was skipped.
+   */
   private async haltQueueOnSlotFailure(
     slot: PipelineSlot,
     pipelineResult: PipelineRunResult | undefined
-  ): Promise<void> {
+  ): Promise<"no-op" | void> {
     try {
+      // #3487: a booked partial-delivery no-op is decided on its structured
+      // field, before any kind or text below is read. Its error text quotes
+      // the open criteria, which can carry another kind's words
+      // (merge_conflict, pr_merge_unmerged), so classifying it would halt the
+      // queue on a run that did nothing wrong. The caller fills the slot.
+      if (pipelineResult?.partialNoOp !== undefined) {
+        this.logger.info(
+          "Skipping haltQueueOnSlotFailure — partial-delivery no-op; nothing is left to build",
+          { failedIssue: slot.issueNumber }
+        );
+        return "no-op";
+      }
+
       // #1148: a `blocked` terminal never halts anything.
       //
       // A run that stopped because its work is blocked on other issues has
@@ -3755,6 +3856,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   resumeFilling(): void {
     this.isShuttingDown = false;
+    // The last slot can drain while the confirmation is open (#3487).
+    this.stoppedAfterCurrent = false;
   }
 
   /**
@@ -4838,7 +4941,89 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     for (const item of state.items ?? []) if (item.remoteRunId) ids.add(item.remoteRunId);
     this.queuedRemoteRunIds = ids;
     this.noteHeldRemoteRuns();
+    if ((state.items ?? []).some(waitsOnBlocker)) this.watchBlockers();
     this.wakeFillForPending(state);
+  }
+
+  /**
+   * Wake the queued items that wait on a blocker (#3487, Part G). Go refreshes
+   * blocker states only inside a dequeue, and an issue closing causes none, so
+   * this manager dequeues when the blocker's card is resolved with close, and
+   * on a poll while no slot runs. The poll also covers a close by hand or from
+   * another process, which emit no event here.
+   */
+  private watchBlockers(): void {
+    this.blockerCloseSubscription ??= IpcClient.getInstance().on("attention.event", (data) => {
+      this.wakeOnBlockerClose(data as AttentionEvent).catch((err) => {
+        this.logger.warn("fillSlots after a blocker's close failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+    });
+    this.armBlockerPoll();
+  }
+
+  private armBlockerPoll(): void {
+    if (this.blockerPollTimer || this.isDisposed || this.windowEnding) return;
+    this.blockerPollTimer = setTimeout(() => {
+      this.blockerPollTimer = null;
+      void this.pollBlockers();
+    }, BLOCKER_POLL_MS);
+  }
+
+  /**
+   * One poll. It stops once nothing waits on a blocker; the next queue state
+   * that has such an item arms it again. Not {@link wakeFillForPending}: the
+   * queue's aggregate status reads paused when any one item is, which would
+   * strand every pending item beside it.
+   */
+  private async pollBlockers(): Promise<void> {
+    const canPoll = () =>
+      this.slots.size === 0 &&
+      this.reservedSlots.size === 0 &&
+      !this.isFilling &&
+      this.canWakeBlockedItems();
+    try {
+      if (canPoll()) {
+        const queue = await this.queueService.getQueue();
+        if (queue && !queue.items.some(waitsOnBlocker)) return;
+        if (queue && canPoll()) await this.fillSlots();
+      }
+    } catch (err) {
+      this.logger.warn("The blocker poll failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+    this.armBlockerPoll();
+  }
+
+  /** Fill at once when the close option of a queued item's blocker was taken. */
+  private async wakeOnBlockerClose({ action, request }: AttentionEvent): Promise<void> {
+    if (action !== "resolved" || request.lifecycle.resolved?.option_id !== NO_OP_CLOSE_OPTION_ID) {
+      return;
+    }
+    const option = request.options.find((o) => o.id === NO_OP_CLOSE_OPTION_ID);
+    if (option?.verb !== NO_OP_CLOSE_VERB || !this.canWakeBlockedItems()) return;
+    const { repo, issue } = request.context;
+    const queue = await this.queueService.getQueue();
+    const blocksQueued = queue?.items.some(
+      (item) =>
+        waitsOnBlocker(item) &&
+        item.blockedBy?.some((b) => b.number === issue && sameRepo(b.repo || item.repoName, repo))
+    );
+    if (blocksQueued && this.canWakeBlockedItems()) await this.fillSlots();
+  }
+
+  /** The gates both blocker wakes share; fillSlots applies its own as well. */
+  private canWakeBlockedItems(): boolean {
+    return (
+      !this.isShuttingDown &&
+      !this.windowEnding &&
+      !this.stoppedAfterCurrent &&
+      this.settlingSlots.size === 0 &&
+      this.queueService.getConfig?.().autoStart !== false &&
+      this.availableSlotCount > 0
+    );
   }
 
   /**
@@ -5214,6 +5399,12 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
   dispose(): void {
     this.isShuttingDown = true;
+    this.isDisposed = true;
+    if (this.blockerPollTimer) {
+      clearTimeout(this.blockerPollTimer);
+      this.blockerPollTimer = null;
+    }
+    this.blockerCloseSubscription?.dispose();
     if (this.pendingFillTimer) {
       clearTimeout(this.pendingFillTimer);
       this.pendingFillTimer = null;

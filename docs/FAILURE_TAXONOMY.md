@@ -543,7 +543,14 @@ the **partial-delivery no-op**, a re-run scoped to a partial-delivery remainder
 that is booked `not_pipeline_actionable` because it has no diff. The booking
 sets a structured signal (`RuntimeState.PartialNoOp`) where the Go run ends,
 and a stage that begins clears it, so it never outlives the attempt that set
-it. The extension does not book it yet (#3487 steps 3 and 4).
+it. The extension books it the same way: HeadlessOrchestrator sets
+`PipelineRunResult.partialNoOp` at the booking and sends `partialNoOp` on
+`pipeline.notifyComplete`. Its slot hands the kind to the scheduler without
+reading the text, does not halt the queue, and the freed slot is filled. Its
+exit record carries `gate_kind: partial_no_op`. It is audited
+`pipeline.completed` with `outcome: no_op`, runs no auto-retro and stays off a
+sequential run's Failed list. The extension's issue comment and live surfaces
+still present it as a failure (#3487 step 4).
 
 What each Go booking writes to the exit records:
 
