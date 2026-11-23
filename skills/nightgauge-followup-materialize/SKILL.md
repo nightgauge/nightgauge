@@ -87,8 +87,12 @@ exit "$STATUS"
 
 `followup-materialize-{N}.json` in the pipeline state directory: the gate,
 `report_only`, `reason`, `refused`, and one item per record with `outcome`
-(`filed`, `already-exists`, `deduped`, `would-file`, `tracked-by-parent`,
-`duplicate`, `refused`, `invalid`).
+(`filed`, `folded`, `already-exists`, `deduped`, `would-file`,
+`tracked-by-parent`, `duplicate`, `refused`, `invalid`).
+Report mode and `--dry-run` still read the parent issue's body through the
+filer, so a record whose marker is in that body, or which restates one of its
+unchecked criteria, is reported `tracked-by-parent` in report-only results
+too, never `would-file`.
 Nothing is written when the capture held no records.
 
 ## Author

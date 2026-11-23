@@ -33,6 +33,8 @@ type fakeFiler struct {
 	// parent criteria by issue number.
 	closed   map[int]bool
 	criteria map[int][]string
+	// bodyErr, when set, fails ParentBody.
+	bodyErr error
 }
 
 func newFake() *fakeFiler {
@@ -49,8 +51,16 @@ func (f *fakeFiler) FindByMarker(_ context.Context, marker string) (Found, error
 	return Found{}, nil
 }
 
-func (f *fakeFiler) ParentCriteria(_ context.Context, n int) ([]string, error) {
-	return f.criteria[n], nil
+// ParentBody is n's body, then its criteria as unchecked boxes.
+func (f *fakeFiler) ParentBody(_ context.Context, n int) (string, error) {
+	if f.bodyErr != nil {
+		return "", f.bodyErr
+	}
+	body := f.bodies[n]
+	for _, c := range f.criteria[n] {
+		body += "\n- [ ] " + c
+	}
+	return body, nil
 }
 
 func (f *fakeFiler) FindOpenByTitle(_ context.Context, title string) (int, string, error) {

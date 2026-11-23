@@ -85,7 +85,7 @@ func TestFollowupMaterialize_ReportOnlyConsumesWithoutClient(t *testing.T) {
 		t.Fatalf("err=%v out=%s", err, out)
 	}
 	if !strings.Contains(out, "report-only: fail closed") || !strings.Contains(out, "would-file") ||
-		!strings.Contains(out, "followup materialize: parent criteria unavailable: no token") {
+		!strings.Contains(out, "followup materialize: parent body unavailable: no token") {
 		t.Fatalf("out = %s", out)
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "discovered-work-42.json")); !os.IsNotExist(err) {
@@ -111,11 +111,11 @@ func TestFollowupMaterialize_DryRunKeepsCapture(t *testing.T) {
 	}
 }
 
-// TestFollowupMaterialize_DryRunAppliesParentCriteria: --dry-run reads the
+// TestFollowupMaterialize_DryRunAppliesParentBody: --dry-run reads the
 // parent's body, so a record restating one of its unchecked criteria is
 // tracked-by-parent, not would-file, and nothing is written to the forge
 // (#2872).
-func TestFollowupMaterialize_DryRunAppliesParentCriteria(t *testing.T) {
+func TestFollowupMaterialize_DryRunAppliesParentBody(t *testing.T) {
 	fake := githubtest.New(t, map[int]githubtest.Issue{
 		42: {Body: "## Acceptance Criteria\n\n- [ ] The waiter honours the configured ceiling on every retry\n"},
 	})

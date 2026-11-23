@@ -103,7 +103,7 @@ cap refused records; they stay in the capture file. Exit 1: error.`,
 				gate.Mode, gate.Reason = filing.ModeReport, "--dry-run"
 			}
 			// Report and dry-run mode build a filer too, best effort: Materialize
-			// only reads the parent's criteria through it there, so
+			// only reads the parent's body through it there, so
 			// tracked-by-parent holds in the would-file list (#2872).
 			var filer followup.Filer
 			trusted := false
@@ -113,9 +113,10 @@ cap refused records; they stay in the capture file. Exit 1: error.`,
 			case err != nil && gate.Files():
 				return fmt.Errorf("create GitHub client: %w", err)
 			case err != nil:
-				fmt.Fprintf(cmd.ErrOrStderr(), "followup materialize: parent criteria unavailable: %v\n", err)
+				fmt.Fprintf(cmd.ErrOrStderr(), "followup materialize: parent body unavailable: %v\n", err)
 			default:
-				filer = followup.NewGitHubFiler(client, ownerPart, repoPart, projectNumber, getOwnerType(cmd))
+				filer = followup.NewGitHubFiler(client, ownerPart, repoPart, projectNumber, getOwnerType(cmd)).
+					WithTrustedBots(followup.TrustedBots(workdir))
 				if gate.Files() {
 					trusted = followup.AuthorTrusted(cmd.Context(), client, workdir, ownerPart, repoPart, number)
 				}

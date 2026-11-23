@@ -18,6 +18,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 - pr-create no longer closes a multi-step issue whose `## Delivery order` section says each PR refs it. With every criterion met it now writes `Refs #N` and says why, and pr-merge's check-criteria promotion no longer turns that back into `Closes` (#3510).
 - The release VirusTotal scan no longer reports a reanalysis whose report moved to a date newer than the lookup's, but outside the file's reanalysis window, as a report that "stayed" at the old date after three file reads. Such a report is now polled to the analysis deadline, as its log line says; a report that really has not moved still stops after three reads. Which of the two exit-2 messages a scan printed used to depend on machine load (#3519).
+- `nightgauge followup materialize` no longer folds a follow-up into an open issue whose author fails the trust gate; it picks the next qualifying trusted issue or files the follow-up on its own. A record whose `discovered-work` marker is already in its parent issue's body is now reported `tracked-by-parent` in file mode and in report mode and `--dry-run`, instead of `already-exists` or `would-file` (#2872).
 
 ## [0.8.7] - 2026-11-22
 
