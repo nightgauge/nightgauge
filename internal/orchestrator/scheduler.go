@@ -1569,7 +1569,6 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 		excludeLabels:            excludeLabels,
 		adapterExplicit:          cfg.AdapterExplicit,
 		runDefaultAdapter:        cfg.Adapter,
-		prMergeRunner:            newPRMergeRunner(client, cfg.RuntimeConfig),
 		prAutoFixMaxAttempts:     prAutoFixMaxAttempts(cfg.RuntimeConfig),
 		prCreateRunner:           NewDefaultPRCreateRunner(client),
 		issuePickupRunner:        NewDeterministicIssuePickupRunner(),
@@ -1578,6 +1577,9 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 	// Wire FailureRecovery registry (Issue #3268). Reuses the same runners
 	// as the deterministic-first hooks so a recovery and a deterministic
 	// merge use a single source of truth.
+	// Bound after the literal so the review filer resolves each repository's
+	// client through s, honouring a resolver wired later (#2837).
+	s.prMergeRunner = newPRMergeRunner(client, cfg.RuntimeConfig, s.reviewFilingClient)
 	s.recoveryRegistry = recovery.Default(cfg.WorkspaceRoot, s.prMergeRunner, s.prCreateRunner)
 	s.trustGate = newSchedulerTrustGate(s, trustedBotsFrom(cfg.RuntimeConfig), cfg.RuntimeConfig.AppOwners(),
 		cfg.RuntimeConfig.ConfiguredGitHubLogins())
@@ -1811,13 +1813,23 @@ func (s *Scheduler) WithRepoRootsResolver(fn func() []string) {
 // prNumberFromURLRE captures the number of a pull request URL.
 var prNumberFromURLRE = regexp.MustCompile(`/pull/(\d+)`)
 
+// reviewFilingClient resolves the review filer's client for owner/repo through
+// the client resolver as it is when called, so one wired after NewScheduler
+// is honoured (#2837). (nil, nil) means none is wired: use the startup client.
+func (s *Scheduler) reviewFilingClient(ctx context.Context, owner, repo string) (*gh.Client, error) {
+	if s.clientResolver == nil {
+		return nil, nil
+	}
+	return s.clientResolver(ctx, owner, repo)
+}
+
 // newPRMergeRunner builds the deterministic pr-merge runner with the
 // configured merge-queue wait budget (pipeline.merge_queue.wait_timeout,
 // #2214) and CI-wait budget (pr.ci_check_timeout, #2504).
-func newPRMergeRunner(client *gh.Client, cfg *config.Config) *pmstages.DeterministicRunner {
+func newPRMergeRunner(client *gh.Client, cfg *config.Config, resolve followup.ClientResolver) *pmstages.DeterministicRunner {
 	r := pmstages.NewDeterministicRunner()
 	if client != nil && cfg != nil {
-		r.SetReviewFiling(followup.ReviewFiling(client, cfg))
+		r.SetReviewFiling(followup.ReviewFiling(client, cfg, resolve))
 	}
 	var p *config.PipelineConfig
 	var pr *config.PRConfig
