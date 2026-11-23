@@ -184,3 +184,24 @@ func TestReadCreateContext_BodyDroppedCriterion_SaysRefs(t *testing.T) {
 		t.Errorf("a changed scope must say Refs #42:\n%s", body)
 	}
 }
+
+// #3510: a readable body whose Delivery order says Refs keeps a fully met
+// report from closing the issue.
+func TestReadCreateContext_DeliveryOrderRefs_SaysRefs(t *testing.T) {
+	dir := stale3228Fixture(t, 13)
+	all := stale3228Criteria()
+	stubIssueBody(t, "Intro.\n\n## Acceptance Criteria\n\n"+acCheckboxBody(all)+"\n## Delivery order\n\n1. Step one. Refs #42.\n", nil)
+
+	snap, err := defaultReadCreateContext(context.Background(), dir, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap.IssueNumber = 42
+	if !snap.DeliveryOrderRefs {
+		t.Fatal("DeliveryOrderRefs = false for a Refs delivery order")
+	}
+	body := RenderBody(snap)
+	if !strings.Contains(body, "Refs #42") || BodyClosesIssue(body, "", 42) {
+		t.Errorf("a Refs delivery order must say Refs #42:\n%s", body)
+	}
+}

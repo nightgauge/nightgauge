@@ -200,6 +200,9 @@ type PRCreateSnapshot struct {
 	// unreadable, or its fingerprint differed from ac-reconcile's. The PR
 	// then says `Refs`, never `Closes`.
 	ACScopeUnverified bool
+	// DeliveryOrderRefs is true when the issue body's Delivery order section
+	// says each PR refs the issue (#3510). The PR then says `Refs`.
+	DeliveryOrderRefs bool
 
 	// Planning / knowledge
 	KnowledgePath    string
@@ -507,7 +510,9 @@ func RenderBody(snap PRCreateSnapshot) string {
 	if !snapClosesIssue(snap) {
 		b.WriteString(UnmetACHeading + "\n\n")
 		open := OpenACs(snap.ACVerdicts)
-		if len(open) == 0 && snap.ACScopeUnverified {
+		if len(open) == 0 && snap.DeliveryOrderRefs {
+			b.WriteString(fmt.Sprintf("This PR leaves #%d open: the issue's Delivery order section says each PR refs it.\n\n", snap.IssueNumber))
+		} else if len(open) == 0 && snap.ACScopeUnverified {
 			b.WriteString(fmt.Sprintf("This PR leaves #%d open: pr-create could not confirm these criteria are the issue's current ones.\n\n", snap.IssueNumber))
 		} else if len(open) == 0 && snap.ACReconcileMissing {
 			b.WriteString(fmt.Sprintf("This PR leaves #%d open: ac-reconcile-%d.json was not found, so no acceptance criteria could be verified.\n\n", snap.IssueNumber, snap.IssueNumber))
@@ -622,9 +627,10 @@ func acRunState(snap PRCreateSnapshot) ACTestState {
 }
 
 // snapClosesIssue reports whether the PR closes its issue: every criterion
-// met, and the criteria confirmed as the issue body's current ones (#3228).
+// met, the criteria confirmed as the issue body's current ones (#3228), and
+// no Delivery order section saying each PR refs the issue (#3510).
 func snapClosesIssue(snap PRCreateSnapshot) bool {
-	return IssueClosedBy(snap.ACVerdicts) && !snap.ACScopeUnverified
+	return IssueClosedBy(snap.ACVerdicts) && !snap.ACScopeUnverified && !snap.DeliveryOrderRefs
 }
 
 // closingKeyword is "Closes" only when every acceptance criterion is met.
@@ -1322,10 +1328,12 @@ func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber i
 		var unjudged map[string]bool
 		forceRefs := false
 		var issueCriteria []string
+		// A readable body also decides DeliveryOrderRefs (#3510); an unreadable
+		// one already forces Refs.
 		if body, bodyErr := prCreateIssueBody(workdir)(ctx, issueNumber); bodyErr != nil {
 			forceRefs = true
 			log.Printf("pr-create: WARNING cannot read #%d's body to check ac-reconcile's scope (%v); the PR will say Refs #%d, not Closes", issueNumber, bodyErr, issueNumber)
-		} else if issueCriteria = hooks.IssueCriterionTexts(body); preflight.ACFingerprint(body) != fingerprint {
+		} else if snap.DeliveryOrderRefs, issueCriteria = DeliveryOrderSaysRefs(body), hooks.IssueCriterionTexts(body); preflight.ACFingerprint(body) != fingerprint {
 			current := preflight.ACFingerprint(body)
 			judged := map[string]bool{}
 			for _, c := range criteria {
