@@ -4,20 +4,51 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
+	"github.com/nightgauge/nightgauge/internal/workspacetest"
 )
+
+// TestQueueDropProcessing covers queue.dropProcessing, and runs both dequeue
+// cases again from inside a multi-repository workspace (#3275).
+//
+// Serial: InsideAWorkspace changes the working directory (t.Chdir).
+func TestQueueDropProcessing(t *testing.T) {
+	plain := func() *orchestrator.Scheduler {
+		return orchestrator.NewScheduler(nil, orchestrator.SchedulerConfig{})
+	}
+	t.Run("Handler", func(t *testing.T) { dropProcessingHandler(t, plain) })
+	t.Run("HandlerWithoutAScheduler", dropProcessingWithoutAScheduler)
+	t.Run("HandlerHandsBack", func(t *testing.T) { dropProcessingHandsBack(t, plain) })
+
+	t.Run("InsideAWorkspace", func(t *testing.T) {
+		_, repoA := workspacetest.TwoRepos(t)
+		t.Chdir(repoA)
+		// "rooted" reads both repositories and holds only through the no-client
+		// guard in affinityBody. The empty-root guard behind "no root" is pinned
+		// by TestRepoAffinity_NoRootReadsNoWorkingDirectoryPaths.
+		schedulers := map[string]orchestrator.SchedulerConfig{
+			"no root": {},
+			"rooted":  {WorkspaceRoot: repoA},
+		}
+		for name, cfg := range schedulers {
+			newSched := func() *orchestrator.Scheduler { return orchestrator.NewScheduler(nil, cfg) }
+			t.Run(name, func(t *testing.T) {
+				t.Run("Handler", func(t *testing.T) { dropProcessingHandler(t, newSched) })
+				t.Run("HandlerHandsBack", func(t *testing.T) { dropProcessingHandsBack(t, newSched) })
+			})
+		}
+	})
+}
 
 // queue.dropProcessing (#2396) is what a window reload or close does to the
 // queue: the item a dispatch took goes with its run, every waiting item stays,
 // and the answer is {"dropped": n}.
-func TestQueueDropProcessing_Handler(t *testing.T) {
-	sched := orchestrator.NewScheduler(nil, orchestrator.SchedulerConfig{})
+func dropProcessingHandler(t *testing.T, newSched func() *orchestrator.Scheduler) {
+	t.Helper()
+	sched := newSched()
 	sched.SetTrustGate(permissiveGate())
 	s := NewServer(nil, WithScheduler(sched))
 	s.writer = &bytes.Buffer{}
@@ -43,7 +74,7 @@ func TestQueueDropProcessing_Handler(t *testing.T) {
 	}
 }
 
-func TestQueueDropProcessing_HandlerWithoutAScheduler(t *testing.T) {
+func dropProcessingWithoutAScheduler(t *testing.T) {
 	s := NewServer(nil)
 	s.writer = &bytes.Buffer{}
 	if _, err := s.methods["queue.dropProcessing"](context.Background(), nil); err == nil || !strings.Contains(err.Error(), errSchedulerNotConfigured) {
@@ -54,8 +85,9 @@ func TestQueueDropProcessing_HandlerWithoutAScheduler(t *testing.T) {
 // The window names the dispatches it had not begun to start, and the dequeues
 // whose answer it never read, by the dispatch token it passed to
 // queue.dequeueIndependent: their items go back to waiting (#2396).
-func TestQueueDropProcessing_HandlerHandsBack(t *testing.T) {
-	sched := orchestrator.NewScheduler(nil, orchestrator.SchedulerConfig{})
+func dropProcessingHandsBack(t *testing.T, newSched func() *orchestrator.Scheduler) {
+	t.Helper()
+	sched := newSched()
 	sched.SetTrustGate(permissiveGate())
 	s := NewServer(nil, WithScheduler(sched))
 	s.writer = &bytes.Buffer{}
@@ -103,34 +135,4 @@ func TestQueueDropProcessing_HandlerHandsBack(t *testing.T) {
 	if _, err := s.methods["queue.dropProcessing"](context.Background(), json.RawMessage(`{"handBack":"x"}`)); err == nil {
 		t.Error("malformed params were accepted")
 	}
-}
-
-// Both dequeue cases hold when the checkout sits inside a multi-repository
-// workspace (#3275).
-//
-// Serial: changes the working directory (t.Chdir).
-func TestQueueDropProcessing_InsideAWorkspace(t *testing.T) {
-	ws := t.TempDir()
-	files := map[string]string{
-		".vscode/nightgauge-workspace.yaml": "repositories:\n  - name: a\n    path: a\n  - name: b\n    path: b\n",
-		"a/.nightgauge/config.yaml":         "owner: o\ndefaultRepo: a\n",
-		"b/.nightgauge/config.yaml":         "owner: o\ndefaultRepo: b\n",
-	}
-	for name, body := range files {
-		path := filepath.Join(ws, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	root := filepath.Join(ws, "a")
-	t.Chdir(root)
-	if got := config.WorkspaceRepoPaths(root); len(got) < 2 {
-		t.Fatalf("fixture paths = %v, want two repositories", got)
-	}
-
-	t.Run("Handler", TestQueueDropProcessing_Handler)
-	t.Run("HandlerHandsBack", TestQueueDropProcessing_HandlerHandsBack)
 }

@@ -3,13 +3,12 @@ package orchestrator
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/trust"
+	"github.com/nightgauge/nightgauge/internal/workspacetest"
 )
 
 // twoRepoWorkspace is a workspace of o/r (the filed repo) and o/ext (a
@@ -175,22 +174,7 @@ func TestRepoAffinity_NoClientFailsOpen(t *testing.T) {
 //
 // Serial: changes the working directory (t.Chdir).
 func TestRepoAffinity_NoRootReadsNoWorkingDirectoryPaths(t *testing.T) {
-	ws := t.TempDir()
-	files := map[string]string{
-		".vscode/nightgauge-workspace.yaml": "repositories:\n  - name: a\n    path: a\n  - name: b\n    path: b\n",
-		"a/.nightgauge/config.yaml":         "owner: o\ndefaultRepo: a\n",
-		"b/.nightgauge/config.yaml":         "owner: o\ndefaultRepo: b\n",
-	}
-	for name, body := range files {
-		path := filepath.Join(ws, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	root := filepath.Join(ws, "a")
+	_, root := workspacetest.TwoRepos(t)
 	t.Chdir(root)
 
 	if got := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: root}).affinityRepoPaths(); len(got) != 2 {
