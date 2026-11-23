@@ -180,7 +180,8 @@ func runIssuePartialNoOp(ctx context.Context, stdout, stderr io.Writer, a partia
 }
 
 // applyPartialClose runs the close for a "close" decision, downgrading the
-// action to "book" with the shared failure detail when it fails.
+// action to "book" with the shared failure or held detail when it fails or
+// holds.
 func applyPartialClose(ctx context.Context, stderr io.Writer, a partialNoOpArgs, v orchestrator.RemainderVerdict, out *partialNoOpOutput) {
 	fail := func(err error) {
 		fmt.Fprintf(stderr, "issue partial-noop: close failed: %v\n", err)
@@ -205,6 +206,14 @@ func applyPartialClose(ctx context.Context, stderr io.Writer, a partialNoOpArgs,
 		fail(err)
 		return
 	}
-	out.Applied = true
 	out.Close = &res
+	if res.Held != "" {
+		// The issue's Delivery order says refs, or its body was unread
+		// (#3510): nothing was written, so the run books as a held close.
+		fmt.Fprintf(stderr, "issue partial-noop: close held: %s\n", res.Held)
+		out.Action = orchestrator.PartialNoOpActionBook
+		out.Detail = orchestrator.PartialCloseHeldDetail(a.number, a.pr, res.Held)
+		return
+	}
+	out.Applied = true
 }

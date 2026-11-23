@@ -31,6 +31,14 @@ var (
 	// ErrRemainderSuperseded refuses a close a later run overtook.
 	ErrRemainderSuperseded = errors.New(
 		"a later run replaced the remainder this card was raised over; review the issue and close it by hand")
+	// ErrDeliveryOrderRefs refuses a close of an issue whose Delivery order
+	// says refs (#3510).
+	ErrDeliveryOrderRefs = errors.New(
+		"the issue's Delivery order says refs, so the pipeline does not close it; close it by hand, or edit the Delivery order")
+	// ErrIssueBodyUnread refuses a close whose issue body was not read, so its
+	// Delivery order could not be checked (#3510).
+	ErrIssueBodyUnread = errors.New(
+		"the issue body could not be read to check its Delivery order; retry, or close it by hand")
 )
 
 // OperatorRemainderClosedMarker tags the comment an operator's close posts.
@@ -59,7 +67,10 @@ type RemainderDecision struct {
 // CloseRemainderByOperator closes target as completed because an operator
 // decided its open criteria are met.
 //
-// An open issue is first checked against the card: ErrRemainderSuperseded
+// An open issue whose Delivery order says refs is refused with
+// ErrDeliveryOrderRefs, and one whose body was not read with
+// ErrIssueBodyUnread, before anything is written (#3510).
+// An open issue is then checked against the card: ErrRemainderSuperseded
 // when the recorded remainder is no longer the card's, then ErrRemainderRevised
 // when the criteria that record was reconciled from changed or one was
 // unticked. Then it gets a comment, the close and the board move
@@ -78,6 +89,12 @@ func CloseRemainderByOperator(ctx context.Context, deps PartialCloseDeps, target
 		return ErrNoCloseDeps
 	}
 	if !strings.EqualFold(target.State, "closed") {
+		switch deliveryOrderHold(target.Body, target.BodyRead) {
+		case HoldDeliveryOrderRefs:
+			return ErrDeliveryOrderRefs
+		case HoldIssueBodyUnread:
+			return ErrIssueBodyUnread
+		}
 		rec, current := currentRemainder(target, d)
 		if !current {
 			return ErrRemainderSuperseded

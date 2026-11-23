@@ -27,6 +27,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/gateledger"
 	"github.com/nightgauge/nightgauge/internal/hooks"
+	"github.com/nightgauge/nightgauge/internal/intelligence/acparse"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 	"github.com/nightgauge/nightgauge/internal/scan"
@@ -1333,7 +1334,7 @@ func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber i
 		if body, bodyErr := prCreateIssueBody(workdir)(ctx, issueNumber); bodyErr != nil {
 			forceRefs = true
 			log.Printf("pr-create: WARNING cannot read #%d's body to check ac-reconcile's scope (%v); the PR will say Refs #%d, not Closes", issueNumber, bodyErr, issueNumber)
-		} else if snap.DeliveryOrderRefs, issueCriteria = DeliveryOrderSaysRefs(body), hooks.IssueCriterionTexts(body); preflight.ACFingerprint(body) != fingerprint {
+		} else if snap.DeliveryOrderRefs, issueCriteria = acparse.DeliveryOrderSaysRefs(body), hooks.IssueCriterionTexts(body); preflight.ACFingerprint(body) != fingerprint {
 			current := preflight.ACFingerprint(body)
 			judged := map[string]bool{}
 			for _, c := range criteria {

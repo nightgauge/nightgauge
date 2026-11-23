@@ -101,7 +101,7 @@ func operatorClose(t *testing.T) (*operatorCloseForge, PartialCloseDeps, Partial
 	f := &operatorCloseForge{}
 	return f,
 		PartialCloseDeps{Issues: f, Comments: f, Board: f, Owner: "o", Repo: "r", ProjectNumber: 3},
-		PartialCloseTarget{Number: 7, NodeID: "I_7", State: "OPEN", Body: operatorCloseBody, PR: 5},
+		PartialCloseTarget{Number: 7, NodeID: "I_7", State: "OPEN", Body: operatorCloseBody, PR: 5, BodyRead: true},
 		RemainderDecision{
 			StateRoot:   root,
 			Fingerprint: card,
@@ -165,6 +165,42 @@ func TestCloseRemainderByOperator(t *testing.T) {
 				if !strings.EqualFold(status, "done") {
 					t.Errorf("board status = %q, want Done", status)
 				}
+			}
+		})
+	}
+}
+
+// #3510: an open issue whose Delivery order says refs, or whose body was not
+// read, is refused before anything is written; a plain Delivery order closes
+// as before, and an already-closed issue still has its board row synced.
+func TestCloseRemainderByOperator_DeliveryOrderHold(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, order, state string
+		bodyRead           bool
+		wantErr            error
+		calls              string
+	}{
+		{name: "refs", order: "## Delivery order\n\n1. Each PR refs #7.\n", state: "OPEN", bodyRead: true, wantErr: ErrDeliveryOrderRefs},
+		{name: "unreadable", state: "OPEN", wantErr: ErrIssueBodyUnread},
+		{name: "no refs", order: "## Delivery order\n\n1. One PR closes it.\n", state: "OPEN", bodyRead: true, calls: "comment close board"},
+		{name: "refs, already closed", order: "## Delivery order\n\nrefs\n", state: "CLOSED", bodyRead: true, calls: "board"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			body := operatorCloseBody + "\n" + tc.order
+			root := layouttest.Repo(t)
+			card := cardOver(t, root, body, PartialDeliveryFile{PR: 5, Criteria: []string{operatorCloseCriterion}})
+			f := &operatorCloseForge{}
+			deps := PartialCloseDeps{Issues: f, Comments: f, Board: f, Owner: "o", Repo: "r", ProjectNumber: 3}
+			target := PartialCloseTarget{Number: 7, NodeID: "I_7", State: tc.state, Body: body, PR: 5, BodyRead: tc.bodyRead}
+			decision := RemainderDecision{StateRoot: root, Fingerprint: card, Login: "octocat", PostedAs: "octocat",
+				Criteria: []attention.RemainderCriterion{{Text: operatorCloseCriterion, Evidence: "undecidable: prose"}}}
+			if err := CloseRemainderByOperator(context.Background(), deps, target, decision); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if got := strings.Join(f.calls, " "); got != tc.calls {
+				t.Fatalf("forge calls = %q, want %q", got, tc.calls)
 			}
 		})
 	}

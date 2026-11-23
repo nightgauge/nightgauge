@@ -216,6 +216,10 @@ type PostMergeResult struct {
 	// #3318): nothing is left to re-dispatch, so the row
 	// stays In review for the supervisor to close instead of Ready.
 	AllCriteriaTicked bool `json:"allCriteriaTicked,omitempty"`
+	// DeliveryOrderRefs is set on a partial delivery whose issue body has a
+	// Delivery order section that says refs (#3510). With nothing left unmet
+	// the row stays In review for a human to close instead of Ready.
+	DeliveryOrderRefs bool `json:"deliveryOrderRefs,omitempty"`
 	// TickedCriteria lists the issue checkboxes (acparse indices) this hook
 	// ticked because the merged PR reported them met (#3318).
 	TickedCriteria []int `json:"tickedCriteria,omitempty"`
@@ -825,7 +829,12 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 			out.TickedCriteria = ticked
 		}
 	}
-	if out.EmptyDelivery || out.OwnerOnlyRemainder || out.AllCriteriaTicked {
+	// A Delivery order that says refs leaves the close to a human (#3510):
+	// with nothing left unmet there is nothing to re-dispatch, so the row
+	// must not return to Ready.
+	out.DeliveryOrderRefs = acparse.DeliveryOrderSaysRefs(issue.Body)
+	refsHold := out.DeliveryOrderRefs && len(out.UnmetCriteria) == 0
+	if out.EmptyDelivery || out.OwnerOnlyRemainder || out.AllCriteriaTicked || refsHold {
 		out.ReadyWithheld = true
 	}
 	fmt.Fprintf(os.Stderr, "Post-merge: PR #%d does not close issue #%d — leaving it open (partial delivery)\n", input.PRNumber, input.IssueNumber)
@@ -841,8 +850,8 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 			out.Error = err.Error()
 		}
 	}
-	if boardSvc != nil && input.ProjectNumber > 0 && (out.OwnerOnlyRemainder || out.AllCriteriaTicked) && !out.EmptyDelivery {
-		fmt.Fprintf(os.Stderr, "Post-merge: every criterion left on #%d is for the supervisor or owner, or not verifiable by the pipeline — keeping it In review instead of Ready\n", input.IssueNumber)
+	if boardSvc != nil && input.ProjectNumber > 0 && (out.OwnerOnlyRemainder || out.AllCriteriaTicked || refsHold) && !out.EmptyDelivery {
+		fmt.Fprintf(os.Stderr, "Post-merge: nothing on #%d is left for the pipeline (owner-only, not verifiable, all met, or its Delivery order says refs) — keeping it In review instead of Ready\n", input.IssueNumber)
 		if err := boardSvc.SyncStatus(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber, "In review"); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: post-merge board sync to In review failed for #%d: %v\n", input.IssueNumber, err)
 			out.Failed = true

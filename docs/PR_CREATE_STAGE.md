@@ -391,9 +391,24 @@ A multi-step issue can ask each PR to reference it rather than close it
 (#3510). When the issue body's first heading starting with "Delivery order"
 heads a section containing the whole word `refs` (case-insensitive; the
 section ends at the next heading of the same or higher level outside a code
-fence), `DeliveryOrderSaysRefs` holds and pr-create says `Refs #<N>` even with
-every criterion met, explaining why under the unmet heading. pr-merge's
-check-criteria promotion honours the same rule.
+fence), `acparse.DeliveryOrderSaysRefs` holds and pr-create says `Refs #<N>`
+even with every criterion met, explaining why under the unmet heading.
+pr-merge's check-criteria promotion honours the same rule.
+
+Every close path honours a Delivery-order `refs`, and an issue body that cannot
+be read holds the same way, so only a human closes such an issue:
+
+- The met-remainder close (`CloseMetRemainder`, also behind
+  `nightgauge issue partial-noop --apply-close`) writes nothing and reports
+  `held`; the run books `not_pipeline_actionable`.
+- The no-diff settle still posts its criteria comment, says why the issue
+  stays open, and does not close it.
+- The operator no-op close from an Action Center card refuses an open issue
+  with an error telling the operator to close it by hand or edit the Delivery
+  order.
+- The post-merge hook never closes on a `Refs` merge, and when nothing is left
+  unmet it keeps the row In review instead of Ready (`deliveryOrderRefs` in
+  its output).
 
 `IssueClosedBy` writes `Closes #<N>` only when there is at least one criterion
 and every one is `met`. Any `unmet` or `not_verifiable` criterion, or no

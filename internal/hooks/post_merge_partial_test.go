@@ -672,3 +672,65 @@ func TestPostMergeNumberedMetCriterionPersistsAcrossRefsPRs(t *testing.T) {
 		t.Errorf("numbered items have no box; EditIssue called %d time(s)", edA.calls+edB.calls)
 	}
 }
+
+// #3510 AC4/AC5: a Refs merge that leaves nothing unmet on an issue whose
+// Delivery order says refs neither closes the issue nor returns it to Ready.
+func TestPostMergeDeliveryOrderRefsHoldsReady(t *testing.T) {
+	// noVerdictPRBody lists no criteria, so the remainder is not computed
+	// from either body: the path that returned such an issue to Ready.
+	const noVerdictPRBody = "## Summary\n\nPart of #600\n\nRefs #600\n"
+	const refsOrder = "## Delivery order\n\nStep one lands first, and each PR refs #600.\n"
+	for name, tc := range map[string]struct {
+		issueBody string
+		prBody    string
+		wantRefs  bool
+		wantBoard string
+	}{
+		"refs, no parseable criteria":                                   {refsOrder, noVerdictPRBody, true, "In review"},
+		"refs, every criterion met (already held by AllCriteriaTicked)": {"## Acceptance criteria\n\n- [x] code change\n\n" + refsOrder, metOnlyPRBody, true, "In review"},
+		"no refs, no parseable criteria":                                {"## Delivery order\n\nOne PR closes it.\n", noVerdictPRBody, false, "Ready"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res, closer, board, commenter, _ := runPartialIssuePR(t, "OPEN", tc.issueBody, tc.prBody, nil)
+			if closer.called || res.IssueClosed {
+				t.Errorf("issue closed (called=%v IssueClosed=%v) by a Refs merge", closer.called, res.IssueClosed)
+			}
+			if res.DeliveryOrderRefs != tc.wantRefs || res.ReadyWithheld != tc.wantRefs {
+				t.Errorf("DeliveryOrderRefs=%v ReadyWithheld=%v, want %v/%v", res.DeliveryOrderRefs, res.ReadyWithheld, tc.wantRefs, tc.wantRefs)
+			}
+			if board.calledWith.status != tc.wantBoard || board.syncs != 1 {
+				t.Errorf("board synced %d time(s), last to %q; want once to %q", board.syncs, board.calledWith.status, tc.wantBoard)
+			}
+			if back := strings.Contains(commenter.body, "back in Ready"); back == tc.wantRefs {
+				t.Errorf("comment back-in-Ready=%v, want %v:\n%s", back, !tc.wantRefs, commenter.body)
+			}
+		})
+	}
+}
+
+// #3510 AC4: a Delivery order refs does not hold Ready while a criterion the
+// pipeline can deliver is still unmet: the next step is re-dispatched.
+func TestPostMergeDeliveryOrderRefsWithUnmetReturnsToReady(t *testing.T) {
+	body := "## Acceptance criteria\n\n- [x] first\n- [ ] add the flag\n\n## Delivery order\n\nEach PR refs #600.\n"
+	res, closer, board, _ := runPartialIssue(t, "OPEN", body, nil)
+	if closer.called || !res.DeliveryOrderRefs || res.ReadyWithheld || board.calledWith.status != "Ready" {
+		t.Errorf("closed=%v DeliveryOrderRefs=%v ReadyWithheld=%v board=%q, want false/true/false/Ready", closer.called, res.DeliveryOrderRefs, res.ReadyWithheld, board.calledWith.status)
+	}
+}
+
+// #3510 AC4: an issue body that cannot be read neither closes the issue nor
+// moves its row. The issue_fetch_error return predates #3510; this pins it as
+// the unreadable-body case of a Refs merge.
+func TestPostMergeRefsMergeUnreadableIssueHolds(t *testing.T) {
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{}}
+	closer := &mockIssueCloser{}
+	board := &mockBoardSyncer{}
+	verifier := &mockPRVerifierWithMerge{state: "MERGED", sha: "abc", mergedAt: "2026-10-26T00:00:00Z", body: metOnlyPRBody}
+	res := EvaluatePostMerge(context.Background(), fetcher, closer, &mockEpicAutoCloser{}, verifier, board, PostMergeInput{
+		IssueNumber: 600, RepositoryOwner: "nightgauge", RepositoryName: "nightgauge", ProjectNumber: 6, PRNumber: 77,
+		Remainder: &recordingCommenter{},
+	})
+	if res.Reason != "issue_fetch_error" || closer.called || res.IssueClosed || board.syncs != 0 {
+		t.Errorf("Reason=%q closed=%v IssueClosed=%v syncs=%d, want issue_fetch_error/false/false/0", res.Reason, closer.called, res.IssueClosed, board.syncs)
+	}
+}
