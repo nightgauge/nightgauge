@@ -154,6 +154,16 @@ func TestIsSensitiveFile(t *testing.T) {
 		{"main.go", false},
 		{"package.json", false},
 		{"config.yaml", false},
+		{".env.example", false},
+		{".env.sample", false},
+		{".env.template", false},
+		{".ENV.EXAMPLE", false},
+		{"config.Template", false},
+		{"secrets.md", false},
+		{".env.example.local", true},
+		{".env.local.bak", true},
+		{"server.example.pem", true},
+		{"secrets.example.yaml", true},
 	}
 
 	for _, tt := range tests {
