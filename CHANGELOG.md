@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Skills that fork into a Claude Code agent (`pipeline-researcher`, `pipeline-optimizer`, `test-runner`, `code-reviewer`) can now run `nightgauge` when invoked manually; each agent's allowlist gains `Bash(nightgauge *)` and keeps its read-only limits. A Go test fails when a forking skill's agent cannot run `nightgauge` (#3561).
 - `scripts/ci-local.sh` now frees a heavy-step slot whose holder is a zombie. A grouped child killed by the kernel stayed unreaped while the gate waited for a slot, and `kill -0` counted it alive, so the next step waited out `CI_LOCAL_SLOT_WAIT` and the step failed. The slot is now reclaimed instead of waited out (#3559).
 - `/nightgauge:feature-validate` invoked from Claude Code now runs inline with its own tools instead of forking into the read-only `test-runner` agent, which could not run `nightgauge` or apply Ralph Loop fixes, so the stage can write `validate-{N}.json` outside the pipeline (#2851).
 - The PreToolUse sensitive-file gate no longer blocks committed env templates and documentation: a file whose final suffix is `.example`, `.sample`, `.template` or `.md` is now allowed, while names such as `server.example.pem` or `secrets.example.yaml` stay blocked (#3551).
