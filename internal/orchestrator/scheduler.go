@@ -6639,6 +6639,24 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// or a dispatched PR) already owns its dev handoff, so it never archives.
 	priorDevArchived := startsPastFeatureDev(stages, stageIdx)
 
+	// A run entering at or before feature-planning (a card retry) is a fresh
+	// attempt: archive every handoff an earlier attempt left for the stages
+	// after planning, keeping only the operator's steer (#3565).
+	// Success also stands in for the dispatch-time dev archive (#3081)
+	// below, so a later feature-dev lap keeps the dev handoff this run
+	// writes. After an error that archive still runs once.
+	if startsAtOrBeforeFeaturePlanning(stages, stageIdx) {
+		archived, err := archivePriorAttemptHandoffs(stageWorkspace(runtime, workspaceRoot), item.Number, time.Now())
+		for _, a := range archived {
+			log.Printf("#%d: archived prior attempt's handoff to %s (#3565)", item.Number, a)
+		}
+		if err != nil {
+			log.Printf("#%d: could not archive every prior attempt handoff: %v", item.Number, err)
+		} else {
+			priorDevArchived = true
+		}
+	}
+
 	// Endpoint-aware OpenCode dispatch (#1679): the slot a stage holds on a
 	// declared endpoint, the endpoints it has lost, and how often it has
 	// failed over. Reset whenever the loop moves to another stage.
@@ -7300,7 +7318,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			devPath, pathErr := stagecontext.ContextPath(ws, item.Number, "dev")
 			if pathErr != nil {
 				log.Printf("#%d: could not resolve the dev context to archive a prior attempt's: %v", item.Number, pathErr)
-			} else if archived, err := archivePriorDevContext(devPath, time.Now()); err != nil {
+			} else if archived, err := archivePriorHandoff(devPath, time.Now()); err != nil {
 				log.Printf("#%d: could not archive prior dev context %s: %v", item.Number, devPath, err)
 			} else if archived != "" {
 				log.Printf("#%d: archived prior attempt's dev context to %s (#3081)", item.Number, archived)
