@@ -427,6 +427,22 @@ describe("HeadlessOrchestrator pre-merge branch-behind guard (Issue #3782)", () 
     ]);
   });
 
+  it("behind-conflict: control characters in conflict paths are escaped (#2845)", async () => {
+    mergeStateStatus.value = "BEHIND";
+    rebaseShouldFail.value = true;
+    conflictDiffStdout.value = "a\nb\u001b[31m.txt\0";
+
+    const runPromise = runPrMergeStageOnly();
+    await drainTimers();
+    const result = await runPromise;
+
+    const message = result.error?.message ?? "";
+    expect(message).toContain("[pre-merge-conflict]");
+    expect(message).toContain("a\\nb\\x1b[31m.txt");
+    expect(message).not.toContain("\n");
+    expect(message).not.toContain("\u001b");
+  });
+
   it.skip("up-to-date: no git operations; skill runs normally (quarantined: async-isolation bleed on CI)", async () => {
     mergeStateStatus.value = "CLEAN";
 

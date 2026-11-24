@@ -1172,6 +1172,69 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
     expect(result.error?.message).toContain("src/a.ts");
   });
 
+  // ── Resume keeps the conflict budget (#2845) ──────────────────────────
+  //
+  // Red-proof: dropping the conflictRedispatchCount restore in runPipeline
+  // gives the resumed run a fresh budget, so it rewinds and both cases fail.
+
+  const conflictBt = {
+    stage: "pr-merge",
+    reason: "conflict",
+    timestamp: "2026-07-19T00:00:00Z",
+    from_stage: "pr-merge",
+    to_stage: "feature-dev",
+    signal_type: "CONFLICT_RESOLUTION_NEEDED",
+    rationale: "conflict",
+    attempt_number: 1,
+  };
+  const resumeRun = async (prior: number) => {
+    mockSkillSuccess();
+    const state = createMockStateService("pr-merge");
+    vi.mocked(state.getState).mockResolvedValue({
+      ...makeState("pr-merge"),
+      backtracks: Array.from({ length: prior }, () => conflictBt),
+      backtrack_count: 0,
+      conflict_redispatch_count: prior,
+    } as never);
+    const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+    orchestrator.setWorktreeOverride(WORKTREE);
+    const result = await orchestrator.runPipeline(300);
+    const stages = vi.mocked(runStageSkillHeadless).mock.calls.map((c) => c[0]);
+    return { result, stages };
+  };
+
+  it("a resumed run that spent its budget halts without another rewind", async () => {
+    prStageMergeQueue.value = [refused];
+    prStageRecover.value = [rewind];
+    const { result, stages } = await resumeRun(2);
+
+    expect(stages).not.toContain("feature-dev");
+    expect(result.failedStage).toBe("pr-merge");
+    expect(result.terminalKind).toBe("merge_conflict");
+    const restored = vi
+      .mocked(mockLogger.info)
+      .mock.calls.find((c) => String(c[0]).includes("Restored backtrack"));
+    expect(restored?.[1]).toMatchObject({ conflictRedispatchCount: 2, traversedEdges: 0 });
+  });
+
+  it("a resumed run with one rewind left gets exactly one", async () => {
+    prStageMergeQueue.value = [refused, refused];
+    prStageRecover.value = [rewind, rewind];
+    const { result, stages } = await resumeRun(1);
+
+    expect(stages.filter((s) => s === "feature-dev")).toHaveLength(1);
+    expect(result.terminalKind).toBe("merge_conflict");
+  });
+
+  it("escapes control characters in the escalated file list", async () => {
+    prStageMergeQueue.value = [refused];
+    prStageRecover.value = [{ ...rewind, conflicting_files: ["a\nb\u001b[31m.txt"] }];
+    const { result } = await resumeRun(2);
+
+    expect(result.error?.message).toContain("a\\nb\\x1b[31m.txt");
+    expect([...(result.error?.message ?? "")].some((c) => c.charCodeAt(0) < 0x20)).toBe(false);
+  });
+
   it.each([
     ["escalated", { outcome: "escalated", reason: "no", conflicting_files: ["b.go"] }, "b.go"],
     ["unmatched", { outcome: "unmatched", reason: "off", conflicting_files: [] }, "could not"],

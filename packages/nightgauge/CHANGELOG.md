@@ -9,6 +9,10 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- A resumed pipeline run now keeps its pr-merge conflict re-dispatch budget instead of starting from zero, so it stops at `max_dev_redispatch` as an uninterrupted run does. Conflicting file names in `[pre-merge-conflict]` and `[merge-conflict]` errors now show control characters as escapes (#2845).
+
 ## [0.8.7] - 2026-11-22
 
 ### Added

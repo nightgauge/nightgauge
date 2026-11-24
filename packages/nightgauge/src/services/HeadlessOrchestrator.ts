@@ -148,6 +148,7 @@ import type {
   PipelineOutcomeType,
   PipelineMeta,
 } from "./PipelineStateService";
+import { isOrdinaryBacktrack } from "./PipelineStateService";
 import { countFailedStages } from "../utils/failedStages";
 import { createDeterministicPhaseReporter } from "../utils/deterministicPhases";
 import { SUCCESS_OUTCOMES } from "../utils/telemetryEventBuilder";
@@ -1359,9 +1360,27 @@ function isRecoverableQueueRefusal(reason: string): boolean {
   return isQueueConflictRefusal(reason) || isQueueCodeFailureRefusal(reason);
 }
 
+/**
+ * Render a path with C0, DEL and C1 control characters escaped, so a file
+ * named with a newline or ESC cannot forge log lines or drive the terminal
+ * (#2845). `git diff -z` hands these bytes over unquoted.
+ */
+export function escapeControlChars(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, (ch) => {
+    if (ch === "\n") return "\\n";
+    if (ch === "\r") return "\\r";
+    if (ch === "\t") return "\\t";
+    return `\\x${ch.charCodeAt(0).toString(16).padStart(2, "0")}`;
+  });
+}
+
 /** `[merge-conflict]` classifies as `merge_conflict` for the card and the retro. */
 function queueConflictEscalationError(reason: string, files: string[]): Error {
-  const named = files.length > 0 ? files.join(", ") : "(could not determine conflicting files)";
+  const named =
+    files.length > 0
+      ? files.map(escapeControlChars).join(", ")
+      : "(could not determine conflicting files)";
   return new Error(
     `[merge-conflict] deterministic pr-merge refused: ${reason}; conflicting files: ${named}`
   );
@@ -1550,7 +1569,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * Reset at the start of each runPipeline() call and in the finally block.
    */
   private backtrackCount = 0;
-  /** Per-run pr-merge -> feature-dev conflict rewinds (#2841). */
+  /** Per-run pr-merge -> feature-dev conflict rewinds (#2841); restored on resume (#2845). */
   private conflictRedispatchCount = 0;
   /**
    * Stages a rewind must re-run although state still reads `complete`: nothing
@@ -12172,8 +12191,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // @see Issue #1342, #1343
         if (isRecovery) {
           this.backtrackCount = existingState.backtrack_count ?? 0;
-          // Reconstruct traversed edges from backtrack history
+          // The conflict rewind bound survives a resume too (#2845).
+          this.conflictRedispatchCount = existingState.conflict_redispatch_count ?? 0;
+          // Reconstruct traversed edges from ordinary backtracks only: conflict
+          // and queue-code rewinds are never oscillation edges (#2841, #3339).
           for (const bt of existingState.backtracks ?? []) {
+            if (!isOrdinaryBacktrack(bt)) continue;
             this.traversedEdges.add(`${bt.from_stage}->${bt.to_stage}`);
           }
           // Reconstruct per-stage escalation counts from escalation history
@@ -12183,6 +12206,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           }
           this.logger.info("Restored backtrack/escalation state from state.json", {
             backtrackCount: this.backtrackCount,
+            conflictRedispatchCount: this.conflictRedispatchCount,
             traversedEdges: this.traversedEdges.size,
             escalationStages: this.stageEscalationCounts.size,
           });
@@ -13515,7 +13539,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             } else if (guardResult.status === "conflict") {
               const fileList =
                 guardResult.files.length > 0
-                  ? guardResult.files.join(", ")
+                  ? guardResult.files.map(escapeControlChars).join(", ")
                   : "(could not determine conflicting files)";
               failedStage = stage;
               error = new Error(
