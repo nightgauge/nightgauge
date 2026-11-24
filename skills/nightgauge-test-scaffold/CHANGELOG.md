@@ -8,6 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Runs inline instead of forking into `test-runner` (#3562).** The read-only
+  agent disallows `Edit` and `Write`, so the skill's file writes failed in the
+  fork.
+
 ### Changed
 
 - The JSON report is written to this checkout's

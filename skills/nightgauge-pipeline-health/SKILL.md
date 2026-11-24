@@ -8,12 +8,10 @@ description: Comprehensive pipeline health analysis across 7 dimensions — toke
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.2.0"
+  version: "1.2.1"
   source: https://github.com/nightgauge/nightgauge
   chainable: true
 allowed-tools: Read Write Edit Glob Grep Bash Task
-context: fork
-agent: pipeline-optimizer
 model: haiku
 ---
 

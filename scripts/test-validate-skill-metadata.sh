@@ -169,6 +169,93 @@ check "a well-formed skill still exits zero when every early-exiting reader dies
 check "no 'missing required field' is reported for a present field under the early-exit shim (#1442)" \
   "$(grep -qF 'missing required field' "$TMP/out" && echo 1 || echo 0)"
 
+# --- Case 5: a fork into an agent that disallows Edit/Write (#3562) ---------
+# fork_skill <root> <name> <allowed-tools> [extra frontmatter lines...]
+# Writes a well-formed skill whose extra lines sit inside the frontmatter.
+fork_skill() {
+  local root="$1" name="$2" tools="$3" l
+  shift 3
+  mkdir -p "$root/$name"
+  {
+    cat <<EOF
+---
+name: $name
+description: Validates a fixture skill for the metadata validator's own regression suite. Use when exercising scripts/validate-skill-metadata.sh.
+license: Apache-2.0
+metadata:
+  author: nightgauge
+  version: "1.0.0"
+  source: https://github.com/nightgauge/nightgauge
+allowed-tools: $tools
+EOF
+    for l in "$@"; do echo "$l"; done
+    printf -- '---\n\n# %s\n' "$name"
+  } > "$root/$name/SKILL.md"
+}
+AGENTS="$TMP/agents"
+mkdir -p "$AGENTS"
+printf -- '---\nname: ro\ndescription: x\ntools: Read\ndisallowedTools: Edit, Write\n---\n' > "$AGENTS/ro.md"
+printf -- '---\nname: rw\ndescription: x\ntools: Read, Edit, Write\n---\n' > "$AGENTS/rw.md"
+run_fork() { AGENTS_DIR="$AGENTS" run_validator "$1"; }
+
+R="$TMP/fork-bad"
+fork_skill "$R" nightgauge-fixture-fork-bad "Read Write Edit" "context: fork" "agent: ro"
+run_fork "$R"; RC=$?
+check "fork into a read-only agent with Write Edit in allowed-tools exits 1 (#3562)" \
+  "$([ "$RC" -eq 1 ] && echo 0 || echo 1)"
+check "the error names the SKILL.md and the agent (#3562)" \
+  "$(BAD_LINES=$(grep -F 'nightgauge-fixture-fork-bad/SKILL.md' "$TMP/out"); grep -qF "agent 'ro'" <<<"$BAD_LINES" && echo 0 || echo 1)"
+check "both Edit and Write are reported (#3562)" \
+  "$([ "$(grep -c 'disallows \(Edit\|Write\)' "$TMP/out")" -eq 2 ] && echo 0 || echo 1)"
+
+R="$TMP/fork-rw"
+fork_skill "$R" nightgauge-fixture-fork-rw "Read Write Edit" "context: fork" "agent: rw"
+run_fork "$R"; RC=$?
+check "fork into an agent with no disallowedTools passes (#3562)" "$([ "$RC" -eq 0 ] && echo 0 || echo 1)"
+
+R="$TMP/nofork"
+fork_skill "$R" nightgauge-fixture-nofork "Read Write Edit"
+run_fork "$R"; RC=$?
+check "no fork with Write Edit in allowed-tools passes (#3562)" "$([ "$RC" -eq 0 ] && echo 0 || echo 1)"
+
+R="$TMP/fork-ro-ok"
+fork_skill "$R" nightgauge-fixture-fork-ro-ok "Read Glob Grep" "context: fork" "agent: ro"
+run_fork "$R"; RC=$?
+check "fork into a read-only agent without Edit/Write passes (#3562)" "$([ "$RC" -eq 0 ] && echo 0 || echo 1)"
+
+R="$TMP/fork-missing"
+fork_skill "$R" nightgauge-fixture-fork-missing "Read" "context: fork" "agent: nope"
+run_fork "$R"; RC=$?
+check "fork into a missing agent file exits 1 (#3562)" "$([ "$RC" -eq 1 ] && echo 0 || echo 1)"
+check "the missing agent file is named (#3562)" \
+  "$(grep -qF "$AGENTS/nope.md does not exist" "$TMP/out" && echo 0 || echo 1)"
+
+printf -- '---\nname: wo\ndescription: x\ndisallowedTools: Write\n---\n' > "$AGENTS/wo.md"
+printf -- '---\nname: flow\ndescription: x\ndisallowedTools: [Edit, Write]\n---\n' > "$AGENTS/flow.md"
+
+R="$TMP/fork-wo"
+fork_skill "$R" nightgauge-fixture-fork-wo "Read Write Edit" "context: fork" "agent: wo"
+run_fork "$R"; RC=$?
+check "an agent disallowing only Write reports Write and not Edit (#3562)" \
+  "$([ "$RC" -eq 1 ] && grep -qF 'disallows Write' "$TMP/out" && ! grep -qF 'disallows Edit' "$TMP/out" && echo 0 || echo 1)"
+
+R="$TMP/fork-superstring"
+fork_skill "$R" nightgauge-fixture-fork-superstring "Read NotebookEdit" "context: fork" "agent: ro"
+run_fork "$R"; RC=$?
+check "NotebookEdit in allowed-tools does not match Edit (#3562)" "$([ "$RC" -eq 0 ] && echo 0 || echo 1)"
+
+R="$TMP/fork-flow"
+fork_skill "$R" nightgauge-fixture-fork-flow "Read" "context: fork" "agent: flow"
+run_fork "$R"; RC=$?
+check "an unparseable disallowedTools list is an ERROR, not a silent skip (#3562)" \
+  "$([ "$RC" -eq 1 ] && grep -qF 'cannot parse disallowedTools' "$TMP/out" && echo 0 || echo 1)"
+
+R="$TMP/fork-badname"
+fork_skill "$R" nightgauge-fixture-fork-badname "Read" "context: fork" "agent: ../x"
+run_fork "$R"; RC=$?
+check "a path-like agent name is rejected (#3562)" \
+  "$([ "$RC" -eq 1 ] && grep -qF 'not a valid agent name' "$TMP/out" && echo 0 || echo 1)"
+
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

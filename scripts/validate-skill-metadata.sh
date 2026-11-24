@@ -17,6 +17,9 @@
 #      - no literal XML tag pairs <tag>...</tag>; placeholders like <N> allowed (ERROR)
 #      - contains a "when to use" trigger token (WARNING)
 #   6. SKILL.md <-> claude-plugins command-file description parity (WARNING)
+#   7. A `context: fork` into an agent whose `disallowedTools` names Edit or
+#      Write must not list that tool in `allowed-tools` (ERROR, #3562). The
+#      agent definition is read from AGENTS_DIR (default .claude/agents).
 #
 # Exit codes:
 #   0 — all checks pass
@@ -42,6 +45,11 @@ UNREADABLE=0
 # Required fields in canonical order
 REQUIRED_FIELDS=(name description license metadata allowed-tools)
 
+
+# Tools rule 7 (#3562) checks against a forked agent's disallowedTools.
+FORK_WRITE_TOOLS=(Edit Write)
+# Agent definitions for rule 7; overridable so the suite can use fixtures.
+AGENTS_DIR="${AGENTS_DIR:-.claude/agents}"
 
 # Maximum allowed description length (Anthropic Agent Skills guidance, #3812).
 MAX_DESC_LEN=1024
@@ -167,6 +175,66 @@ value_after() {
   local rest="${1#"$2"}"
   while [[ "$rest" == " "* ]]; do rest="${rest# }"; done
   printf '%s' "$rest"
+}
+
+# check_fork_agent_tools FILE — rule 7 (#3562). A skill that forks into an
+# agent runs with that agent's tool set: a tool the agent disallows fails at
+# runtime even though the skill's allowed-tools lists it. Uses the already-read
+# $frontmatter and shell builtins only (#1442).
+check_fork_agent_tools() {
+  local file="$1" context_line agent_line agent agent_file line
+  context_line=$(frontmatter_first "context:")
+  [[ "$(value_after "$context_line" "context:")" == "fork" ]] || return 0
+  agent_line=$(frontmatter_first "agent:")
+  agent=$(value_after "$agent_line" "agent:")
+  [[ -n "$agent" ]] || return 0
+  if [[ ! "$agent" =~ ^[a-z0-9-]+$ ]]; then
+    echo "ERROR: $file — agent '$agent' is not a valid agent name (expected [a-z0-9-]+)"
+    ((ERRORS++))
+    return 0
+  fi
+  agent_file="$AGENTS_DIR/${agent}.md"
+  if [[ ! -f "$agent_file" ]]; then
+    echo "ERROR: $file — context: fork into agent '$agent', but $agent_file does not exist"
+    ((ERRORS++))
+    return 0
+  fi
+
+  # Read the agent's frontmatter disallowedTools line (inline comma form).
+  local in_fm=false disallowed="" found=false
+  while IFS= read -r line; do
+    if [[ "$line" == "---" ]]; then
+      $in_fm && break
+      in_fm=true
+      continue
+    fi
+    $in_fm || continue
+    if [[ "$line" == "disallowedTools:"* ]]; then
+      found=true
+      disallowed=$(value_after "$line" "disallowedTools:")
+    fi
+  done < "$agent_file"
+  $found || return 0
+  if [[ -z "$disallowed" || "$disallowed" == "["* ]]; then
+    echo "ERROR: $file — cannot parse disallowedTools in $agent_file (expected an inline comma-separated list, e.g. 'disallowedTools: Edit, Write')"
+    ((ERRORS++))
+    return 0
+  fi
+
+  local allowed_line allowed tool entry
+  allowed_line=$(frontmatter_first "allowed-tools:")
+  allowed=" $(value_after "$allowed_line" "allowed-tools:") "
+  local -a entries
+  IFS=',' read -ra entries <<< "$disallowed"
+  for tool in "${FORK_WRITE_TOOLS[@]}"; do
+    for entry in "${entries[@]}"; do
+      entry="${entry// /}"
+      if [[ "$entry" == "$tool" && "$allowed" == *" $tool "* ]]; then
+        echo "ERROR: $file — context: fork into agent '$agent' ($agent_file) disallows $tool, but allowed-tools lists $tool; drop the fork or the tool"
+        ((ERRORS++))
+      fi
+    done
+  done
 }
 
 check_skill() {
@@ -327,6 +395,8 @@ check_skill() {
       ((ERRORS++))
     fi
   fi
+
+  check_fork_agent_tools "$file"
 
   # Description quality (#3812)
   local desc

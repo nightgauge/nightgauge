@@ -8,6 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Runs inline instead of forking into `pipeline-optimizer` (#3562).** The read-only
+  agent disallows `Edit` and `Write`, so the skill's file writes failed in the
+  fork.
+
 ### Changed
 
 - Per-clone pipeline state, plans, retros and logs are read at

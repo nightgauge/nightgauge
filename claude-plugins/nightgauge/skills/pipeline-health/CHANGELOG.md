@@ -8,6 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Runs inline instead of forking into `pipeline-optimizer` (#3562).** The read-only
+  agent disallows `Edit` and `Write`, so the skill's file writes failed in the
+  fork.
+
 ### Changed
 
 - The health series (`checkout/health/trends.jsonl`, schema 2) is the only

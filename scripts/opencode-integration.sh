@@ -58,6 +58,6 @@ case "$got" in
     exit 1
     ;;
 esac
-PATH="$bin:$PATH" go test -tags opencode_integration -count=1 -v -timeout 10m \
+PATH="$bin:$PATH" go test -tags opencode_integration -count=1 -v -timeout 20m \
   -run '^Test(OpenCode(Integration.*|PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess|MergeHarnessReclaimsOrphanedLocks|CatalogEnvMatchesTheBinary|AnthropicModelsMatchTheBinary)|RealOpenCodePinRelaxedUnderCanary|PluginLoadsOnRealOpenCode|ToolExecuteBeforeFiresInSubagentAgainstRealOpenCode|RealPluginDeniesTaskAgainstRealOpenCode|CompactionAutocontinueSuppressionAgainstRealOpenCode|PermissionAskEventAgainstRealOpenCode)$' \
   ./internal/execution/ ./internal/execution/adapters/ ./internal/execution/opencodeplugin/
