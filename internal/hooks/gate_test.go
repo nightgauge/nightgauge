@@ -575,3 +575,31 @@ func TestGateAllowsTemplateReads(t *testing.T) {
 		}
 	}
 }
+
+// TestGateAllowsPipelineContextWriteOutsidePipeline locks #2851 AC 2: with no
+// pipeline env, the Bash PreToolUse gates allow feature-validate's context
+// write through `nightgauge layout write pipeline`.
+func TestGateAllowsPipelineContextWriteOutsidePipeline(t *testing.T) {
+	t.Setenv(skipWorkflowGateEnv, "")
+	t.Setenv("NIGHTGAUGE_STAGE", "")
+	t.Setenv("NIGHTGAUGE_ISSUE_NUMBER", "")
+	for _, cmd := range []string{
+		`jq -n '{validation_status: "passed"}' | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "validate-${ISSUE_NUMBER}.json" >/dev/null`,
+		`"${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline validate-2851.json --from /tmp/validate.json`,
+		`nightgauge layout write pipeline validate-2851.json < /tmp/validate.json`,
+	} {
+		input := makeGateInput("Bash", BashToolInput{Command: cmd})
+		if got := EvaluateGate(input, config.SanitizationModeBlock); got.Decision != "allow" {
+			t.Errorf("workflow gate blocked %q: %s", cmd, got.Reason)
+		}
+		if got := evalMainProtected(input, config.SanitizationModeBlock); got.Decision != "allow" {
+			t.Errorf("push-gated workflow gate blocked %q: %s", cmd, got.Reason)
+		}
+		if got := EvaluateCarefulGate(input); got.Decision != "allow" {
+			t.Errorf("careful gate blocked %q: %s", cmd, got.Reason)
+		}
+		if got := EvaluateGateBackground(input); got.Decision != "allow" {
+			t.Errorf("background gate blocked %q: %s", cmd, got.Reason)
+		}
+	}
+}
