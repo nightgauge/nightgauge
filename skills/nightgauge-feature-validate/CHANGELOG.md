@@ -10,6 +10,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Runs inline instead of forking into `test-runner` (#2851).** The read-only
+  agent could not run `nightgauge` or edit files, so a direct
+  `/nightgauge:feature-validate` could not write `validate-{N}.json`.
 - **The full local gate runs once per run, after the final independent-review
   round (#3207).** With the review on, Phase 2.5 runs only build, vet and the
   changed packages' tests, and a review `catch` re-runs those, never the full

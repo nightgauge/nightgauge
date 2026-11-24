@@ -6,7 +6,7 @@ description: Validate feature implementation with integration/E2E tests and manu
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.25.1"
+  version: "1.25.2"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 orchestration:
@@ -29,8 +29,6 @@ orchestration:
     quorum: 1
     promptRef: _includes/ci-and-knowledge.md
 programmatic-tools: run_build run_lint run_tests run_typecheck
-context: fork
-agent: test-runner
 model: sonnet
 # Completion verification is a Go StageGate (FeatureDevGate /
 # FeatureValidateGate — internal/orchestrator/gates), NOT a Claude-only
