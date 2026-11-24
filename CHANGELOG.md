@@ -22,6 +22,10 @@ changelog, and the release workflow refuses a tag that does not.
 - `nightgauge followup materialize` no longer folds a follow-up into an open issue whose author fails the trust gate; it picks the next qualifying trusted issue or files the follow-up on its own. A record whose `discovered-work` marker is already in its parent issue's body is now reported `tracked-by-parent` in file mode and in report mode and `--dry-run`, instead of `already-exists` or `would-file` (#2872).
 - pr-create no longer judges a criterion unmet, and so writes `Refs` instead of `Closes`, for two kinds of clause the diff cannot decide. A `{name}` placeholder inside a span, such as `POST /files/{sha}/analyse`, now matches the code's spelling of that segment (`$sha`, `${sha}`), not only the literal braces. A clause about the pull request's own description, body or title gets no diff verdict, and one asking for `Closes #N` or `Refs #N` on its own issue is judged against the keyword pr-create writes, so it cannot hold its own issue open; a Delivery order that says `refs` still wins. The partial-delivery comment now lists a criterion that names `Closes #N` once, in the issue's wording, instead of a second copy saying `Refs #N` (#3529).
 
+### Changed
+
+- The Claude plugin's version is now 1.29.3, because the `followup-materialize` skill changed after 0.8.7. Without the bump, `check-plugin-version.sh` failed every 0.8.8 release candidate, `main-build.yml` and pull-request CI, and installed plugins would not have received the change.
+
 ## [0.8.7] - 2026-11-22
 
 ### Added
