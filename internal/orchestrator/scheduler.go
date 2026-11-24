@@ -3620,6 +3620,11 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 // dispatch (#2396): each item this call marks processing records dispatch, so
 // a window that closes before it reads the answer can hand those items back
 // (QueueDropProcessing's unanswered tokens). An empty dispatch records none.
+//
+// Items queued while the gates ran have no verdict in the first round. When
+// slots remain, the call re-runs the gates and decides them in one more round;
+// any still undecided after it emit queue.changed so a later pass takes them
+// (#3553).
 func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, maxSlots int, running []RunningItem) []QueueItem {
 	// The window this daemon serves has handed its queue back (#2396).
 	if s.dispatchEnded.Load() {
@@ -3642,14 +3647,64 @@ func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, 
 	affinity := s.queueAffinity(ctx, verdicts)
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	// A window that closed while this dequeue read blockers has dropped or
 	// handed back every dispatched item; anything marked now would never be
 	// released.
 	if s.dispatchEnded.Load() {
+		s.mu.Unlock()
 		log.Printf("queue: dequeue refused — the window this daemon serves handed its queue back (#2396)")
 		return nil
 	}
+	dequeued, undecided := s.dequeueRoundLocked(dispatch, maxSlots, running, verdicts, affinity)
+	s.mu.Unlock()
+	if undecided == 0 || len(dequeued) >= maxSlots {
+		return dequeued
+	}
+
+	// Items queued after the gate ran (#3553): decide them in this same call,
+	// once, instead of leaving them for a pass nothing schedules.
+	verdicts = s.queueEligibility(ctx)
+	affinity = s.queueAffinity(ctx, verdicts)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dispatchEnded.Load() {
+		log.Printf("queue: second dequeue round refused — the window this daemon serves handed its queue back (#2396)")
+		return dequeued
+	}
+	seen := append(append([]RunningItem(nil), running...), runningItemsOf(dequeued)...)
+	more, undecided := s.dequeueRoundLocked(dispatch, maxSlots-len(dequeued), seen, verdicts, affinity)
+	dequeued = append(dequeued, more...)
+	if undecided > 0 {
+		// Still undecided: wake the extension so a later pass takes it.
+		s.emitQueueChangedUnlocked()
+	}
+	return dequeued
+}
+
+// runningItemsOf names items a dequeue round took, so a later round in the
+// same call counts them as in flight.
+func runningItemsOf(items []QueueItem) []RunningItem {
+	out := make([]RunningItem, 0, len(items))
+	for _, it := range items {
+		out = append(out, RunningItem{Repo: it.Repo, Number: it.IssueNumber})
+	}
+	return out
+}
+
+// NotifyPendingWake re-emits the queue state so the extension schedules a
+// fill pass for pending items (#3553). It is the wake a released pending
+// reservation sends; callers must not hold the autonomous scheduler's lock.
+func (s *Scheduler) NotifyPendingWake() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.emitQueueChangedUnlocked()
+}
+
+// dequeueRoundLocked is one dequeue pass over s.queue against the given gate
+// verdicts. It returns the items it marked processing and how many pending
+// items had no verdict (queued after the gate ran). Caller must hold s.mu.
+func (s *Scheduler) dequeueRoundLocked(dispatch string, maxSlots int, running []RunningItem,
+	verdicts map[string]trust.Decision, affinity map[string]affinityVerdict) (dequeued []QueueItem, undecided int) {
 
 	// Issues already in flight (for the blockedBy guard) and per-repo
 	// in-flight counts (for the per-repo cap). Seeded from the caller's
@@ -3676,7 +3731,6 @@ func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, 
 		queued[repoIssueKey(item.Repo, item.IssueNumber)] = true
 	}
 
-	var dequeued []QueueItem
 	var toRemoveIdx []int
 	// pausedByLabel records that the human-only label guard below rewrote at
 	// least one item's status, so the queue is persisted and re-emitted even
@@ -3754,7 +3808,8 @@ func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, 
 		}
 		d, decided := verdicts[repoIssueKey(item.Repo, item.IssueNumber)]
 		if !decided {
-			// Queued after the gate ran: the next pass decides it.
+			// Queued after the gate ran: the caller's next round decides it.
+			undecided++
 			continue
 		}
 		if !d.Eligible {
@@ -3851,7 +3906,7 @@ func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, 
 		s.emitQueueChangedUnlocked()
 	}
 
-	return dequeued
+	return dequeued, undecided
 }
 
 // HoldNoOpSuccessors keeps the queued issues that repo's issueNumber blocks

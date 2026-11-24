@@ -603,6 +603,7 @@ describe("ConcurrentPipelineManager", () => {
           return { dispose: vi.fn() };
         }),
         getConfig: vi.fn().mockReturnValue({ autoStart: config.autoStart ?? true }),
+        getQueue: vi.fn().mockResolvedValue(null),
       };
       const orch = createMockOrchestratorFactory();
       const mgr = new ConcurrentPipelineManager(
@@ -677,6 +678,62 @@ describe("ConcurrentPipelineManager", () => {
       for (const fill of fills) expect(fill).not.toHaveBeenCalled();
       paused.mgr.dispose();
       off.mgr.dispose();
+    });
+
+    it("re-arms one later pass when a pass takes nothing while items are pending (#3553)", async () => {
+      vi.useFakeTimers();
+      const { mgr, queue } = managerWithQueueEvents();
+      // Items queued while the dequeue's gates ran: this pass takes nothing.
+      queue.getQueue.mockResolvedValue({
+        status: "waiting",
+        items: [pendingItem(2), pendingItem(3)],
+      });
+      queue.dequeueIndependent.mockResolvedValueOnce([]);
+      await mgr.fillSlots();
+      expect(mgr.getActiveSlots()).toHaveLength(0);
+
+      queue.dequeueIndependent.mockResolvedValueOnce([pendingItem(2), pendingItem(3)]);
+      const fill = vi.spyOn(mgr, "fillSlots");
+      await vi.advanceTimersByTimeAsync(150);
+      expect(fill).toHaveBeenCalledTimes(1);
+      await fill.mock.results[0].value;
+      expect(mgr.getActiveSlots()).toHaveLength(2);
+      mgr.dispose();
+    });
+
+    it("re-arms only once while every pass stays empty (#3553)", async () => {
+      vi.useFakeTimers();
+      const { mgr, queue } = managerWithQueueEvents();
+      queue.getQueue.mockResolvedValue({ status: "waiting", items: [pendingItem(2)] });
+      queue.dequeueIndependent.mockResolvedValue([]);
+      await mgr.fillSlots();
+      const fill = vi.spyOn(mgr, "fillSlots");
+      await vi.advanceTimersByTimeAsync(150);
+      await fill.mock.results[0]?.value;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(fill).toHaveBeenCalledTimes(1);
+      mgr.dispose();
+    });
+
+    it("re-arms again after a pass that dequeued (#3553)", async () => {
+      vi.useFakeTimers();
+      const { mgr, queue } = managerWithQueueEvents();
+      queue.getQueue.mockResolvedValue({ status: "waiting", items: [pendingItem(2)] });
+      queue.dequeueIndependent.mockResolvedValueOnce([]);
+      await mgr.fillSlots();
+      // The re-armed pass dequeues, then finds nothing more.
+      queue.dequeueIndependent.mockResolvedValueOnce([pendingItem(2)]);
+      queue.dequeueIndependent.mockResolvedValue([]);
+      const fill = vi.spyOn(mgr, "fillSlots");
+      await vi.advanceTimersByTimeAsync(150);
+      await fill.mock.results[0].value;
+      expect(mgr.getActiveSlots()).toHaveLength(1);
+      // A later empty pass, after one that dequeued, re-arms once more.
+      await mgr.fillSlots();
+      await vi.advanceTimersByTimeAsync(150);
+      expect(fill).toHaveBeenCalledTimes(3);
+      await fill.mock.results[2].value;
+      mgr.dispose();
     });
 
     it("cancels a scheduled fill on dispose", async () => {

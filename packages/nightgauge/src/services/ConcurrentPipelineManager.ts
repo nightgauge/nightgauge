@@ -1267,8 +1267,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           this.logger.info(
             "fillSlots: dequeueIndependent returned 0 items — queue may be empty or all items blocked"
           );
+          await this.rearmAfterEmptyPass();
           break;
         }
+        this.emptyPassRearmed = false;
 
         this.logger.info("Filling concurrent pipeline slots", {
           available,
@@ -5026,16 +5028,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * queue change, so both reach fillSlots on this one path; fillSlots' own
    * isFilling guard keeps concurrent fills apart. A paused queue, a queue with
    * autoStart off, or a manager shutting down does not fill — the same gates
-   * the onItemAdded fill applies.
+   * the onItemAdded fill applies. Returns whether a fill was scheduled.
    */
   private wakeFillForPending(
     state: NonNullable<Awaited<ReturnType<IssueQueueService["getQueue"]>>>
-  ): void {
-    if (this.isShuttingDown || this.windowEnding) return;
-    if (state.status === "paused") return;
-    if (!(state.items ?? []).some((item) => item.status === "pending")) return;
-    if (this.queueService.getConfig?.().autoStart === false) return;
-    if (this.availableSlotCount <= 0) return;
+  ): boolean {
+    if (this.isShuttingDown || this.windowEnding) return false;
+    if (state.status === "paused") return false;
+    if (!(state.items ?? []).some((item) => item.status === "pending")) return false;
+    if (this.queueService.getConfig?.().autoStart === false) return false;
+    if (this.availableSlotCount <= 0) return false;
     if (this.pendingFillTimer) clearTimeout(this.pendingFillTimer);
     this.pendingFillTimer = setTimeout(() => {
       this.pendingFillTimer = null;
@@ -5046,7 +5048,30 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         });
       });
     }, ConcurrentPipelineManager.PENDING_FILL_DEBOUNCE_MS);
+    return true;
   }
+
+  /**
+   * A pass that took nothing while pending items remain schedules one later
+   * pass (#3553): an item queued while the dequeue's gates ran was skipped,
+   * and no queue change was left to wake a fill for it. Once per run of empty
+   * passes, so items that stay blocked do not spin the dequeue.
+   */
+  private async rearmAfterEmptyPass(): Promise<void> {
+    if (this.emptyPassRearmed) return;
+    try {
+      const state = await this.queueService.getQueue();
+      if (!state || !(state.items ?? []).some((item) => item.status === "pending")) return;
+      this.emptyPassRearmed = this.wakeFillForPending(state);
+    } catch (err) {
+      this.logger.warn("rearmAfterEmptyPass: could not read the queue", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /** Set once an empty pass re-armed a fill; cleared by a pass that dequeues. */
+  private emptyPassRearmed = false;
 
   /** Coalesces a burst of queue changes into one fill, as onItemAdded does. */
   private static readonly PENDING_FILL_DEBOUNCE_MS = 100;

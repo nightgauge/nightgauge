@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -383,6 +384,59 @@ func TestAutonomousScheduler_PendingReservationIsBoundedAndHaltAware(t *testing.
 			t.Fatalf("slots = %+v, want 2 available, 0 pending", got)
 		}
 	})
+}
+
+// A state.Running entry whose issue is still a pending queue item has not
+// been taken: it is not counted as running, so two untaken dispatches no
+// longer read as running=2 and hold the fleet (#3553).
+func TestSlotAvailability_PendingQueueItemsAreNotRunning(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 2},
+		state:             &AutonomousState{Running: []RunningItem{{Repo: "o/a", Number: 2}, {Repo: "o/b", Number: 3}}},
+		rescanCh:          make(chan struct{}, 1),
+		scheduler: &Scheduler{queue: []QueueItem{
+			{Repo: "o/a", IssueNumber: 2, Status: "pending", AddedAt: now},
+			{Repo: "o/b", IssueNumber: 3, Status: "pending", AddedAt: now},
+		}},
+	}
+	if got := as.slotAvailability(); got.running != 0 || got.reserved != 2 || got.available != 0 {
+		t.Fatalf("slots = %+v, want 0 running, 2 reserved, 0 available", got)
+	}
+}
+
+// Releasing an expired reservation wakes a dequeue exactly once (#3553):
+// before, the item sat queued until a window reload.
+//
+// Serial: redirects the standard logger (via withCapturedLog).
+func TestSlotAvailability_ReleasedReservationWakesDequeueOnce(t *testing.T) {
+	withCapturedLog(t)
+	var wakes atomic.Int32
+	done := make(chan struct{}, 4)
+	sch := &Scheduler{queue: []QueueItem{
+		{Repo: "o/a", IssueNumber: 2, Status: "pending", AddedAt: time.Now().Add(-2 * pendingReservationTTL)},
+	}}
+	sch.onQueueChanged = func(QueueState) { wakes.Add(1); done <- struct{}{} }
+	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 2},
+		state:             &AutonomousState{},
+		rescanCh:          make(chan struct{}, 1),
+		scheduler:         sch,
+	}
+	as.slotAvailability()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no queue.changed after the reservation was released")
+	}
+	as.slotAvailability()
+	time.Sleep(50 * time.Millisecond)
+	if n := wakes.Load(); n != 1 {
+		t.Fatalf("queue.changed fired %d times, want 1", n)
+	}
 }
 
 // The `no effective slots available` line reports the pending queue items and
