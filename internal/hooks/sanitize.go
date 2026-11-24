@@ -4,6 +4,7 @@ package hooks
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -108,9 +109,25 @@ func MatchAllCategories(text string) *PatternMatch {
 	return MatchPatterns(text)
 }
 
+// templateOrDocExts are final suffixes IsSensitiveFile exempts: env templates
+// and Markdown are committed artifacts, not secret stores (#3551).
+var templateOrDocExts = map[string]bool{
+	".example":  true,
+	".sample":   true,
+	".template": true,
+	".md":       true,
+}
+
 // IsSensitiveFile checks if a filename looks like a secrets/credential file.
 func IsSensitiveFile(filename string) bool {
 	lower := strings.ToLower(filename)
+
+	// Committed templates and documentation hold no secret values by design.
+	// Only the final suffix counts, so a name like server.example.pem stays
+	// blocked.
+	if templateOrDocExts[filepath.Ext(lower)] {
+		return false
+	}
 
 	// Exact matches
 	sensitiveNames := []string{".env", "credentials.json"}
