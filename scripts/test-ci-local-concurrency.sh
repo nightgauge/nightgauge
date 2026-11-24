@@ -215,6 +215,7 @@ check "the report says the step asserted nothing either way" $?
 # fork (only into a slot whose owner is still this gate). Budget 1: steps 2 and
 # 3 can only run if the killed step 1's slot is reclaimed.
 mkdir -p "$TMP/slots-kf" "$TMP/logs-kf"
+kf_fail_before=$FAIL
 env CI_LOCAL_SLOT_ROOT="$TMP/slots-kf" CI_LOCAL_LOG_DIR="$TMP/logs-kf" CI_LOCAL_JOBS=1 \
   CI_LOCAL_SLOT_WAIT=20 CI_LOCAL_PROBE_KILL_FIRST=1 \
   bash scripts/ci-local.sh --group-probe 3 1 > "$TMP/killfirst.log" 2>&1
@@ -229,6 +230,11 @@ check "the child killed at spawn is counted as infrastructure" $?
 [ "$(grep -c '^group probe: slot pid is child$' "$TMP/killfirst.log")" -eq 3 ] &&
   ! grep -q '^group probe: slot pid is \(main\|other\)' "$TMP/killfirst.log"
 check "every grouped slot names its child, never the gate's main pid" $?
+if [ "$FAIL" -ne "$kf_fail_before" ]; then
+  echo "--- killfirst.log ---"
+  cat "$TMP/killfirst.log"
+  echo "--- end killfirst.log ---"
+fi
 
 # ── (7c) a slot wait names its holders ──────────────────────────────────────
 # Silence was #3133's defect: one "waiting" line, then 20 minutes of nothing.
@@ -245,6 +251,45 @@ grep -q "slot 1: pid=$hold_pid alive main=no owner=some-other-gate-1" "$TMP/hold
 check "a slot wait names the live holder pid and its owner" $?
 grep -q 'gave up waiting' "$TMP/holder.log"
 check "the holder-report arm still gives up on a live holder" $?
+
+# ── (7d) a ZOMBIE holder is dead: its slot is reclaimed (#3559) ─────────────
+# `kill -0` succeeds on a zombie. A grouped child killed while the gate's main
+# shell is blocked in `slot_acquire` stays unreaped, and a bare `kill -0`
+# reclaim waited out CI_LOCAL_SLOT_WAIT on it (arm 7b's CI red). Deterministic:
+# the zombie's parent never reaps it; it lives 60s, longer than the arm.
+zroot="$TMP/slots-zombie"
+mkdir -p "$zroot/1"
+python3 -c 'import os,sys,time
+pid=os.fork()
+if pid==0: os._exit(0)
+print(pid); sys.stdout.flush(); time.sleep(60)' > "$TMP/zombie.pid" 2>/dev/null &
+zparent=$!
+HOLDER_PIDS="$HOLDER_PIDS $zparent"
+# Poll up to 10s (50 x 0.2s) until ps reports the child as Z: python3 start-up
+# is slow on a loaded box, and the child needs a moment to exit.
+zpid=""; zstat=""
+for _ in $(seq 1 50); do
+  zpid="$(cat "$TMP/zombie.pid" 2>/dev/null)"
+  [ -n "$zpid" ] && zstat="$(ps -o stat= -p "$zpid" 2>/dev/null | tr -d ' ')"
+  case "$zstat" in Z*) break ;; esac
+  sleep 0.2
+done
+case "$zstat" in
+  Z*)
+    printf '%s\n' "$zpid" > "$zroot/1/pid"
+    printf 'some-other-gate-z\n' > "$zroot/1/owner"
+    env CI_LOCAL_SLOT_ROOT="$zroot" CI_LOCAL_LOG_DIR="$TMP/logs-zombie" CI_LOCAL_JOBS=1 \
+      CI_LOCAL_SLOT_WAIT=5 bash scripts/ci-local.sh --slot-probe > "$TMP/zombie.log" 2>&1
+    zcode=$?
+    [ "$zcode" -eq 0 ] && grep -q "slot acquired: $zroot/1" "$TMP/zombie.log" &&
+      ! grep -q 'gave up waiting' "$TMP/zombie.log"
+    check "a slot held by a zombie pid is reclaimed and taken, not waited out" $?
+    ;;
+  *)
+    echo "HARNESS ERROR: arm 7d could not seed a zombie holder (pid='$zpid' stat='$zstat')"
+    FAIL=$((FAIL + 1))
+    ;;
+esac
 
 # ── (8) the budget is shared ACROSS PROCESSES, not per process ───────────────
 # The regression itself, stated as a test: two gates, one budget. Each run asks
