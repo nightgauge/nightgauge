@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The `test-runner` agent can no longer run `nightgauge` write verbs such as `layout write`: its allowlist grants only `nightgauge layout path` and `nightgauge forge issue view`, and a Go test fails when a `test-runner` grant admits a write verb (#3578).
 - The PreToolUse Bash write gate no longer blocks `echo`/`printf` writes to committed env templates: a redirect target whose final suffix is `.example`, `.sample`, `.template` or `.md` is allowed, the same rule the sensitive-file gate applies. Every redirect target in the command is checked, so `> .env`, `> .env.example.local` and `> server.example.pem` stay blocked (#3558).
 - The PreToolUse Bash read gate no longer blocks `cat`/`less`/`more`/`head`/`tail` of committed env templates: an argument whose final suffix is `.example`, `.sample`, `.template` or `.md` is allowed. Each argument is checked, so `cat .env`, `cat .env.example.local`, `cat server.example.pem` and `cat .env.example .env` stay blocked (#3575).
 - A card retry no longer hands the earlier attempt's work to the new one. A run that starts at or before feature-planning archives the prior `dev`, `validate`, `quality-review` and `feedback` handoffs as `*.prior.json`, keeping only the operator's steer in `feedback-N.json`, so planning and feature-dev act on this attempt alone (#3565).
