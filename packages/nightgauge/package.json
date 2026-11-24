@@ -1808,11 +1808,11 @@
     "yaml": "^2.9.1"
   },
   "devDependencies": {
-    "@hono/node-server": "^2.1.9",
+    "@hono/node-server": "^2.1.11",
     "@playwright/test": "^1.65.1",
     "@types/node": "^26.6.6",
     "@types/vscode": "^1.85.0",
-    "@vitest/coverage-v8": "^5.1.0",
+    "@vitest/coverage-v8": "^5.1.1",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^4.1.1",
     "esbuild": "^0.28.2",
