@@ -109,13 +109,21 @@ func MatchAllCategories(text string) *PatternMatch {
 	return MatchPatterns(text)
 }
 
-// templateOrDocExts are final suffixes IsSensitiveFile exempts: env templates
+// templateOrDocExts are final suffixes isTemplateOrDoc recognises, exempting
+// them from IsSensitiveFile and the Bash write gate: env templates
 // and Markdown are committed artifacts, not secret stores (#3551).
 var templateOrDocExts = map[string]bool{
 	".example":  true,
 	".sample":   true,
 	".template": true,
 	".md":       true,
+}
+
+// isTemplateOrDoc reports whether name's final suffix marks a committed
+// template or document. Only the final suffix counts, so server.example.pem
+// is not a template. Shared by IsSensitiveFile and the Bash write gate.
+func isTemplateOrDoc(name string) bool {
+	return templateOrDocExts[filepath.Ext(strings.ToLower(name))]
 }
 
 // IsSensitiveFile checks if a filename looks like a secrets/credential file.
@@ -125,7 +133,7 @@ func IsSensitiveFile(filename string) bool {
 	// Committed templates and documentation hold no secret values by design.
 	// Only the final suffix counts, so a name like server.example.pem stays
 	// blocked.
-	if templateOrDocExts[filepath.Ext(lower)] {
+	if isTemplateOrDoc(lower) {
 		return false
 	}
 

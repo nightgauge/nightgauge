@@ -718,7 +718,24 @@ func readCurrentBranch(workDir string) (string, error) {
 	return strings.TrimPrefix(head, refPrefix), nil
 }
 
-// isSecretWrite detects writing to sensitive files via echo/printf.
+// redirectTargetEnd holds the characters that end a redirect target: blanks,
+// shell operators, a subshell close, input redirects and backticks.
+const redirectTargetEnd = " \t\n;&|)<`"
+
+// redirectTarget returns the file named by the text after a '>'. It drops the
+// '|' of '>|' and the '&' of '>&', cuts at the first character in
+// redirectTargetEnd, and strips quotes.
+func redirectTarget(piece string) string {
+	piece = strings.TrimLeft(piece, " \t|&")
+	if i := strings.IndexAny(piece, redirectTargetEnd); i >= 0 {
+		piece = piece[:i]
+	}
+	return strings.Trim(piece, "\"'")
+}
+
+// isSecretWrite detects writing to sensitive files via echo/printf. Every
+// redirect target is checked; one whose final suffix marks a template or doc
+// (see isTemplateOrDoc) is exempt.
 func isSecretWrite(cmd string) bool {
 	lower := strings.ToLower(cmd)
 	if !strings.HasPrefix(lower, "echo") && !strings.HasPrefix(lower, "printf") {
@@ -730,19 +747,18 @@ func isSecretWrite(cmd string) bool {
 	}
 
 	secretExts := []string{".env", ".pem", ".key", ".secret"}
-	// Check the part after > for sensitive file extensions
-	parts := strings.SplitN(cmd, ">", 2)
-	if len(parts) < 2 {
-		return false
-	}
-	target := strings.TrimSpace(parts[1])
-	target = strings.TrimPrefix(target, ">") // handle >>
-	target = strings.TrimSpace(target)
-
-	lower = strings.ToLower(target)
-	for _, ext := range secretExts {
-		if strings.HasSuffix(lower, ext) || strings.Contains(lower, ext+".") {
-			return true
+	// Examine every redirect target, so a template target cannot shield a
+	// later secret one (echo a > .env.example; echo b > .env). Empty pieces
+	// are the second '>' of '>>'.
+	for _, piece := range strings.Split(cmd, ">")[1:] {
+		target := strings.ToLower(redirectTarget(piece))
+		if target == "" || isTemplateOrDoc(target) {
+			continue
+		}
+		for _, ext := range secretExts {
+			if strings.HasSuffix(target, ext) || strings.Contains(target, ext+".") {
+				return true
+			}
 		}
 	}
 	return false
