@@ -7,7 +7,7 @@ description: Comprehensive codebase security assessment producing quantitative s
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.2.0"
+  version: "1.2.1"
   source: https://github.com/nightgauge/nightgauge
   chainable: true
 allowed-tools: Read Write Edit Glob Grep Bash Task
@@ -41,8 +41,6 @@ orchestration:
     mode: per-unit
     quorum: 1
     promptRef: SKILL.md#phase-8-scoring--report
-context: fork
-agent: code-reviewer
 model: haiku
 ---
 
