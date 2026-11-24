@@ -4021,7 +4021,7 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	if availableSlots <= 0 {
 		as.mu.Lock()
 		log.Printf("autonomous: no effective slots available (MaxConcurrent=%d, ceiling=%d, running=%d, pending=%d, reserved=%d), skipping graph build",
-			as.config.MaxConcurrent, as.dispatchCeilingLocked(), len(as.state.Running), slots.pending, slots.reserved)
+			as.config.MaxConcurrent, as.dispatchCeilingLocked(), slots.running, slots.pending, slots.reserved)
 		as.mu.Unlock()
 		as.persistState()
 		if as.onCycleComplete != nil {
@@ -8027,6 +8027,10 @@ type slotAvailability struct {
 	// slot (fresh and in a repository that is not halted).
 	pending  int
 	reserved int
+	// running is the state.Running entries actually in flight: an entry
+	// whose issue is still a pending queue item has not been taken, and is
+	// represented by reserved while fresh and by nothing once expired (#3553).
+	running int
 }
 
 // effectiveAvailableSlots returns how many additional pipelines can be
@@ -8047,6 +8051,10 @@ func (as *AutonomousScheduler) effectiveAvailableSlots() int {
 // slot, not 3). When any repo has no per-repo cap, the global ceiling is the
 // only constraint — that repo can absorb any remaining global capacity.
 //
+// A state.Running entry that is still a pending queue item is not counted as
+// running (#3553). When a pending reservation expires for the first time this
+// calls Scheduler.NotifyPendingWake, which emits queue.changed.
+//
 // Must be called without as.mu held.
 func (as *AutonomousScheduler) slotAvailability() slotAvailability {
 	var pendingItems []QueueItem
@@ -8056,13 +8064,30 @@ func (as *AutonomousScheduler) slotAvailability() slotAvailability {
 		pendingItems = as.scheduler.QueuePendingItems()
 	}
 
+	pendingKeys := make(map[string]bool, len(pendingItems))
+	for _, it := range pendingItems {
+		pendingKeys[repoIssueKey(it.Repo, it.IssueNumber)] = true
+	}
+
 	as.mu.Lock()
-	globalAvail := as.dispatchCeilingLocked() - len(as.state.Running)
+	running := 0
+	for _, r := range as.state.Running {
+		if !pendingKeys[repoIssueKey(r.Repo, r.Number)] {
+			running++
+		}
+	}
+	globalAvail := as.dispatchCeilingLocked() - running
 	repos := as.repos
-	reserved := as.pendingReservationsLocked(pendingItems, time.Now())
+	reserved, released := as.pendingReservationsLocked(pendingItems, time.Now())
 	as.mu.Unlock()
 
-	res := slotAvailability{pending: len(pendingItems), reserved: reserved}
+	if released && as.scheduler != nil {
+		// A released reservation wakes a dequeue, so the item is taken now
+		// rather than at the next window reload (#3553). Outside as.mu.
+		as.scheduler.NotifyPendingWake()
+	}
+
+	res := slotAvailability{pending: len(pendingItems), reserved: reserved, running: running}
 	if globalAvail <= 0 {
 		return res
 	}
@@ -8082,14 +8107,14 @@ func (as *AutonomousScheduler) slotAvailability() slotAvailability {
 // board-scan slot (#2717). An item reserves nothing when the fleet or its
 // repository is halted — fillSlots will not take it, so the slot would sit
 // idle until the halt lifts — or when it has been pending longer than
-// pendingReservationTTL; the first time an item expires, a warning names it.
+// pendingReservationTTL; the first time an item expires, a warning names it
+// and released reports it, so the caller can wake a dequeue (#3553).
 //
 // Caller MUST hold as.mu.
-func (as *AutonomousScheduler) pendingReservationsLocked(items []QueueItem, now time.Time) int {
+func (as *AutonomousScheduler) pendingReservationsLocked(items []QueueItem, now time.Time) (reserved int, released bool) {
 	if len(items) == 0 || machineHalted(as.state) {
-		return 0
+		return 0, false
 	}
-	reserved := 0
 	for _, it := range items {
 		if repoPaused(as.state, it.Repo) {
 			continue
@@ -8102,6 +8127,7 @@ func (as *AutonomousScheduler) pendingReservationsLocked(items []QueueItem, now 
 					as.expiredPendingWarned = make(map[string]bool)
 				}
 				as.expiredPendingWarned[key] = true
+				released = true
 				log.Printf("autonomous: WARNING pending queue item %s#%d has not been taken for %s (limit %s) — releasing its slot reservation to the board scan",
 					it.Repo, it.IssueNumber, age.Round(time.Second), pendingReservationTTL)
 			}
@@ -8109,7 +8135,7 @@ func (as *AutonomousScheduler) pendingReservationsLocked(items []QueueItem, now 
 		}
 		reserved++
 	}
-	return reserved
+	return reserved, released
 }
 
 // repoBoundSlots applies the per-repo caps to globalAvail.

@@ -98,3 +98,100 @@ func TestDequeueIndependent_ReleasesAHeldItemOnceVouchedFor(t *testing.T) {
 		t.Fatalf("dequeued %+v after approval, want #504", got)
 	}
 }
+
+// Items queued while a dequeue's gates run used to be skipped as "the next
+// pass decides it", and no next pass was scheduled (#3553). The same call now
+// decides and takes them.
+func TestDequeueIndependent_TakesItemsQueuedAfterTheGateRan(t *testing.T) {
+	t.Parallel()
+
+	s := newDequeueExcludeFixture(t, nil)
+	added := false
+	deps := twoRepoDeps(map[int]string{1: "Fix internal/a.go", 2: "Fix internal/a.go", 3: "Fix internal/a.go"})
+	body := deps.body
+	deps.body = func(ctx context.Context, o, r string, n int) (string, error) {
+		if !added {
+			added = true
+			s.QueueAddItem(
+				QueueItem{Repo: "o/r", IssueNumber: 2, Title: "late"},
+				QueueItem{Repo: "o/r", IssueNumber: 3, Title: "later"},
+			)
+		}
+		return body(ctx, o, r, n)
+	}
+	s.affinityDeps = deps
+	s.QueueAddItem(QueueItem{Repo: "o/r", IssueNumber: 1, Title: "first"})
+
+	got := s.DequeueIndependent(t.Context(), 5, nil)
+	if len(got) != 3 {
+		t.Fatalf("dequeued %+v, want #1, #2 and #3 in one call", got)
+	}
+}
+
+// The second round counts what the first took: it stays within maxSlots and
+// the per-repo cap (#3553).
+func TestDequeueIndependent_SecondRoundKeepsTheCaps(t *testing.T) {
+	t.Parallel()
+
+	late := func(s *Scheduler) {
+		added := false
+		deps := twoRepoDeps(map[int]string{1: "Fix internal/a.go", 2: "Fix internal/a.go", 3: "Fix internal/a.go"})
+		body := deps.body
+		deps.body = func(ctx context.Context, o, r string, n int) (string, error) {
+			if !added {
+				added = true
+				s.QueueAddItem(
+					QueueItem{Repo: "o/r", IssueNumber: 2, Title: "late"},
+					QueueItem{Repo: "o/r", IssueNumber: 3, Title: "later"},
+				)
+			}
+			return body(ctx, o, r, n)
+		}
+		s.affinityDeps = deps
+		s.QueueAddItem(QueueItem{Repo: "o/r", IssueNumber: 1, Title: "first"})
+	}
+
+	t.Run("maxSlots", func(t *testing.T) {
+		t.Parallel()
+		s := newDequeueExcludeFixture(t, nil)
+		late(s)
+		if got := s.DequeueIndependent(t.Context(), 2, nil); len(got) != 2 {
+			t.Fatalf("dequeued %+v, want 2 (maxSlots)", got)
+		}
+	})
+	t.Run("per-repo cap", func(t *testing.T) {
+		t.Parallel()
+		s := newDequeueExcludeFixture(t, nil)
+		s.maxPerRepo = 1
+		late(s)
+		if got := s.DequeueIndependent(t.Context(), 5, nil); len(got) != 1 || got[0].IssueNumber != 1 {
+			t.Fatalf("dequeued %+v, want only #1 (per-repo cap 1)", got)
+		}
+	})
+}
+
+// Regression pin (#3553): one refused item in a batch pauses only itself; the
+// rest of the batch is taken in the same pass.
+func TestDequeueIndependent_AffinityRefusalTakesTheRestOfTheBatch(t *testing.T) {
+	t.Parallel()
+
+	s := newDequeueExcludeFixture(t, nil)
+	s.affinityDeps = twoRepoDeps(map[int]string{
+		1: "Fix src/ext/one.ts and src/ext/two.ts.\n## Acceptance criteria\n- [ ] lib/three.ts works",
+		2: "Fix internal/a.go",
+		3: "Fix internal/a.go",
+	})
+	s.QueueAddItem(
+		QueueItem{Repo: "o/r", IssueNumber: 1, Title: "misfiled"},
+		QueueItem{Repo: "o/r", IssueNumber: 2, Title: "own"},
+		QueueItem{Repo: "o/r", IssueNumber: 3, Title: "own too"},
+	)
+	got := s.DequeueIndependent(t.Context(), 5, nil)
+	if len(got) != 2 || got[0].IssueNumber != 2 || got[1].IssueNumber != 3 {
+		t.Fatalf("dequeued %+v, want #2 and #3", got)
+	}
+	held := s.queueItemUnlocked("o/r", 1)
+	if held == nil || held.Status != "paused" || held.PausedReason == nil || held.PausedReason.Kind != pausedRepoAffinity {
+		t.Fatalf("#1 = %+v, want it paused for repo affinity", held)
+	}
+}
