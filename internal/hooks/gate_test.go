@@ -483,3 +483,58 @@ func TestGateBlocksBoundaryAllowlistInPipelineStage(t *testing.T) {
 		t.Errorf("unrelated file blocked: %s", r.Reason)
 	}
 }
+
+func TestIsSecretWrite(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want bool
+	}{
+		{`echo "FOO=bar" > .env.example`, false},
+		{`echo "FOO=bar" > .env.sample`, false},
+		{`echo "FOO=bar" > .env.template`, false},
+		{`echo "FOO=bar" > .ENV.EXAMPLE`, false},
+		{`echo "FOO=bar" > .ENV.TEMPLATE`, false},
+		{`echo "FOO=bar" >> .env.example`, false},
+		{`echo "FOO=bar" >.env.sample`, false},
+		{`printf 'x' > "config/.env.template"`, false},
+		{`echo "X=1" > .env`, true},
+		{`echo "X=1" > .env.local`, true},
+		{`echo "X=1" >> .env`, true},
+		{`echo "X=1" > .env.example.local`, true},
+		{`printf 'k' > server.pem`, true},
+		{`echo k > private.key`, true},
+		{`echo k > api.secret`, true},
+		{`echo k > server.example.pem`, true},
+		{`echo a > .env.example; echo b > .env`, true},
+		{`echo a > .env.example && echo b >> "prod.env"`, true},
+		{`echo x > docs/secrets.md`, false},
+		{`echo k >| .env`, true},
+		{`echo k >& server.pem`, true},
+		{`echo x > .env;ls`, true},
+		{`echo x > .env|cat`, true},
+		{`echo x > .env</dev/null`, true},
+		{"echo k > .env`true`", true},
+		{`echo x 2>&1 > .env`, true},
+		{`echo x 2>/dev/null > .env`, true},
+	}
+	for _, tc := range cases {
+		if got := isSecretWrite(tc.cmd); got != tc.want {
+			t.Errorf("isSecretWrite(%q) = %v, want %v", tc.cmd, got, tc.want)
+		}
+	}
+}
+
+func TestGateAllowsTemplateWrites(t *testing.T) {
+	allowed := []string{
+		`echo "FOO=bar" > .env.example`,
+		`echo "FOO=bar" >> .env.sample`,
+		`printf 'x' > "config/.env.template"`,
+	}
+	for _, cmd := range allowed {
+		input := makeGateInput("Bash", BashToolInput{Command: cmd})
+		result := EvaluateGate(input, config.SanitizationModeBlock)
+		if result.Decision == "block" {
+			t.Errorf("expected allow for %q, got block: %s", cmd, result.Reason)
+		}
+	}
+}

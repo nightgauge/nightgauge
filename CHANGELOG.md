@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The PreToolUse Bash write gate no longer blocks `echo`/`printf` writes to committed env templates: a redirect target whose final suffix is `.example`, `.sample`, `.template` or `.md` is allowed, the same rule the sensitive-file gate applies. Every redirect target in the command is checked, so `> .env`, `> .env.example.local` and `> server.example.pem` stay blocked (#3558).
 - A card retry no longer hands the earlier attempt's work to the new one. A run that starts at or before feature-planning archives the prior `dev`, `validate`, `quality-review` and `feedback` handoffs as `*.prior.json`, keeping only the operator's steer in `feedback-N.json`, so planning and feature-dev act on this attempt alone (#3565).
 - `scripts/validate-skill-metadata.sh` now rejects a skill that sets `context: fork` into an agent whose `disallowedTools` names `Edit` or `Write` while its `allowed-tools` lists that tool. The six skills that did (`test-scaffold`, `security-audit`, `continuous-improvement`, `pipeline-audit`, `pipeline-health`, `retro`) now run inline, so their file writes no longer fail in the read-only fork (#3562).
 - The OpenCode catalog integration tests now run their `opencode models` probes four at a time instead of one by one, so `scripts/opencode-integration.sh` is back to a 10-minute `go test` timeout (#3563).
