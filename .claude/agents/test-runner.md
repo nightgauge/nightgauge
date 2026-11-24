@@ -1,7 +1,7 @@
 ---
 name: test-runner
 description: Test execution and analysis agent. Use when running test suites, diagnosing test failures, verifying acceptance criteria, or checking test coverage for a change.
-tools: Read, Grep, Glob, Bash(npx -w *), Bash(npm run *), Bash(go test *), Bash(git diff *), Bash(nightgauge *)
+tools: Read, Grep, Glob, Bash(npx -w *), Bash(npm run *), Bash(go test *), Bash(git diff *), Bash(nightgauge layout path *), Bash(nightgauge forge issue view *)
 disallowedTools: Edit, Write
 model: sonnet
 memory: project

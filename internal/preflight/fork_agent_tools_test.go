@@ -156,3 +156,78 @@ func TestFeatureValidateRunsInlineWithBash(t *testing.T) {
 		}
 	}
 }
+
+// nightgaugeWriteCommands are nightgauge invocations that write state. The
+// `layout write` form follows internal/hooks/gate_test.go
+// TestGateAllowsPipelineContextWriteOutsidePipeline.
+var nightgaugeWriteCommands = []string{
+	"nightgauge layout write pipeline planning-1.json",
+	"nightgauge layout write plans 1-x.md --from /tmp/p.md",
+	"nightgauge project move-status 1 done",
+	"nightgauge knowledge stamp f.md",
+	"nightgauge finding record --summary x",
+	"nightgauge discovered-work record --issue 1",
+	"nightgauge forge issue comment 1 --body x",
+	"nightgauge forge issue edit 1 --title x",
+	"nightgauge forge issue close 1",
+	"nightgauge pr merge 1",
+	"nightgauge hook post-merge --issue 1",
+}
+
+// testRunnerReadGrants are the read-only nightgauge grants test-runner keeps.
+var testRunnerReadGrants = []string{
+	"Bash(nightgauge layout path *)",
+	"Bash(nightgauge forge issue view *)",
+}
+
+// grantAdmits reports whether a Claude Code Bash grant admits cmd: bare
+// `Bash` admits everything, a trailing `:*` is a prefix wildcard, and each
+// `*` in the pattern matches any run of characters.
+func grantAdmits(tool, cmd string) bool {
+	if tool == "Bash" {
+		return true
+	}
+	if !strings.HasPrefix(tool, "Bash(") || !strings.HasSuffix(tool, ")") {
+		return false
+	}
+	pattern := tool[len("Bash(") : len(tool)-1]
+	if prefix, ok := strings.CutSuffix(pattern, ":*"); ok {
+		pattern = prefix + "*"
+	}
+	parts := strings.Split(pattern, "*")
+	for i, part := range parts {
+		parts[i] = regexp.QuoteMeta(part)
+	}
+	return regexp.MustCompile("^" + strings.Join(parts, ".*") + "$").MatchString(cmd)
+}
+
+// TestReadOnlyAgentNightgaugeGrantsAreReadOnly locks #3578: the read-only
+// test-runner agent may run only nightgauge verbs that cannot write.
+func TestReadOnlyAgentNightgaugeGrantsAreReadOnly(t *testing.T) {
+	const writeCmd = "nightgauge layout write pipeline planning-1.json"
+	for _, wide := range []string{nightgaugeTool, "Bash", "Bash(*)", "Bash(nightgauge:*)"} {
+		if !grantAdmits(wide, writeCmd) {
+			t.Fatalf("grantAdmits(%q, %q) = false; the matcher cannot see a write grant", wide, writeCmd)
+		}
+	}
+	for _, grant := range testRunnerReadGrants {
+		if grantAdmits(grant, writeCmd) {
+			t.Fatalf("grantAdmits(%q, %q) = true; the matcher over-matches", grant, writeCmd)
+		}
+	}
+	root := repoRoot(t)
+	const agent = "test-runner"
+	tools := agentTools(t, root, agent)
+	for _, tool := range tools {
+		for _, cmd := range nightgaugeWriteCommands {
+			if grantAdmits(tool, cmd) {
+				t.Errorf(".claude/agents/%s.md grant %s admits write command %q", agent, tool, cmd)
+			}
+		}
+	}
+	for _, want := range testRunnerReadGrants {
+		if !hasTool(tools, want) {
+			t.Errorf(".claude/agents/%s.md tools: lacks %s", agent, want)
+		}
+	}
+}
