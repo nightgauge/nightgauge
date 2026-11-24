@@ -11,6 +11,7 @@ and this project adheres to
 
 ### Fixed
 
+- Issues dispatched together by autonomous mode no longer sit queued until a window reload: a fill pass that takes nothing while items are pending schedules one later pass (#3553).
 - A resumed pipeline run now keeps its pr-merge conflict re-dispatch budget instead of starting from zero, so it stops at `max_dev_redispatch` as an uninterrupted run does. Conflicting file names in `[pre-merge-conflict]` and `[merge-conflict]` errors now show control characters as escapes (#2845).
 
 ## [0.8.7] - 2026-11-22
