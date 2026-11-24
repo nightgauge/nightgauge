@@ -168,6 +168,37 @@ export interface BacktrackRecord {
   attempt_number: number;
 }
 
+/** Signal Go records on a pr-merge conflict rewind (#2841). */
+export const CONFLICT_RESOLUTION_SIGNAL = "CONFLICT_RESOLUTION_NEEDED";
+/** Signal Go records on a merge-group code-failure rewind (#3339). */
+export const MERGE_QUEUE_CODE_FAILURE_SIGNAL = "MERGE_QUEUE_CODE_FAILURE";
+
+/**
+ * True for a rewind that the ordinary backtrack bound and oscillation guard
+ * count. Conflict and queue-code rewinds carry their own bounds (#2841,
+ * #3339) and are left out, as they are in an uninterrupted run (#2845).
+ */
+export function isOrdinaryBacktrack(bt: { signal_type?: string }): boolean {
+  return (
+    bt.signal_type !== CONFLICT_RESOLUTION_SIGNAL &&
+    bt.signal_type !== MERGE_QUEUE_CODE_FAILURE_SIGNAL
+  );
+}
+
+/** Derive the resumable rewind counters from a backtrack history (#2845). */
+export function countBacktracks(backtracks: ReadonlyArray<{ signal_type?: string }>): {
+  backtrackCount: number;
+  conflictRedispatchCount: number;
+} {
+  let backtrackCount = 0;
+  let conflictRedispatchCount = 0;
+  for (const bt of backtracks) {
+    if (bt.signal_type === CONFLICT_RESOLUTION_SIGNAL) conflictRedispatchCount++;
+    else if (isOrdinaryBacktrack(bt)) backtrackCount++;
+  }
+  return { backtrackCount, conflictRedispatchCount };
+}
+
 export interface ModelEscalationRecord {
   stage: string;
   fromModel: string;
@@ -376,6 +407,12 @@ export interface PipelineState {
   labels?: string[];
   backtracks?: BacktrackRecord[];
   backtrack_count?: number;
+  /**
+   * Conflict rewinds (pr-merge → feature-dev, `CONFLICT_RESOLUTION_NEEDED`)
+   * this run has made, derived from Go's backtrack history so a resumed run
+   * keeps its `max_dev_redispatch` budget (#2845).
+   */
+  conflict_redispatch_count?: number;
   modelEscalations?: ModelEscalationRecord[];
   model_escalations?: ModelEscalationRecord[];
   tokens?: PipelineStateTokens;
@@ -493,6 +530,14 @@ export interface StageTransitionResult {
  * This is NOT the same as PipelineState — it uses Go naming conventions and is converted on receipt.
  */
 export interface GoRuntimeState {
+  /** Go's persisted rewind history (`RuntimeState.Backtracks`, #3081). */
+  backtracks?: Array<{
+    from_stage: string;
+    to_stage: string;
+    signal_type?: string;
+    reason?: string;
+    at?: string;
+  }>;
   completedStages?: Array<{ stage: string; startedAt?: string; duration?: number }>;
   skippedStages?: string[];
   stageErrors?: Record<string, string>;
@@ -853,6 +898,21 @@ export class PipelineStateService implements vscode.Disposable {
       stages[phase.stage] = stage;
     }
 
+    // Go sends from/to/signal/reason/at only. `stage`, `rationale` and
+    // `attempt_number` are placeholders; the counters and oscillation edges
+    // read only from_stage, to_stage and signal_type (#2845).
+    const backtracks: BacktrackRecord[] = (goState.backtracks ?? []).map((bt) => ({
+      stage: bt.from_stage,
+      reason: bt.reason ?? "",
+      timestamp: bt.at ?? "",
+      from_stage: bt.from_stage,
+      to_stage: bt.to_stage,
+      signal_type: bt.signal_type ?? "",
+      rationale: bt.reason ?? "",
+      attempt_number: 1,
+    }));
+    const counts = countBacktracks(backtracks);
+
     this._lastState = {
       issue_number: issueNumber,
       title: goState.title || this._lastState?.title || `Issue #${issueNumber}`,
@@ -880,6 +940,9 @@ export class PipelineStateService implements vscode.Disposable {
         estimated_cost_usd: goState.totalCostUsd ?? 0,
       },
       execution_mode: "headless",
+      backtracks,
+      backtrack_count: counts.backtrackCount,
+      conflict_redispatch_count: counts.conflictRedispatchCount,
       paused: goState.paused,
       retry_count: goState.retryCount,
       escalation_history: goState.escalationHistory,
