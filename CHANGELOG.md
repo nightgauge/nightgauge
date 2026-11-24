@@ -25,6 +25,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- pr-create's check of a "`X` tests are untouched" criterion now lists the base revision once per diff and reads every candidate test file in one `git cat-file --batch`, so its git calls no longer grow with the number of test files. An uncertain read still gives the strict verdict (#3504).
 - The Claude plugin's version is now 1.29.3, because the `followup-materialize` skill changed after 0.8.7. Without the bump, `check-plugin-version.sh` failed every 0.8.8 release candidate, `main-build.yml` and pull-request CI, and installed plugins would not have received the change.
 
 ## [0.8.7] - 2026-11-22

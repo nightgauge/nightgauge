@@ -1,6 +1,7 @@
 package stages
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -127,6 +128,17 @@ type ACDiff struct {
 	gofiles map[string]*acGoFile
 	// gofields memoises goFieldValue by path and span (#3424).
 	gofields map[string]acGoFieldMatch
+	// base memoises the span-independent base listings acTestsPreserved
+	// reads, so each scoped span does not list the tree again (#3504).
+	base *acBaseListing
+}
+
+// acBaseListing is the base revision's file list and the paths git says the
+// diff touches; ok=false records that either listing failed.
+type acBaseListing struct {
+	tree    []string
+	touched map[string]bool
+	ok      bool
 }
 
 // acContent is one file's working-tree lines; ok=false means the file could
@@ -272,6 +284,115 @@ func acBlob(repo, rev, path string) ([]byte, bool) {
 		return nil, false
 	}
 	return out, true
+}
+
+// acBlobs reads every path at rev in one `git cat-file --batch` streamed
+// within acDiffTimeout; a blob over acReadMaxBytes is discarded unread. A path
+// that is missing, not a blob, too large or holds a newline is absent from the
+// result; a failed subprocess or output that does not parse leaves every path
+// absent (#3504).
+func acBlobs(repo, rev string, paths []string) map[string][]byte {
+	if repo == "" || rev == "" || strings.HasPrefix(rev, "-") {
+		return map[string][]byte{}
+	}
+	var req []string
+	var in strings.Builder
+	for _, p := range paths {
+		if p == "" || strings.ContainsAny(p, "\n\r") {
+			continue
+		}
+		req = append(req, p)
+		in.WriteString(rev + ":" + p + "\n")
+	}
+	if len(req) == 0 {
+		return map[string][]byte{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), acDiffTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", repo, "cat-file", "--batch")
+	cmd.Stdin = strings.NewReader(in.String())
+	stdout, err := cmd.StdoutPipe()
+	if err != nil || cmd.Start() != nil {
+		return map[string][]byte{}
+	}
+	got, ok := acParseBatch(bufio.NewReader(stdout), req)
+	if _, err := io.Copy(io.Discard, stdout); err != nil {
+		ok = false
+	}
+	if cmd.Wait() != nil || !ok {
+		return map[string][]byte{}
+	}
+	return got
+}
+
+// acParseBatch reads one `cat-file --batch` answer per requested path from r,
+// keeping each blob within acReadMaxBytes; ok=false when the output is not
+// one well-formed answer per path.
+func acParseBatch(r *bufio.Reader, req []string) (map[string][]byte, bool) {
+	got := map[string][]byte{}
+	for _, p := range req {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return nil, false
+		}
+		header := strings.Fields(line)
+		if len(header) == 2 && header[1] == "missing" {
+			continue
+		}
+		if len(header) != 3 {
+			return nil, false
+		}
+		size, err := strconv.ParseInt(header[2], 10, 64)
+		if err != nil || size < 0 {
+			return nil, false
+		}
+		if header[1] == "blob" && size <= acReadMaxBytes {
+			body := make([]byte, size+1)
+			if _, err := io.ReadFull(r, body); err != nil || body[size] != '\n' {
+				return nil, false
+			}
+			got[p] = body[:size]
+			continue
+		}
+		if _, err := io.CopyN(io.Discard, r, size); err != nil {
+			return nil, false
+		}
+		if b, err := r.ReadByte(); err != nil || b != '\n' {
+			return nil, false
+		}
+	}
+	if _, err := r.ReadByte(); err != io.EOF {
+		return nil, false
+	}
+	return got, true
+}
+
+// baseListing lists the base tree and the paths the diff touches once per
+// ACDiff, memoising a failure too; its revisions never change (#3504).
+func (d *ACDiff) baseListing() ([]string, map[string]bool, bool) {
+	if d.base != nil {
+		return d.base.tree, d.base.touched, d.base.ok
+	}
+	d.base = &acBaseListing{}
+	tree, err := acGitList(d.Workdir, nil, "ls-tree", "-r", "--full-tree", "--name-only", "-z", d.BaseRev)
+	if err != nil {
+		return nil, nil, false
+	}
+	// The diff's headers lose a path git quotes, so git lists what was touched.
+	args := []string{"diff", "--name-only", "--no-renames", "--no-relative", "-z", d.BaseRev}
+	if d.ToRev != "" {
+		args = append(args, d.ToRev)
+	}
+	listed, err := acGitList(d.Workdir, nil, append(args, "--")...)
+	if err != nil {
+		return nil, nil, false
+	}
+	touched := map[string]bool{}
+	for _, p := range listed {
+		touched[p] = true
+	}
+	d.base = &acBaseListing{tree: tree, touched: touched, ok: true}
+	return tree, touched, true
 }
 
 // headContent is path's content on the branch: the working tree when the
@@ -3147,8 +3268,8 @@ func acTestsPreserved(tok string, d *ACDiff) acResult {
 	if d.Workdir == "" || d.BaseRev == "" || strings.HasPrefix(d.BaseRev, "-") {
 		return acResult{}
 	}
-	tree, err := acGitList(d.Workdir, nil, "ls-tree", "-r", "--full-tree", "--name-only", "-z", d.BaseRev)
-	if err != nil {
+	tree, touched, ok := d.baseListing()
+	if !ok {
 		return acResult{}
 	}
 	// git grep skips a blob it cannot read and still exits 0 or 1, saying so
@@ -3179,25 +3300,21 @@ func acTestsPreserved(tok string, d *ACDiff) acResult {
 		}
 	}
 
-	// The diff's headers lose a path git quotes, so git lists what was touched.
-	args := []string{"diff", "--name-only", "--no-renames", "--no-relative", "-z", d.BaseRev}
-	if d.ToRev != "" {
-		args = append(args, d.ToRev)
-	}
-	listed, err := acGitList(d.Workdir, nil, append(args, "--")...)
-	if err != nil {
-		return acResult{}
-	}
-	touched := map[string]bool{}
-	for _, p := range listed {
-		touched[p] = true
-	}
-
 	name, match := acSpanName(tok), acSpanMatcher(tok)
 	if name == tok && acNameSpanRE.MatchString(tok) {
 		// A bare name is a word here: a `get` test is not one holding "widget".
 		match = func(line string) bool { return acNamesWord(line, tok) }
 	}
+	// Every candidate is read in one batch; an absent one is unread.
+	var candidates []string
+	candidate := map[string]bool{}
+	for _, p := range tree {
+		if acIsTestFile(p) && !acNamesWord(p, name) && inContent[p] {
+			candidates = append(candidates, p)
+			candidate[p] = true
+		}
+	}
+	blobs := acBlobs(d.Workdir, d.BaseRev, candidates)
 	kept, unread := "", false
 	for _, p := range tree {
 		if !acIsTestFile(p) {
@@ -3211,8 +3328,8 @@ func acTestsPreserved(tok string, d *ACDiff) acResult {
 			return r < 0x20 || r == 0x7f || r == '"' || r == '\\'
 		})
 		contains := acNamesWord(p, name)
-		if !contains && inContent[p] {
-			data, ok := acBlob(d.Workdir, d.BaseRev, p)
+		if candidate[p] {
+			data, ok := blobs[p]
 			if !ok {
 				unread = true
 				continue

@@ -1,12 +1,16 @@
 package stages
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -212,6 +216,13 @@ new file mode 100644
 	}
 	if b := files["b.go"]; b == nil || b.Status != "added" || len(b.Added) != 1 {
 		t.Errorf("b.go = %+v", b)
+	}
+	if r := files["new.go"]; r == nil || r.OldPath != "old.go" {
+		t.Errorf("rename OldPath = %+v", r)
+	}
+	spaced := parseUnifiedDiff("diff --git a/my file.go b/my file.go\n--- a/my file.go\t\n+++ b/my file.go\t\n@@ -1 +1 @@\n-a\n+b\n")
+	if f := spaced["my file.go"]; f == nil || strings.Contains(f.Path, "\t") || len(f.Added) != 1 {
+		t.Errorf("spaced = %+v", spaced)
 	}
 }
 
@@ -2848,5 +2859,160 @@ func TestACTestsPreserved_RenamedToQuotedPath(t *testing.T) {
 		if r.status != ACUnmet || !strings.Contains(r.evidence, "test/slugify.test.js") {
 			t.Errorf("otherKept=%v: got %+v, want unmet naming the base path", otherKept, r)
 		}
+	}
+}
+
+// #3504: pin the word-boundary helpers the test-scoped judge matches with.
+func TestACNamesWord(t *testing.T) {
+	for _, tc := range []struct {
+		s    string
+		i    int
+		want bool
+	}{{"getUser", 3, true}, {"v2Client", 2, true}, {"HTTPClient", 4, true}, {"HTTPClient", 2, false}, {"widget", 3, false}} {
+		if got := acWordBreak(tc.s, tc.i); got != tc.want {
+			t.Errorf("acWordBreak(%q, %d) = %v, want %v", tc.s, tc.i, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		s, name string
+		want    bool
+	}{{"getUser", "get", true}, {"v2Client", "Client", true}, {"HTTPClient", "Client", true},
+		{"widget", "get", false}, {"getter", "get", false}, {"anything", "", false}} {
+		if got := acNamesWord(tc.s, tc.name); got != tc.want {
+			t.Errorf("acNamesWord(%q, %q) = %v, want %v", tc.s, tc.name, got, tc.want)
+		}
+	}
+}
+
+// #3504: a changed non-test file whose base cannot be read might hold the
+// token; a diff that changes only tests changes nothing outside them.
+func TestACChangesOutsideTests(t *testing.T) {
+	t.Run("unreadable base", func(t *testing.T) {
+		dir := slugifyRepo(t)
+		writeFile(t, dir, "README.md", "# Fixture\n\nedited\n")
+		gitOut(t, dir, "commit", "-qam", "edit")
+		d := collect(t, dir)
+		sha := strings.TrimSpace(gitOut(t, dir, "rev-parse", d.BaseRev+":README.md"))
+		if err := os.Remove(filepath.Join(dir, ".git", "objects", sha[:2], sha[2:])); err != nil {
+			t.Fatal(err)
+		}
+		if !acChangesOutsideTests("`slugify`", d) {
+			t.Error("an unreadable base must count as a possible match")
+		}
+	})
+	t.Run("tests only", func(t *testing.T) {
+		dir := slugifyRepo(t)
+		writeFile(t, dir, "test/slugify.test.js", slugifyTest+"check(slugify(\"x\"));\n")
+		gitOut(t, dir, "commit", "-qam", "edit")
+		if acChangesOutsideTests("`slugify`", collect(t, dir)) {
+			t.Error("a test-only diff changes nothing outside tests")
+		}
+	})
+}
+
+// #3504: acTestsPreserved lists the base once per ACDiff and reads every
+// candidate in one batch, so its git calls do not grow with candidates.
+func TestACTestsPreserved_GitCallsDoNotScaleWithCandidates(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell git shim")
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not found")
+	}
+	run := func(t *testing.T, n int) []string {
+		dir := slugifyRepo(t)
+		onBase(t, dir, func(t *testing.T, dir string) {
+			for i := 0; i < n; i++ {
+				writeFile(t, dir, fmt.Sprintf("test/c%d.test.js", i), "check(slugify(\"c\"));\n")
+			}
+		})
+		writeFile(t, dir, "src/index.js", "function slugify(s) { return s }\n\nmodule.exports = { slugify };\n")
+		gitOut(t, dir, "commit", "-qam", "edit")
+		d := collect(t, dir)
+		shim := t.TempDir()
+		logf := filepath.Join(shim, "log")
+		script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + logf + "'\nexec '" + realGit + "' \"$@\"\n"
+		if err := os.WriteFile(filepath.Join(shim, "git"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", shim+string(os.PathListSeparator)+os.Getenv("PATH"))
+		var calls []string
+		for _, span := range []string{"slugify", "check"} {
+			if r := acTestsPreserved(span, d); r.status != ACMet {
+				t.Errorf("n=%d %s: got %+v, want met", n, span, r)
+			}
+			data, _ := os.ReadFile(logf)
+			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+			if c := countContaining(lines[len(calls):], "cat-file"); c > 1 {
+				t.Errorf("n=%d %s: %d cat-file calls, want at most 1", n, span, c)
+			}
+			calls = lines
+		}
+		if c := countContaining(calls, "ls-tree"); c != 1 {
+			t.Errorf("n=%d: %d ls-tree calls, want 1", n, c)
+		}
+		return calls
+	}
+	if one, six := run(t, 1), run(t, 6); len(one) != len(six) {
+		t.Errorf("git calls: %d for 1 candidate, %d for 6\n%v\n%v", len(one), len(six), one, six)
+	}
+}
+
+func countContaining(lines []string, sub string) int {
+	n := 0
+	for _, l := range lines {
+		if strings.Contains(l, sub) {
+			n++
+		}
+	}
+	return n
+}
+
+// #3504: acBlobs keeps only readable blobs within the cap and keeps reading
+// past a missing, non-blob or oversized answer.
+func TestACBlobs(t *testing.T) {
+	dir := slugifyRepo(t)
+	big := strings.Repeat("x", acReadMaxBytes+1)
+	onBase(t, dir, func(t *testing.T, dir string) { writeFile(t, dir, "big.txt", big) })
+	d := collect(t, dir)
+	got := acBlobs(dir, d.BaseRev, []string{"big.txt", "nope.js", "src", "bad\nname", "README.md", "test/get.test.js"})
+	want := map[string]string{"README.md": "# Fixture\n\n`src/index.js` exports `slugify`.\n", "test/get.test.js": "check(get());\n"}
+	if len(got) != len(want) {
+		t.Errorf("keys = %v, want %v", reflect.ValueOf(got).MapKeys(), want)
+	}
+	for p, w := range want {
+		if string(got[p]) != w {
+			t.Errorf("%s = %q, want %q", p, got[p], w)
+		}
+	}
+	for _, rev := range []string{"", "-x"} {
+		if got := acBlobs(dir, rev, []string{"README.md"}); len(got) != 0 {
+			t.Errorf("rev %q: got %v", rev, got)
+		}
+	}
+	if got := acBlobs(t.TempDir(), "HEAD", []string{"README.md"}); len(got) != 0 {
+		t.Errorf("not a repository: got %v", got)
+	}
+	for _, out := range []string{"", "abc blob 3\nab", "abc blob 1\nax", "abc blob 1\na\nextra", "abc blob\n"} {
+		if _, ok := acParseBatch(bufio.NewReader(strings.NewReader(out)), []string{"p"}); ok {
+			t.Errorf("acParseBatch(%q) ok, want malformed", out)
+		}
+	}
+}
+
+// #3504: a failed base listing is memoised, so a second span neither lists
+// again nor decides.
+func TestACTestsPreserved_ListingFailureMemoised(t *testing.T) {
+	dir := slugifyRepo(t)
+	d := collect(t, dir)
+	d.BaseRev = "0000000000000000000000000000000000000000"
+	for i := 0; i < 2; i++ {
+		if r := acTestsPreserved("slugify", d); !reflect.DeepEqual(r, acResult{}) {
+			t.Errorf("call %d: got %+v, want no decision", i, r)
+		}
+	}
+	if d.base == nil || d.base.ok {
+		t.Errorf("base = %+v, want a memoised failure", d.base)
 	}
 }
