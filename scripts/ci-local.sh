@@ -833,6 +833,20 @@ slot_key() {
   printf '%s' "$common" | cksum | awk '{print $1}'
 }
 
+# Is the slot's holder alive? A zombie is not: `kill -0` succeeds on one, yet it
+# holds no CPU, memory or files. A grouped child SIGKILLed by the kernel stays a
+# zombie until the gate's main shell reaps it, and main is blocked inside the
+# `slot_acquire` command substitution that would reclaim it (#3559). If `ps`
+# cannot answer, `kill -0` alone decides, so this only ever frees MORE dead
+# slots, never a live one.
+slot_pid_alive() { # slot_pid_alive <pid>
+  local stat
+  [ -n "$1" ] && kill -0 "$1" 2>/dev/null || return 1
+  stat="$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ' || true)"
+  case "$stat" in Z*) return 1 ;; esac
+  return 0
+}
+
 # A slot whose owner is gone is not a slot. Reclaimed ONLY on a dead pid, never
 # on age: #1697 was an age-based cleanup that deleted a LIVE sandbox, and the
 # same mistake here would hand two gates the same slot.
@@ -842,7 +856,7 @@ slot_reclaim_dead() {
     [ -d "$slot" ] || continue
     pid=""
     [ -r "$slot/pid" ] && pid="$(cat "$slot/pid" 2>/dev/null || true)"
-    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+    if ! slot_pid_alive "$pid"; then
       rm -rf "$slot" 2>/dev/null && reclaimed=1
     fi
   done
@@ -859,7 +873,8 @@ slots_in_use() {
 
 # Take one slot, blocking until the machine-wide budget allows it. Prints the
 # slot's path on stdout; the caller's child owns it and removes it when done.
-# One line per held slot: who holds it, whether that pid is alive, whether it is
+# One line per held slot: who holds it, whether that pid is alive, dead or a
+# zombie (`kill -0` succeeds but the process is unreaped), whether it is
 # this gate's MAIN pid, and for how long. A silent 30-minute wait was #3133's
 # whole defect; the wait now names what it is waiting on. Best-effort: a
 # diagnostic must never fail the gate.
@@ -872,7 +887,11 @@ slot_holders() {
     [ -r "$slot/pid" ] && pid="$(cat "$slot/pid" 2>/dev/null || true)"
     [ -r "$slot/owner" ] && owner="$(cat "$slot/owner" 2>/dev/null || true)"
     alive=dead
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && alive=alive
+    if slot_pid_alive "$pid"; then
+      alive=alive
+    elif [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      alive=zombie
+    fi
     ismain=no
     [ "$pid" = "$MAIN_PID" ] && ismain=yes
     # GNU first: on Linux `stat -f` prints filesystem info for `%m`, not mtime.
