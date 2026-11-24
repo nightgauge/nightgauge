@@ -340,6 +340,11 @@ printf '<!-- phase:start name="read-planning-context" index=1 total=17 stage="fe
 
 **PURPOSE**: Load context from previous pipeline stage.
 
+This stage reads only `planning-{N}.json`, the plan, handoffs this run wrote,
+and the operator steer kept in `feedback-{N}.json`. It never reads the validate
+handoff: a card retry archives an earlier
+attempt's dev, validate, quality-review and feedback handoffs at run start (#3565).
+
 > **Read `_includes/context-and-feedback-intake.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---

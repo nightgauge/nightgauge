@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A card retry no longer hands the earlier attempt's work to the new one. A run that starts at or before feature-planning archives the prior `dev`, `validate`, `quality-review` and `feedback` handoffs as `*.prior.json`, keeping only the operator's steer in `feedback-N.json`, so planning and feature-dev act on this attempt alone (#3565).
 - Skills that fork into a Claude Code agent (`pipeline-researcher`, `pipeline-optimizer`, `test-runner`, `code-reviewer`) can now run `nightgauge` when invoked manually; each agent's allowlist gains `Bash(nightgauge *)` and keeps its read-only limits. A Go test fails when a forking skill's agent cannot run `nightgauge` (#3561).
 - `scripts/ci-local.sh` now frees a heavy-step slot whose holder is a zombie. A grouped child killed by the kernel stayed unreaped while the gate waited for a slot, and `kill -0` counted it alive, so the next step waited out `CI_LOCAL_SLOT_WAIT` and the step failed. The slot is now reclaimed instead of waited out (#3559).
 - `/nightgauge:feature-validate` invoked from Claude Code now runs inline with its own tools instead of forking into the read-only `test-runner` agent, which could not run `nightgauge` or apply Ralph Loop fixes, so the stage can write `validate-{N}.json` outside the pipeline (#2851).
