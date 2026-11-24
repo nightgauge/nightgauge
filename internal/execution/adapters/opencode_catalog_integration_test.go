@@ -19,6 +19,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -122,6 +123,32 @@ func openCodeModelsFrom(t *testing.T, path string, catalog []byte, content strin
 	return lines
 }
 
+// openCodeProbeConcurrency bounds how many opencode processes the probes run
+// at once, independent of -parallel and GOMAXPROCS: each listing is ~10 s of
+// wall time under load, so the serial probes cost most of the step's timeout
+// (#3563).
+const openCodeProbeConcurrency = 4
+
+// openCodeProbeEach runs probe once per name, each in its own parallel subtest
+// of a "probes" group, at most openCodeProbeConcurrency at a time. It returns
+// once every probe has finished, so the caller can aggregate their results.
+// Subtests, not goroutines: openCodeModelsFrom calls t.Fatalf and t.TempDir,
+// which belong to the goroutine of their own t.
+func openCodeProbeEach(t *testing.T, names []string, probe func(t *testing.T, name string)) {
+	t.Helper()
+	sem := make(chan struct{}, openCodeProbeConcurrency)
+	t.Run("probes", func(t *testing.T) {
+		for _, name := range names {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				probe(t, name)
+			})
+		}
+	})
+}
+
 // openCodeListedProviders is the set of provider keys a listing names.
 func openCodeListedProviders(lines []string) map[string]bool {
 	keys := map[string]bool{}
@@ -163,14 +190,19 @@ func TestOpenCodeCatalogEnvMatchesTheBinary(t *testing.T) {
 	// Without a variable set, only providers that need none are listed.
 	baseline := openCodeListedProviders(openCodeModels(t, path, true, ""))
 
-	var diff []string
-	for _, v := range all {
+	var (
+		mu   sync.Mutex
+		diff []string
+	)
+	openCodeProbeEach(t, all, func(t *testing.T, v string) {
 		for key := range openCodeListedProviders(openCodeModels(t, path, true, "", v)) {
 			if !baseline[key] && !slices.Contains(openCodeCatalogEnv[key], v) {
+				mu.Lock()
 				diff = append(diff, fmt.Sprintf("%s alone loads %q, and openCodeCatalogEnv[%q] = %q", v, key, key, openCodeCatalogEnv[key]))
+				mu.Unlock()
 			}
 		}
-	}
+	})
 	if len(diff) > 0 {
 		sort.Strings(diff)
 		t.Errorf("opencode %s binds variables the policy does not; add each to openCodeCodeBoundEnv and re-derive openCodeCatalogEnv:\n  %s",
@@ -241,9 +273,9 @@ func TestOpenCodeAnthropicModelsMatchTheBinary(t *testing.T) {
 		t.Errorf("opencode lists the anthropic models %q from the pinned catalog; openCodeAnthropicModels holds %q", got, want)
 	}
 
-	for _, id := range slices.Sorted(maps.Keys(openCodeAnthropicModels)) {
+	openCodeProbeEach(t, slices.Sorted(maps.Keys(openCodeAnthropicModels)), func(t *testing.T, id string) {
 		if openCodeAnthropicModels[id] != id {
-			continue // refused: see TestOpenCodeConfigRefusesAnAnthropicModelItCannotPin
+			return // refused: see TestOpenCodeConfigRefusesAnAnthropicModelItCannotPin
 		}
 		model := openCodeAnthropicKey + "/" + id
 		built, err := BuildOpenCodeConfig(OpenCodeConfigInput{
@@ -253,10 +285,10 @@ func TestOpenCodeAnthropicModelsMatchTheBinary(t *testing.T) {
 		})
 		if err != nil {
 			t.Errorf("%s: %v", model, err)
-			continue
+			return
 		}
 		if !slices.Contains(openCodeModels(t, path, true, built.Content, "ANTHROPIC_API_KEY"), model) {
 			t.Errorf("%s is not listed under its per-run config", model)
 		}
-	}
+	})
 }
