@@ -642,6 +642,9 @@ func isGitPush(segments []Segment) bool {
 }
 
 // isSecretRead detects reading sensitive files via cat/less/more/head/tail.
+// Each argument is judged separately: committed templates and docs
+// (isTemplateOrDoc, shared with the write gate) are skipped, so
+// `cat .env.example` is allowed while `cat .env.example .env` is not (#3575).
 func isSecretRead(cmd string) bool {
 	fields := strings.Fields(cmd)
 	if len(fields) < 2 {
@@ -655,7 +658,10 @@ func isSecretRead(cmd string) bool {
 
 	secretExts := []string{".env", ".pem", ".key", ".secret"}
 	for _, f := range fields[1:] {
-		lower := strings.ToLower(f)
+		lower := strings.ToLower(strings.Trim(f, "\"'"))
+		if isTemplateOrDoc(lower) {
+			continue
+		}
 		for _, ext := range secretExts {
 			if strings.HasSuffix(lower, ext) || strings.Contains(lower, ext+".") {
 				return true

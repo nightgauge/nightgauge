@@ -538,3 +538,40 @@ func TestGateAllowsTemplateWrites(t *testing.T) {
 		}
 	}
 }
+
+func TestIsSecretRead(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want bool
+	}{
+		{"cat .env.example", false},
+		{"head .env.sample", false},
+		{"tail .env.template", false},
+		{"less .ENV.EXAMPLE", false},
+		{`cat "config/.env.example"`, false},
+		{"more docs/secrets.md", false},
+		{"cat .env", true},
+		{`cat ".env"`, true},
+		{"cat .env.local", true},
+		{"cat .env.example.local", true},
+		{"cat server.example.pem", true},
+		{"cat .env.example .env", true},
+		{"head -n 5 private.key", true},
+		{"tail app.secret", true},
+	}
+	for _, tc := range cases {
+		if got := isSecretRead(tc.cmd); got != tc.want {
+			t.Errorf("isSecretRead(%q) = %v, want %v", tc.cmd, got, tc.want)
+		}
+	}
+}
+
+func TestGateAllowsTemplateReads(t *testing.T) {
+	for _, cmd := range []string{"cat .env.example", "head .env.sample", "tail .env.template"} {
+		input := makeGateInput("Bash", BashToolInput{Command: cmd})
+		result := EvaluateGate(input, config.SanitizationModeBlock)
+		if result.Decision == "block" {
+			t.Errorf("expected allow for %q, got block: %s", cmd, result.Reason)
+		}
+	}
+}
