@@ -117,3 +117,42 @@ func TestReadOnlyAgentsKeepReadOnlyTools(t *testing.T) {
 		}
 	}
 }
+
+// validateContextWrite matches feature-validate's executable context write,
+// not the prose that names the command.
+var validateContextWrite = regexp.MustCompile(`\| "\$\{NIGHTGAUGE_BIN:-nightgauge\}" layout write pipeline "validate-`)
+
+// TestFeatureValidateRunsInlineWithBash locks #2851: feature-validate runs
+// inline (no fork into a read-only agent) with Bash and Write allowed (AC 2),
+// and its context-and-board include still writes validate-{N}.json through
+// `nightgauge layout write pipeline` (AC 3).
+func TestFeatureValidateRunsInlineWithBash(t *testing.T) {
+	root := repoRoot(t)
+	for _, dir := range []string{
+		"skills/nightgauge-feature-validate",
+		"claude-plugins/nightgauge/skills/feature-validate",
+	} {
+		rel := filepath.Join(dir, "SKILL.md")
+		fields, _ := frontmatter(t, filepath.Join(root, rel))
+		if fields["context"] == "fork" || fields["agent"] != "" {
+			t.Errorf("%s: context=%q agent=%q; #2851 AC 2 requires feature-validate to run inline",
+				rel, fields["context"], fields["agent"])
+		}
+		tools := strings.Fields(fields["allowed-tools"])
+		for _, want := range []string{"Bash", "Write"} {
+			if !hasTool(tools, want) {
+				t.Errorf("%s: allowed-tools %q lacks %s; #2851 AC 2 needs it to write validate-{N}.json",
+					rel, fields["allowed-tools"], want)
+			}
+		}
+		include := filepath.Join(dir, "_includes", "context-and-board.md")
+		raw, err := os.ReadFile(filepath.Join(root, include))
+		if err != nil {
+			t.Fatalf("read %s: %v", include, err)
+		}
+		if !validateContextWrite.Match(raw) {
+			t.Errorf("%s: no `| nightgauge layout write pipeline \"validate-` command; "+
+				"#2851 AC 3 expects the stage to write its context file", include)
+		}
+	}
+}
