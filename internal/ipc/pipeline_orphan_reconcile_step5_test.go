@@ -491,7 +491,7 @@ func TestOrphanReconcile_PausedAndIdentityLessSnapshotsStillSkipped(t *testing.T
 // and a fresh abandoned run may still be streaming, so its crash snapshot stays
 // and a stage transition arriving afterwards still finds its file.
 //
-// Both rows are production-inert until step 6 gives `abandoned` a writer.
+// Both rows are reachable in production: RetireDeadRun (#3567) latches `abandoned`.
 func TestOrphanReconcile_FreshAbandonedSnapshotSurvives(t *testing.T) {
 	s, _, stateDir := reconcileServer(t)
 	now := time.Now()

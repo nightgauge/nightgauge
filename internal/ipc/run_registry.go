@@ -7,8 +7,10 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -196,12 +198,17 @@ type runEntry struct {
 	// everything a fresh process, the gate CLI and the reconciler can see.
 	terminal bool
 
-	// abandoned mirrors RuntimeState.Abandoned for the index ranking. NOTHING
-	// SETS IT YET — pipeline.abandonRun is ADR-017 step 6. The field exists
-	// because the ranking below reads it, and a ranking written to ignore
-	// abandonment would have to be rewritten rather than extended.
+	// abandoned starts as RuntimeState.Abandoned and is latched by
+	// RetireDeadRun when the scheduler reports the run's issue as not
+	// in-flight (or closed on the forge) AND the registry itself holds no
+	// live evidence for the run (#3567). It is the registry-only, reversible
+	// half: touchLocked clears it on the next run-progress or terminal call,
+	// so a run proven alive afterwards is counted again.
 	abandoned   bool
 	abandonedAt time.Time
+	// retired marks an abandonment RetireDeadRun latched, the only kind run
+	// traffic may undo. A RuntimeState.Abandoned mirror stays latched.
+	retired bool
 
 	// firstSeen is stamped once at entry creation; lastSeen is the
 	// SERVER-OBSERVED lease stamp that every accepted run-progress or
@@ -226,6 +233,13 @@ func (e *runEntry) touchLocked(class verbClass) {
 		return
 	}
 	e.lastSeen = time.Now()
+	// Run traffic proves the run alive: undo a retirement (#3567), so an
+	// error in RetireDeadRun can only fall on the over-report side.
+	if e.retired {
+		e.abandoned = false
+		e.abandonedAt = time.Time{}
+		e.retired = false
+	}
 }
 
 // newRunEntry builds an entry around a runtime. now is passed so firstSeen and
@@ -682,7 +696,8 @@ func (s *Server) resolveRun(method string, class verbClass, runID, repo string, 
 //
 // "Current" = the non-abandoned, non-terminal entry for repo#issue with the
 // newest lastSeen — the SERVER-OBSERVED lease stamp that every accepted call
-// refreshes, so no caller clock is trusted.
+// refreshes, so no caller clock is trusted. An entry RetireDeadRun retired is
+// skipped until run traffic un-retires it in touchLocked.
 //
 // repo is a component of the index KEY, not of the identity: the identity is
 // globally unique on its own, which is what actually fixes the cross-repo
@@ -891,7 +906,8 @@ func (s *Server) compareAndDeleteRun(entry *runEntry, runID string) {
 // every run reports its own stage transitions to it.
 //
 // An entry counts as running when it is neither terminal-latched nor
-// abandoned. Lease staleness is REPORTED, not filtered: an under-report here
+// abandoned; a proven-dead entry is retired by RetireDeadRun, not filtered
+// here. Lease staleness is REPORTED, not filtered: an under-report here
 // becomes "safe to reload" over live work, which is the exact failure the
 // caller is trying to avoid, whereas an over-report costs one confirmation
 // prompt. `Stale` lets the caller say "no progress for 40m — it may already be
@@ -983,4 +999,142 @@ func (s *Server) RunningPipelinesSnapshot(now time.Time) RunningPipelinesResult 
 		res.AutonomousStatus = s.autonomousScheduler.Status().Status
 	}
 	return res
+}
+
+// leaseFreshLocked is the lease half of runLeaseIsFresh: run traffic inside
+// livenessWindow. The zero lease (administrative install) is never fresh.
+// Caller holds runtimesMu.
+func (e *runEntry) leaseFreshLocked(now time.Time) bool {
+	return !e.lastSeen.IsZero() && now.Sub(e.lastSeen) < livenessWindow
+}
+
+// sameRepo reports whether two repo slugs name the same repository:
+// case-insensitive equality on the full slug, or on the trailing name segment
+// when one side carries no owner. An empty side matches anything. Looser than
+// currentRunForIssueLocked's exact compare on purpose: the retire triggers pass
+// an owner/name slug from the graph and an origin-derived slug from the scan.
+func sameRepo(a, b string) bool {
+	if a == "" || b == "" {
+		return true
+	}
+	if strings.EqualFold(a, b) {
+		return true
+	}
+	if strings.Contains(a, "/") && strings.Contains(b, "/") {
+		return false
+	}
+	name := func(s string) string { return s[strings.LastIndex(s, "/")+1:] }
+	return strings.EqualFold(name(a), name(b))
+}
+
+// RetireDeadRun latches abandoned on every non-terminal, non-abandoned registry
+// entry for repo#issue that shows no live evidence (#3567). It returns the
+// retired run ids and live, the number of matching entries still counted
+// afterwards (kept for a fresh lease or a live child). The caller's verdict is
+// never trusted alone. The entry is not deleted and no durable marker is
+// written: touchLocked un-retires it on the next run traffic.
+func (s *Server) RetireDeadRun(
+	repo string, issue int, reason string, now time.Time,
+) (retired []string, live int) {
+	s.runtimesMu.Lock()
+	var candidates []*runEntry
+	for _, e := range s.activeRuntimes {
+		if e == nil || e.issue != issue || e.terminal || e.abandoned {
+			continue
+		}
+		candidates = append(candidates, e)
+	}
+	s.runtimesMu.Unlock()
+
+	// rs.mu is taken only after runtimesMu is released (lock order).
+	type retireCandidate struct {
+		e     *runEntry
+		runID string
+		repo  string
+		alive bool
+	}
+	checked := make([]retireCandidate, 0, len(candidates))
+	for _, e := range candidates {
+		snap := e.rs.Snapshot()
+		checked = append(checked, retireCandidate{
+			e: e, runID: snap.RunID, repo: snap.Repo, alive: runstate.ProcessAlive(snap.PID),
+		})
+	}
+
+	s.runtimesMu.Lock()
+	defer s.runtimesMu.Unlock()
+	for _, c := range checked {
+		e := c.e
+		entryRepo := e.repo
+		if entryRepo == "" {
+			entryRepo = c.repo
+		}
+		if !sameRepo(repo, entryRepo) {
+			continue
+		}
+		// Re-check under the lock: still unlatched, and no run traffic since
+		// the first look.
+		if e.terminal || e.abandoned {
+			continue
+		}
+		if c.alive || e.leaseFreshLocked(now) || s.activeRuntimes[c.runID] != e {
+			live++
+			continue
+		}
+		e.abandoned = true
+		e.abandonedAt = now
+		e.retired = true
+		retired = append(retired, c.runID)
+		log.Printf("ipc: retired run %s for %s#%d — %s", c.runID, entryRepo, issue, reason)
+	}
+	sort.Strings(retired)
+	return retired, live
+}
+
+// LiveRunIssues returns the repo and issue of every registry entry that
+// RunningPipelinesSnapshot counts (non-terminal, not abandoned), one per
+// repo#issue (#3567). An entry with no repo falls back to its snapshot's.
+func (s *Server) LiveRunIssues() []orchestrator.RunIssue {
+	type row struct {
+		rs    *state.RuntimeState
+		repo  string
+		issue int
+	}
+	s.runtimesMu.Lock()
+	rows := make([]row, 0, len(s.activeRuntimes))
+	for _, e := range s.activeRuntimes {
+		if e == nil || e.terminal || e.abandoned {
+			continue
+		}
+		rows = append(rows, row{rs: e.rs, repo: e.repo, issue: e.issue})
+	}
+	s.runtimesMu.Unlock()
+
+	seen := map[orchestrator.RunIssue]bool{}
+	out := make([]orchestrator.RunIssue, 0, len(rows))
+	for _, r := range rows {
+		repo, issue := r.repo, r.issue
+		if repo == "" || issue == 0 {
+			snap := r.rs.Snapshot()
+			if repo == "" {
+				repo = snap.Repo
+			}
+			if issue == 0 {
+				issue = snap.IssueNumber
+			}
+		}
+		ri := orchestrator.RunIssue{Repo: repo, Number: issue}
+		if issue == 0 || seen[ri] {
+			continue
+		}
+		seen[ri] = true
+		out = append(out, ri)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Repo != out[j].Repo {
+			return out[i].Repo < out[j].Repo
+		}
+		return out[i].Number < out[j].Number
+	})
+	return out
 }

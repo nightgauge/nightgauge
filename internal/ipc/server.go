@@ -1225,6 +1225,17 @@ func (s *Server) SetAutonomousScheduler(as *orchestrator.AutonomousScheduler) {
 		s.Emit("autonomous.dispatch", payload)
 	})
 
+	// Wire run-retire callback: an issue the scheduler judges to have no live
+	// run (not in-flight, or closed on the forge) has its registry entry
+	// retired once the registry's own liveness evidence agrees, so
+	// running_pipelines/reload_safe stop counting a dead run (#3567).
+	// The hook answers settled once no matching entry is still counted.
+	as.OnRunNotInFlight(func(repo string, issue int, reason string) bool {
+		_, live := s.RetireDeadRun(repo, issue, reason, time.Now())
+		return live == 0
+	})
+	as.OnLiveRunIssues(s.LiveRunIssues)
+
 	// Wire status-change callback: every Status transition (Pause, Resume,
 	// safety_tripped, complete, init) emits `autonomous.statusChanged` so the
 	// VSCode extension's status-bar badge stays in sync without polling

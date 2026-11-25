@@ -156,8 +156,18 @@ func (as *AutonomousScheduler) sweepOrphanedComposeProjects(ctx context.Context)
 // volumes and a worktree against a run that will never continue. Either way the
 // scan's warnings are logged just below, so an aged-out pause is named before
 // anything it used to protect is torn down.
+//
+// SIDE EFFECT (#3567): on a DETERMINED scan it fires onRunNotInFlight for each
+// issue a root reported NotInFlight and no root protects, so the IPC registry
+// can retire the dead run. A root with no forge origin slug reports nothing.
 func (as *AutonomousScheduler) snapshotInFlightIssues(roots []string) (map[int]bool, bool) {
 	out := map[int]bool{}
+	type deadRef struct {
+		repo   string
+		issue  int
+		reason string
+	}
+	var dead []deadRef
 	for _, root := range roots {
 		if _, err := os.Stat(root); err != nil {
 			if os.IsNotExist(err) {
@@ -181,6 +191,29 @@ func (as *AutonomousScheduler) snapshotInFlightIssues(roots []string) (map[int]b
 		}
 		for n := range res.Issues {
 			out[n] = true
+		}
+		// An unresolvable slug would match every repo's same-numbered run in
+		// the registry, so a root without a forge origin reports nothing.
+		if len(res.NotInFlight) > 0 {
+			if slug := originRepoSlug(main); slug != "" {
+				for n, runID := range res.NotInFlight {
+					reason := fmt.Sprintf(retireReasonNotInFlight, runID)
+					dead = append(dead, deadRef{slug, n, reason})
+				}
+			} else {
+				log.Printf("%s: WARN %s has no forge origin slug — "+
+					"%d not-in-flight run(s) cannot be retired from the registry",
+					composeReconcileLogPrefix, main, len(res.NotInFlight))
+			}
+		}
+	}
+	// Fired only for a DETERMINED scan, and only for issues no root protects
+	// (#3567). The registry re-checks liveness before retiring anything.
+	if notify := as.RunNotInFlightHook(); notify != nil {
+		for _, d := range dead {
+			if !out[d.issue] {
+				_ = notify(d.repo, d.issue, d.reason) // the next scan re-asks
+			}
 		}
 	}
 	return out, true

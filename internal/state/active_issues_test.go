@@ -75,6 +75,9 @@ func TestActiveIssuesFromSnapshots_FreshNonTerminalIsActive(t *testing.T) {
 	if !res.Issues[501] {
 		t.Errorf("a fresh non-terminal snapshot must protect its issue; got %v (warnings %v)", res.Issues, res.Warnings)
 	}
+	if _, dead := res.NotInFlight[501]; dead {
+		t.Error("a protected issue must not be reported as NotInFlight (#3567)")
+	}
 }
 
 // TestActiveIssuesFromSnapshots_StaleNonTerminalIsNotActive is the deliberate
@@ -90,7 +93,8 @@ func TestActiveIssuesFromSnapshots_FreshNonTerminalIsActive(t *testing.T) {
 func TestActiveIssuesFromSnapshots_StaleNonTerminalIsNotActive(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
-	path := persistSnapshot(t, dir, NewRuntimeState("owner/repo", 502, "item", mustRunID(t)))
+	runID := mustRunID(t)
+	path := persistSnapshot(t, dir, NewRuntimeState("owner/repo", 502, "item", runID))
 	backdate(t, path, now.Add(-2*runstate.LivenessWindow))
 
 	res, err := activeIssuesFromSnapshotsAt(dir, now)
@@ -102,6 +106,9 @@ func TestActiveIssuesFromSnapshots_StaleNonTerminalIsNotActive(t *testing.T) {
 	}
 	if len(res.Warnings) == 0 || !strings.Contains(strings.Join(res.Warnings, "\n"), "NOT protected") {
 		t.Errorf("dropping an issue from the in-flight set must be reported, not silent; warnings = %v", res.Warnings)
+	}
+	if got := res.NotInFlight[502]; got != runID {
+		t.Errorf("NotInFlight[502] = %q, want the dead run %q (#3567)", got, runID)
 	}
 }
 
@@ -129,6 +136,9 @@ func TestActiveIssuesFromSnapshots_LiveStageChildOutranksTheTimestamp(t *testing
 	}
 	if !res.Issues[503] {
 		t.Errorf("a live stage child must protect its run however quiet the snapshot is; got %v", res.Issues)
+	}
+	if len(res.NotInFlight) != 0 {
+		t.Errorf("a live stage child must not be reported NotInFlight; got %v", res.NotInFlight)
 	}
 }
 
@@ -446,6 +456,9 @@ func TestActiveIssuesFromSnapshots_PausedSnapshotAgesOut(t *testing.T) {
 	if !res.Issues[4431] {
 		t.Fatalf("a pause inside the retention cap must still protect; got %v (warnings %v)", res.Issues, res.Warnings)
 	}
+	if len(res.NotInFlight) != 0 {
+		t.Errorf("a paused snapshot is never NotInFlight; got %v", res.NotInFlight)
+	}
 	if got := res.Protected[4431]; !strings.HasPrefix(got, "paused-snapshot") {
 		t.Errorf("Protected[4431] = %q, want the paused-snapshot arm", got)
 	}
@@ -696,5 +709,26 @@ func TestActiveIssuesFromSnapshots_UnstattableSnapshotIsUnboundedlyActive(t *tes
 	}
 	if !strings.Contains(strings.Join(res.Warnings, "\n"), "could not stat") {
 		t.Errorf("the unstattable entry must be named; warnings = %v", res.Warnings)
+	}
+}
+
+// A dead snapshot and a fresh one for the same issue: the fresh one protects,
+// so the issue is not NotInFlight (#3567).
+func TestActiveIssuesFromSnapshots_ProtectedIssueIsNotNotInFlight(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	stale := persistSnapshot(t, dir, NewRuntimeState("owner/repo", 3567, "item", mustRunID(t)))
+	backdate(t, stale, now.Add(-2*runstate.LivenessWindow))
+	persistSnapshot(t, dir, NewRuntimeState("owner/repo", 3567, "item", mustRunID(t)))
+
+	res, err := activeIssuesFromSnapshotsAt(dir, now)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if !res.Issues[3567] {
+		t.Fatalf("the fresh run must protect the issue; got %v", res.Issues)
+	}
+	if _, dead := res.NotInFlight[3567]; dead {
+		t.Error("an issue another snapshot protects must not be NotInFlight")
 	}
 }

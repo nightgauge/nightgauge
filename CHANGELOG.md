@@ -17,6 +17,7 @@ changelog, and the release workflow refuses a tag that does not.
 ### Fixed
 
 - `nightgauge format run` on a Dart project now runs `dart fix` and `dart format` only on the branch's changed `.dart` files, skipping paths in `analysis_options.yaml` `analyzer.exclude`, so generated files and unparseable fixtures are left alone. `--base` names the branch to diff against (#3585).
+- `autonomous status --json` no longer reports a dead run as running forever: when the scheduler finds a run not in flight, or the issue of any counted run (autonomous or manual) closed on the forge, the run registry retires that run unless its lease or recorded child still shows it alive, so `reload_safe` can become `true`. Later progress from the run counts it again (#3567).
 - Backlog promotion no longer moves an issue labelled `blocked`, `owner-action` or another `autonomous.exclude_labels` entry to Ready; both promotion sweeps hold it and tally it as `excluded-label` (#3579).
 - A stage stopped at its own stage timeout (`[stage-timeout]`) is now recorded as `stage_cap_kill`, not `stall_kill`, so a deadline stop reads apart from an idle kill. Recovery is unchanged (#2885).
 - On a bundled build the Claude plugin gate now names the supported Claude CLI floor and the detected version when a stage stops below it, stops a `nightgauge` plugin that loaded from anywhere but the bundled directory (naming its source and path), and stops instead of warning when a stamped bundle's plugin lost `hooks/hooks.json`. Builds with no bundle still warn and continue (#2883).
