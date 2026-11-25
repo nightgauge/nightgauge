@@ -1159,6 +1159,26 @@ type AutonomousScheduler struct {
 	// (e.g. IPC emit to TypeScript extension) instead of using the Go queue.
 	onDispatch func(owner, repo string, issueNumber int, title string, openPRNumber int)
 
+	// onRunNotInFlight is told about an issue whose run this scheduler has
+	// judged dead: not in-flight in the compose reconcile's snapshot scan, or
+	// closed on the forge (#3567). The IPC server retires the run's registry
+	// entry, re-checking liveness itself, and answers settled once nothing for
+	// the issue is still counted. Guarded by mu; always fired outside it.
+	onRunNotInFlight RunNotInFlightFunc
+	// onLiveRunIssues lists the issues the IPC run registry still counts. The
+	// closed trigger is driven from it, a small set, rather than from
+	// Completed/Failed, which grow for the whole session. Guarded by mu;
+	// always called outside it.
+	onLiveRunIssues func() []RunIssue
+	// closedRetirePending maps repo#issue to when the closure of a live
+	// registry issue was first seen. It is re-asked each reconcile until the
+	// hook answers settled or closedRetireHorizon passes, then moved to
+	// closedRetireSettled. Guarded by mu.
+	closedRetirePending map[string]closedRetireRef
+	// closedRetireSettled holds closures never to report again. A key is
+	// pruned once the registry stops listing the issue as live. Guarded by mu.
+	closedRetireSettled map[string]bool
+
 	// dispatchThrottle is the platform's workspace throttle (#2352). It caps
 	// the global ceiling only when the scheduler dispatches without the
 	// extension: work fed to the extension is capped where the extension
@@ -3006,6 +3026,50 @@ func (as *AutonomousScheduler) SetMaxConcurrent(n int) (int, int) {
 	default:
 	}
 	return prev, n
+}
+
+// RunIssue names an issue the IPC run registry counts as running (#3567).
+type RunIssue struct {
+	Repo   string
+	Number int
+}
+
+// RunNotInFlightFunc is told an issue has no live run and answers settled:
+// true once nothing for the issue is still counted.
+type RunNotInFlightFunc func(repo string, issue int, reason string) (settled bool)
+
+// OnRunNotInFlight registers a callback fired, outside as.mu, for each issue
+// the scheduler judges to have no live run (#3567).
+func (as *AutonomousScheduler) OnRunNotInFlight(fn RunNotInFlightFunc) {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	as.onRunNotInFlight = fn
+}
+
+// OnLiveRunIssues registers the provider of the issues the run registry still
+// counts; it drives the closed-on-forge trigger (#3567).
+func (as *AutonomousScheduler) OnLiveRunIssues(fn func() []RunIssue) {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	as.onLiveRunIssues = fn
+}
+
+// RunNotInFlightHook returns the registered callback, read under as.mu.
+func (as *AutonomousScheduler) RunNotInFlightHook() RunNotInFlightFunc {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	return as.onRunNotInFlight
+}
+
+// LiveRunIssues calls the registered provider outside as.mu; nil when none.
+func (as *AutonomousScheduler) LiveRunIssues() []RunIssue {
+	as.mu.Lock()
+	fn := as.onLiveRunIssues
+	as.mu.Unlock()
+	if fn == nil {
+		return nil
+	}
+	return fn()
 }
 
 // OnStatusChange registers a callback fired whenever state.Status transitions.
@@ -8792,6 +8856,107 @@ func (as *AutonomousScheduler) parkedOnBoard(node *depgraph.Node) (string, bool)
 // reconcileStateAgainstGraph re-admits or holds completed and failed entries
 // against the live graph. It returns the completed items it re-admitted, for
 // vetPartialReadmits (#3160).
+// closedRetireKey is the pending/settled key, the graph's node key form.
+func closedRetireKey(repo string, issue int) string {
+	return fmt.Sprintf("%s#%d", repo, issue)
+}
+
+// noteClosedRunsLocked records each live registry issue whose graph node is
+// closed and returns the closures to ask about this cycle (#3567). A pending
+// closure past closedRetireHorizon moves to settled without being asked; a
+// settled key is pruned once the registry no longer lists the issue, so a
+// retired or long-live closure is never re-added with a fresh timestamp.
+// Caller holds as.mu.
+func (as *AutonomousScheduler) noteClosedRunsLocked(
+	g *depgraph.Graph, live []RunIssue, now time.Time,
+) []closedRetireRef {
+	if as.closedRetirePending == nil {
+		as.closedRetirePending = map[string]closedRetireRef{}
+	}
+	if as.closedRetireSettled == nil {
+		as.closedRetireSettled = map[string]bool{}
+	}
+	liveKeys := make(map[string]bool, len(live))
+	for _, r := range live {
+		key := closedRetireKey(r.Repo, r.Number)
+		liveKeys[key] = true
+		if _, ok := as.closedRetirePending[key]; ok || as.closedRetireSettled[key] {
+			continue
+		}
+		node := closedRetireNode(g, r.Repo, r.Number)
+		if node == nil || !strings.EqualFold(node.State, forgeStateClosed) {
+			continue
+		}
+		as.closedRetirePending[key] = closedRetireRef{r.Repo, r.Number, now}
+	}
+	for key := range as.closedRetireSettled {
+		if !liveKeys[key] {
+			delete(as.closedRetireSettled, key)
+		}
+	}
+	var refs []closedRetireRef
+	for key, r := range as.closedRetirePending {
+		if now.Sub(r.since) > closedRetireHorizon {
+			delete(as.closedRetirePending, key)
+			as.closedRetireSettled[key] = true
+			continue
+		}
+		refs = append(refs, r)
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].repo != refs[j].repo {
+			return refs[i].repo < refs[j].repo
+		}
+		return refs[i].issue < refs[j].issue
+	})
+	return refs
+}
+
+// closedRetireNode finds the graph node for a registry run. The registry repo
+// may be a bare name or differ in case from the graph's owner/name key, so a
+// miss on the exact key falls back to the same matching the IPC retire uses:
+// case-insensitive slug, or trailing name when one side has no owner (#3567).
+func closedRetireNode(g *depgraph.Graph, repo string, issue int) *depgraph.Node {
+	if n, ok := g.Nodes[closedRetireKey(repo, issue)]; ok {
+		return n
+	}
+	name := func(s string) string { return s[strings.LastIndex(s, "/")+1:] }
+	for _, n := range g.Nodes {
+		if n == nil || n.Number != issue {
+			continue
+		}
+		if strings.EqualFold(n.Repo, repo) ||
+			((!strings.Contains(n.Repo, "/") || !strings.Contains(repo, "/")) &&
+				strings.EqualFold(name(n.Repo), name(repo))) {
+			return n
+		}
+	}
+	return nil
+}
+
+// closedRetireRef is a closed issue whose run the IPC registry may still count
+// (#3567), with when the closure was first seen.
+type closedRetireRef struct {
+	repo  string
+	issue int
+	since time.Time
+}
+
+// closedRetireHorizon bounds how long a closure is re-asked: two liveness
+// windows, by which time a dead run's lease has aged out. A run still sending
+// traffic past it is live, and the compose reconcile covers it if it dies.
+const closedRetireHorizon = 2 * runstate.LivenessWindow
+
+const (
+	// forgeStateClosed is the forge's state for a closed issue.
+	forgeStateClosed = "CLOSED"
+	// retireReasonClosed is the retire reason for an issue closed on the forge.
+	retireReasonClosed = "issue closed on forge"
+	// retireReasonNotInFlight is the retire reason format for a snapshot with
+	// no live evidence; the argument is the run id.
+	retireReasonNotInFlight = "not in-flight: snapshot of run %s has no live evidence"
+)
+
 func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) []CompletedItem {
 	// Resolved before the lock: config.Load reads the filesystem, and the
 	// architecture-approval hold below needs the same label name the gate
@@ -8799,8 +8964,42 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) []C
 	// than a second hard-coded copy of the default.
 	approvalLabel := as.architectureApprovalLabel()
 
+	// Called before the lock: the provider takes the IPC registry's locks.
+	liveRuns := as.LiveRunIssues()
+
+	// Closures to ask the registry about (#3567), collected under as.mu and
+	// fired by this deferred call, which runs AFTER the deferred unlock below.
+	var closedRefs []closedRetireRef
+	var notify RunNotInFlightFunc
+	defer func() {
+		if notify == nil {
+			return
+		}
+		var settled []string
+		for _, r := range closedRefs {
+			if notify(r.repo, r.issue, retireReasonClosed) {
+				settled = append(settled, closedRetireKey(r.repo, r.issue))
+			}
+		}
+		if len(settled) == 0 {
+			return
+		}
+		as.mu.Lock()
+		defer as.mu.Unlock()
+		for _, k := range settled {
+			if _, ok := as.closedRetirePending[k]; ok {
+				delete(as.closedRetirePending, k)
+				as.closedRetireSettled[k] = true
+			}
+		}
+	}()
+
 	as.mu.Lock()
 	defer as.mu.Unlock()
+	notify = as.onRunNotInFlight
+	if notify != nil && as.onLiveRunIssues != nil {
+		closedRefs = as.noteClosedRunsLocked(g, liveRuns, time.Now())
+	}
 
 	// Prune recentClosures entries older than 60 seconds to prevent unbounded
 	// growth (Issue #3661).

@@ -95,6 +95,13 @@ type ActiveIssues struct {
 	// each non-terminal snapshot whose liveness lease has expired (i.e. an
 	// issue this scan deliberately does NOT protect).
 	Warnings []string
+	// NotInFlight is the structured form of the "NOT protected as in-flight"
+	// warning: issue → run id of a non-terminal snapshot that no arm vouched
+	// for (#3567). Set at exactly that warning's site and nowhere else, so a
+	// paused snapshot past retention or an unreadable file never lands here.
+	// An issue another snapshot protects is removed at the end of the scan.
+	// Never nil.
+	NotInFlight map[int]string
 }
 
 // ActiveIssuesFromSnapshots scans one repo's canonical snapshot directory
@@ -122,7 +129,7 @@ func ActiveIssuesFromSnapshots(stateDir string) (ActiveIssues, error) {
 // clock, so the age matrix is testable without sleeping — the same seam
 // classifyCandidate takes for the reconciler's table.
 func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, error) {
-	res := ActiveIssues{Issues: map[int]bool{}, Protected: map[int]string{}}
+	res := ActiveIssues{Issues: map[int]bool{}, Protected: map[int]string{}, NotInFlight: map[int]string{}}
 
 	// "" is an unresolved directory (PipelineStateDir), not an empty one: an
 	// os.ReadDir("") not-exist would answer "nothing is running", and the
@@ -315,6 +322,12 @@ func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, 
 		res.Warnings = append(res.Warnings, fmt.Sprintf(
 			"%s: non-terminal snapshot, no in-flight sidecar vouches for #%d, the recorded stage child (pid %d) is not alive, and no stage boundary in the last %s (the file is rewritten at stage starts and completions only — there is no heartbeat) — #%d is NOT protected as in-flight",
 			name, issueNumber, snap.PID, now.Sub(info.ModTime()).Round(time.Second), issueNumber))
+		res.NotInFlight[issueNumber] = runID
+	}
+	for n := range res.NotInFlight {
+		if res.Issues[n] {
+			delete(res.NotInFlight, n)
+		}
 	}
 
 	return res, nil
@@ -531,7 +544,7 @@ func PipelineStateDir(repoRoot string) (string, error) {
 func ActiveIssuesForRoot(repoRoot string) (ActiveIssues, error) {
 	dir, err := PipelineStateDir(repoRoot)
 	if err != nil {
-		return ActiveIssues{Issues: map[int]bool{}, Protected: map[int]string{}}, err
+		return ActiveIssues{Issues: map[int]bool{}, Protected: map[int]string{}, NotInFlight: map[int]string{}}, err
 	}
 	return ActiveIssuesFromSnapshots(dir)
 }

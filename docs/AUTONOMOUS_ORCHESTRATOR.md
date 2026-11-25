@@ -1561,10 +1561,20 @@ these keys sit beside the scheduler's `running` list. `running_pipelines_known`
 is false when no daemon or no summary answered, so a script never reads an empty
 list as "nothing is running", and `reload_safe` is then false too.
 
-A run that has not reported progress inside the liveness window is **reported
-as stale, not dropped**. Hiding it would turn "possibly finished" into
-"definitely safe to reload" over work that may still be running; showing it
-costs one glance.
+While a run may still be live, a run that has not reported progress inside the
+liveness window is **reported as stale, not dropped**. Hiding it would turn
+"possibly finished" into "definitely safe to reload" over work that may still
+be running; showing it costs one glance. A run shown to be dead is retired, as
+the next paragraph describes.
+
+A run is dropped only once it is shown to be dead. The autonomous scheduler
+asks the registry to retire a run when the compose reconcile finds its snapshot
+not in flight (no live evidence), or when the issue of any run the registry
+counts, autonomous or manual, is closed on the forge. The registry retires it
+only if it agrees: no lease refresh inside the liveness window and no live
+recorded child. A closure is asked about until the registry settles it or two
+liveness windows pass, and is not asked about again while the run stays listed.
+Any later progress from a retired run counts it again.
 
 **`dev-install.sh` asks.** It runs `check-running-pipelines.sh` before
 building; if anything is in flight it names the runs, prints the two stop
