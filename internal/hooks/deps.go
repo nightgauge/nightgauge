@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -20,6 +21,15 @@ import (
 // list the hook would discard can neither cost it requests nor fail it.
 type IssueFetcher interface {
 	GetIssueWithRelations(ctx context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error)
+}
+
+// DependencyStateReader resolves what a referenced number is — issue, pull
+// request or nothing — in one read (github.IssueService.GetDependencyStates,
+// #2854). EvaluateIssueDeps uses it, when the fetcher implements it, for a
+// body-declared reference whose issue read failed: an issue read cannot see a
+// pull request, so without it an open PR named in the body was skipped (#2867).
+type DependencyStateReader interface {
+	GetDependencyStates(ctx context.Context, owner, repo string, numbers []int) (map[int]string, error)
 }
 
 // IssueDepsResult is the output of the issue dependency (blockedBy) check.
@@ -77,6 +87,12 @@ type OpenDependency struct {
 // dispatcher's graph holds such an issue instead (fails closed), naming the
 // line to fix.
 //
+// The issue read cannot see a pull request, so when it fails and the fetcher
+// is a DependencyStateReader, the number's state is read instead (#2867). An
+// open pull request blocks, recorded with State "OPEN" and no title. A merged
+// or closed pull request, a missing number, or a failed state read is skipped
+// as above.
+//
 // The gate uses one relationship list, the issue's own blockedBy, and reads it
 // whole: a blockedBy list that cannot be read to its end fails the evaluation
 // (forge.ErrConnectionTruncated). It reads no other list. The issue's
@@ -127,7 +143,16 @@ func EvaluateIssueDeps(ctx context.Context, fetcher IssueFetcher, owner, repo st
 		}
 		dep, derr := fetcher.GetIssueWithRelations(ctx, refOwner, refName, ref.Number, gh.NoRelations)
 		if derr != nil || dep == nil {
-			continue // unresolvable prose reference — see the doc comment
+			if bodyRefIsOpenPullRequest(ctx, fetcher, refOwner, refName, ref.Number) {
+				result.OpenDependencies = append(result.OpenDependencies, OpenDependency{
+					Number:     ref.Number,
+					State:      forge.DepStateOpen,
+					Repo:       ref.Repo,
+					Source:     "body",
+					SourceLine: ref.SourceLine,
+				})
+			}
+			continue // otherwise an unresolvable prose reference — see the doc comment
 		}
 		if !strings.EqualFold(dep.State, "OPEN") {
 			continue
@@ -147,6 +172,22 @@ func EvaluateIssueDeps(ctx context.Context, fetcher IssueFetcher, owner, repo st
 	result.ShouldBlock = result.HasOpenDependencies
 
 	return result, nil
+}
+
+// bodyRefIsOpenPullRequest reports whether number names an open pull request,
+// when fetcher can read dependency states. Every other answer, including a
+// failed read, is false: the reference keeps the skip the doc comment of
+// EvaluateIssueDeps describes.
+func bodyRefIsOpenPullRequest(ctx context.Context, fetcher IssueFetcher, owner, repo string, number int) bool {
+	reader, ok := fetcher.(DependencyStateReader)
+	if !ok {
+		return false
+	}
+	states, err := reader.GetDependencyStates(ctx, owner, repo, []int{number})
+	if err != nil {
+		return false
+	}
+	return states[number] == forge.DepStatePROpen
 }
 
 // DepsResult is the output of the dependency check hook.

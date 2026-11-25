@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
@@ -15,6 +16,21 @@ import (
 // depsMockFetcher implements hooks.IssueFetcher for testing without a network.
 type depsMockFetcher struct {
 	issues map[string]*types.Issue
+	// states answers GetDependencyStates by number; nil means not a reader
+	// result (every number MISSING).
+	states map[int]string
+}
+
+func (m *depsMockFetcher) GetDependencyStates(_ context.Context, _, _ string, numbers []int) (map[int]string, error) {
+	out := map[int]string{}
+	for _, n := range numbers {
+		if st, ok := m.states[n]; ok {
+			out[n] = st
+		} else {
+			out[n] = forge.DepStateMissing
+		}
+	}
+	return out, nil
 }
 
 func (m *depsMockFetcher) GetIssueWithRelations(_ context.Context, owner, repo string, number int, _ gh.IssueRelations) (*types.Issue, error) {
@@ -280,5 +296,27 @@ func TestDepsDeferReason_QualifiesOnlyCrossRepoBlockers(t *testing.T) {
 	want := "blocked by open dependency #3, #4, o/a#7 (PR not merged)"
 	if got != want {
 		t.Errorf("depsDeferReason = %q, want %q", got, want)
+	}
+}
+
+// TestEvaluateDepsGate_DefersOnOpenPullRequestBodyDependency — a body
+// dependency naming an open PR defers; merged or closed allows (#2867).
+func TestEvaluateDepsGate_DefersOnOpenPullRequestBodyDependency(t *testing.T) {
+	for st, want := range map[string]string{
+		forge.DepStatePROpen:   depsDecisionDeferred,
+		forge.DepStatePRMerged: depsDecisionAllow,
+		forge.DepStatePRClosed: depsDecisionAllow,
+	} {
+		mock := &depsMockFetcher{
+			issues: map[string]*types.Issue{"o/r#5": {Number: 5, Body: "Depends on: #7"}},
+			states: map[int]string{7: st},
+		}
+		res, err := evaluateDepsGate(context.Background(), mock, "o", "r", 5, nil)
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", st, err)
+		}
+		if res.Decision != want {
+			t.Errorf("%s: Decision = %q, want %q", st, res.Decision, want)
+		}
 	}
 }

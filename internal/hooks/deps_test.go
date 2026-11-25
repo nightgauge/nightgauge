@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
@@ -23,6 +24,30 @@ type mockFetcher struct {
 	truncated map[string]gh.IssueRelations
 	// reads records the relations each read named, keyed by issue.
 	reads map[string][]gh.IssueRelations
+	// states answers GetDependencyStates, keyed by "owner/repo#N". A
+	// repository with no entry errors and an unknown number is MISSING,
+	// as the real API answers.
+	states map[string]string
+}
+
+func (m *mockFetcher) GetDependencyStates(_ context.Context, owner, repo string, numbers []int) (map[int]string, error) {
+	out := map[int]string{}
+	prefix := owner + "/" + repo + "#"
+	known := false
+	for k := range m.states {
+		known = known || strings.HasPrefix(k, prefix)
+	}
+	if !known {
+		return nil, fmt.Errorf("repository %s/%s not found", owner, repo)
+	}
+	for _, n := range numbers {
+		st, ok := m.states[fmt.Sprintf("%s/%s#%d", owner, repo, n)]
+		if !ok {
+			st = forge.DepStateMissing
+		}
+		out[n] = st
+	}
+	return out, nil
 }
 
 func (m *mockFetcher) GetIssueWithRelations(_ context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error) {
@@ -568,5 +593,89 @@ func TestEvaluateIssueDeps_UnresolvedRepositoryIsNotThisRepository(t *testing.T)
 		if reads := mock.reads["example-org/widget-api#12"]; len(reads) != 0 {
 			t.Errorf("%q: the declaring repository's own #12 was read %d time(s)", body, len(reads))
 		}
+	}
+}
+
+// TestEvaluateIssueDeps_BodyDeclaredOpenPullRequestBlocks — an issue read
+// cannot see a pull request, so the state read must catch an open one (#2867).
+func TestEvaluateIssueDeps_BodyDeclaredOpenPullRequestBlocks(t *testing.T) {
+	mock := &mockFetcher{
+		issues: map[string]*types.Issue{"o/r#5": {Number: 5, Body: "Depends on: #7"}},
+		states: map[string]string{"o/r#7": forge.DepStatePROpen},
+	}
+	result, err := EvaluateIssueDeps(context.Background(), mock, "o", "r", 5, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.ShouldBlock || len(result.OpenDependencies) != 1 {
+		t.Fatalf("an open PR dependency must block, got %+v", result)
+	}
+	d := result.OpenDependencies[0]
+	if d.Number != 7 || d.Source != "body" || d.State != "OPEN" || d.Repo != "o/r" {
+		t.Errorf("open dependency = %+v, want #7 from body, OPEN, o/r", d)
+	}
+	if d.SourceLine != "Depends on: #7" {
+		t.Errorf("SourceLine = %q, want the body line", d.SourceLine)
+	}
+}
+
+// TestEvaluateIssueDeps_BodyDeclaredNonOpenStateAllows — a merged or closed
+// pull request, or a missing number, never holds (#2867 AC 2, 3).
+func TestEvaluateIssueDeps_BodyDeclaredNonOpenStateAllows(t *testing.T) {
+	for _, st := range []string{forge.DepStatePRMerged, forge.DepStatePRClosed, forge.DepStateMissing} {
+		mock := &mockFetcher{
+			issues: map[string]*types.Issue{"o/r#5": {Number: 5, Body: "Depends on: #7"}},
+			states: map[string]string{"o/r#7": st},
+		}
+		result, err := EvaluateIssueDeps(context.Background(), mock, "o", "r", 5, nil)
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", st, err)
+		}
+		if result.ShouldBlock {
+			t.Errorf("%s must allow, got %+v", st, result)
+		}
+	}
+}
+
+// Compile-time pin: production passes *gh.IssueService, and the fallback is
+// reached by a type assertion that would silently fail if this drifted.
+var _ DependencyStateReader = (*gh.IssueService)(nil)
+
+func TestEvaluateIssueDeps_BodyDeclaredCrossRepoOpenPullRequestBlocks(t *testing.T) {
+	mock := &mockFetcher{
+		issues: map[string]*types.Issue{"o/r#5": {Number: 5, Body: "Depends on: other/repo#7"}},
+		states: map[string]string{"other/repo#7": forge.DepStatePROpen},
+	}
+	result, err := EvaluateIssueDeps(context.Background(), mock, "o", "r", 5, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.ShouldBlock || result.OpenDependencies[0].Repo != "other/repo" {
+		t.Fatalf("a cross-repo open PR must block, got %+v", result)
+	}
+}
+
+// issueOnlyFetcher is not a DependencyStateReader.
+type issueOnlyFetcher struct{ m *mockFetcher }
+
+func (f issueOnlyFetcher) GetIssueWithRelations(ctx context.Context, o, r string, n int, rels gh.IssueRelations) (*types.Issue, error) {
+	return f.m.GetIssueWithRelations(ctx, o, r, n, rels)
+}
+
+// TestEvaluateIssueDeps_BodyRefSkippedWithoutStateReader — a fetcher that
+// cannot read states, or a state read that fails, keeps the skip.
+func TestEvaluateIssueDeps_BodyRefSkippedWithoutStateReader(t *testing.T) {
+	m := &mockFetcher{
+		issues: map[string]*types.Issue{"o/r#5": {Number: 5, Body: "Depends on: #7"}},
+		states: map[string]string{"o/r#7": forge.DepStatePROpen},
+	}
+	result, err := EvaluateIssueDeps(context.Background(), issueOnlyFetcher{m}, "o", "r", 5, nil)
+	if err != nil || result.ShouldBlock {
+		t.Fatalf("no reader must skip, got %+v, %v", result, err)
+	}
+	m.states = map[string]string{"x/y#1": forge.DepStatePROpen} // o/r unknown → read errors
+	result, err = EvaluateIssueDeps(context.Background(), m, "o", "r", 5, nil)
+	if err != nil || result.ShouldBlock {
+		t.Fatalf("a failed state read must skip, got %+v, %v", result, err)
 	}
 }
