@@ -947,6 +947,9 @@ type Scheduler struct {
 	// in checkEpicCompletion invalidates it. Nil for a Scheduler used alone.
 	boardCache    *boardcache.Cache
 	workspaceRoot string
+	// ephemeralQueue is SchedulerConfig.EphemeralQueue (#3605): the queue is
+	// never loaded from, written to or crash-recovered from the queue file.
+	ephemeralQueue bool
 
 	// attention is the shared Action Center DecisionRequest store (ADR 015),
 	// injected by NewAutonomousScheduler via SetAttention so the run-scoped
@@ -1364,6 +1367,12 @@ type QueueItem struct {
 	// remote-triggered runs. Preferred over the locally-generated runstate
 	// UUID when set (#3557).
 	RemoteRunID string `json:"remoteRunId,omitempty"`
+	// RunID is a run identity the caller minted for the run this item starts
+	// (#3605). When it passes runstate.IsIdentity it outranks RemoteRunID as
+	// the run's id, and RemoteRunID is then recorded on the run only as the
+	// remote run it serves. A non-empty value that is not an identity is
+	// logged and ignored, never adopted (ADR-017 Decision 1).
+	RunID string `json:"runId,omitempty"`
 	// RemoteRunAttached is true when RemoteRunID was attached to an item
 	// queued for the issue before its trigger arrived (#2344): the item is
 	// the operator's own work and also serves the remote run, so cancelling
@@ -1522,6 +1531,12 @@ type SchedulerConfig struct {
 	// project_number against the runtime-resolved board (#271). Nil skips
 	// the check (e.g. single-repo invocations with no loaded config).
 	RuntimeConfig *config.Config
+	// EphemeralQueue keeps the scheduler's queue in memory only (#3605): it
+	// neither loads, writes nor crash-recovers the checkout's queue file. A
+	// second scheduler on a checkout (the headless trigger, #3586) sets it so
+	// it never reads or overwrites the queue the checkout's own scheduler
+	// owns. False is the persisted queue.
+	EphemeralQueue bool
 }
 
 // NewScheduler creates a board-driven scheduler.
@@ -1573,6 +1588,7 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 		prCreateRunner:           NewDefaultPRCreateRunner(client),
 		issuePickupRunner:        NewDeterministicIssuePickupRunner(),
 		launchRepo:               launchRepoSlug(cfg.RuntimeConfig),
+		ephemeralQueue:           cfg.EphemeralQueue,
 	}
 	// Wire FailureRecovery registry (Issue #3268). Reuses the same runners
 	// as the deterministic-first hooks so a recovery and a deterministic
@@ -1583,7 +1599,11 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 	s.recoveryRegistry = recovery.Default(cfg.WorkspaceRoot, s.prMergeRunner, s.prCreateRunner)
 	s.trustGate = newSchedulerTrustGate(s, trustedBotsFrom(cfg.RuntimeConfig), cfg.RuntimeConfig.AppOwners(),
 		cfg.RuntimeConfig.ConfiguredGitHubLogins())
-	s.loadQueue()
+	// loadQueue is also the only entry to orchestrator crash recovery, so an
+	// ephemeral queue skips both (#3605).
+	if !s.ephemeralQueue {
+		s.loadQueue()
+	}
 	warnProjectMappingMismatch(cfg.RuntimeConfig, cfg.WorkspaceRoot)
 	return s
 }
@@ -3025,7 +3045,9 @@ func (s *Scheduler) RunQueue(ctx context.Context) (QueueRunSummary, error) {
 		}
 
 		item.OpenPRNumber = entry.OpenPRNumber
-		ok, terminalKind := s.runPipeline(ctx, *item)
+		// The entry left s.queue above, so the run takes its identity, pin and
+		// visibility from the entry itself rather than a queue lookup (#3605).
+		ok, terminalKind := s.runPipelineSeeded(ctx, *item, seedFromQueueItem(entry))
 		if ok {
 			record(entry, QueueOutcomeCompleted, "", "")
 		} else {
@@ -3136,33 +3158,45 @@ func (s *Scheduler) QueuePendingItems() []QueueItem {
 	return out
 }
 
-// queueItemRemoteRunID returns the RemoteRunID for a queued issue, or "" when not found.
-// Used by runPipeline to prefer platform-assigned run IDs over locally-generated ones (#3557).
-func (s *Scheduler) queueItemRemoteRunID(repo string, issueNumber int) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, item := range s.queue {
-		if item.Repo == repo && item.IssueNumber == issueNumber {
-			return item.RemoteRunID
-		}
-	}
-	return ""
+// queueRunSeed is what a queue item contributes to the run it starts: the
+// caller-minted identity, the remote run it serves, the remote request's pin
+// and its visibility (#3605). RunQueue builds it from the entry it dispatches;
+// every other caller resolves it from s.queue.
+type queueRunSeed struct {
+	RunID            string
+	RemoteRunID      string
+	RequestedAdapter string
+	RequestedModel   string
+	Visibility       string
 }
 
-// queueItemVisibility returns the visibility of a queued issue's item
-// (#2400), or "" (team) when the issue is not queued.
-func (s *Scheduler) queueItemVisibility(repo string, issueNumber int) string {
+// seedFromQueueItem copies a queue item's run-start values into a seed.
+func seedFromQueueItem(item QueueItem) queueRunSeed {
+	return queueRunSeed{
+		RunID:            item.RunID,
+		RemoteRunID:      item.RemoteRunID,
+		RequestedAdapter: item.RequestedAdapter,
+		RequestedModel:   item.RequestedModel,
+		Visibility:       item.Visibility,
+	}
+}
+
+// queueItemSeed returns the seed of the queued item for repo#issueNumber, or
+// the zero seed when the issue is not queued. Used by runPipeline for the
+// dispatch paths that leave the item in s.queue while it runs (#3557, #3605).
+func (s *Scheduler) queueItemSeed(repo string, issueNumber int) queueRunSeed {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if item := s.queueItemUnlocked(repo, issueNumber); item != nil {
-		return item.Visibility
+		return seedFromQueueItem(*item)
 	}
-	return ""
+	return queueRunSeed{}
 }
 
 // QueueItemRequestedPin returns the remote run request's adapter and model
-// for a queued issue (#1656), and whether the issue is queued at all. An item
-// stays queued, marked processing, for the whole of its run.
+// for a queued issue (#1656), and whether the issue is queued at all. RunQueue
+// takes its items off the queue before running them (#3605), so this reports
+// a run's pin only while its item is still queued.
 func (s *Scheduler) QueueItemRequestedPin(repo string, issueNumber int) (adapter, model string, queued bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -4177,7 +4211,7 @@ func (s *Scheduler) OnQueueChanged(fn func(QueueState)) {
 // persistQueue writes the current queue to disk atomically.
 // Must be called with s.mu held.
 func (s *Scheduler) persistQueue() {
-	if s.workspaceRoot == "" {
+	if s.workspaceRoot == "" || s.ephemeralQueue {
 		return
 	}
 	st := QueueState{
@@ -5629,6 +5663,14 @@ func shouldSkipBoardRevert(workRecovered bool, terminalFailureKind string, merge
 // written to the run record. RunQueue needs both to build its end-of-run summary
 // and its exit status (#875); every other caller may ignore them.
 func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (success bool, terminalKind string) {
+	return s.runPipelineSeeded(ctx, item, s.queueItemSeed(item.Repo, item.Number))
+}
+
+// runPipelineSeeded is runPipeline with the queue item's run-start values
+// supplied by the caller (#3605). RunQueue takes its items off s.queue before
+// dispatching them, so it passes each entry's own seed; a lookup by repo and
+// issue would find nothing there.
+func (s *Scheduler) runPipelineSeeded(ctx context.Context, item types.BoardItem, seed queueRunSeed) (success bool, terminalKind string) {
 	// Track repo concurrency
 	s.mu.Lock()
 	s.repoRunning[item.Repo]++
@@ -5661,9 +5703,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		workspaceRoot = s.execMgr.WorkspaceRoot()
 	}
 
-	// Resolve run_id for telemetry correlation (#3557). Prefer the RemoteRunID
-	// from the platform command payload (for remote-triggered runs); fall back
-	// to run-state.json; then mint locally.
+	// Resolve run_id for telemetry correlation (#3557). Prefer a caller-minted
+	// RunID (#3605), then the RemoteRunID from the platform command payload
+	// (for remote-triggered runs); fall back to run-state.json; then mint
+	// locally. When RunID wins, RemoteRunID is recorded as the remote run the
+	// run serves instead of being dropped.
 	//
 	// This block RUNS BEFORE THE CONSTRUCTOR (ADR-017 step 1): the identity is a
 	// constructor fact, so it cannot be stamped on afterwards.
@@ -5688,9 +5732,18 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// below the terminal defer (ADR-017 step 0b) — see below.
 	var runID string
 	var runIDMintErr error
+	var servedRemoteRunID string
 	{
-		remoteRunID := s.queueItemRemoteRunID(item.Repo, item.Number)
-		if remoteRunID != "" {
+		if seed.RunID != "" {
+			if runstate.IsIdentity(seed.RunID) {
+				runID = seed.RunID
+				servedRemoteRunID = seed.RemoteRunID
+			} else {
+				log.Printf("#%d: ignoring non-identity run id %q from the queue item (ADR-017 Decision 1)",
+					item.Number, seed.RunID)
+			}
+		}
+		if remoteRunID := seed.RemoteRunID; runID == "" && remoteRunID != "" {
 			if runstate.IsIdentity(remoteRunID) {
 				runID = remoteRunID
 			} else {
@@ -5747,15 +5800,18 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 
 	runtime := state.NewRuntimeState(item.Repo, item.Number, item.ID, runID)
 	runtime.Title = item.Title
+	if servedRemoteRunID != "" {
+		runtime.SetRemoteRunID(servedRemoteRunID)
+	}
 	// A remote run request's pin (#1656) is a fact of the run from its start.
-	if reqAdapter, reqModel, _ := s.QueueItemRequestedPin(item.Repo, item.Number); reqAdapter != "" {
-		runtime.SetRequestedPin(reqAdapter, reqModel)
+	if seed.RequestedAdapter != "" {
+		runtime.SetRequestedPin(seed.RequestedAdapter, seed.RequestedModel)
 	}
 	// Who reads the run on the hosted service (#2400) is a fact of the run
 	// from its start, read before the first event is emitted, so the run's
 	// first stage event already carries it. An issue the scheduler picked
 	// from the board on its own has no queue item and stays team.
-	runtime.SetVisibility(s.queueItemVisibility(item.Repo, item.Number))
+	runtime.SetVisibility(seed.Visibility)
 	// Capture the issue body at pickup (#183) so the run record + telemetry can
 	// show the issue context (title, labels, body) on the dashboard run-detail
 	// page without leaving the dashboard. Title/labels are already on the board

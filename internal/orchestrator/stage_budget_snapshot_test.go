@@ -40,15 +40,15 @@ func TestStageBudgetsAreSnapshottedOncePerRun(t *testing.T) {
 		t.Fatalf("snapshot shares storage with a later read: max_turns = %d", got)
 	}
 
-	// runPipeline reads the budgets exactly once and every stage dispatch
+	// runPipelineSeeded (runPipeline's body, #3605) reads the budgets exactly once and every stage dispatch
 	// takes the snapshot, never a fresh read.
 	src, err := os.ReadFile("scheduler.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := regexp.MustCompile(`(?s)\nfunc \(s \*Scheduler\) runPipeline\(.*?\n}\n`).Find(src)
+	body := regexp.MustCompile(`(?s)\nfunc \(s \*Scheduler\) runPipelineSeeded\(.*?\n}\n`).Find(src)
 	if body == nil {
-		t.Fatal("runPipeline not found in scheduler.go")
+		t.Fatal("runPipelineSeeded not found in scheduler.go")
 	}
 	if n := len(regexp.MustCompile(`pipelineStageBudgets\(`).FindAll(body, -1)); n != 1 {
 		t.Errorf("runPipeline calls pipelineStageBudgets %d times, want once at run start", n)

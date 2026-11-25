@@ -17,6 +17,7 @@ changelog, and the release workflow refuses a tag that does not.
 ### Fixed
 
 - feature-dev now passes the issue's base branch to `nightgauge format run --base`, so an epic sub-issue on a Dart project formats only the `.dart` files it changed, not every file its epic branch changed. With no base recorded it diffs against the default branch as before (#3602).
+- A run started from the queue (`nightgauge queue run`, `nightgauge run`, the extension's run command and autonomous dispatch) keeps its remote run id, its requested adapter and model, and private visibility. They were dropped because the queue removed the item before the run read them. The scheduler also gains internal groundwork for the headless trigger (#3586): a pre-minted run id on a queue item, and an in-memory queue that leaves the checkout's queue file alone (#3605).
 
 ## [0.8.8] - 2026-11-25
 
