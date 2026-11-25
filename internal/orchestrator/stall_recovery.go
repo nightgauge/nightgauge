@@ -283,10 +283,11 @@ func parseBoolishOrDefault(s string, defaultVal bool) bool {
 	return defaultVal
 }
 
-// RetryInPlaceOnTimeout reports whether a stall-kill should re-run the killed
-// stage itself instead of rewinding to feature-planning. It holds for one
+// RetryInPlaceOnTimeout reports whether a stall-shaped kill (stall_kill or
+// stage_cap_kill) should re-run the killed stage itself instead of rewinding
+// to feature-planning. It holds for one
 // case: feature-validate stopped at its wall-clock stage timeout
-// (`[stage-timeout]`, which terminalkind books as stall_kill) after
+// (`[stage-timeout]`, which terminalkind books as stage_cap_kill, #2885) after
 // feature-dev finished and wrote its handoff. That stage was slow, not
 // stuck, and the plan and implementation it was checking already passed
 // their gates; rewinding to planning re-runs hours of finished work on a

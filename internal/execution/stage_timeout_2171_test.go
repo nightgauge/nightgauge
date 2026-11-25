@@ -26,7 +26,7 @@ func (sleepingAdapter) Agentic() bool   { return true }
 // TestRunStage_StageTimeoutIsClassifiedAsTimeout is #2171 item 1: a stage
 // killed by its own stage timeout ended with a silent stderr and was recorded
 // as `exit -1: <nil>`, a subagent_crash. It must carry a notice naming the
-// timeout and the elapsed time, and that notice must classify as stall_kill.
+// timeout and the elapsed time, and that notice must classify as stage_cap_kill (#2885).
 func TestRunStage_StageTimeoutIsClassifiedAsTimeout(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-2171"), 0o755); err != nil {
@@ -54,8 +54,8 @@ func TestRunStage_StageTimeoutIsClassifiedAsTimeout(t *testing.T) {
 		!strings.Contains(result.Stderr, "elapsed") {
 		t.Fatalf("stderr = %q, want the stage-timeout notice naming the timeout and elapsed time", result.Stderr)
 	}
-	if kind := terminalkind.Classify("exit -1: " + strings.TrimSpace(result.Stderr)); kind != "stall_kill" {
-		t.Fatalf("classified %q, want stall_kill", kind)
+	if kind := terminalkind.Classify("exit -1: " + strings.TrimSpace(result.Stderr)); kind != "stage_cap_kill" {
+		t.Fatalf("classified %q, want stage_cap_kill", kind)
 	}
 }
 

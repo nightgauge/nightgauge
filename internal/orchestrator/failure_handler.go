@@ -276,7 +276,8 @@ const (
 	// lifetime-cap increment, board→Ready). Issue #3783.
 	TerminalKindRunawayProgress = "runaway_progress"
 	// TerminalKindStageCapKill is set when a stage is stopped at
-	// pipeline.stage_hard_caps or pipeline.stage_time_caps. Same recovery as
+	// pipeline.stage_hard_caps, pipeline.stage_time_caps or its own stage
+	// timeout (`[stage-timeout]`, #2885). Same recovery as
 	// stall_kill, through terminalkind.IsStallShapedKill, but the stage reached
 	// a limit rather than going idle, so the two are counted apart. Issue #2812.
 	TerminalKindStageCapKill = "stage_cap_kill"

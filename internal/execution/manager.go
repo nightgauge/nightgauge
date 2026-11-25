@@ -1061,9 +1061,9 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 		keepStderr([]byte(notice))
 	}
 	// A stage its own stage timeout stopped ends its stderr with the marker
-	// the stall_kill terminal rule classifies (#2171). Without it the deadline
-	// kill left stderr silent and the stage was recorded as `exit -1: <nil>`,
-	// a subagent_crash.
+	// the stage_cap_kill terminal rule classifies (#2171, #2885). Without it
+	// the deadline kill left stderr silent and the stage was recorded as
+	// `exit -1: <nil>`, a subagent_crash.
 	stageTimedOut := false
 	if notice := stageTimeoutNotice(stageTimeoutEvidence{
 		execErr:     execCtx.Err(),
@@ -1235,8 +1235,8 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	return result, nil
 }
 
-// stageTimeoutMarker is the token the stall_kill terminal rule matches for a
-// stage stopped by its own stage timeout (#2171).
+// stageTimeoutMarker is the token the stage_cap_kill terminal rule matches for
+// a stage stopped by its own stage timeout (#2171, #2885).
 const stageTimeoutMarker = "[stage-timeout]"
 
 // stageTimeoutEvidence is what stageTimeoutNotice decides from, read after the
