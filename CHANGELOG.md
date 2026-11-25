@@ -14,6 +14,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.8.8] - 2026-11-25
+
+### Changed
+
+- pr-create's check of a "`X` tests are untouched" criterion now lists the base revision once per diff and reads every candidate test file in one `git cat-file --batch`, so its git calls no longer grow with the number of test files. An uncertain read still gives the strict verdict (#3504).
+- The Claude plugin's version is now 1.29.3, because the `followup-materialize` skill changed after 0.8.7. Without the bump, `check-plugin-version.sh` failed every 0.8.8 release candidate, `main-build.yml` and pull-request CI, and installed plugins would not have received the change.
+
 ### Fixed
 
 - `nightgauge format run` on a Dart project now runs `dart fix` and `dart format` only on the branch's changed `.dart` files, skipping paths in `analysis_options.yaml` `analyzer.exclude`, so generated files and unparseable fixtures are left alone. `--base` names the branch to diff against (#3585).
@@ -43,11 +50,6 @@ changelog, and the release workflow refuses a tag that does not.
 - An issue whose Delivery order says `refs` is no longer closed by the pipeline once every criterion is met. The met-remainder close (including `nightgauge issue partial-noop --apply-close`, which now reports `close.held`), the no-diff settle and the operator no-op close now leave it open, and now also leave an issue open when its body cannot be read; the operator close returns an error saying to close the issue by hand or edit the Delivery order. A `Refs` merge that leaves nothing unmet now keeps the issue In review instead of returning it to Ready (#3510).
 - `nightgauge followup materialize` no longer folds a follow-up into an open issue whose author fails the trust gate; it picks the next qualifying trusted issue or files the follow-up on its own. A record whose `discovered-work` marker is already in its parent issue's body is now reported `tracked-by-parent` in file mode and in report mode and `--dry-run`, instead of `already-exists` or `would-file` (#2872).
 - pr-create no longer judges a criterion unmet, and so writes `Refs` instead of `Closes`, for two kinds of clause the diff cannot decide. A `{name}` placeholder inside a span, such as `POST /files/{sha}/analyse`, now matches the code's spelling of that segment (`$sha`, `${sha}`), not only the literal braces. A clause about the pull request's own description, body or title gets no diff verdict, and one asking for `Closes #N` or `Refs #N` on its own issue is judged against the keyword pr-create writes, so it cannot hold its own issue open; a Delivery order that says `refs` still wins. The partial-delivery comment now lists a criterion that names `Closes #N` once, in the issue's wording, instead of a second copy saying `Refs #N` (#3529).
-
-### Changed
-
-- pr-create's check of a "`X` tests are untouched" criterion now lists the base revision once per diff and reads every candidate test file in one `git cat-file --batch`, so its git calls no longer grow with the number of test files. An uncertain read still gives the strict verdict (#3504).
-- The Claude plugin's version is now 1.29.3, because the `followup-materialize` skill changed after 0.8.7. Without the bump, `check-plugin-version.sh` failed every 0.8.8 release candidate, `main-build.yml` and pull-request CI, and installed plugins would not have received the change.
 
 ## [0.8.7] - 2026-11-22
 
@@ -9590,7 +9592,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.7...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.8...HEAD
+[0.8.8]: https://github.com/nightgauge/nightgauge/compare/v0.8.7...v0.8.8
 [0.8.7]: https://github.com/nightgauge/nightgauge/compare/v0.8.6...v0.8.7
 [0.8.6]: https://github.com/nightgauge/nightgauge/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.5

@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.8.8] - 2026-11-25
+
 ### Fixed
 
 - On a bundled build the Claude plugin gate now names the supported Claude CLI floor and the detected version when a stage stops below it, stops a `nightgauge` plugin that loaded from anywhere but the bundled directory (naming its source and path), and stops instead of warning when a stamped bundle's plugin lost `hooks/hooks.json`. Builds with no bundle still warn and continue (#2883).
@@ -1744,7 +1746,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.7...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.8...HEAD
+[0.8.8]: https://github.com/nightgauge/nightgauge/compare/v0.8.7...v0.8.8
 [0.8.7]: https://github.com/nightgauge/nightgauge/compare/v0.8.6...v0.8.7
 [0.8.6]: https://github.com/nightgauge/nightgauge/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.5
