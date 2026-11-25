@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The pr-create criterion checker no longer books "`F` no longer grants `X`" unmet when the diff removed `X`: "no longer grants/allows/admits/permits/carries/lists/declares/defines" and "does not grant/allow/admit/permit" are read as absence checks, and a code span before the phrase (such as `tools:`) is the subject, not a token that must be absent (#3582).
 - The `test-runner` agent can no longer run `nightgauge` write verbs such as `layout write`: its allowlist grants only `nightgauge layout path` and `nightgauge forge issue view`, and a Go test fails when a `test-runner` grant admits a write verb (#3578).
 - The PreToolUse Bash write gate no longer blocks `echo`/`printf` writes to committed env templates: a redirect target whose final suffix is `.example`, `.sample`, `.template` or `.md` is allowed, the same rule the sensitive-file gate applies. Every redirect target in the command is checked, so `> .env`, `> .env.example.local` and `> server.example.pem` stay blocked (#3558).
 - The PreToolUse Bash read gate no longer blocks `cat`/`less`/`more`/`head`/`tail` of committed env templates: an argument whose final suffix is `.example`, `.sample`, `.template` or `.md` is allowed. Each argument is checked, so `cat .env`, `cat .env.example.local`, `cat server.example.pem` and `cat .env.example .env` stay blocked (#3575).
