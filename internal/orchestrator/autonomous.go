@@ -7558,6 +7558,22 @@ func isTriagedAndUnblocked(node *depgraph.Node, graph *depgraph.Graph, adj map[s
 	return true
 }
 
+// promotionRejectExcludedLabel is the rejection-tally key for promotionExcluded.
+const promotionRejectExcludedLabel = "excluded-label"
+
+// promotionExcluded reports whether an OPEN Backlog node carries a label in
+// the resolved autonomous.exclude_labels (#3579). Such an issue needs a human,
+// so both promotion sweeps hold it before the triage gate, as the candidate
+// loop does at dispatch (#317). Non-Backlog nodes return false so their
+// rejection tally stays not-open / not-backlog.
+func promotionExcluded(node *depgraph.Node, excludeLabels []string) bool {
+	if node == nil || !strings.EqualFold(node.State, "OPEN") || !strings.EqualFold(node.BoardStatus, "Backlog") {
+		return false
+	}
+	_, ok := excludedLabelMatch(node.Labels, resolvedExcludeLabels(excludeLabels))
+	return ok
+}
+
 // triageRejectionReason mirrors isTriagedAndUnblocked's checks in order and
 // returns the first failing reason, or "" if the node is eligible. A blocker
 // missing from the graph reports "unresolved-blocker" (#2744). Used only
@@ -7635,6 +7651,10 @@ func (as *AutonomousScheduler) promoteUnblockedOnStartup(ctx context.Context) {
 	rejections := make(map[string]int)
 
 	for _, node := range graph.Nodes {
+		if promotionExcluded(node, as.config.ExcludeLabels) {
+			rejections[promotionRejectExcludedLabel]++
+			continue
+		}
 		if strings.EqualFold(node.BoardStatus, "Backlog") && node.Priority != "" {
 			if d := as.eligibility().decideNode(opCtx, node); !d.Eligible {
 				owner, repoName := splitOwnerRepo(node.Repo)
@@ -7759,6 +7779,11 @@ func (as *AutonomousScheduler) promoteUnblockedToReady(parent context.Context, c
 	for _, downKey := range candidateKeys {
 		node, exists := graph.Nodes[downKey]
 		if !exists {
+			continue
+		}
+		// Human-only labels hold the issue before the triage gate (#3579).
+		if promotionExcluded(node, as.config.ExcludeLabels) {
+			rejections[promotionRejectExcludedLabel]++
 			continue
 		}
 		// Triage gate is shared with promoteUnblockedOnStartup so the cascade

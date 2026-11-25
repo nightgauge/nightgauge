@@ -1884,6 +1884,12 @@ issue to Ready by hand (#2744). Extending the
 candidate set to cover independent Backlog nodes costs no extra GitHub
 calls in either path — the graph is already built for other reasons.
 
+Before that predicate, both scans hold an OPEN Backlog issue that carries a
+label in `autonomous.exclude_labels` (default `owner-action` and `blocked`,
+compared without case; a configured list replaces the default). Such an issue
+needs a human, so it is never promoted, matching the dispatch candidate loop
+(#317). It tallies as `excluded-label` (#3579).
+
 **Diagnostics**: `AutonomousState.LastPromotionConsidered` /
 `LastPromotionEligible` / `LastPromotionPromoted` /
 `LastPromotionRejectionReasons` are overwritten by whichever scan ran most
@@ -1897,7 +1903,9 @@ autonomous: promoteUnblockedOnStartup: considered=25 eligible=6 promoted=6 top_r
 
 `open-blocker` means a blocker in the graph is still open. `unresolved-blocker`
 means a blocker is missing from the graph, so its state is unknown: add it to
-the board or move the dependent to Ready by hand (#2744).
+the board or move the dependent to Ready by hand (#2744). `excluded-label`
+means the issue carries a label in `autonomous.exclude_labels`; remove the
+label once the human step is done (#3579).
 
 **`nightgauge autonomous status`** uses `LastPromotionEligible` to
 distinguish two conditions that otherwise look identical
