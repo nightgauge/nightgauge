@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A feature-validate halt now carries its terminal kind (`validation_failed`, `validation_inconclusive`, `review_cap_reached` or `git_transport_auth_failed`) onto the halt card, which used to read `unclassified` (#2874).
 - `deps-gate check` now defers an issue whose body declares a dependency on an open pull request (`Depends on: #N`). The issue read cannot see a pull request, so the reference used to be skipped; a merged or closed pull request still allows (#2867).
 - pr-create now pushes the branch with `nightgauge git push-branch` instead of a bare `git push -u`, so a self-inflicted fork is recovered and a genuine one is reported as `[branch-forked]` rather than swallowed. A regression suite, `skills/nightgauge-pr-create/tests/push-branch.test.sh`, runs in the local gate and CI (#2856).
 - The read-only `code-reviewer`, `pipeline-optimizer` and `pipeline-researcher` agents can no longer run state-writing `nightgauge` commands: the first two grant no `nightgauge` verb, and `pipeline-researcher` grants only `nightgauge layout path` and `nightgauge forge issue view`. issue-pickup, feature-planning, backlog-preflight and health-check now run inline instead of forking into `pipeline-researcher` (#3581).

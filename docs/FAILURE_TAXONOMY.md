@@ -465,6 +465,13 @@ through to the generic `subagent_crash` fallback — this taxonomy doc already
 declared "Feature-validate test failure → organic, weight 1.0" (see the
 Example table under Weighting Rationale, above), but the classifier never
 implemented the matcher.
+`verifyPostValidateState` also returns the kind as a structured field
+beside the error, for each of its four markers (`[push-auth-failed]` →
+`git_transport_auth_failed`, `[review-cap-reached]` → `review_cap_reached`,
+`[validation-failed]` → `validation_failed`, `[validation-inconclusive]` →
+`validation_inconclusive`), and the feature-validate halt sets it as the run's
+terminal kind, so the halt card names the kind instead of `unclassified`
+(#2874). The marker stays in the text for the Go classifier.
 Emitted with the `[validation-failed]` marker embedded in the failure text
 (mirrors the `[adapter-auth-failed]` / `[no-changes-produced]` marker
 pattern). Unlike `no_changes_produced` and `adapter_auth_failed`,
