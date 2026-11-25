@@ -109,4 +109,15 @@ rsync -a --delete "$OPENCODE_PLUGIN_SRC/" "$OPENCODE_PLUGIN_DEST/"
 mkdir -p "$DIST/git-hooks"
 install -m 0755 "$REPO_ROOT/scripts/git-hooks/pre-push" "$DIST/git-hooks/pre-push"
 
+# 6. Stamp the bundle (#2883): the binary reads <prefix>/claude-plugin-bundled to
+#    know it shipped with the Claude plugin, so a bundle that later lost
+#    hooks/hooks.json stops its Claude stages instead of warning. Written only
+#    once the plugin's hooks are in place.
+rm -f "$DIST/claude-plugin-bundled"
+if [ ! -f "$DIST/claude-plugins/nightgauge/hooks/hooks.json" ]; then
+  echo "Bundled Claude plugin has no hooks/hooks.json; refusing to stamp the bundle." >&2
+  exit 1
+fi
+printf 'nightgauge claude plugin bundled\n' > "$DIST/claude-plugin-bundled"
+
 echo "Marketplace bundled into dist/ ($(find "$DIST/claude-plugins" "$DIST/skills" -type f 2>/dev/null | wc -l | tr -d ' ') files)"

@@ -486,3 +486,22 @@ func TestShippedInstallersCarryTheirPin(t *testing.T) {
 		}
 	}
 }
+
+func TestBelowFloor(t *testing.T) {
+	m, ok := Get("claude-headless")
+	if !ok {
+		t.Fatal("no claude-headless manifest")
+	}
+	for _, tc := range []struct {
+		version string
+		below   bool
+	}{{"0.0.1", true}, {"", true}, {"not-a-version", true}, {m.MinVersion, false}, {"999.0.0", false}} {
+		floor, below := BelowFloor("claude-headless", tc.version)
+		if floor != m.MinVersion || below != tc.below {
+			t.Errorf("BelowFloor(%q) = %q, %v; want %q, %v", tc.version, floor, below, m.MinVersion, tc.below)
+		}
+	}
+	if floor, below := BelowFloor("no-such-adapter", "1.0.0"); floor != "" || below {
+		t.Errorf("unknown adapter = %q, %v", floor, below)
+	}
+}

@@ -11,6 +11,7 @@ and this project adheres to
 
 ### Fixed
 
+- On a bundled build the Claude plugin gate now names the supported Claude CLI floor and the detected version when a stage stops below it, stops a `nightgauge` plugin that loaded from anywhere but the bundled directory (naming its source and path), and stops instead of warning when a stamped bundle's plugin lost `hooks/hooks.json`. Builds with no bundle still warn and continue (#2883).
 - A feature-validate halt now names its terminal kind (such as `validation_failed`) on the halt card instead of `unclassified` (#2874).
 - Issues dispatched together by autonomous mode no longer sit queued until a window reload: a fill pass that takes nothing while items are pending schedules one later pass (#3553).
 - A resumed pipeline run now keeps its pr-merge conflict re-dispatch budget instead of starting from zero, so it stops at `max_dev_redispatch` as an uninterrupted run does. Conflicting file names in `[pre-merge-conflict]` and `[merge-conflict]` errors now show control characters as escapes (#2845).

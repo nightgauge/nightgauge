@@ -263,7 +263,7 @@ record may carry both fields, neither, or only one.
 | `adapter_provider_error`         | OpenCode 2.x reported any other `provider.*` error type, such as `provider.internal` for a provider 500, stopped past the retry bound or ended on that error (Issue #3305) — retryable                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `dev_context_stale`              | feature-dev's gate found a `dev-N.json` older than the stage it judged, the `[dev-context-stale]` reason (Issue #2637) — a prior attempt's handoff; parked, never judged on its contents, not charged to the issue                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `environment_halt`               | A project-declared `preflight.environment` check failed in Phase 0, the `[environment-halt]` marker (Issue #101) — the operator's environment, not the code; parked, held for an operator, excluded from the calibration corpus                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `gate_plugin_missing`            | A bundled build's Claude stage did not load the Nightgauge plugin exactly once, the `[gate-plugin-missing]` marker (Issue #2723) — stopped before any work; parked, held for an operator, excluded from the calibration corpus                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `gate_plugin_missing`            | A bundled build's Claude stage did not load its bundled Nightgauge plugin exactly once (or the bundle lost its hooks), the `[gate-plugin-missing]` marker (Issue #2723) — stopped before any work; parked, held for an operator, excluded from the calibration corpus                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 A rejected tool call the session recovered from (a later call completed and its step finished) is a warning, not `adapter_permission_rejected`: only a rejection still open when the session ends classifies it. A non-zero OpenCode exit whose only errors were recovered is handed to the stage's post-condition gate, which decides (Issue #2168).
 
@@ -722,6 +722,16 @@ On a bundled build, each of these stops the stage before any work:
 - `plugins` has no entry named exactly `nightgauge`.
 - `plugins` has more than one such entry.
 - Work arrives on the stream with no `system/init` before it.
+- The one `nightgauge` entry's `path` is not the bundled plugin directory
+  (#2883). Its `source` is `nightgauge@inline` for any `--plugin-dir` load, so
+  only the path says which copy ran; the reason names both.
+- The build is bundled but its plugin has no `hooks/hooks.json` (#2883).
+
+A build is bundled when its plugin sits beside the binary, when
+`<prefix>/claude-plugin-bundled` (written by `bundle-marketplace.sh`) exists, or,
+on the extension path, when the host is a packaged VSIX. When the CLI's
+`claude_code_version` is below the `claude-headless` floor, or missing, the stop
+line also names the floor and the detected version.
 
 The stage runner kills the process tree and writes `[gate-plugin-missing]` to
 stderr, which classifies as `gate_plugin_missing`. The kind parks and both
@@ -729,7 +739,7 @@ outcome writers skip the run, as for `environment_halt`. Parking raises no card,
 so both terminal funnels raise a `gate-plugin-missing` Action Center card under
 one key.
 
-A build with no bundle beside it writes `[gate-plugin-warning]` on the same
+A build that is not bundled writes `[gate-plugin-warning]` on the same
 readings and continues. That literal is separate so a warning in the stderr of a
 later failure does not park that failure. Interactive stages have no stream, so
 they pass `--plugin-dir` with no check.

@@ -122,18 +122,22 @@ describe("resolveClaudePlugin", () => {
 
   it("loads the bundle ahead of a workspace copy on a packaged host, and holds it to it", () => {
     setExtensionIsPackaged(true);
-    expect(resolveClaudePlugin()).toEqual({ dir: bundle, bundled: true });
+    expect(resolveClaudePlugin()).toEqual({ dir: bundle, bundled: true, expectedDir: bundle });
   });
 
   it("keeps the workspace first on a development host, and only warns", () => {
     setExtensionIsPackaged(false);
-    expect(resolveClaudePlugin()).toEqual({ dir: workspace, bundled: false });
+    expect(resolveClaudePlugin()).toEqual({ dir: workspace, bundled: false, expectedDir: bundle });
   });
 
-  it("reads a packaged build with no bundle as no-bundle", () => {
+  it("holds a packaged build whose bundle lost its hooks as bundled, so it stops (#2883)", () => {
     setExtensionIsPackaged(true);
     vi.mocked(fs.existsSync).mockImplementation((p) => String(p).startsWith(workspace));
-    expect(resolveClaudePlugin()).toEqual({ dir: workspace, bundled: false });
+    expect(resolveClaudePlugin()).toEqual({
+      dir: workspace,
+      bundled: true,
+      expectedDir: undefined,
+    });
   });
 
   it("emits the flag only for a directory", () => {

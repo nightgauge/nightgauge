@@ -89,6 +89,10 @@ type StreamEvent struct {
 	// Absent and empty are different readings, so a missing key stays nil.
 	Plugins []StreamPlugin `json:"plugins,omitempty"`
 
+	// ClaudeCodeVersion is set on system/init: the CLI's own version. The
+	// plugin gate names it against the supported floor on a stop (#2883).
+	ClaudeCodeVersion string `json:"claude_code_version,omitempty"`
+
 	// PerTurnEffortActive is set on system/init: whether the CLI applied the
 	// --effort it was given. The CLI drops a rung the model has no axis for
 	// with no warning, so this is how a turn learns what effort ran (#1568).
@@ -101,6 +105,9 @@ type StreamPlugin struct {
 	Name    string `json:"name"`
 	Source  string `json:"source,omitempty"`
 	Version string `json:"version,omitempty"`
+	// Path is the directory the plugin loaded from; for a --plugin-dir load it
+	// is the directory given (checked live, #2883).
+	Path string `json:"path,omitempty"`
 }
 
 // StreamAPIEvent is one API streaming event: message_start,

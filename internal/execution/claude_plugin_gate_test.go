@@ -15,6 +15,11 @@ import (
 	"github.com/nightgauge/nightgauge/internal/terminalkind"
 )
 
+// testBundleDir stands in for the bundled plugin. Fixtures redact the path
+// each plugin loaded from; a --plugin-dir load reports the directory it was
+// given (checked live, #2883), so the redacted path reads as this one.
+const testBundleDir = "/bundle/claude-plugins/nightgauge"
+
 func initEventFromFixture(t *testing.T, name string) *StreamEvent {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", name))
@@ -24,6 +29,11 @@ func initEventFromFixture(t *testing.T, name string) *StreamEvent {
 	for _, line := range strings.Split(string(raw), "\n") {
 		var event StreamEvent
 		if json.Unmarshal([]byte(line), &event) == nil && event.Subtype == "init" {
+			for i := range event.Plugins {
+				if event.Plugins[i].Path == "<redacted>" {
+					event.Plugins[i].Path = testBundleDir
+				}
+			}
 			return &event
 		}
 	}
@@ -34,6 +44,9 @@ func initEventFromFixture(t *testing.T, name string) *StreamEvent {
 func TestEvaluateClaudePluginInit(t *testing.T) {
 	present := initEventFromFixture(t, "claude_init_plugin_present.jsonl")
 	absent := initEventFromFixture(t, "claude_init_plugin_absent.jsonl")
+	foreign := &StreamEvent{Plugins: []StreamPlugin{
+		{Name: "nightgauge", Source: "nightgauge@marketplace", Path: "/home/u/.claude/plugins/nightgauge", Version: "1.0.0"},
+	}}
 	duplicate := &StreamEvent{Plugins: []StreamPlugin{
 		{Name: "nightgauge", Version: "1.0.0"}, {Name: "nightgauge", Version: "2.0.0"},
 	}}
@@ -48,6 +61,7 @@ func TestEvaluateClaudePluginInit(t *testing.T) {
 	}{
 		{"real capture, one entry", present, ClaudePluginPass, ClaudePluginPass, "1.25.0"},
 		{"real capture, plugin absent", absent, ClaudePluginStop, ClaudePluginWarn, ""},
+		{"one entry from another copy", foreign, ClaudePluginStop, ClaudePluginPass, ""},
 		{"duplicate entries", duplicate, ClaudePluginStop, ClaudePluginWarn, ""},
 		{"prefix is not the plugin", lookalike, ClaudePluginStop, ClaudePluginWarn, ""},
 		{"init has no plugins key", &StreamEvent{}, ClaudePluginStop, ClaudePluginWarn, ""},
@@ -55,11 +69,11 @@ func TestEvaluateClaudePluginInit(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := EvaluateClaudePluginInit(true, tc.event)
+			got := EvaluateClaudePluginInit(true, testBundleDir, tc.event)
 			if got.Verdict != tc.bundled || got.Version != tc.wantVersion {
 				t.Errorf("bundled: got %+v, want verdict %d version %q", got, tc.bundled, tc.wantVersion)
 			}
-			if got := EvaluateClaudePluginInit(false, tc.event); got.Verdict != tc.noBundle {
+			if got := EvaluateClaudePluginInit(false, "", tc.event); got.Verdict != tc.noBundle {
 				t.Errorf("no bundle: got %+v, want verdict %d", got, tc.noBundle)
 			}
 		})
@@ -83,8 +97,69 @@ func TestUserLevelInstallLeavesOneNightgaugeEntry(t *testing.T) {
 	if loaded != 1 {
 		t.Fatalf("capture lists %d nightgauge plugins, want 1", loaded)
 	}
-	if got := EvaluateClaudePluginInit(true, event); got.Verdict != ClaudePluginPass {
+	if got := EvaluateClaudePluginInit(true, testBundleDir, event); got.Verdict != ClaudePluginPass {
 		t.Errorf("reading = %+v, want a pass", got)
+	}
+}
+
+// A single nightgauge entry loaded from anywhere but the bundle does not satisfy
+// a bundled build, and the stop names where it came from (#2883).
+func TestBundledGateNamesAForeignCopy(t *testing.T) {
+	event := &StreamEvent{Plugins: []StreamPlugin{
+		{Name: "nightgauge", Source: "nightgauge@inline", Path: "/elsewhere/nightgauge", Version: "1.0.0"},
+	}}
+	got := EvaluateClaudePluginInit(true, testBundleDir, event)
+	if got.Verdict != ClaudePluginStop {
+		t.Fatalf("reading = %+v, want a stop", got)
+	}
+	for _, want := range []string{"nightgauge@inline", "/elsewhere/nightgauge", testBundleDir} {
+		if !strings.Contains(got.Reason, want) {
+			t.Errorf("reason %q does not name %q", got.Reason, want)
+		}
+	}
+	if got := EvaluateClaudePluginInit(true, testBundleDir+"/", initEventFromFixture(t, "claude_init_plugin_present.jsonl")); got.Verdict != ClaudePluginPass {
+		t.Errorf("an uncleaned bundle path: %+v", got)
+	}
+}
+
+// A stop names the CLI floor when the CLI is below it or unnamed, and only then.
+func TestStopNoticeNamesTheCLIFloor(t *testing.T) {
+	manifest, ok := adaptercompat.Get("claude-headless")
+	if !ok {
+		t.Fatal("no claude-headless manifest")
+	}
+	floor := manifest.MinVersion
+	absent := func(cli string) *StreamEvent {
+		return &StreamEvent{Type: "system", Subtype: "init", ClaudeCodeVersion: cli, Plugins: []StreamPlugin{}}
+	}
+	for _, tc := range []struct {
+		name      string
+		event     *StreamEvent
+		wantFloor bool
+		wantText  string
+	}{
+		{"below the floor", absent("2.0.1"), true, "Claude CLI 2.0.1 is below the supported floor " + floor},
+		{"no version on init", absent(""), true, "reported no version"},
+		{"work before init", &StreamEvent{Type: "assistant"}, true, "reported no version"},
+		{"on the floor", absent(floor), false, ""},
+		{"above the floor", absent("99.0.0"), false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newClaudePluginGate(true, testBundleDir)
+			if !g.observe(tc.event) {
+				t.Fatal("did not stop")
+			}
+			n := g.notice()
+			if !strings.HasPrefix(n, gatePluginMissingMarker) {
+				t.Errorf("notice %q lost its marker", n)
+			}
+			if got := strings.Contains(n, "upgrade Claude Code to "+floor); got != tc.wantFloor {
+				t.Errorf("floor clause = %v, want %v: %q", got, tc.wantFloor, n)
+			}
+			if !strings.Contains(n, tc.wantText) {
+				t.Errorf("notice %q does not contain %q", n, tc.wantText)
+			}
+		})
 	}
 }
 
@@ -109,14 +184,14 @@ func TestFloorCaptureBacksTheManifestFloor(t *testing.T) {
 	if init.ClaudeCodeVersion != manifest.MinVersion {
 		t.Errorf("capture is from %q, min_version is %q", init.ClaudeCodeVersion, manifest.MinVersion)
 	}
-	if got := EvaluateClaudePluginInit(true, initEventFromFixture(t, name)); got.Verdict != ClaudePluginPass {
+	if got := EvaluateClaudePluginInit(true, testBundleDir, initEventFromFixture(t, name)); got.Verdict != ClaudePluginPass {
 		t.Errorf("a bundled build on the floor reads %+v, want a pass", got)
 	}
 }
 
 // A real stream puts hook_started ahead of init, and that must not read as work.
 func TestClaudePluginGateIgnoresEventsBeforeInit(t *testing.T) {
-	g := newClaudePluginGate(true)
+	g := newClaudePluginGate(true, testBundleDir)
 	for _, e := range []*StreamEvent{{Type: "system", Subtype: "hook_started"}, {Type: "rate_limit_event"}, nil} {
 		if g.observe(e) || g.decided {
 			t.Fatalf("event %+v decided the gate", e)
@@ -129,7 +204,7 @@ func TestClaudePluginGateIgnoresEventsBeforeInit(t *testing.T) {
 
 // A subagent's or a later init cannot change the stage's first reading.
 func TestClaudePluginGateDecidesOnce(t *testing.T) {
-	g := newClaudePluginGate(true)
+	g := newClaudePluginGate(true, testBundleDir)
 	first := initEventFromFixture(t, "claude_init_plugin_present.jsonl")
 	if g.observe(first) {
 		t.Fatal("present fixture stopped the stage")
@@ -193,6 +268,7 @@ func runGateStage(t *testing.T, adapter *stubClaudeAdapter, pluginDir, stage str
 	t.Helper()
 	m := NewManager(realGitRepo(t), adapter)
 	m.claudePluginDir = func() string { return pluginDir }
+	m.claudePluginStamp = func() bool { return false }
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	start := time.Now()
@@ -212,7 +288,7 @@ func fixtureScript(t *testing.T, name string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return "cat '" + path + "'"
+	return "sed 's#<redacted>#" + testBundleDir + "#' '" + path + "'"
 }
 
 func TestRunStageStopsABundledClaudeStageWithoutThePlugin(t *testing.T) {
@@ -299,6 +375,33 @@ func TestRunStageWarnsWithNoBundle(t *testing.T) {
 	}
 	if strings.Contains(result.Stderr, gatePluginMissingMarker) {
 		t.Errorf("warning carries the stop marker: %q", result.Stderr)
+	}
+}
+
+// A stamped bundle whose plugin lost hooks/hooks.json stops instead of warning:
+// the stamp, not the plugin's health, says the build is bundled (#2883).
+func TestRunStageStopsAStampedBundleWithADamagedPlugin(t *testing.T) {
+	adapter := &stubClaudeAdapter{name: "claude", script: fixtureScript(t, "claude_init_plugin_present.jsonl")}
+	m := NewManager(realGitRepo(t), adapter)
+	m.claudePluginDir = func() string { return "" }
+	m.claudePluginStamp = func() bool { return true }
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	result, err := m.RunStage(ctx, StageOptions{
+		Repo: "acme/repo", IssueNumber: 2883, Stage: "feature-dev", Timeout: 60 * time.Second,
+		Runtime: state.NewRuntimeState("acme/repo", 2883, "", "01890a5d-ac96-774b-bcce-b302099a8058"),
+	})
+	if err != nil && result == nil {
+		t.Fatalf("RunStage: %v", err)
+	}
+	if result.ExitCode == 0 {
+		t.Error("a damaged bundle's stage exited 0")
+	}
+	if got := terminalkind.Classify(result.Stderr); got != "gate_plugin_missing" {
+		t.Errorf("kind = %q, stderr = %q", got, result.Stderr)
+	}
+	if !strings.Contains(result.Stderr, "hooks/hooks.json") {
+		t.Errorf("stderr does not name the damage: %q", result.Stderr)
 	}
 }
 

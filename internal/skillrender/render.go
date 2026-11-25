@@ -1584,8 +1584,9 @@ func bundleSkillsRoot(exe string) string {
 // hooks/hooks.json: the gates are the reason to load it, and a plugin with no
 // hooks would satisfy the init check with none of them running.
 //
-// A non-empty answer is what makes a build "bundled": the stage runner stops a
-// bundled build's stage when this plugin did not load, and only warns otherwise.
+// A non-empty answer makes a build "bundled", and so does the bundle stamp
+// (ClaudePluginBundleStamped): the stage runner stops a bundled build's stage
+// when this plugin did not load, and only warns otherwise.
 func BundledClaudePluginDir(exe string) string {
 	if exe == "" {
 		return ""
@@ -1598,6 +1599,25 @@ func BundledClaudePluginDir(exe string) string {
 		return candidate
 	}
 	return ""
+}
+
+// ClaudePluginBundleStampName is the file the VSIX bundle step writes at
+// `<prefix>/claude-plugin-bundled` once the plugin is in place (#2883).
+const ClaudePluginBundleStampName = "claude-plugin-bundled"
+
+// ClaudePluginBundleStamped reports whether exe was shipped as a bundle with
+// the Claude plugin. Unlike BundledClaudePluginDir it does not depend on the
+// plugin being intact, so a bundle that lost hooks/hooks.json still reads as
+// bundled and its stages stop instead of warning.
+func ClaudePluginBundleStamped(exe string) bool {
+	if exe == "" {
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	info, err := os.Stat(filepath.Join(filepath.Dir(filepath.Dir(exe)), ClaudePluginBundleStampName))
+	return err == nil && !info.IsDir()
 }
 
 // phaseMarkerRE matches the literal phase-marker HTML comment the Phase
