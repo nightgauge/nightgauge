@@ -685,6 +685,7 @@ REQUIRED_FILES=(
   scripts/check-issue-body-contract.py
   scripts/test-skill-echo-json.sh
   scripts/check-skill-echo-json.py
+  skills/nightgauge-pr-create/tests/push-branch.test.sh
   scripts/test-pipefail-early-exit.sh
   scripts/check-pipefail-early-exit.py
   scripts/install-agent-skills.sh
@@ -2683,6 +2684,11 @@ run_group "Skill echo-into-jq gate regression suite" \
   bash scripts/test-skill-echo-json.sh
 run_step --fast "Skill echo-into-jq gate" \
   python3 scripts/check-skill-echo-json.py
+
+# 11a2b. pr-create push-branch suite (#2856) — pr-create must push through
+#        `nightgauge git push-branch`, never a bare or forced `git push`.
+run_group "pr-create push-branch regression suite" \
+  bash skills/nightgauge-pr-create/tests/push-branch.test.sh
 
 # 11a3. Pipefail early-exit gate (#2360) — a command piped into a reader that
 #       stops early (grep -q, head, sed q, awk exit) dies of SIGPIPE once the

@@ -125,6 +125,10 @@ jobs:
         run: bash scripts/test-skill-echo-json.sh
       - name: Skill echo-into-jq gate
         run: python3 scripts/check-skill-echo-json.py
+      # pr-create push-branch suite (#2856): pr-create pushes only through
+      # `nightgauge git push-branch`, never a bare or forced `git push`.
+      - name: pr-create push-branch suite
+        run: bash skills/nightgauge-pr-create/tests/push-branch.test.sh
       # Pipefail early-exit gate (#2360): a command piped into a reader that
       # stops early (grep -q, head, sed q, awk exit) dies of SIGPIPE, and under
       # pipefail a match then reads as a miss. Covers every shell script and

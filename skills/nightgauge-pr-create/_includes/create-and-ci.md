@@ -41,14 +41,21 @@ fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
 
-# Push the branch idempotently. feature-dev usually already pushed it, so a
-# rejected push (diverged worktree) is NOT fatal — if origin already has the
-# branch, the work is on the remote and we open the PR from it. NEVER force-push
-# (the safety hook blocks it) and NEVER fall back to asking the user: that
-# dead-ends in headless mode (#3804). Mirrors the deterministic path (#3828/#3835).
-if ! git push -u origin "$BRANCH_NAME" 2>&1; then
+# Push the branch through push-branch, never a bare or forced push: it
+# recovers a self-inflicted fork (#2699) and marks a rejection it could not
+# reconcile [branch-forked], exit 3 (#2856). feature-dev usually already pushed the branch, so a
+# failed push is NOT fatal when origin already has it — open the PR from the
+# remote branch. NEVER fall back to asking the user: that dead-ends in headless
+# mode (#3804). `2>&1` keeps the verb's marker line in the transcript.
+PUSH_EXIT=0
+"$BINARY" git push-branch 2>&1 || PUSH_EXIT=$?
+if [ "$PUSH_EXIT" -ne 0 ]; then
   if git ls-remote --exit-code --heads origin "$BRANCH_NAME" >/dev/null 2>&1; then
-    echo "Push rejected but origin already has $BRANCH_NAME — proceeding to PR creation from the remote branch"
+    if [ "$PUSH_EXIT" -eq 3 ]; then
+      echo "[branch-forked] origin/$BRANCH_NAME was not reconciled with the local branch — opening the PR from origin's tip; local-only commits are NOT in it"
+    else
+      echo "Push failed (push-branch exit $PUSH_EXIT) but origin already has $BRANCH_NAME — opening the PR from the remote branch"
+    fi
   else
     echo "ERROR: Failed to push branch $BRANCH_NAME to origin and it does not exist on the remote" >&2
     echo "Do NOT force-push and do NOT ask for input — report this as a terminal pr-create failure with the push error above." >&2
@@ -264,7 +271,7 @@ if [ "$PR_EXISTS" -eq 0 ]; then
   echo ""
   echo "Troubleshooting:"
   echo "  1. Check branch exists: git branch -a | grep $BRANCH"
-  echo "  2. Check branch is pushed: git push -u origin $BRANCH"
+  echo "  2. Check branch is pushed: nightgauge git push-branch"
   echo "  3. Re-run pr-create stage to attempt again"
   echo "  4. Or create PR manually:"
   echo "       nightgauge forge pr create --title \"[...title...]\" --body \"[...body...]\" --head $BRANCH --base $BASE_BRANCH"

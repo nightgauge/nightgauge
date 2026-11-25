@@ -145,6 +145,7 @@ Issue-body contract gate regression suite
 Issue-body heading contract
 Skill echo-into-jq gate regression suite
 Skill echo-into-jq gate
+pr-create push-branch regression suite
 Pipefail early-exit gate regression suite
 Pipefail early-exit gate
 Plugin skills mirror in sync
