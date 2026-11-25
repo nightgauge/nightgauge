@@ -8105,7 +8105,8 @@ Scoping to a subset cuts that cost proportionally.
 
 Issues carrying one of these labels are **never dispatched** — by the
 autonomous candidate loop, by epic-expansion enqueue (`EnqueueEpic`), or by the
-`nightgauge queue add` CLI command. These are human-only issues: work only an
+`nightgauge queue add` CLI command — and Backlog promotion never moves them to
+Ready (tallied as `excluded-label`, #3579). These are human-only issues: work only an
 operator can do (e.g. rotating a cloud credential in a provider dashboard, a
 DNS change, revoking an over-scoped token). Dispatching one burns tokens
 through issue-pickup → planning → feature-dev → validate — which correctly
