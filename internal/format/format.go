@@ -11,8 +11,10 @@ import (
 	"time"
 )
 
-// FormatResult is the structured output of a project-level format run.
-// Distinct from internal/hooks/format.go which operates per-file.
+// FormatResult is the structured output of a format run (project-wide, or the
+// branch's changed files on the Dart path). Distinct from internal/hooks/format.go,
+// which operates per-file. Ran=false with a non-empty Formatter means the formatter
+// was detected but had nothing to do; Output says why.
 type FormatResult struct {
 	Ran       bool   `json:"ran"`
 	Formatter string `json:"formatter"`
@@ -20,9 +22,17 @@ type FormatResult struct {
 	Timestamp string `json:"timestamp"`
 }
 
+// Options tunes a format run.
+type Options struct {
+	// Base is the branch the Dart path diffs against to find changed files.
+	// Empty means the repository default branch.
+	Base string
+}
+
 // RunFormat detects the project formatter in workdir and runs it.
 // Detection order: npm format → .prettierrc* → dprint.json → go.mod → pubspec.yaml.
-func RunFormat(ctx context.Context, workdir string) (FormatResult, error) {
+// The Dart path formats only the branch's changed files outside analyzer.exclude.
+func RunFormat(ctx context.Context, workdir string, opts Options) (FormatResult, error) {
 	switch {
 	case hasPkgScript(workdir, "format"):
 		return run(ctx, workdir, "npm run format", "npm", "run", "format")
@@ -37,9 +47,7 @@ func RunFormat(ctx context.Context, workdir string) (FormatResult, error) {
 		return run(ctx, workdir, "go fmt", "go", "fmt", "./...")
 
 	case fileExists(filepath.Join(workdir, "pubspec.yaml")):
-		return runMulti(ctx, workdir, "dart format",
-			[][]string{{"dart", "fix", "--apply"}, {"dart", "format", "."}},
-		)
+		return runDart(ctx, workdir, opts)
 	}
 
 	return FormatResult{
@@ -50,8 +58,8 @@ func RunFormat(ctx context.Context, workdir string) (FormatResult, error) {
 }
 
 // RunFormatJSON is a convenience wrapper returning JSON bytes.
-func RunFormatJSON(ctx context.Context, workdir string) ([]byte, error) {
-	result, err := RunFormat(ctx, workdir)
+func RunFormatJSON(ctx context.Context, workdir string, opts Options) ([]byte, error) {
+	result, err := RunFormat(ctx, workdir, opts)
 	if err != nil {
 		return nil, err
 	}
