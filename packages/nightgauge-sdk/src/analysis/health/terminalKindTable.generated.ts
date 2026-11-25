@@ -932,9 +932,12 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
         ],
         [
           "exceeded stage_time_cap"
+        ],
+        [
+          "[stage-timeout]"
         ]
       ],
-      "why": "A stage stopped at `pipeline.stage_hard_caps` or `pipeline.stage_time_caps` (#2812). It was working and ran out of time, so it reads differently from an idle kill and recovers exactly like one. MUST precede stall-kill. The clauses are the exact producer wordings, not bare `hard cap`, so an idle kill's stderr tail or report text that merely names a cap stays stall_kill."
+      "why": "A stage stopped at `pipeline.stage_hard_caps` or `pipeline.stage_time_caps` (#2812), or at its own stage timeout: `[stage-timeout]` is execution.Manager's notice for that deadline (#2171, #2885). It was working and ran out of time, so it reads differently from an idle kill and recovers exactly like one. MUST precede stall-kill. The clauses are the exact producer wordings, not bare `hard cap`, so an idle kill's stderr tail or report text that merely names a cap stays stall_kill."
     },
     {
       "id": "stall-kill",
@@ -943,9 +946,6 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
       "clauses": [
         [
           "[stall-killed]"
-        ],
-        [
-          "[stage-timeout]"
         ],
         [
           "stall-killed"
@@ -966,7 +966,7 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
           "hard cap"
         ]
       ],
-      "why": "`[stage-timeout]` is execution.Manager's notice for a stage its own stage timeout stopped (#2171). Stall-kill markers (#3207) as PipelineBridge writes them into the IPC stage result, plus the auto-mode wordings. All three real phrasings differ by a word, so a matcher written for one leaves the others unclassified — which is exactly what had happened to the SDK mirror, on the most common failure this machine produces (#306)."
+      "why": "Stall-kill markers (#3207) as PipelineBridge writes them into the IPC stage result, plus the auto-mode wordings. All three real phrasings differ by a word, so a matcher written for one leaves the others unclassified — which is exactly what had happened to the SDK mirror, on the most common failure this machine produces (#306)."
     },
     {
       "id": "budget-enforcer",

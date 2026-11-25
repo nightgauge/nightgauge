@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/state"
+	"github.com/nightgauge/nightgauge/internal/terminalkind"
 
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
@@ -297,5 +298,23 @@ func TestKilledAfterRetryCategory(t *testing.T) {
 	}
 	if got := killedAfterRetryCategory(TerminalKindStallKill); got != "stall-killed-after-retry" {
 		t.Errorf("stall kill category = %q", got)
+	}
+}
+
+// TestStageTimeoutClassifiesAsStallShapedCapKill pins #2885: execution.Manager's
+// stage-timeout notice books as stage_cap_kill, not stall_kill, and still takes
+// the scheduler's stall-recovery branch through IsStallShapedKill.
+func TestStageTimeoutClassifiesAsStallShapedCapKill(t *testing.T) {
+	t.Parallel()
+	line := "exit -1: [stage-timeout] stage stopped at its stage timeout of 30m0s after 30m0s elapsed"
+	kind := terminalkind.Classify(line)
+	if kind != TerminalKindStageCapKill {
+		t.Fatalf("classified %q, want %q", kind, TerminalKindStageCapKill)
+	}
+	if !terminalkind.IsStallShapedKill(kind) {
+		t.Fatalf("%q is not stall-shaped; the scheduler would skip stall recovery", kind)
+	}
+	if got := killedAfterRetryCategory(kind); got != "stage-cap-killed-after-retry" {
+		t.Fatalf("second-kill category %q, want stage-cap-killed-after-retry", got)
 	}
 }

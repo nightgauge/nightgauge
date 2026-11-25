@@ -179,11 +179,11 @@
     {
       "id": "synthetic-stage-timeout",
       "input": "exit -1: [stage-timeout] stage stopped at its stage timeout of 30m0s after 30m0s elapsed",
-      "expected": "stall_kill",
+      "expected": "stage_cap_kill",
       "expected_signal": "",
       "source": "synthetic",
       "producer": "internal/execution/manager.go stageTimeoutNotice",
-      "rationale": "execution.Manager's own stage-timeout notice (#2171), prefixed the way terminalFailureReason renders it. Before it existed the deadline kill left stderr silent and the stage recorded `exit -1: <nil>`, a subagent_crash; the marker is claimed by stall_kill, the existing wall-clock kind, well before the bare `exit ` rule."
+      "rationale": "execution.Manager's own stage-timeout notice (#2171), prefixed the way terminalFailureReason renders it. Before it existed the deadline kill left stderr silent and the stage recorded `exit -1: <nil>`, a subagent_crash; the marker is claimed by stage_cap_kill, the runtime-limit kind (#2885), well before the bare `exit ` rule."
     },
     {
       "id": "captured-stall-idle-threshold",
