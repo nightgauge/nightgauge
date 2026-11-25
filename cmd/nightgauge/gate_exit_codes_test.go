@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/intelligence/baselineGate"
@@ -76,6 +77,16 @@ func TestDepsGateCheck_ExitCodes(t *testing.T) {
 				{Number: 4, Title: "blocker", State: "OPEN", Repo: "o/r"},
 			}},
 		}}, nil)
+		if code, _ := runGateCmd(t, depsGateCheckCmd(), args...); code != 1 {
+			t.Fatalf("exit = %d, want 1", code)
+		}
+	})
+
+	t.Run("a body dependency on an open pull request exits 1", func(t *testing.T) {
+		withDepsGateFetcher(t, &depsMockFetcher{
+			issues: map[string]*types.Issue{"o/r#5": {Number: 5, Body: "Depends on: #4"}},
+			states: map[int]string{4: forge.DepStatePROpen},
+		}, nil)
 		if code, _ := runGateCmd(t, depsGateCheckCmd(), args...); code != 1 {
 			t.Fatalf("exit = %d, want 1", code)
 		}
