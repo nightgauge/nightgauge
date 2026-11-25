@@ -3,7 +3,9 @@ package execution
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
+	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/skillrender"
 )
 
@@ -47,40 +49,79 @@ type ClaudePluginReading struct {
 	Version string
 	// Reason names what was wrong, "" on a pass.
 	Reason string
+	// CLIVersion is the init's claude_code_version, "" when it named none or
+	// no init arrived.
+	CLIVersion string
 }
 
 // EvaluateClaudePluginInit judges a system/init event. A nil event means work
-// arrived on the stream with no init before it.
-func EvaluateClaudePluginInit(bundled bool, event *StreamEvent) ClaudePluginReading {
+// arrived on the stream with no init before it. bundledDir is the plugin the
+// stage was given; on a bundled build the one nightgauge entry must have loaded
+// from it, since the entry's source (nightgauge@inline for any --plugin-dir
+// load) cannot say which copy ran (#2883). A bundled build with no bundledDir
+// is stamped but damaged, and stops.
+func EvaluateClaudePluginInit(bundled bool, bundledDir string, event *StreamEvent) ClaudePluginReading {
 	reason := ""
-	version := ""
+	cliVersion := ""
+	if event != nil {
+		cliVersion = event.ClaudeCodeVersion
+	}
 	switch {
+	case bundled && bundledDir == "":
+		reason = "this build is stamped as bundled but its plugin at <prefix>/claude-plugins/nightgauge has no hooks/hooks.json"
 	case event == nil:
 		reason = "the stream carried work before any system/init event"
 	case event.Plugins == nil:
 		reason = "system/init has no plugins list"
 	default:
-		loaded := 0
+		var found []StreamPlugin
 		for _, p := range event.Plugins {
 			if p.Name == claudePluginName {
-				loaded++
-				version = p.Version
+				found = append(found, p)
 			}
 		}
-		switch loaded {
+		switch len(found) {
 		case 1:
-			return ClaudePluginReading{Verdict: ClaudePluginPass, Version: version}
+			p := found[0]
+			if !bundled || samePluginPath(p.Path, bundledDir) {
+				return ClaudePluginReading{Verdict: ClaudePluginPass, Version: p.Version, CLIVersion: cliVersion}
+			}
+			reason = fmt.Sprintf("system/init lists nightgauge from %s at %s, not the bundled plugin at %s",
+				orUnnamed(p.Source), orUnnamed(p.Path), bundledDir)
 		case 0:
 			reason = "system/init lists no nightgauge plugin"
 		default:
-			version = ""
-			reason = fmt.Sprintf("system/init lists %d nightgauge plugins, so each gate would fire more than once", loaded)
+			reason = fmt.Sprintf("system/init lists %d nightgauge plugins, so each gate would fire more than once", len(found))
 		}
 	}
+	verdict := ClaudePluginWarn
 	if bundled {
-		return ClaudePluginReading{Verdict: ClaudePluginStop, Reason: reason}
+		verdict = ClaudePluginStop
 	}
-	return ClaudePluginReading{Verdict: ClaudePluginWarn, Reason: reason}
+	return ClaudePluginReading{Verdict: verdict, Reason: reason, CLIVersion: cliVersion}
+}
+
+func orUnnamed(s string) string {
+	if s == "" {
+		return "an unnamed location"
+	}
+	return s
+}
+
+// samePluginPath compares two plugin directories after cleaning and, where
+// they resolve, following symlinks.
+func samePluginPath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	norm := func(p string) string {
+		p = filepath.Clean(p)
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		return p
+	}
+	return norm(a) == norm(b)
 }
 
 // claudePluginGate applies EvaluateClaudePluginInit to one stage's stream. Like
@@ -88,12 +129,13 @@ func EvaluateClaudePluginInit(bundled bool, event *StreamEvent) ClaudePluginRead
 // read after wg.Wait(). A nil gate, for every other adapter, observes nothing.
 type claudePluginGate struct {
 	bundled bool
+	dir     string
 	decided bool
 	reading ClaudePluginReading
 }
 
-func newClaudePluginGate(bundled bool) *claudePluginGate {
-	return &claudePluginGate{bundled: bundled}
+func newClaudePluginGate(bundled bool, dir string) *claudePluginGate {
+	return &claudePluginGate{bundled: bundled, dir: dir}
 }
 
 // observe reports true on the one event that stops the stage. Only the first
@@ -104,9 +146,9 @@ func (g *claudePluginGate) observe(event *StreamEvent) bool {
 	}
 	switch {
 	case event.Type == "system" && event.Subtype == "init":
-		g.reading = EvaluateClaudePluginInit(g.bundled, event)
+		g.reading = EvaluateClaudePluginInit(g.bundled, g.dir, event)
 	case isStreamWork(event):
-		g.reading = EvaluateClaudePluginInit(g.bundled, nil)
+		g.reading = EvaluateClaudePluginInit(g.bundled, g.dir, nil)
 	default:
 		// hook_started precedes init on a real stream, so other system events
 		// and heartbeats decide nothing.
@@ -156,13 +198,40 @@ func (g *claudePluginGate) notice() string {
 	}
 	switch g.reading.Verdict {
 	case ClaudePluginStop:
-		return fmt.Sprintf("%s stopped before any work: %s; this build's safety gates did not load",
-			gatePluginMissingMarker, g.reading.Reason)
+		return fmt.Sprintf("%s stopped before any work: %s; this build's safety gates did not load%s",
+			gatePluginMissingMarker, g.reading.Reason, cliFloorClause(g.reading.CLIVersion))
 	case ClaudePluginWarn:
 		return fmt.Sprintf("%s %s; this build has no bundled plugin, so the stage continues without confirmed gates",
 			gatePluginWarningMarker, g.reading.Reason)
 	}
 	return ""
+}
+
+// cliFloorClause names the supported Claude CLI floor when the init's CLI is
+// below it or reported no version, "" otherwise (#2883).
+func cliFloorClause(cliVersion string) string {
+	floor, below := adaptercompat.BelowFloor("claude-headless", cliVersion)
+	if !below {
+		return ""
+	}
+	detected := "Claude CLI " + cliVersion
+	if cliVersion == "" {
+		detected = "Claude CLI reported no version and"
+	}
+	return fmt.Sprintf("; %s is below the supported floor %s: upgrade Claude Code to %s or later",
+		detected, floor, floor)
+}
+
+// resolveClaudePluginStamp reports whether this build carries the bundle stamp.
+func (m *Manager) resolveClaudePluginStamp() bool {
+	if m.claudePluginStamp != nil {
+		return m.claudePluginStamp()
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	return skillrender.ClaudePluginBundleStamped(exe)
 }
 
 // resolveClaudePluginDir returns the plugin directory a Claude stage loads, ""

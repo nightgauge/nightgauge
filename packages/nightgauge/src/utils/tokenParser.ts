@@ -306,6 +306,8 @@ export interface ParsedStreamMessage {
   subtype?: string;
   /** The `plugins` list of a `system/init` event, unset when it has none (#2723). */
   initPlugins?: ClaudeInitPlugin[];
+  /** The CLI's `claude_code_version` on `system/init` (#2883). */
+  claudeCodeVersion?: string;
   /**
    * Model reported serving this event: `message.model` on assistant
    * messages, `model` on system/init. The LAST observed value is the
@@ -613,6 +615,9 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
       }
       if (parsed.subtype === "init" && Array.isArray(parsed.plugins)) {
         msg.initPlugins = parsed.plugins;
+      }
+      if (parsed.subtype === "init" && typeof parsed.claude_code_version === "string") {
+        msg.claudeCodeVersion = parsed.claude_code_version;
       }
       if (
         parsed.subtype === "model_refusal_fallback" &&

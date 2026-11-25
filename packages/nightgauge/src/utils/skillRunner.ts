@@ -4495,14 +4495,23 @@ function bundledPluginRoot(): string | undefined {
 
 /**
  * What a Claude spawn loads and how strictly it is held to it (#2723). `bundled`
- * makes the stage's plugin gate stop instead of warn: a packaged build whose own
- * bundle is the directory being loaded.
+ * makes the stage's plugin gate stop instead of warn. It is the packaged host,
+ * not the bundle's health, so a VSIX whose plugin lost hooks/hooks.json still
+ * stops (#2883). A host with no installed nightgauge extension has no bundle
+ * to hold to, so it only warns. `expectedDir` is the bundled plugin the init
+ * must report, unset when the bundle has none.
  */
-export function resolveClaudePlugin(): { dir: string | undefined; bundled: boolean } {
-  const dir = resolvePluginRoot();
+export function resolveClaudePlugin(): {
+  dir: string | undefined;
+  bundled: boolean;
+  expectedDir: string | undefined;
+} {
   return {
-    dir,
-    bundled: packagedExtensionHost && dir !== undefined && dir === bundledPluginRoot(),
+    dir: resolvePluginRoot(),
+    bundled:
+      packagedExtensionHost &&
+      Boolean(vscode.extensions.getExtension("nightgauge.nightgauge")?.extensionPath),
+    expectedDir: bundledPluginRoot(),
   };
 }
 
@@ -5228,7 +5237,7 @@ function runStageSkillHeadlessImpl(
   if (adapter === "claude") {
     const authProvider = getAuthProvider(workspaceRoot);
     const claudePlugin = resolveClaudePlugin();
-    pluginGate = new ClaudePluginGate(claudePlugin.bundled);
+    pluginGate = new ClaudePluginGate(claudePlugin.bundled, claudePlugin.expectedDir);
     args = [
       "-p",
       "--no-session-persistence",
@@ -9145,7 +9154,7 @@ export function resumeSessionWithResponse(
 
   // A resumed session reads system/init afresh, so it proves its plugin too (#2723).
   const claudePlugin = resolveClaudePlugin();
-  const pluginGate = new ClaudePluginGate(claudePlugin.bundled);
+  const pluginGate = new ClaudePluginGate(claudePlugin.bundled, claudePlugin.expectedDir);
 
   // Build CLI arguments for resuming
   const args = [

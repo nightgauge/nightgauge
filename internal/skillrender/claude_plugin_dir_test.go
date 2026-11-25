@@ -51,3 +51,33 @@ func TestBundledClaudePluginDir(t *testing.T) {
 		t.Errorf("no executable: got %q", got)
 	}
 }
+
+func TestClaudePluginBundleStamped(t *testing.T) {
+	bundle := t.TempDir()
+	exe := filepath.Join(bundle, "bin", "nightgauge")
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if ClaudePluginBundleStamped(exe) {
+		t.Error("no stamp beside the binary reads as stamped")
+	}
+	if err := os.WriteFile(filepath.Join(bundle, ClaudePluginBundleStampName), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !ClaudePluginBundleStamped(exe) {
+		t.Error("stamp not read")
+	}
+	shim := filepath.Join(t.TempDir(), "nightgauge")
+	if err := os.Symlink(exe, shim); err != nil {
+		t.Fatal(err)
+	}
+	if !ClaudePluginBundleStamped(shim) {
+		t.Error("stamp not read through a symlink")
+	}
+	if ClaudePluginBundleStamped("") {
+		t.Error("no executable reads as stamped")
+	}
+}

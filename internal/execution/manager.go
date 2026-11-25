@@ -96,8 +96,11 @@ type Manager struct {
 	// claudePluginDir overrides the bundled plugin lookup in tests. nil reads
 	// the directory beside this executable (resolveClaudePluginDir).
 	claudePluginDir func() string
-	mu              sync.Mutex
-	running         map[string]*Execution // keyed by "repo#issue"
+	// claudePluginStamp overrides the bundle stamp lookup in tests. nil reads
+	// the stamp beside this executable (resolveClaudePluginStamp).
+	claudePluginStamp func() bool
+	mu                sync.Mutex
+	running           map[string]*Execution // keyed by "repo#issue"
 }
 
 // Execution represents a single running pipeline execution.
@@ -403,7 +406,8 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	var pluginGate *claudePluginGate
 	if adapters.IsClaudeCLI(adapter.Name()) {
 		runOpts.ClaudePluginDir = m.resolveClaudePluginDir()
-		pluginGate = newClaudePluginGate(runOpts.ClaudePluginDir != "")
+		bundled := m.resolveClaudePluginStamp() || runOpts.ClaudePluginDir != ""
+		pluginGate = newClaudePluginGate(bundled, runOpts.ClaudePluginDir)
 	}
 
 	cmdName, args, env := adapter.BuildCommand(runOpts)

@@ -591,6 +591,21 @@ func checkFixture(p string, tree fs.FS) error {
 	return nil
 }
 
+// BelowFloor reports adapter's supported floor and whether version is below it
+// (#2883). A version semverRe rejects, or "", is unknown and counts as below:
+// nothing proves it meets the floor. floor is "" when the adapter has no
+// manifest or no min_version, and then nothing is below it.
+func BelowFloor(adapter, version string) (floor string, below bool) {
+	m, ok := Get(adapter)
+	if !ok || !semverRe.MatchString(m.MinVersion) {
+		return "", false
+	}
+	if !semverRe.MatchString(version) {
+		return m.MinVersion, true
+	}
+	return m.MinVersion, compareSemver(version, m.MinVersion) < 0
+}
+
 // compareSemver compares two versions semverRe already accepted.
 func compareSemver(a, b string) int {
 	as, bs := strings.Split(a, "."), strings.Split(b, ".")

@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- On a bundled build the Claude plugin gate now names the supported Claude CLI floor and the detected version when a stage stops below it, stops a `nightgauge` plugin that loaded from anywhere but the bundled directory (naming its source and path), and stops instead of warning when a stamped bundle's plugin lost `hooks/hooks.json`. Builds with no bundle still warn and continue (#2883).
 - A feature-validate halt now carries its terminal kind (`validation_failed`, `validation_inconclusive`, `review_cap_reached` or `git_transport_auth_failed`) onto the halt card, which used to read `unclassified` (#2874).
 - `deps-gate check` now defers an issue whose body declares a dependency on an open pull request (`Depends on: #N`). The issue read cannot see a pull request, so the reference used to be skipped; a merged or closed pull request still allows (#2867).
 - pr-create now pushes the branch with `nightgauge git push-branch` instead of a bare `git push -u`, so a self-inflicted fork is recovered and a genuine one is reported as `[branch-forked]` rather than swallowed. A regression suite, `skills/nightgauge-pr-create/tests/push-branch.test.sh`, runs in the local gate and CI (#2856).

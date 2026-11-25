@@ -5253,7 +5253,7 @@ describe("skillRunner - Claude plugin gate (#2723)", () => {
   const presentInit = JSON.stringify({
     type: "system",
     subtype: "init",
-    plugins: [{ name: "nightgauge", source: "nightgauge@inline", version: "1.25.0" }],
+    plugins: [{ name: "nightgauge", source: "nightgauge@inline", path: dir, version: "1.25.0" }],
   });
   const laterResult = JSON.stringify({
     type: "result",
