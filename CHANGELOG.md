@@ -14,6 +14,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- feature-dev now passes the issue's base branch to `nightgauge format run --base`, so an epic sub-issue on a Dart project formats only the `.dart` files it changed, not every file its epic branch changed. With no base recorded it diffs against the default branch as before (#3602).
+
 ## [0.8.8] - 2026-11-25
 
 ### Changed
