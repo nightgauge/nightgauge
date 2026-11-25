@@ -9,7 +9,7 @@ import (
 
 func TestRunFormat_NoFormatter_NotRan(t *testing.T) {
 	dir := t.TempDir()
-	result, err := RunFormat(context.Background(), dir)
+	result, err := RunFormat(context.Background(), dir, Options{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestRunFormat_GoModProject(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/test\ngo 1.21\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	result, err := RunFormat(context.Background(), dir)
+	result, err := RunFormat(context.Background(), dir, Options{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

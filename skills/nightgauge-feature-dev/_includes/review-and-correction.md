@@ -109,7 +109,8 @@ bash -c "$FOCUSED_TESTS" \
 
 ### Step 6.3: Run Formatter
 
-Run the project's code formatter on all files. This prevents CI failures from
+Run the project's code formatter. On Dart projects it touches only the branch's
+changed `.dart` files outside `analyzer.exclude`. This prevents CI failures from
 formatting drift — the #1 cause of avoidable CI failures.
 
 ```bash

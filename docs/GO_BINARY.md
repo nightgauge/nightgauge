@@ -4236,8 +4236,14 @@ SDK dist marker, the binary rebuilds the SDK and retries once before reporting
 
 ### Format Operations
 
-Detects the project formatter and runs it at project scope (not per-file).
-Distinct from `internal/hooks/format.go` which operates per-file via post-save
+Detects the project formatter and runs it at project scope (not per-file),
+except on Dart projects (`pubspec.yaml`): there `dart fix --apply` and
+`dart format` run only on the `.dart` files the branch changed against its base
+(committed, staged, unstaged and untracked), minus any path matched by the root
+`analysis_options.yaml` `analyzer.exclude`. With no such file the result is
+`ran: false`, `formatter: "dart format"` and an explanatory `output`, and `dart`
+is not invoked. An unresolvable base or malformed `analysis_options.yaml` is an
+error, never a whole-tree run. Distinct from `internal/hooks/format.go` which operates per-file via post-save
 hooks. Used by `skills/nightgauge-feature-dev/SKILL.md` Phase 6.3.
 
 ```bash
@@ -4250,6 +4256,9 @@ nightgauge format run --json
 
 # Explicit working directory
 nightgauge format run --workdir /path/to/project
+
+# Dart: diff against a named base (default: origin/HEAD, then main, then master)
+nightgauge format run --base main
 ```
 
 **JSON output schema**:

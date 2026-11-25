@@ -22,11 +22,12 @@ func formatCmd() *cobra.Command {
 	return cmd
 }
 
-// formatRunCmd implements `nightgauge format run [--json] [--workdir <dir>]`.
+// formatRunCmd implements `nightgauge format run [--json] [--workdir <dir>] [--base <branch>]`.
 func formatRunCmd() *cobra.Command {
 	var (
 		outputJSON bool
 		workdir    string
+		base       string
 	)
 
 	cmd := &cobra.Command{
@@ -35,7 +36,8 @@ func formatRunCmd() *cobra.Command {
 		SilenceUsage: true,
 		Example: `  nightgauge format run
   nightgauge format run --json
-  nightgauge format run --workdir /path/to/project`,
+  nightgauge format run --workdir /path/to/project
+  nightgauge format run --base main`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if workdir == "" {
 				wd, err := os.Getwd()
@@ -45,7 +47,7 @@ func formatRunCmd() *cobra.Command {
 				workdir = wd
 			}
 
-			result, err := formatpkg.RunFormat(cmd.Context(), workdir)
+			result, err := formatpkg.RunFormat(cmd.Context(), workdir, formatpkg.Options{Base: base})
 			if err != nil {
 				return fmt.Errorf("format run: %w", err)
 			}
@@ -55,6 +57,10 @@ func formatRunCmd() *cobra.Command {
 			}
 
 			if !result.Ran {
+				if result.Formatter != "" {
+					fmt.Printf("Format: skipped (%s: %s)\n", result.Formatter, result.Output)
+					return nil
+				}
 				fmt.Println("Format: skipped (no formatter detected)")
 				return nil
 			}
@@ -68,5 +74,8 @@ func formatRunCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory (default: cwd)")
+	cmd.Flags().StringVar(&base, "base", "",
+		"Base branch for the Dart path (default: the repo default branch); Dart runs touch only "+
+			"the branch's changed .dart files outside analysis_options.yaml analyzer.exclude")
 	return cmd
 }
