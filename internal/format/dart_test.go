@@ -195,3 +195,36 @@ func TestRunDart_NoAnalysisOptionsMeansNoExcludes(t *testing.T) {
 		t.Fatalf("dart invocations: %q", got)
 	}
 }
+
+// An epic sub-issue's branch forks from the epic branch; with Base naming the
+// epic, only the sub-branch's own .dart changes are formatted (#3602).
+func TestRunDart_NonDefaultBaseScopesToOwnChanges(t *testing.T) {
+	dir, log := dartRepo(t)
+	gitT(t, dir, "checkout", "-q", "-b", "epic", "main")
+	write(t, dir, "lib/epic.dart", "void e() {}\n")
+	gitT(t, dir, "add", "-A")
+	gitT(t, dir, "commit", "-q", "-m", "epic")
+	gitT(t, dir, "checkout", "-q", "-b", "sub")
+	write(t, dir, "lib/sub.dart", "void s() {}\n")
+	gitT(t, dir, "add", "-A")
+	gitT(t, dir, "commit", "-q", "-m", "sub")
+
+	if _, err := RunFormat(context.Background(), dir, Options{Base: "epic"}); err != nil {
+		t.Fatalf("RunFormat(epic): %v", err)
+	}
+	got := readLog(t, log)
+	want := "fix --apply -- lib/sub.dart\nformat -- lib/sub.dart\n"
+	if got != want {
+		t.Fatalf("base=epic dart invocations:\n%s\nwant:\n%s", got, want)
+	}
+
+	if err := os.Remove(log); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RunFormat(context.Background(), dir, Options{}); err != nil {
+		t.Fatalf("RunFormat(default): %v", err)
+	}
+	if got := readLog(t, log); !strings.Contains(got, "lib/epic.dart") || !strings.Contains(got, "lib/sub.dart") {
+		t.Fatalf("default base should include both files:\n%s", got)
+	}
+}

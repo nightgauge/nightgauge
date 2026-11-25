@@ -110,11 +110,19 @@ bash -c "$FOCUSED_TESTS" \
 ### Step 6.3: Run Formatter
 
 Run the project's code formatter. On Dart projects it touches only the branch's
-changed `.dart` files outside `analyzer.exclude`. This prevents CI failures from
-formatting drift — the #1 cause of avoidable CI failures.
+changed `.dart` files outside `analyzer.exclude`, diffed against the issue's base
+branch: the epic branch for an epic sub-issue, the default branch when none is
+recorded (#3602). This prevents CI failures from formatting drift — the #1 cause
+of avoidable CI failures.
 
 ```bash
-"${NIGHTGAUGE_BIN:-nightgauge}" format run 2>&1 || { echo "ERROR: format run failed"; exit 1; }
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+BASE_BRANCH=$(jq -r '.base_branch // empty' \
+  "$("${NIGHTGAUGE_BIN:-nightgauge}" layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
+[ -n "$BASE_BRANCH" ] || BASE_BRANCH=$(git config --get nightgauge.branch.base 2>/dev/null)
+"${NIGHTGAUGE_BIN:-nightgauge}" format run ${BASE_BRANCH:+--base "$BASE_BRANCH"} 2>&1 \
+  || { echo "ERROR: format run failed"; exit 1; }
 ```
 
 If the formatter modifies files, those changes must be included in the commit.
