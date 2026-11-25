@@ -3518,7 +3518,17 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     }
   }
 
-  private verifyPostValidateState(issueNumber: number): Error | null {
+  /**
+   * Returns the halt error together with its terminal kind (#2874), so the
+   * halt site sets `gateTerminalKind` without parsing the message. The marker
+   * stays in the text for Go's text classifier; each kind equals
+   * `classifyTerminalKind(error.message)`. Returns null when there is nothing
+   * to halt on: a passed/partial/skipped verdict, no status, or a missing or
+   * unreadable context (fail open).
+   */
+  private verifyPostValidateState(
+    issueNumber: number
+  ): { error: Error; terminalKind: string } | null {
     try {
       const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
       const ctxPath = path.join(pipelineStateDir(cwd), `validate-${issueNumber}.json`);
@@ -3538,21 +3548,27 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // failed branch: the remote refused the credentials, so whatever the
         // test verdict was, a test failure is not the cause.
         const detail = parsed.push_error ? ` Push error: ${parsed.push_error}` : "";
-        return new Error(
-          `[push-auth-failed] feature-validate could not push: the remote refused this ` +
-            `machine's git credentials (validation_status="${status || "unknown"}").${detail} ` +
-            `Fix the git credentials and re-queue; tests and acceptance criteria are not the cause.`
-        );
+        return {
+          terminalKind: "git_transport_auth_failed",
+          error: new Error(
+            `[push-auth-failed] feature-validate could not push: the remote refused this ` +
+              `machine's git credentials (validation_status="${status || "unknown"}").${detail} ` +
+              `Fix the git credentials and re-queue; tests and acceptance criteria are not the cause.`
+          ),
+        };
       }
       if (status === "failed" && parsed.errorCategory === "review-cap-reached") {
         // Stable `[review-cap-reached]` marker (#2865): the cap is one issue's
         // outcome, so it classifies as a park, not as a repository-halting
         // validation_failed.
-        return new Error(
-          `[review-cap-reached] feature-validate stopped at the independent review's round ` +
-            `cap with findings standing. The code was intentionally NOT committed or pushed ` +
-            `and stays in this run's worktree. Parking this issue for an operator.`
-        );
+        return {
+          terminalKind: "review_cap_reached",
+          error: new Error(
+            `[review-cap-reached] feature-validate stopped at the independent review's round ` +
+              `cap with findings standing. The code was intentionally NOT committed or pushed ` +
+              `and stays in this run's worktree. Parking this issue for an operator.`
+          ),
+        };
       }
       if (status === "failed") {
         const category = parsed.errorCategory ? ` (${parsed.errorCategory})` : "";
@@ -3561,13 +3577,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // instead of falling through to the generic subagent_crash fallback —
         // this is feature-validate correctly catching a real implementation
         // defect, not a process crash.
-        return new Error(
-          `[validation-failed] feature-validate reported validation_status="failed"${category}. ` +
-            `The validated code was intentionally NOT committed or pushed — the ` +
-            `skill leaves it on disk for retry. Advancing to pr-create would push ` +
-            `an empty branch and fail the no-commits-ahead gate. Halting at ` +
-            `feature-validate so the failure is surfaced for retry/triage instead.`
-        );
+        return {
+          terminalKind: "validation_failed",
+          error: new Error(
+            `[validation-failed] feature-validate reported validation_status="failed"${category}. ` +
+              `The validated code was intentionally NOT committed or pushed — the ` +
+              `skill leaves it on disk for retry. Advancing to pr-create would push ` +
+              `an empty branch and fail the no-commits-ahead gate. Halting at ` +
+              `feature-validate so the failure is surfaced for retry/triage instead.`
+          ),
+        };
       }
       if (status === "inconclusive") {
         // Stable `[validation-inconclusive]` marker (#221), mirroring
@@ -3575,12 +3594,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // TerminalKindValidationInconclusive instead of falling through to
         // the generic subagent_crash fallback — a zero-test run is an
         // environmental misconfiguration, not a process crash.
-        return new Error(
-          `[validation-inconclusive] feature-validate reported validation_status="inconclusive" ` +
-            `(unit-test tier ran but executed zero tests). The validated code was intentionally ` +
-            `NOT committed or pushed. Halting at feature-validate so this is retried as a ` +
-            `recoverable, non-lifetime-counted outcome instead of advancing to pr-create.`
-        );
+        return {
+          terminalKind: "validation_inconclusive",
+          error: new Error(
+            `[validation-inconclusive] feature-validate reported validation_status="inconclusive" ` +
+              `(unit-test tier ran but executed zero tests). The validated code was intentionally ` +
+              `NOT committed or pushed. Halting at feature-validate so this is retried as a ` +
+              `recoverable, non-lifetime-counted outcome instead of advancing to pr-create.`
+          ),
+        };
       }
       return null;
     } catch (err) {
@@ -13960,8 +13982,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           // never-executes failure #169 was.
           await this.deriveUnexercisedDeliverable(issueNumber);
 
-          const validateVerdictError = this.verifyPostValidateState(issueNumber);
-          if (validateVerdictError) {
+          const validateVerdict = this.verifyPostValidateState(issueNumber);
+          if (validateVerdict) {
+            const validateVerdictError = validateVerdict.error;
             // #1348 revived on the failed path (#1142): a run that discovers
             // mid-flight it was under-estimated could never say so, because the
             // halt below preempted the learning engine 640 lines further down.
@@ -14039,6 +14062,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             }
             failedStage = stage;
             error = validateVerdictError;
+            // #2874: carry the verdict's kind so the halt card is not unclassified.
+            gateTerminalKind = validateVerdict.terminalKind;
             break;
           }
 

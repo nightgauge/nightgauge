@@ -409,6 +409,8 @@ describe("HeadlessOrchestrator — backtrack must be reachable on a FAILED stage
     // replace it with a backtrack-specific message.
     expect(result.error?.message).toContain("[validation-failed]");
     expect(result.error?.message).toContain("tests-failed");
+    // #2874: the halt carries the verdict's structured kind, not unclassified.
+    expect(result.terminalKind).toBe("validation_failed");
     expect(countOf("feature-planning")).toBe(1);
     expect(state.recordBacktrack).not.toHaveBeenCalled();
     expect(writes.some((w) => w.path.includes(`feedback-${ISSUE}.json`))).toBe(false);

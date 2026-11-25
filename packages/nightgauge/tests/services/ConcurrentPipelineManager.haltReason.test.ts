@@ -168,6 +168,7 @@ function createControllableFactory() {
         failedStage,
         totalDurationMs: 10000,
       }),
+    resolveIssue: (issueNumber: number, result: any) => resolvers.get(issueNumber)?.(result),
   };
 }
 
@@ -225,6 +226,51 @@ describe("ConcurrentPipelineManager — haltQueueOnSlotFailure pause reason (#32
     expect(issueNumber).toBe(3239);
     expect(stage).toBe("pr-merge");
     expect(repo).toBe("nightgauge/nightgauge");
+  });
+
+  // #2874: pins the CPM boundary — a validate halt's kind reaches the card.
+  // The orchestrator side is covered in failedStageBacktrack.test.ts.
+  it("a [validation-failed] validate halt pauses with validation_failed, not unclassified", async () => {
+    const c = createControllableFactory();
+    const manager = new ConcurrentPipelineManager(
+      "/test-repo",
+      {
+        dequeueIndependent: vi
+          .fn()
+          .mockResolvedValueOnce([makeQueueItem(2874, "nightgauge/nightgauge")])
+          .mockResolvedValue([]),
+        updateActiveSlots: vi.fn().mockResolvedValue(undefined),
+        drainBlockedSuccessors: vi.fn().mockResolvedValue([]),
+        enqueue: vi.fn().mockResolvedValue(null),
+        clear: vi.fn().mockResolvedValue(undefined),
+        getQueue: vi.fn().mockResolvedValue({ items: [], status: "idle" }),
+      } as any,
+      c.factory,
+      { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), getChannel: vi.fn() } as any,
+      { maxConcurrent: 1 }
+    );
+
+    await manager.fillSlots();
+    c.resolveIssue(2874, {
+      success: false,
+      completedStages: ["issue-pickup", "feature-planning", "feature-dev"],
+      skippedStages: [],
+      deferredStages: [],
+      failedStage: "feature-validate",
+      terminalKind: "validation_failed",
+      error: new Error(
+        '[validation-failed] feature-validate reported validation_status="failed" (tests-failed).'
+      ),
+      totalDurationMs: 10000,
+    });
+    await manager.settleForTest(2874);
+
+    expect(mockAutonomousPauseRepo).toHaveBeenCalledTimes(1);
+    const args = mockAutonomousPauseRepo.mock.calls[0];
+    expect(args[5]).toBe("validation_failed");
+    for (const arg of args) {
+      expect(String(arg)).not.toContain("unclassified");
+    }
   });
 
   // #1148 — the fallback. A dispatch that could not be attributed to a repo

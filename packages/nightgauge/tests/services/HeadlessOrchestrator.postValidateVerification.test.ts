@@ -87,7 +87,7 @@ describe("HeadlessOrchestrator.verifyPostValidateState (Issue #4220)", () => {
       validation_status: "failed",
       errorCategory: "build-failed",
     });
-    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42);
+    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42)?.error ?? null;
     expect(result).toBeInstanceOf(Error);
     expect((result as Error).message).toMatch(/validation_status="failed"/i);
     expect((result as Error).message).toMatch(/build-failed/);
@@ -103,7 +103,7 @@ describe("HeadlessOrchestrator.verifyPostValidateState (Issue #4220)", () => {
       validation_status: "failed",
       errorCategory: "tests-failed",
     });
-    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42);
+    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42)?.error ?? null;
     expect(result).toBeInstanceOf(Error);
     expect((result as Error).message).toContain("[validation-failed]");
   });
@@ -116,7 +116,7 @@ describe("HeadlessOrchestrator.verifyPostValidateState (Issue #4220)", () => {
       push_status: "auth_failed",
       push_error: "[push-auth-failed] PUSH REFUSED: Permission denied (publickey).",
     });
-    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42);
+    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42)?.error ?? null;
     expect(result).toBeInstanceOf(Error);
     expect((result as Error).message).toMatch(/^\[push-auth-failed\]/);
     expect((result as Error).message).not.toContain("[validation-failed]");
@@ -125,7 +125,7 @@ describe("HeadlessOrchestrator.verifyPostValidateState (Issue #4220)", () => {
 
   it("prefers the push marker over a failed verdict (#2742)", () => {
     writeValidateContext(workdir, 42, { validation_status: "failed", push_status: "auth_failed" });
-    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42);
+    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42)?.error ?? null;
     expect((result as Error).message).toMatch(/^\[push-auth-failed\]/);
   });
 
@@ -136,7 +136,7 @@ describe("HeadlessOrchestrator.verifyPostValidateState (Issue #4220)", () => {
       validation_status: "failed",
       errorCategory: "review-cap-reached",
     });
-    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42);
+    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42)?.error ?? null;
     expect(result).toBeInstanceOf(Error);
     expect((result as Error).message).toMatch(/^\[review-cap-reached\]/);
     expect((result as Error).message).not.toContain("[validation-failed]");
@@ -151,9 +151,29 @@ describe("HeadlessOrchestrator.verifyPostValidateState (Issue #4220)", () => {
       validation_status: "failed",
       errorCategory: "mobile-apk-build-failed",
     });
-    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(238);
+    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(238)?.error ?? null;
     expect(result).toBeInstanceOf(Error);
     expect((result as Error).message).toMatch(/mobile-apk-build-failed/);
+  });
+
+  // #2874: each marker returns a structured kind equal to the text classifier's.
+  it.each([
+    [{ validation_status: "passed", push_status: "auth_failed" }, "git_transport_auth_failed"],
+    [{ validation_status: "failed", errorCategory: "review-cap-reached" }, "review_cap_reached"],
+    [{ validation_status: "failed", errorCategory: "tests-failed" }, "validation_failed"],
+    [{ validation_status: "inconclusive" }, "validation_inconclusive"],
+    [{ validation_status: "failed", push_status: "auth_failed" }, "git_transport_auth_failed"],
+    [{ validation_status: "failed" }, "validation_failed"],
+    [
+      { validation_status: "failed", errorCategory: "mobile-apk-build-failed" },
+      "validation_failed",
+    ],
+  ])("returns a structured terminalKind for %j → %s (#2874)", (body, kind) => {
+    writeValidateContext(workdir, 42, body);
+    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42);
+    expect(result.terminalKind).toBe(kind);
+    expect(result.terminalKind).not.toBe("unclassified");
+    expect(classifyTerminalKind(result.error.message)).toBe(result.terminalKind);
   });
 
   it.each(["partial", "skipped", "passed"])("returns null for non-failed verdict: %s", (status) => {
