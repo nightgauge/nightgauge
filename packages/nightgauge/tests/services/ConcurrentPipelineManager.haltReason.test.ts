@@ -7,6 +7,32 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// #3596: haltQueueOnSlotFailure asks the forge whether the work already landed
+// (`gh issue view`, `gh pr list`) before pausing. Unstubbed, those calls hit
+// live GitHub, so a case broke once its own issue number closed. Pin the forge
+// to "issue open, no landed PR" so every case exercises the halt-to-pause path.
+vi.mock("child_process", async (importActual) => {
+  const actual = await importActual<typeof import("child_process")>();
+  type Cb = (err: Error | null, out: { stdout: string; stderr: string }) => void;
+  return {
+    ...actual,
+    exec: (_cmd: string, optsOrCb: unknown, maybeCb?: unknown) => {
+      const cb = (typeof optsOrCb === "function" ? optsOrCb : maybeCb) as Cb;
+      cb(null, { stdout: "", stderr: "" });
+    },
+    execFile: (file: string, args: string[], optsOrCb: unknown, maybeCb?: unknown) => {
+      const cb = (typeof optsOrCb === "function" ? optsOrCb : maybeCb) as Cb;
+      if (file === "gh" && args.includes("issue") && args.includes("view")) {
+        cb(null, { stdout: JSON.stringify({ state: "OPEN" }), stderr: "" });
+      } else if (file === "gh" && args.includes("pr") && args.includes("list")) {
+        cb(null, { stdout: "[]", stderr: "" });
+      } else {
+        cb(null, { stdout: "", stderr: "" });
+      }
+    },
+  };
+});
+
 vi.mock("vscode", () => ({
   EventEmitter: class {
     private listeners: Array<(...args: any[]) => void> = [];
