@@ -10,6 +10,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Runs inline: it no longer forks into the read-only `pipeline-researcher` agent, whose allowlist cannot run the state-writing `nightgauge` verbs this skill calls (#3581).
 - Per-clone pipeline state, plans, retros and logs are read at
   `$(nightgauge layout path <class> <name>)` and written through
   `nightgauge layout write|append`, not by `.nightgauge/...` path (#2037,

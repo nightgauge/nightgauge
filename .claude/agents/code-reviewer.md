@@ -1,7 +1,7 @@
 ---
 name: code-reviewer
 description: Code review agent for quality, security, and best practices analysis. Use when reviewing pull requests, auditing code changes, checking for security issues, or validating adherence to project standards.
-tools: Read, Grep, Glob, Bash(npm run lint *), Bash(git diff *), Bash(git log *), Bash(nightgauge *)
+tools: Read, Grep, Glob, Bash(npm run lint *), Bash(git diff *), Bash(git log *)
 disallowedTools: Edit, Write
 model: sonnet
 memory: project

@@ -15,6 +15,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Runs inline: it no longer forks into the read-only `pipeline-researcher` agent, whose allowlist cannot run the state-writing `nightgauge` verbs this skill calls (#3581).
 - **Phase 8 says what happens to a broken context file (#1919).** When the stage
   exits 0 on this issue's branch, the orchestrator now repairs a missing,
   invalid, schema-mismatched or branch-less `issue-{N}.json` before the gate

@@ -10,6 +10,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Runs inline: it no longer forks into the read-only `pipeline-researcher` agent, whose allowlist cannot run the state-writing `nightgauge` verbs this skill calls (#3581).
 - The JSON report is written to this checkout's `reports/health-report.json`
   inside the git directory (`nightgauge layout path checkout
 reports/health-report.json`) through `nightgauge layout write checkout`, not to
