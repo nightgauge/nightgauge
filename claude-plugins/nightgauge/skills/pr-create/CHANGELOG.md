@@ -10,6 +10,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The branch push goes through `nightgauge git push-branch`: a self-inflicted fork is recovered and a genuine one is surfaced as `[branch-forked]` instead of being swallowed (#2856).
 - Phase 2.3 stale-branch merge reports a conflict on a non-ASCII path such as
   `café.txt` by its real name instead of a C-quoted string (#3028).
 - Phase 2.3 base merge no longer aborts a merge that is already open, so a staged

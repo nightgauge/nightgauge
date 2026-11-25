@@ -17,8 +17,9 @@ import (
 	"github.com/nightgauge/nightgauge/internal/terminalkind"
 )
 
-// Exit codes of `git push-branch`, a contract feature-validate Step 5.3 and
-// feature-dev Step 0.7.1b branch on (#2699).
+// Exit codes of `git push-branch`, a contract feature-validate Step 5.3,
+// feature-dev Step 0.7.1b and pr-create Phase 3 (create-and-ci.md, #2856)
+// branch on (#2699).
 const (
 	pushBranchOK     = 0
 	pushBranchFailed = 1
