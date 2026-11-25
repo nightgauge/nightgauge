@@ -8,9 +8,6 @@ import (
 	"testing"
 )
 
-// nightgaugeCall matches a skill body that invokes the nightgauge binary.
-var nightgaugeCall = regexp.MustCompile(`\bnightgauge\s+[a-z]|NIGHTGAUGE_BIN`)
-
 const nightgaugeTool = "Bash(nightgauge *)"
 
 // frontmatter returns the key/value pairs of a file's leading --- block and
@@ -67,11 +64,113 @@ func hasTool(tools []string, want string) bool {
 	return false
 }
 
+// nightgaugeInvocation captures the verb tokens of a nightgauge call written
+// as `"${NIGHTGAUGE_BIN:-nightgauge}" <verb…>`, `"$BINARY" <verb…>` or a bare
+// `nightgauge <verb…>`.
+var nightgaugeInvocation = regexp.MustCompile(
+	`(?:"\$\{NIGHTGAUGE_BIN:-nightgauge\}"|"?\$BINARY"?|\bnightgauge)((?:[ \t]+[a-z][a-z-]*)+)`)
+
+// forkNightgaugeViolations lists the nightgauge invocations in body that no
+// tool in tools admits. Each is normalised to `nightgauge <verbs…> ` so a
+// `Bash(nightgauge <verb> *)` grant can match it.
+func forkNightgaugeViolations(body string, tools []string) []string {
+	var violations []string
+	seen := map[string]bool{}
+	for _, m := range nightgaugeInvocation.FindAllStringSubmatch(body, -1) {
+		cmd := "nightgauge " + strings.Join(strings.Fields(m[1]), " ") + " "
+		if seen[cmd] {
+			continue
+		}
+		seen[cmd] = true
+		admitted := false
+		for _, tool := range tools {
+			if grantAdmits(tool, cmd) {
+				admitted = true
+				break
+			}
+		}
+		if !admitted {
+			violations = append(violations, strings.TrimSpace(cmd))
+		}
+	}
+	return violations
+}
+
+// includeDirective matches a `<!-- include: path -->` line in a skill body.
+var includeDirective = regexp.MustCompile(`<!-- include: (\S+) -->`)
+
+// skillText returns body plus every file the skill pulls in: the
+// `_includes/*.md` files beside its SKILL.md and each `<!-- include: -->`
+// target. A forked skill runs all of that text under its agent's allowlist.
+func skillText(t *testing.T, skillPath, body string) string {
+	t.Helper()
+	dir := filepath.Dir(skillPath)
+	parts := []string{body}
+	seen := map[string]bool{}
+	add := func(path string) {
+		if seen[path] {
+			return
+		}
+		seen[path] = true
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read include %s of %s: %v", path, skillPath, err)
+		}
+		parts = append(parts, string(raw))
+	}
+	includes, err := filepath.Glob(filepath.Join(dir, "_includes", "*.md"))
+	if err != nil {
+		t.Fatalf("glob includes of %s: %v", skillPath, err)
+	}
+	for _, inc := range includes {
+		add(inc)
+	}
+	for _, m := range includeDirective.FindAllStringSubmatch(body, -1) {
+		add(filepath.Clean(filepath.Join(dir, m[1])))
+	}
+	return strings.Join(parts, "\n")
+}
+
 // TestForkedSkillAgentsAllowNightgauge fails when a skill that forks into a
-// Claude Code agent calls nightgauge but the agent's allowlist denies it
-// (#3561).
+// Claude Code agent calls a nightgauge verb the agent's allowlist denies
+// (#3561, #3581).
 func TestForkedSkillAgentsAllowNightgauge(t *testing.T) {
+	researcher := readOnlyNightgaugeGrants
+	for _, body := range []string{
+		"X=$(\"${NIGHTGAUGE_BIN:-nightgauge}\" layout write pipeline x.json)",
+		"$BINARY layout write pipeline x.json",
+		"nightgauge layout write pipeline x.json",
+	} {
+		v := forkNightgaugeViolations(body, researcher)
+		if len(v) != 1 || !strings.HasPrefix(v[0], "nightgauge layout write pipeline") {
+			t.Fatalf("%q against read-only grants yielded %v; want one layout write violation", body, v)
+		}
+	}
+	if v := forkNightgaugeViolations(
+		"X=$(\"${NIGHTGAUGE_BIN:-nightgauge}\" layout path pipeline x.json)\n\"$BINARY\" forge issue view 1",
+		researcher); len(v) != 0 {
+		t.Fatalf("read-only calls yielded violations %v; want none", v)
+	}
 	root := repoRoot(t)
+	// A write verb that appears only in an included file must still be seen.
+	fixtureDir := t.TempDir()
+	skillDir := filepath.Join(fixtureDir, "skill")
+	for path, text := range map[string]string{
+		filepath.Join(skillDir, "_includes", "ctx.md"):    "\"$BINARY\" layout write pipeline x.json\n",
+		filepath.Join(fixtureDir, "_shared", "SHARED.md"): "nightgauge finding record --issue 1\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixtureBody := "<!-- include: ../_shared/SHARED.md -->\n"
+	if v := forkNightgaugeViolations(
+		skillText(t, filepath.Join(skillDir, "SKILL.md"), fixtureBody), researcher); len(v) != 2 {
+		t.Fatalf("write verbs in included files yielded %v; want two violations", v)
+	}
 	var skills []string
 	for _, pattern := range []string{"skills/*/SKILL.md", "claude-plugins/nightgauge/skills/*/SKILL.md"} {
 		matches, err := filepath.Glob(filepath.Join(root, pattern))
@@ -80,23 +179,50 @@ func TestForkedSkillAgentsAllowNightgauge(t *testing.T) {
 		}
 		skills = append(skills, matches...)
 	}
+	if len(skills) == 0 {
+		t.Fatal("no SKILL.md found; the scan is vacuous")
+	}
+	// Since #3581 no skill forks into an agent, so the scan is expected to
+	// examine nothing; the fixtures above prove the check itself can go red.
 	examined := 0
 	for _, path := range skills {
 		fields, body := frontmatter(t, path)
 		agent := fields["agent"]
-		if fields["context"] != "fork" || agent == "" || !nightgaugeCall.MatchString(body) {
+		if fields["context"] != "fork" || agent == "" {
 			continue
 		}
 		examined++
 		rel, _ := filepath.Rel(root, path)
-		if !hasTool(agentTools(t, root, agent), nightgaugeTool) {
-			t.Errorf("%s forks into agent %q and calls nightgauge, but "+
-				".claude/agents/%s.md tools: lacks %s; add it to the allowlist",
-				rel, agent, agent, nightgaugeTool)
+		for _, cmd := range forkNightgaugeViolations(skillText(t, path, body), agentTools(t, root, agent)) {
+			t.Errorf("%s forks into agent %q and calls %q, which .claude/agents/%s.md tools: "+
+				"does not admit; run the skill inline instead", rel, agent, cmd, agent)
 		}
 	}
-	if examined == 0 {
-		t.Fatal("no context: fork skill with an agent was examined; the scan is vacuous")
+	t.Logf("examined %d forked skills with an agent", examined)
+}
+
+// TestResearcherSkillsRunInline locks #3581: skills that call state-writing
+// nightgauge verbs run inline with Bash and Write instead of forking into
+// the read-only pipeline-researcher agent.
+func TestResearcherSkillsRunInline(t *testing.T) {
+	root := repoRoot(t)
+	for _, name := range []string{"issue-pickup", "feature-planning", "backlog-preflight", "health-check"} {
+		for _, rel := range []string{
+			filepath.Join("skills", "nightgauge-"+name, "SKILL.md"),
+			filepath.Join("claude-plugins", "nightgauge", "skills", name, "SKILL.md"),
+		} {
+			fields, _ := frontmatter(t, filepath.Join(root, rel))
+			if fields["context"] == "fork" || fields["agent"] != "" {
+				t.Errorf("%s: context=%q agent=%q; #3581 requires it to run inline",
+					rel, fields["context"], fields["agent"])
+			}
+			tools := strings.Fields(fields["allowed-tools"])
+			for _, want := range []string{"Bash", "Write"} {
+				if !hasTool(tools, want) {
+					t.Errorf("%s: allowed-tools %q lacks %s", rel, fields["allowed-tools"], want)
+				}
+			}
+		}
 	}
 }
 
@@ -174,8 +300,9 @@ var nightgaugeWriteCommands = []string{
 	"nightgauge hook post-merge --issue 1",
 }
 
-// testRunnerReadGrants are the read-only nightgauge grants test-runner keeps.
-var testRunnerReadGrants = []string{
+// readOnlyNightgaugeGrants are the read-only nightgauge grants test-runner and
+// pipeline-researcher keep.
+var readOnlyNightgaugeGrants = []string{
 	"Bash(nightgauge layout path *)",
 	"Bash(nightgauge forge issue view *)",
 }
@@ -201,8 +328,8 @@ func grantAdmits(tool, cmd string) bool {
 	return regexp.MustCompile("^" + strings.Join(parts, ".*") + "$").MatchString(cmd)
 }
 
-// TestReadOnlyAgentNightgaugeGrantsAreReadOnly locks #3578: the read-only
-// test-runner agent may run only nightgauge verbs that cannot write.
+// TestReadOnlyAgentNightgaugeGrantsAreReadOnly locks #3578 and #3581: the
+// read-only agents may run only nightgauge verbs that cannot write.
 func TestReadOnlyAgentNightgaugeGrantsAreReadOnly(t *testing.T) {
 	const writeCmd = "nightgauge layout write pipeline planning-1.json"
 	for _, wide := range []string{nightgaugeTool, "Bash", "Bash(*)", "Bash(nightgauge:*)"} {
@@ -210,24 +337,34 @@ func TestReadOnlyAgentNightgaugeGrantsAreReadOnly(t *testing.T) {
 			t.Fatalf("grantAdmits(%q, %q) = false; the matcher cannot see a write grant", wide, writeCmd)
 		}
 	}
-	for _, grant := range testRunnerReadGrants {
+	for _, grant := range readOnlyNightgaugeGrants {
 		if grantAdmits(grant, writeCmd) {
 			t.Fatalf("grantAdmits(%q, %q) = true; the matcher over-matches", grant, writeCmd)
 		}
 	}
 	root := repoRoot(t)
-	const agent = "test-runner"
-	tools := agentTools(t, root, agent)
-	for _, tool := range tools {
-		for _, cmd := range nightgaugeWriteCommands {
-			if grantAdmits(tool, cmd) {
-				t.Errorf(".claude/agents/%s.md grant %s admits write command %q", agent, tool, cmd)
+	agents := map[string][]string{
+		"test-runner":         readOnlyNightgaugeGrants,
+		"pipeline-researcher": readOnlyNightgaugeGrants,
+		"code-reviewer":       nil,
+		"pipeline-optimizer":  nil,
+	}
+	for agent, required := range agents {
+		tools := agentTools(t, root, agent)
+		for _, tool := range tools {
+			for _, cmd := range nightgaugeWriteCommands {
+				if grantAdmits(tool, cmd) {
+					t.Errorf(".claude/agents/%s.md grant %s admits write command %q", agent, tool, cmd)
+				}
+			}
+			if len(required) == 0 && strings.HasPrefix(tool, "Bash(nightgauge") {
+				t.Errorf(".claude/agents/%s.md grants %s; it needs no nightgauge verb", agent, tool)
 			}
 		}
-	}
-	for _, want := range testRunnerReadGrants {
-		if !hasTool(tools, want) {
-			t.Errorf(".claude/agents/%s.md tools: lacks %s", agent, want)
+		for _, want := range required {
+			if !hasTool(tools, want) {
+				t.Errorf(".claude/agents/%s.md tools: lacks %s", agent, want)
+			}
 		}
 	}
 }

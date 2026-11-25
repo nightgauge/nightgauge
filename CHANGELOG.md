@@ -16,6 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The read-only `code-reviewer`, `pipeline-optimizer` and `pipeline-researcher` agents can no longer run state-writing `nightgauge` commands: the first two grant no `nightgauge` verb, and `pipeline-researcher` grants only `nightgauge layout path` and `nightgauge forge issue view`. issue-pickup, feature-planning, backlog-preflight and health-check now run inline instead of forking into `pipeline-researcher` (#3581).
 - The pr-create criterion checker no longer books "`F` no longer grants `X`" unmet when the diff removed `X`: "no longer grants/allows/admits/permits/carries/lists/declares/defines" and "does not grant/allow/admit/permit" are read as absence checks, and a code span before the phrase (such as `tools:`) is the subject, not a token that must be absent (#3582).
 - The `test-runner` agent can no longer run `nightgauge` write verbs such as `layout write`: its allowlist grants only `nightgauge layout path` and `nightgauge forge issue view`, and a Go test fails when a `test-runner` grant admits a write verb (#3578).
 - The PreToolUse Bash write gate no longer blocks `echo`/`printf` writes to committed env templates: a redirect target whose final suffix is `.example`, `.sample`, `.template` or `.md` is allowed, the same rule the sensitive-file gate applies. Every redirect target in the command is checked, so `> .env`, `> .env.example.local` and `> server.example.pem` stay blocked (#3558).

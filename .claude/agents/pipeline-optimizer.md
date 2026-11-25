@@ -1,7 +1,7 @@
 ---
 name: pipeline-optimizer
 description: Pipeline performance analysis agent. Use when analyzing token usage, stage durations, cost efficiency, model routing effectiveness, or failure patterns across pipeline executions.
-tools: Read, Grep, Glob, Bash(cat *), Bash(wc *), Bash(jq *), Bash(nightgauge *)
+tools: Read, Grep, Glob, Bash(cat *), Bash(wc *), Bash(jq *)
 disallowedTools: Edit, Write
 model: haiku
 memory: project

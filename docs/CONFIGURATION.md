@@ -3711,9 +3711,9 @@ stages take the higher of the default and the router's tier, so the router
 mode envelope still applies: `efficiency` caps Opus at Sonnet, and `maximum`
 pins Opus at `high` effort. Effort is always sent explicitly for an Opus stage.
 
-Research and exploration subagents that skills dispatch (the
-`pipeline-researcher` agent and the skills' read-only `Task` helpers) run on
-`haiku`.
+Research and exploration subagents (the read-only `pipeline-researcher`
+agent and the skills' `Task` helpers) run on `haiku`. Stage skills run inline
+and do not fork into `pipeline-researcher`.
 
 **Example:**
 

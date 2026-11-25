@@ -10,6 +10,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Runs inline: it no longer forks into the read-only `pipeline-researcher` agent, whose allowlist cannot run the state-writing `nightgauge` verbs this skill calls (#3581).
 - Partial-delivery re-runs: `focus_acs` is exactly the scope block's criteria; Phase 1.7 never widens it with unmet or undetectable criteria from the regenerated `ac-reconcile-{N}.json` (#3235).
 - Phase 1.7 only reads `ac-reconcile-{N}.json`: the orchestrator rebuilds it from the current issue body before planning, and a missing report fails the stage. The skill no longer runs or skips `preflight ac-reconcile` (#3228).
 - Already-Resolved Issue Signal: a partial-delivery comment's remaining criteria are met only by evidence dated after it; plan them as `focus_acs`, never verify-and-close (#3089).

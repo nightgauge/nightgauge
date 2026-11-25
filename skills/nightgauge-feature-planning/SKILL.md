@@ -7,11 +7,9 @@ description: Documentation-first feature planning. Read docs before code, propos
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.20.0"
+  version: "1.20.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
-context: fork
-agent: pipeline-researcher
 model: haiku
 inputs:
   - pipeline/issue-{N}.json

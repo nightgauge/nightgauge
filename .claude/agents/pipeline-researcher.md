@@ -1,7 +1,7 @@
 ---
 name: pipeline-researcher
 description: Research agent for codebase exploration and issue analysis. Use when gathering context for pipeline stages, analyzing issue requirements, understanding code structure, or summarizing a codebase area before implementation begins.
-tools: Read, Grep, Glob, Bash(gh *), Bash(git log *), Bash(git diff *), Bash(nightgauge *)
+tools: Read, Grep, Glob, Bash(gh *), Bash(git log *), Bash(git diff *), Bash(nightgauge layout path *), Bash(nightgauge forge issue view *)
 model: haiku
 memory: project
 ---
