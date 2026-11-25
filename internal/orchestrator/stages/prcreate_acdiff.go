@@ -1852,10 +1852,12 @@ func acRemovedIn(name string, re *regexp.Regexp, d *ACDiff, scope []string) acRe
 }
 
 // acNegContentRE marks a negative-content criterion (#3385): "`F` no longer
-// contains `X`", "`git grep X` returns no match". Absence on the branch is
-// the success condition, never whether the diff adds the token.
+// contains `X`", "`F` no longer grants `X`" (#3582), "`git grep X` returns
+// no match". Absence on the branch is the success condition, never whether
+// the diff adds the token. Behaviour negatives ("no longer fails") are not
+// matched: they stay with the judge.
 var (
-	acNegContentRE = regexp.MustCompile(`(?i)\bno longer (?:contains?|includes?|mentions?|references?|has)\b|\bdoes(?: not|n't) (?:contain|include|mention|reference)\b|\bcontains no\b|\b(?:returns?|finds?|has|have) no (?:match(?:es)?|occurrences?|hits?|results?)\b`)
+	acNegContentRE = regexp.MustCompile(`(?i)\bno longer (?:contains?|includes?|mentions?|references?|has)\b|\bno longer (?:grants?|allows?|admits?|permits?|carry|carries|lists?|declares?|defines?)\b|\bdoes(?: not|n't) (?:contain|include|mention|reference)\b|\bdoes(?: not|n't) (?:grant|allow|admit|permit)\b|\bcontains no\b|\b(?:returns?|finds?|has|have) no (?:match(?:es)?|occurrences?|hits?|results?)\b`)
 	acGitGrepRE    = regexp.MustCompile(`^git\s+grep\b`)
 	acNegCoverRE   = regexp.MustCompile(`(?i)\b(?:covers?|asserts?|verif(?:y|ies)|exercises?|checks?|tests?)\b`)
 	acBREMetaRE    = regexp.MustCompile(`[.*\[\]^$\\]`)
@@ -1888,8 +1890,9 @@ func acAbsent(c acClause, d *ACDiff) acResult {
 		}
 		return acResult{}
 	}
-	matchers := make([]func(string) bool, len(c.Tokens))
-	for i, tok := range c.Tokens {
+	targets := acNegTargets(c)
+	matchers := make([]func(string) bool, len(targets))
+	for i, tok := range targets {
 		matchers[i] = acSpanMatcher(tok)
 	}
 	var removedFrom []string
@@ -1905,7 +1908,7 @@ func acAbsent(c acClause, d *ACDiff) acResult {
 		for ti, match := range matchers {
 			for i, l := range lines {
 				if match(l) {
-					return acAnswer(ACUnmet, fmt.Sprintf("`%s` still present at `%s:%d`", c.Tokens[ti], p, i+1), p)
+					return acAnswer(ACUnmet, fmt.Sprintf("`%s` still present at `%s:%d`", targets[ti], p, i+1), p)
 				}
 			}
 		}
@@ -1920,11 +1923,33 @@ func acAbsent(c acClause, d *ACDiff) acResult {
 			}
 		}
 	}
-	ev := fmt.Sprintf("%s absent from `%s` on the branch", acList(c.Tokens, 3), strings.Join(c.Paths, "`, `"))
+	ev := fmt.Sprintf("%s absent from `%s` on the branch", acList(targets, 3), strings.Join(c.Paths, "`, `"))
 	if len(removedFrom) > 0 {
 		ev += fmt.Sprintf("; the diff removed it from `%s`", strings.Join(acUniq(removedFrom), "`, `"))
 	}
 	return acAnswer(ACMet, ev, c.Paths...)
+}
+
+// acNegTargets is the tokens a path-scoped negative criterion requires
+// absent: those whose code span follows the negative phrase in c.Raw. In
+// "`F` `tools:` no longer grants `X`" the span before the phrase is the
+// subject, not text that must be gone (#3582). When none follows, every
+// token is a target.
+func acNegTargets(c acClause) []string {
+	loc := acNegContentRE.FindStringIndex(c.Raw)
+	if loc == nil {
+		return c.Tokens
+	}
+	var out []string
+	for _, tok := range c.Tokens {
+		if i := strings.LastIndex(c.Raw, "`"+tok+"`"); i >= loc[1] {
+			out = append(out, tok)
+		}
+	}
+	if len(out) == 0 {
+		return c.Tokens
+	}
+	return out
 }
 
 // acGitGrepPattern is the pattern a `git grep [flags] PATTERN [--] [path…]`
