@@ -123,19 +123,19 @@ func TestQueueAddRaisesVisibilityNeverLowers(t *testing.T) {
 
 	s.QueueAdd(QueueEntry{Repo: "nightgauge/test", IssueNumber: 1})
 	s.QueueAddItem(QueueItem{Repo: "nightgauge/test", IssueNumber: 1, Visibility: state.VisibilityPrivate})
-	if got := s.queueItemVisibility("nightgauge/test", 1); got != state.VisibilityPrivate {
+	if got := s.queueItemSeed("nightgauge/test", 1).Visibility; got != state.VisibilityPrivate {
 		t.Errorf("after a private request, item Visibility = %q, want private", got)
 	}
 
 	s.QueueAdd(QueueEntry{Repo: "nightgauge/test", IssueNumber: 2, Visibility: state.VisibilityPrivate})
 	s.QueueAdd(QueueEntry{Repo: "nightgauge/test", IssueNumber: 2})
 	s.QueueAddItem(QueueItem{Repo: "nightgauge/test", IssueNumber: 2, Visibility: state.VisibilityTeam})
-	if got := s.queueItemVisibility("nightgauge/test", 2); got != state.VisibilityPrivate {
+	if got := s.queueItemSeed("nightgauge/test", 2).Visibility; got != state.VisibilityPrivate {
 		t.Errorf("after team requests, private item Visibility = %q, want private", got)
 	}
 
 	s.QueueAddItem(QueueItem{Repo: "nightgauge/test", IssueNumber: 3, Visibility: "public"})
-	if got := s.queueItemVisibility("nightgauge/test", 3); got != "" {
+	if got := s.queueItemSeed("nightgauge/test", 3).Visibility; got != "" {
 		t.Errorf("malformed request Visibility = %q, want none", got)
 	}
 }

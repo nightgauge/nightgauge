@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/execution"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -277,7 +281,7 @@ func TestRunPipeline_IgnoresANonIdentityRemoteRunID_AndMintsLocally(t *testing.T
 
 			const issue = 371
 			item := types.BoardItem{Number: issue, Repo: "nightgauge/nightgauge", ID: "item-371"}
-			// The queue is where queueItemRemoteRunID reads from — this is the
+			// The queue is where queueItemSeed reads from — this is the
 			// real production seam, not a stubbed accessor.
 			s.queue = []QueueItem{{
 				Repo: item.Repo, IssueNumber: issue, RemoteRunID: tc.remote, Status: "ready",
@@ -417,5 +421,182 @@ func TestRunPipeline_PreflightRefusesANonIdentity_AndBooksThroughTheFunnel(t *te
 		if strings.HasPrefix(e.Name(), "runtime-") {
 			t.Errorf("a refused run left a snapshot behind: %s", e.Name())
 		}
+	}
+}
+
+// #3605: RunQueue takes its items off s.queue before it dispatches them, so a
+// run that looked its identity, pin and visibility up in s.queue found nothing.
+// Every test below fills the queue through QueueAddItem and enters through
+// RunQueue, the production path, never a hand-seeded s.queue.
+
+// itemBoardServer answers GetItem's filtered items query with the one issue the
+// filter names (`repo:<owner>/<repo> #<N>`), so RunQueue resolves every queued
+// entry to a board row. Every other request gets an empty data object.
+func itemBoardServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	filter := regexp.MustCompile(`^repo:(\S+) #(\d+)$`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		var req struct {
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		q, _ := req.Variables["query"].(string)
+		m := filter.FindStringSubmatch(q)
+		if m == nil {
+			_, _ = w.Write([]byte(`{"data":{}}`))
+			return
+		}
+		fmt.Fprintf(w, `{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[`+
+			`{"id":"PVTI_%[2]s","content":{"__typename":"Issue","number":%[2]s,"title":"t%[2]s","state":"OPEN",`+
+			`"repository":{"nameWithOwner":%[1]q}},"fieldValues":{"nodes":[]}}]}}}}}`, m[1], m[2])
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// runQueueSnapshots queues items through QueueAddItem, runs RunQueue once and
+// returns the terminal runtime snapshot of each run, keyed "repo#issue".
+func runQueueSnapshots(t *testing.T, items ...QueueItem) map[string]*state.RuntimeState {
+	t.Helper()
+	root := gitWorkspace(t)
+	runner := &runIDCapturingRunner{}
+	s := newRunIdentityTestScheduler(t, root, runner)
+	srv := itemBoardServer(t)
+	client := gh.NewClientWithURL("test-token", srv.URL)
+	s.client = client
+	s.boardSvc = gh.NewBoardService(client, "o", 1)
+	s.owner = "o"
+	s.repoPathResolver = func(string) string { return root }
+
+	var mu sync.Mutex
+	snaps := map[string]*state.RuntimeState{}
+	s.OnPipelineComplete(func(repo string, issue int, snap *state.RuntimeState, _ bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		snaps[fmt.Sprintf("%s#%d", repo, issue)] = snap
+	})
+
+	s.QueueAddItem(items...)
+	summary, err := s.RunQueue(context.Background())
+	if err != nil {
+		t.Fatalf("RunQueue: %v", err)
+	}
+	for _, o := range summary.Outcomes {
+		if o.Kind == QueueOutcomeNotDispatched || o.Kind == QueueOutcomeBlocked {
+			t.Fatalf("%s#%d was not dispatched (%s): the fixture is wrong, not the assertion", o.Repo, o.IssueNumber, o.Detail)
+		}
+	}
+	if len(snaps) != len(items) {
+		t.Fatalf("got %d completed runs for %d queued items", len(snaps), len(items))
+	}
+	return snaps
+}
+
+func TestRunQueue_RunIdentity_ValidRunIDWinsAndRemoteRunIDIsServed(t *testing.T) {
+	t.Parallel()
+	runID, remote := testRunID(), testRunID()
+	snap := runQueueSnapshots(t, QueueItem{Repo: "o/r", IssueNumber: 401, RunID: runID, RemoteRunID: remote})["o/r#401"]
+	if snap.RunID != runID {
+		t.Errorf("RunID = %q, want the item's RunID %q", snap.RunID, runID)
+	}
+	if snap.RemoteRunID != remote {
+		t.Errorf("RemoteRunID = %q, want the served remote run %q", snap.RemoteRunID, remote)
+	}
+}
+
+func TestRunQueue_RunIdentity_InvalidRunIDFallsBackToRemoteRunID(t *testing.T) {
+	t.Parallel()
+	remote := testRunID()
+	snap := runQueueSnapshots(t, QueueItem{Repo: "o/r", IssueNumber: 402, RunID: "../../escape", RemoteRunID: remote})["o/r#402"]
+	if snap.RunID != remote {
+		t.Errorf("RunID = %q, want the valid RemoteRunID %q after ignoring the invalid RunID", snap.RunID, remote)
+	}
+}
+
+func TestRunQueue_RunIdentity_RemoteRunIDIsTheIDWithoutRunID(t *testing.T) {
+	t.Parallel()
+	remote := testRunID()
+	snap := runQueueSnapshots(t, QueueItem{Repo: "o/r", IssueNumber: 403, RemoteRunID: remote})["o/r#403"]
+	if snap.RunID != remote {
+		t.Errorf("RunID = %q, want RemoteRunID %q (#3557)", snap.RunID, remote)
+	}
+}
+
+func TestRunQueue_RunIdentity_NeitherMintsLocally(t *testing.T) {
+	t.Parallel()
+	snap := runQueueSnapshots(t, QueueItem{Repo: "o/r", IssueNumber: 404})["o/r#404"]
+	if !runstate.IsIdentity(snap.RunID) {
+		t.Errorf("RunID = %q, want a locally minted identity", snap.RunID)
+	}
+	if snap.RemoteRunID != "" {
+		t.Errorf("RemoteRunID = %q, want none", snap.RemoteRunID)
+	}
+}
+
+func TestRunQueue_PinAndVisibilityReachTheRun(t *testing.T) {
+	t.Parallel()
+	snap := runQueueSnapshots(t, QueueItem{
+		Repo: "o/r", IssueNumber: 405,
+		RequestedAdapter: "claude", RequestedModel: "opus", Visibility: state.VisibilityPrivate,
+	})["o/r#405"]
+	if snap.RequestedAdapter != "claude" || snap.RequestedModel != "opus" {
+		t.Errorf("pin = %q/%q, want claude/opus (#1656)", snap.RequestedAdapter, snap.RequestedModel)
+	}
+	if snap.Visibility != state.VisibilityPrivate {
+		t.Errorf("Visibility = %q, want private (#2400)", snap.Visibility)
+	}
+}
+
+func TestRunQueue_EachItemGetsItsOwnValues(t *testing.T) {
+	t.Parallel()
+	idA, idB := testRunID(), testRunID()
+	snaps := runQueueSnapshots(t,
+		QueueItem{Repo: "o/r", IssueNumber: 406, RunID: idA, RequestedAdapter: "claude", RequestedModel: "opus",
+			Visibility: state.VisibilityPrivate},
+		QueueItem{Repo: "o/r", IssueNumber: 407, RunID: idB, RequestedAdapter: "codex", RequestedModel: "gpt"},
+		// Same issue number as the first item, another repository: none of its values.
+		QueueItem{Repo: "o/other", IssueNumber: 406},
+	)
+	a, b, other := snaps["o/r#406"], snaps["o/r#407"], snaps["o/other#406"]
+	if a.RunID != idA || a.RequestedAdapter != "claude" || a.Visibility != state.VisibilityPrivate {
+		t.Errorf("o/r#406 = id %q pin %q vis %q, want its own values", a.RunID, a.RequestedAdapter, a.Visibility)
+	}
+	if b.RunID != idB || b.RequestedAdapter != "codex" || b.RequestedModel != "gpt" || b.Visibility != "" {
+		t.Errorf("o/r#407 = id %q pin %q/%q vis %q, want its own values", b.RunID, b.RequestedAdapter, b.RequestedModel, b.Visibility)
+	}
+	if other.RunID == idA || other.RequestedAdapter != "" || other.Visibility != "" {
+		t.Errorf("o/other#406 = id %q pin %q vis %q, want none of o/r#406's values", other.RunID, other.RequestedAdapter, other.Visibility)
+	}
+}
+
+func TestRunQueue_RunIdentity_InvalidRunIDAloneMintsLocally(t *testing.T) {
+	t.Parallel()
+	snap := runQueueSnapshots(t, QueueItem{Repo: "o/r", IssueNumber: 408, RunID: "run_01H8XGJWBWBAQ4ZZY1N1V9PJ0M"})["o/r#408"]
+	if snap.RunID == "run_01H8XGJWBWBAQ4ZZY1N1V9PJ0M" || !runstate.IsIdentity(snap.RunID) {
+		t.Errorf("RunID = %q, want a locally minted identity in place of the invalid RunID", snap.RunID)
+	}
+}
+
+// The dispatch paths that leave the item in s.queue (DequeueIndependentFor,
+// autonomous, waves) resolve the same seed through runPipeline (#3605).
+func TestRunPipeline_QueuedRunIDIsTheRunsIdentity(t *testing.T) {
+	t.Parallel()
+	root := gitWorkspace(t)
+	runner := &runIDCapturingRunner{}
+	s := newRunIdentityTestScheduler(t, root, runner)
+	runID, remote := testRunID(), testRunID()
+	item := types.BoardItem{Number: 409, Repo: "nightgauge/nightgauge", ID: "item-409"}
+	s.QueueAddItem(QueueItem{Repo: item.Repo, IssueNumber: item.Number, RunID: runID, RemoteRunID: remote})
+
+	var snap *state.RuntimeState
+	s.OnPipelineComplete(func(_ string, _ int, rs *state.RuntimeState, _ bool) { snap = rs })
+	s.runPipeline(context.Background(), item)
+
+	if snap == nil {
+		t.Fatal("the run never completed")
+	}
+	if snap.RunID != runID || snap.RemoteRunID != remote {
+		t.Errorf("RunID/RemoteRunID = %q/%q, want %q/%q", snap.RunID, snap.RemoteRunID, runID, remote)
 	}
 }
