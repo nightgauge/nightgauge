@@ -534,46 +534,68 @@ func TestOpenCodeBinDirCpDeniedUnderTmpdirTmp(t *testing.T) {
 	runOpenCodeBinDirCpDeniedProbe(t)
 }
 
+// runOpenCodeBinDirCpDeniedProbe runs one shell tool call per write form
+// against the real opencode: a plain cp, a cp wrapped in `sh -c`, a
+// redirection, and a worktree-relative cp (#3615). Each must be refused
+// naming permission shell, and nothing may land in binDir.
 func runOpenCodeBinDirCpDeniedProbe(t *testing.T) {
-	dir := t.TempDir()
-	guardWriteFile(t, filepath.Join(dir, "README.md"), "probe worktree\n")
-	source := filepath.Join(dir, "payload.sh")
-	guardWriteFile(t, source, "#!/bin/sh\necho PLANTED\n")
-	guardGitInit(t, dir)
-
-	binDir := t.TempDir()
-	planted := filepath.Join(binDir, "gh")
-
-	opts := RunOptions{AllowedTools: []string{"Read", "Bash"}, WorktreeDir: dir}
-	permission := openCodePermissionMap(opts, binDir)
-
-	stub := newGuardStubServer(t, []guardStubTurn{
-		{ToolCall: &guardStubToolCall{Name: "shell", Arguments: map[string]any{"command": fmt.Sprintf("cp %q %q", source, planted)}}},
-		{Content: "done"},
-	})
-	exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
-	t.Logf("exit=%d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout, stderr)
-
-	shellEvents := 0
-	for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
-		tool, status, errText, ok := guardToolUseEvent(line)
-		if !ok || tool != "shell" {
-			continue
-		}
-		shellEvents++
-		if status != "error" {
-			t.Errorf("the bash cp into NIGHTGAUGE_BIN was not rejected (status=%q)", status)
-		} else if !strings.Contains(errText, openCodeShellDenied) {
-			t.Errorf("the rejection's error text does not name permission shell: %s", errText)
-		}
+	forms := []struct {
+		name    string
+		command func(source, binDir, rel string) string
+	}{
+		{"cp", func(s, b, _ string) string { return fmt.Sprintf("cp %q %q", s, filepath.Join(b, "gh")) }},
+		{"sh -c cp", func(s, b, _ string) string { return fmt.Sprintf(`sh -c "cp %s %s"`, s, filepath.Join(b, "gh")) }},
+		{"redirect", func(_, b, _ string) string { return "echo PLANTED > " + filepath.Join(b, "gh") }},
+		{"relative cp", func(_, _, r string) string { return "cp payload.sh " + r + "/gh" }},
 	}
-	// Without a shell event the rejection checks above never ran, and the
-	// os.Stat check alone cannot tell a refusal from a cp never attempted.
-	if shellEvents == 0 {
-		t.Error("no shell tool_use event: the probe's cp never reached opencode's permission check")
-	}
-	if _, err := os.Stat(planted); err == nil {
-		t.Errorf("NIGHTGAUGE_BIN dir is writable via bash: cp planted %s", planted)
+	for _, f := range forms {
+		t.Run(f.name, func(t *testing.T) {
+			dir := t.TempDir()
+			guardWriteFile(t, filepath.Join(dir, "README.md"), "probe worktree\n")
+			source := filepath.Join(dir, "payload.sh")
+			guardWriteFile(t, source, "#!/bin/sh\necho PLANTED\n")
+			guardGitInit(t, dir)
+
+			binDir := t.TempDir()
+			planted := filepath.Join(binDir, "gh")
+			rel, err := filepath.Rel(dir, binDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			opts := RunOptions{AllowedTools: []string{"Read", "Bash"}, WorktreeDir: dir}
+			permission := openCodePermissionMap(opts, binDir)
+
+			command := f.command(source, binDir, rel)
+			stub := newGuardStubServer(t, []guardStubTurn{
+				{ToolCall: &guardStubToolCall{Name: "shell", Arguments: map[string]any{"command": command}}},
+				{Content: "done"},
+			})
+			exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
+			t.Logf("command=%s\nexit=%d\nstdout:\n%s\nstderr:\n%s", command, exitCode, stdout, stderr)
+
+			shellEvents := 0
+			for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
+				tool, status, errText, ok := guardToolUseEvent(line)
+				if !ok || tool != "shell" {
+					continue
+				}
+				shellEvents++
+				if status != "error" {
+					t.Errorf("%q into NIGHTGAUGE_BIN was not rejected (status=%q)", command, status)
+				} else if !strings.Contains(errText, openCodeShellDenied) {
+					t.Errorf("the rejection's error text does not name permission shell: %s", errText)
+				}
+			}
+			// Without a shell event the rejection checks never ran, and the
+			// os.Stat check alone cannot tell a refusal from a call never made.
+			if shellEvents == 0 {
+				t.Error("no shell tool_use event: the probe's command never reached opencode's permission check")
+			}
+			if _, err := os.Stat(planted); err == nil {
+				t.Errorf("NIGHTGAUGE_BIN dir is writable via bash: %q planted %s", command, planted)
+			}
+		})
 	}
 }
 
