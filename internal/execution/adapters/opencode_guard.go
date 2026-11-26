@@ -114,7 +114,7 @@ func openCodePermissionKeyForClaudeTool(name string) (string, bool) {
 // openCodeShellDenyBackstop are the shell patterns the issue's deny-list
 // backstop names, always denied whatever the stage's tools grant. Enforcement
 // is #1635's careful-gate plugin; this is the backstop, and a glob deny-list
-// can be routed around (`sh -c`), so it is not the only control.
+// can be routed around (`sh -c`, a variable), so it is not the only control.
 var openCodeShellDenyBackstop = []string{"rm -rf *", "rm -fr *", "git push --force*", "git push -f*", "git push * --force*"}
 
 // openCodeSecretDenyBackstop are the read/edit patterns the issue's deny-list
@@ -310,9 +310,10 @@ func openCodeScalarPermission(g *openCodeToolGrant) string {
 
 // openCodeShellPermission is always a pattern map: "*" from g, every scoped
 // pattern g grants, the deny-list backstop, then the bin-dir write denies for
-// binDir (openCodeShellBinDirDenyPatterns; none when binDir is ""). The denies
+// binDir (openCodeShellBinDirDenyPatterns; none when binDir is ""), including
+// its `../` forms relative to worktreeDir's git top-level. The denies
 // come last, so they win even over a scoped allow that overlaps them.
-func openCodeShellPermission(g *openCodeToolGrant, binDir string) *openCodePatternMap {
+func openCodeShellPermission(g *openCodeToolGrant, binDir, worktreeDir string) *openCodePatternMap {
 	pm := newOpenCodePatternMap()
 	base := openCodeDeny
 	if g != nil && g.bare {
@@ -327,39 +328,84 @@ func openCodeShellPermission(g *openCodeToolGrant, binDir string) *openCodePatte
 	for _, pattern := range openCodeShellDenyBackstop {
 		pm.set(pattern, openCodeDeny)
 	}
-	for _, pattern := range openCodeShellBinDirDenyPatterns(binDir) {
+	for _, pattern := range openCodeShellBinDirDenyPatterns(binDir, worktreeDir) {
 		pm.set(pattern, openCodeDeny)
 	}
 	return pm
 }
 
-// openCodeShellBinDirWriteVerbs are the commands that put a file into a
-// directory named as an argument.
-var openCodeShellBinDirWriteVerbs = []string{"cp", "mv", "ln", "install", "tee", "rsync"}
+// openCodeShellBinDirWriteVerbs are the commands that write, replace or
+// remove a file named as an argument (dd through of=, curl -o, wget -O).
+var openCodeShellBinDirWriteVerbs = []string{
+	"cp", "mv", "ln", "install", "tee", "rsync",
+	"dd", "curl", "wget", "rm", "unlink", "truncate", "chmod",
+}
+
+// openCodeShellVerbBoundaries are the characters that can precede a command
+// word inside a command line: a verb counts only after one of these (or at
+// the start), so `git add` never matches `dd`.
+var openCodeShellVerbBoundaries = []string{" ", "\"", "'", ";", "&", "|", "(", "`"}
 
 // openCodeShellBinDirDenyPatterns denies a shell command that writes into
 // binDir (NIGHTGAUGE_BIN's directory), the bash leg of the bin-dir guard
 // (#1638). OpenCode 2.2.7 refused such a `cp` through external_directory. 2.3.2
 // does not: its shell scanner derives external_directory resources only from
 // the arguments of cd, chdir, pushd, popd, push-location and set-location, so
-// `cp payload <binDir>/gh` completed (observed in the 2.3.2 binary and by
-// TestOpenCodeBinDirCpDenied, #3608). Like openCodeShellDenyBackstop this is a
-// glob deny-list a stage can route around (`sh -c`, a variable), not the only
-// control; the edit and write maps deny binDir too. Running a binary from
-// binDir stays allowed: only the write verbs are matched.
-func openCodeShellBinDirDenyPatterns(binDir string) []string {
+// `cp payload <binDir>/gh` completed (#3608).
+//
+// OpenCode anchors a shell glob at both ends of the command text, so each
+// pattern is unanchored (#3615): `*<sep><verb> *<form>*` matches the verb after
+// any command boundary (`sh -c "cp …"`, `a && cp …`, `xargs cp …`), and
+// `*>*<form>*` matches any redirection into binDir (`>`, `>>`, `2>`, `&>`). The forms are every
+// absolute form of binDir (openCodePathForms) and, when binDir lies outside
+// the worktree, its `../` path relative to each form of the worktree's git
+// top-level (worktreeDir itself outside a git checkout; none when worktreeDir
+// is ""). A binDir inside the worktree (the dev-only `bin/`) gets no
+// relative form: `*cp *bin*` would deny unrelated writes, and the edit/write
+// maps deny it. A path assembled from variables or split quoting, or a
+// relative path after `cd`, still routes around a glob; the edit and write
+// maps deny binDir too. Running a binary from binDir stays allowed: no write
+// verb or `>` precedes the path. A command that writes elsewhere and then runs
+// the binary (`rm -f x && <binDir>/gh …`) is denied too, accepted as fail-safe.
+func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
 	if binDir == "" {
 		return nil
 	}
-	dirs := []string{binDir}
-	if resolved, err := filepath.EvalSymlinks(binDir); err == nil && resolved != binDir {
-		dirs = append(dirs, resolved)
+	forms := openCodePathForms(binDir)
+	absForms := append([]string(nil), forms...)
+	if worktreeDir != "" {
+		root, ok := openCodeGitTopLevel(worktreeDir)
+		if !ok {
+			root = worktreeDir
+		}
+		for _, r := range openCodePathForms(root) {
+			for _, f := range absForms {
+				rel, err := filepath.Rel(r, f)
+				if err != nil || !strings.HasPrefix(rel, "../") {
+					continue
+				}
+				dup := false
+				for _, x := range forms {
+					if x == rel {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					forms = append(forms, rel)
+				}
+			}
+		}
 	}
 	var out []string
-	for _, dir := range dirs {
+	for _, form := range forms {
 		for _, verb := range openCodeShellBinDirWriteVerbs {
-			out = append(out, verb+" *"+dir+"*")
+			out = append(out, verb+" *"+form+"*")
+			for _, sep := range openCodeShellVerbBoundaries {
+				out = append(out, "*"+sep+verb+" *"+form+"*")
+			}
 		}
+		out = append(out, "*>*"+form+"*")
 	}
 	return out
 }
@@ -972,7 +1018,7 @@ func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJS
 		Write:    openCodeEditPermission(grants["write"], editDenyDirPatterns),
 		Glob:     openCodeScalarPermission(grants["glob"]),
 		Grep:     openCodeScalarPermission(grants["grep"]),
-		Shell:    openCodeShellPermission(grants["shell"], binDir),
+		Shell:    openCodeShellPermission(grants["shell"], binDir, opts.WorktreeDir),
 		// subagent is denied whatever the stage grants: gates.js refuses
 		// every subagent call (ADR-022 AC9, #1748), and OpenCode drops a tool
 		// whose permission is a bare deny from the tool list it offers the

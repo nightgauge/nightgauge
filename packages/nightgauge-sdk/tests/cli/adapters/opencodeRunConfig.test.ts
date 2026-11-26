@@ -488,7 +488,7 @@ describe("a verb that fails fails the stage before any opencode starts (#1648)",
     const golden = loadGolden(tmp("oc-g-"));
     const partial = { ...golden.verb } as Record<string, unknown>;
     delete partial.plugin_version;
-    const err = await refusal(`echo '${JSON.stringify(partial).replace(/'/g, "'\\''")}'`);
+    const err = await refusal(`printf '%s\n' '${JSON.stringify(partial).replace(/'/g, "'\\''")}'`);
     expect(err.message).toContain("plugin_version");
   });
 
