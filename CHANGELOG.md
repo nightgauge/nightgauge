@@ -21,6 +21,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- The Claude plugin's version is now 1.29.4, because the stage skills changed after 0.8.8: the skill preflight cascades gained a signature-gated per-user shim rung (#2928), and the stages now pass the issue's base branch to `format run --base` (#3602). Without the bump, `check-plugin-version.sh` fails every 0.8.9 release candidate, `main-build.yml` and pull-request CI, and installed plugins would not receive the change.
 - OpenCode is now tested up to 2.3.2 (the floor stays 2.2.7). The pinned models catalog is re-captured from 2.3.2, which bundles 327 providers to 2.2.7's 233, so credential withholding and output redaction now cover the new providers' variables. 2.3.2 no longer lists deprecated models, so `anthropic/claude-sonnet-4-5` and its dated id are now refused like any model OpenCode does not know. The OpenCode integration suite passes on 2.3.2, and CI installs 2.3.2 for it (#3608).
 
 ### Fixed
