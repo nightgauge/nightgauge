@@ -105,7 +105,7 @@ rejected.
 
 | Limit             | Value | Effect                                                    |
 | ----------------- | ----- | --------------------------------------------------------- |
-| Findings per file | 30    | More is rejected; nothing is posted                       |
+| Findings per file | 30    | More keeps the first 30 by severity; the comment says so  |
 | Nitpicks shown    | 5     | The rest are counted in an "N more nitpicks omitted" line |
 | `claim` length    | 300   | Longer is truncated with a marker; the comment says so    |
 | `fix` length      | 1000  | Longer is truncated with a marker; the comment says so    |
@@ -115,8 +115,8 @@ rejected.
 ## Turn limit
 
 A review that reaches the turn limit did not finish. Its red check is neither
-a pass nor a finding, and nothing is posted. The job summary and the error
-annotation say so and name the limit.
+a pass nor a finding, and nothing is posted, even when findings were already
+written. The job summary and the error annotation say so and name the limit.
 
 The review scales with the diff, so the remedy is to split the pull request
 into smaller ones. One re-run is reasonable because turn use varies; repeating
