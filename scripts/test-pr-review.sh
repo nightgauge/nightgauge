@@ -77,7 +77,8 @@ check "long token past the fix limit still rejected" 1 \
 check "anthropic key shape" 1 "$(fixture skant '.findings[0].fix = "use sk-ant-api03-abc"')"
 check "github token shape" 1 "$(fixture ghp '.findings[0].claim = "token ghp_abcdef"')"
 check "fine-grained pat shape" 1 "$(fixture pat '.findings[0].fix = "github_pat_11ABC"')"
-check "over finding cap" 1 "$(fixture cap '.findings = [range(31) as $i | .findings[0]]')"
+check "over cap with a bad severity still rejected" 1 "$(fixture capbad \
+  '.findings = [range(31) as $i | .findings[0]] | .findings[30].severity = "critical"')"
 printf 'not json' > "$TMP/garbage.json"
 check "not JSON" 1 "$TMP/garbage.json"
 
@@ -107,6 +108,36 @@ NITS="$(fixture nits '.findings = [range(8) as $i | {pass: "correctness",
 OUT="$(render "$NITS")"
 expect "nitpick cap shows 5" 5 "$(printf '%s\n' "$OUT" | grep -c '^- \*\*nitpick')"
 expect "omitted nitpicks counted" 1 "$(printf '%s\n' "$OUT" | grep -c '^3 more nitpicks omitted\.$')"
+
+# Finding cap (#2902): over 30, the first 30 by severity are kept, with one notice.
+severity_fixture() { # mk <name> <blockers> <majors> <nitpicks>; input order is nitpicks, majors, blockers
+  fixture "$1" ".findings = ([range($4) as \$i | {pass: \"correctness\", file: \"n.go\",
+    line: (\$i + 1), claim: \"n\", severity: \"nitpick\", fix: \"f\"}]
+    + [range($3) as \$i | {pass: \"correctness\", file: \"m.go\", line: (\$i + 1),
+    claim: \"m\", severity: \"major\", fix: \"f\"}]
+    + [range($2) as \$i | {pass: \"security\", file: \"b.go\", line: (\$i + 1),
+    claim: \"b\", severity: \"blocker\", fix: \"f\"}])"
+}
+CAP31="$(severity_fixture cap31 2 24 5)"
+OUT="$(render "$CAP31")"
+expect "cap 31: renders" 0 $?
+expect "cap 31: keeps 30 by severity" 1 "$(printf '%s\n' "$OUT" | grep -c '^2 blocker, 24 major, 4 nitpick\.$')"
+expect "cap 31: one notice" 1 \
+  "$(printf '%s\n' "$OUT" | grep -c 'Dropped 1 finding over the cap of 30: 1 nitpick\.')"
+expect "cap 31: last nitpick is the one dropped" 0 "$(printf '%s\n' "$OUT" | grep -c '`n.go:5`')"
+expect "cap 31: earlier nitpicks kept in order" "n.go:1 n.go:2 n.go:3 n.go:4" \
+  "$(printf '%s\n' "$OUT" | grep -o '`n.go:[0-9]*`' | tr -d '`' | xargs)"
+OUT="$(render "$(severity_fixture cap100 5 40 55)")"
+expect "cap 100: keeps blockers then majors" 1 "$(printf '%s\n' "$OUT" | grep -c '^5 blocker, 25 major, 0 nitpick\.$')"
+expect "cap 100: notice counts dropped" 1 \
+  "$(printf '%s\n' "$OUT" | grep -c 'Dropped 70 findings over the cap of 30: 15 major, 55 nitpick\.')"
+expect "cap 100: one notice" 1 "$(printf '%s\n' "$OUT" | grep -o 'Dropped [0-9]* finding' | wc -l | tr -d ' ')"
+OUT="$(render "$(severity_fixture cap30 2 20 8)")"
+expect "cap 30: all kept" 1 "$(printf '%s\n' "$OUT" | grep -c '^2 blocker, 20 major, 8 nitpick\.$')"
+expect "cap 30: no notice" 0 "$(printf '%s\n' "$OUT" | grep -c 'Dropped')"
+node "$CLI" validate "$CAP31" > /dev/null 2> "$TMP/cap.err"
+expect "validate: over cap exits 0" 0 $?
+expect "validate: cap notice on stderr" 1 "$(grep -c 'notice: Dropped 1 finding' "$TMP/cap.err")"
 
 OUT="$(render "$(fixture empty '.findings = []')")"
 expect "empty review says so" 1 "$(printf '%s\n' "$OUT" | grep -c '^No findings')"

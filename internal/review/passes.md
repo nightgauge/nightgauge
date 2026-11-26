@@ -66,7 +66,7 @@ rejected.
 
 | Limit             | Value | Effect                                                    |
 | ----------------- | ----- | --------------------------------------------------------- |
-| Findings per file | 30    | More is rejected; nothing is posted                       |
+| Findings per file | 30    | More keeps the first 30 by severity; the comment says so  |
 | Nitpicks shown    | 5     | The rest are counted in an "N more nitpicks omitted" line |
 | `claim` length    | 300   | Longer is truncated with a marker; the comment says so    |
 | `fix` length      | 1000  | Longer is truncated with a marker; the comment says so    |

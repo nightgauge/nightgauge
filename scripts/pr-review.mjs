@@ -6,9 +6,10 @@
 // content with no forge token; everything it writes passes through `render`
 // here before the post job, which holds `pull-requests: write`, publishes it.
 // The rules are closed: exact keys, bounded sizes, path and credential-shape
-// checks, and a finding cap. Anything else is rejected and nothing is posted,
-// except length: an over-long claim or fix is truncated with a marker, and a
-// finding whose file path is over-long is dropped alone. The comment says so.
+// checks. Anything else is rejected and nothing is posted, except length: an
+// over-long claim or fix is truncated with a marker, a finding whose file path
+// is over-long is dropped alone, and over the finding cap the first 30 by
+// severity are kept (MAX_FINDINGS). The comment says so.
 //
 // Usage:
 //   node scripts/pr-review.mjs gate --pr-json <file> --event <name>
@@ -171,9 +172,6 @@ export function validate(doc) {
     errors.push("findings must be an array");
     return errors;
   }
-  if (doc.findings.length > MAX_FINDINGS) {
-    errors.push(`${doc.findings.length} findings, over the cap of ${MAX_FINDINGS}`);
-  }
   doc.findings.forEach((f, i) => {
     const at = `findings[${i}]`;
     if (f === null || typeof f !== "object" || Array.isArray(f)) {
@@ -213,11 +211,22 @@ export function validate(doc) {
 
 export const TRUNCATED_MARK = " … [truncated]";
 
+// Stable sort by SEVERITIES order; ties keep their original order.
+function bySeverity(findings) {
+  const rank = (f) => SEVERITIES.indexOf(f.severity);
+  return findings
+    .map((f, i) => ({ f, i }))
+    .sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i)
+    .map(({ f }) => f);
+}
+
 /**
  * Fit a validated document to the per-field length limits. An over-long claim
  * or fix is truncated to its limit, ending in TRUNCATED_MARK; a finding whose
  * file path is over-long is dropped, since a shortened path names the wrong
- * file. Run after validate(), so the credential check saw the full strings.
+ * file. Over MAX_FINDINGS, the first MAX_FINDINGS by severity are kept and one
+ * notice counts the dropped ones. Run after validate(), so the credential
+ * check saw the full strings.
  * Notices name findings by their original index. The input is not mutated.
  * @returns {{ doc: object, notices: string[] }}
  */
@@ -245,6 +254,19 @@ export function fitToLimits(doc) {
     }
     findings.push(out);
   });
+  const sorted = bySeverity(findings);
+  if (sorted.length > MAX_FINDINGS) {
+    const dropped = sorted.slice(MAX_FINDINGS);
+    const droppedCounts = SEVERITIES.map((s) => [s, dropped.filter((f) => f.severity === s).length])
+      .filter(([, n]) => n > 0)
+      .map(([s, n]) => `${n} ${s}`)
+      .join(", ");
+    const noun = dropped.length === 1 ? "finding" : "findings";
+    notices.push(
+      `Dropped ${dropped.length} ${noun} over the cap of ${MAX_FINDINGS}: ${droppedCounts}.`
+    );
+    return { doc: { ...doc, findings: sorted.slice(0, MAX_FINDINGS) }, notices };
+  }
   return { doc: { ...doc, findings }, notices };
 }
 
@@ -268,11 +290,7 @@ function escapeCode(value) {
  */
 export function render(input) {
   const { doc, notices } = fitToLimits(input);
-  const rank = (f) => SEVERITIES.indexOf(f.severity);
-  const sorted = doc.findings
-    .map((f, i) => ({ f, i }))
-    .sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i)
-    .map(({ f }) => f);
+  const sorted = bySeverity(doc.findings);
   const nitpicks = sorted.filter((f) => f.severity === "nitpick");
   const shown = sorted
     .filter((f) => f.severity !== "nitpick")
