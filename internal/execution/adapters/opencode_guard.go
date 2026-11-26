@@ -351,11 +351,16 @@ var openCodeShellVerbBoundaries = []string{
 }
 
 // openCodeShellVerbArgSeparators are the whitespace characters that can follow
-// a verb before its arguments (#3623). The newline entry only helps a matcher
-// that sees the whole command: OpenCode 2.4.2 checks each line on its own, so
-// `cp\n<src> <dst>` completes there. That is harmless only because the shell
-// ends `cp` at the newline and writes nothing.
+// a verb before its arguments (#3623). The newline entry serves a matcher that
+// sees the whole command. OpenCode 2.4.2 checks each line on its own, so
+// `cp\n<src> <dst>` reaches it as a bare `cp` line and a verb-less argument
+// line: the bare write-verb deny in openCodeShellBinDirDenyPatterns refuses it.
 var openCodeShellVerbArgSeparators = []string{" ", "\t", "\n"}
+
+// openCodeShellBareVerbSuffixes end a write verb that stands alone on a
+// command line (#3623). Newline is absent: OpenCode splits lines before it
+// matches, so no line it checks ends in one.
+var openCodeShellBareVerbSuffixes = []string{"", " ", "\t"}
 
 // openCodeShellBinDirDenyPatterns denies a shell command that writes into
 // binDir (NIGHTGAUGE_BIN's directory), the bash leg of the bin-dir guard
@@ -378,6 +383,13 @@ var openCodeShellVerbArgSeparators = []string{" ", "\t", "\n"}
 // maps deny binDir too. Running a binary from binDir stays allowed: no write
 // verb or `>` precedes the path. A command that writes elsewhere and then runs
 // the binary (`rm -f x && <binDir>/gh …`) is denied too, accepted as fail-safe.
+//
+// OpenCode checks each line of a multi-line command as its own command, so a
+// split `cp\n<src> <binDir>/gh` leaves a bare `cp` line and an argument line
+// no binDir pattern can catch without denying a run of the binary (#3623).
+// Each write verb is therefore also denied as a bare command (`cp`, `cp `,
+// `cp\t`, `/bin/cp`): a write verb with no arguments writes nothing, and one
+// denied line refuses the whole call. `which cp` and `ls /bin/cp` stay allowed.
 func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
 	if binDir == "" {
 		return nil
@@ -409,6 +421,12 @@ func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
 		}
 	}
 	var out []string
+	for _, verb := range openCodeShellBinDirWriteVerbs {
+		for _, suffix := range openCodeShellBareVerbSuffixes {
+			out = append(out, verb+suffix)
+		}
+		out = append(out, "/*/"+verb)
+	}
 	for _, form := range forms {
 		for _, verb := range openCodeShellBinDirWriteVerbs {
 			for _, argSep := range openCodeShellVerbArgSeparators {

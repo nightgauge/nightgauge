@@ -543,23 +543,16 @@ func runOpenCodeBinDirCpDeniedProbe(t *testing.T) {
 	forms := []struct {
 		name    string
 		command func(source, binDir, rel string) string
-		// lineSplit: OpenCode checks each line of the command as its own
-		// command (observed on 2.4.2, #3623), so a newline right after the
-		// verb leaves `cp` alone on one line and `<src> <binDir>/gh` with no
-		// verb on the next. The shell ends `cp` there too, so it writes
-		// nothing. The arm then accepts a completed call, but nothing may be
-		// planted.
-		lineSplit bool
 	}{
-		{"cp", func(s, b, _ string) string { return fmt.Sprintf("cp %q %q", s, filepath.Join(b, "gh")) }, false},
-		{"sh -c cp", func(s, b, _ string) string { return fmt.Sprintf(`sh -c "cp %s %s"`, s, filepath.Join(b, "gh")) }, false},
-		{"redirect", func(_, b, _ string) string { return "echo PLANTED > " + filepath.Join(b, "gh") }, false},
-		{"relative cp", func(_, _, r string) string { return "cp payload.sh " + r + "/gh" }, false},
+		{"cp", func(s, b, _ string) string { return fmt.Sprintf("cp %q %q", s, filepath.Join(b, "gh")) }},
+		{"sh -c cp", func(s, b, _ string) string { return fmt.Sprintf(`sh -c "cp %s %s"`, s, filepath.Join(b, "gh")) }},
+		{"redirect", func(_, b, _ string) string { return "echo PLANTED > " + filepath.Join(b, "gh") }},
+		{"relative cp", func(_, _, r string) string { return "cp payload.sh " + r + "/gh" }},
 		// #3623: a newline, a tab or a path-qualified verb.
-		{"newline cp", func(s, b, _ string) string { return "cp\n" + s + " " + filepath.Join(b, "gh") }, true},
-		{"multi-line cp", func(s, b, _ string) string { return "true\ncp " + s + " " + filepath.Join(b, "gh") }, false},
-		{"tab cp", func(s, b, _ string) string { return "cp\t" + s + " " + filepath.Join(b, "gh") }, false},
-		{"/bin/cp", func(s, b, _ string) string { return "/bin/cp " + s + " " + filepath.Join(b, "gh") }, false},
+		{"newline cp", func(s, b, _ string) string { return "cp\n" + s + " " + filepath.Join(b, "gh") }},
+		{"multi-line cp", func(s, b, _ string) string { return "true\ncp " + s + " " + filepath.Join(b, "gh") }},
+		{"tab cp", func(s, b, _ string) string { return "cp\t" + s + " " + filepath.Join(b, "gh") }},
+		{"/bin/cp", func(s, b, _ string) string { return "/bin/cp " + s + " " + filepath.Join(b, "gh") }},
 	}
 	for _, f := range forms {
 		t.Run(f.name, func(t *testing.T) {
@@ -594,9 +587,6 @@ func runOpenCodeBinDirCpDeniedProbe(t *testing.T) {
 					continue
 				}
 				shellEvents++
-				if f.lineSplit && status == "completed" {
-					continue
-				}
 				if status != "error" {
 					t.Errorf("%q into NIGHTGAUGE_BIN was not rejected (status=%q)", command, status)
 				} else if !strings.Contains(errText, openCodeShellDenied) {

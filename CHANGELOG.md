@@ -16,7 +16,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
-- An OpenCode stage can no longer write into the directory the pipeline runs `nightgauge` from by splitting the command across lines or tabs, or by calling the write verb by path (`/bin/cp`, `/usr/bin/install`) (#3623).
+- An OpenCode stage can no longer write into the directory the pipeline runs `nightgauge` from by splitting the command across lines or tabs, or by calling the write verb by path (`/bin/cp`, `/usr/bin/install`). OpenCode checks each line of a command on its own, so the shell guard now refuses any write verb that stands alone on a line (`cp` with its arguments on the next line), wherever the write would land (#3623).
 - The VS Code extension now re-checks a stage's blocked verdict that names a closed issue or PR, as the Go scheduler does: it refreshes the base once and re-runs the stage when the base advanced, ends the run `merge_conflict` on a conflict, and otherwise books the verdict with a note that the re-check ran. New verb: `nightgauge pr-stage recheck-blocker` (#3618).
 
 ### Changed
