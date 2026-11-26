@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/cmd/followup"
 	"github.com/nightgauge/nightgauge/internal/config"
+	gitpkg "github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
@@ -70,6 +73,7 @@ scheduler contract instead of maintaining a second, divergent implementation.`,
 	cmd.AddCommand(prStageReviewGateCmd())
 	cmd.AddCommand(prStageResumePointCmd())
 	cmd.AddCommand(prStageRefreshBaseCmd())
+	cmd.AddCommand(prStageRecheckBlockerCmd())
 	return cmd
 }
 
@@ -698,6 +702,62 @@ func prStageRefreshBaseCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
+	return cmd
+}
+
+// recheckRepoPattern is the owner/name shape a --repo must have before it is
+// interpolated into a forge API path.
+var recheckRepoPattern = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*$`)
+
+// prStageRecheckBlockerCmd runs `nightgauge pr-stage recheck-blocker <N>`:
+// the closed-named-blocker re-check the scheduler applies to a stage-declared
+// blocked outcome (#2897), for the extension's HeadlessOrchestrator (#3618).
+// It prints orchestrator.BlockerRecheck as JSON and exits 0 whenever it
+// produced a verdict, including ran:false; non-zero for a bad argument, a
+// malformed --repo or an unresolvable workspace. With no repository resolvable
+// it prints ran:false and says why on stderr.
+func prStageRecheckBlockerCmd() *cobra.Command {
+	var workdir, repo, detail string
+	cmd := &cobra.Command{
+		Use:          "recheck-blocker <issue-number>",
+		Short:        "Refresh the base once when a blocked outcome names a closed blocker",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			issue, err := parseIssueNumberArg(args[0])
+			if err != nil {
+				return err
+			}
+			workspace, err := resolvePrStageWorkspace(workdir)
+			if err != nil {
+				return err
+			}
+			repo = strings.TrimSpace(repo)
+			if repo != "" && !recheckRepoPattern.MatchString(repo) {
+				return fmt.Errorf("malformed --repo %q: expected owner/name", repo)
+			}
+			if repo == "" {
+				svc, serr := gitpkg.NewService(workspace)
+				if serr == nil {
+					repo, serr = svc.RemoteRepoSlug()
+				}
+				if serr != nil || !recheckRepoPattern.MatchString(repo) {
+					fmt.Fprintf(cmd.ErrOrStderr(), "recheck-blocker: no repository resolvable from origin (%v); not re-checking\n", serr)
+					repo = ""
+				}
+			}
+			verdict := orchestrator.RecheckNamedBlockers(cmd.Context(), strings.TrimSpace(repo), issue, workspace, detail)
+			data, err := json.Marshal(verdict)
+			if err != nil {
+				return fmt.Errorf("marshal blocker re-check: %w", err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), string(data))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
+	cmd.Flags().StringVar(&repo, "repo", "", "owner/name of the repository (default: origin remote)")
+	cmd.Flags().StringVar(&detail, "detail", "", "The blocked outcome text that names the blockers")
 	return cmd
 }
 

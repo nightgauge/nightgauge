@@ -3300,6 +3300,10 @@ nightgauge pr-stage resume-point <issue> [--workdir W]
 # exit 0 when it ran, JSON with outcome, skipped and stop_reason
 nightgauge pr-stage refresh-base <issue> [--workdir W]
 
+# Re-check a stage-declared blocked verdict that names a closed issue or PR (#3618):
+# one base refresh; exit 0 with JSON ran, rerun, closed, note, stop_reason, conflict_files
+nightgauge pr-stage recheck-blocker <issue> --detail TEXT [--repo owner/name] [--workdir W]
+
 # Run merge-queue recovery (conflict or merge-group code failure) for a refused
 # pr-merge; read `outcome`, not the exit code
 nightgauge pr-stage recover <issue> --reason <text> [--run-id <id>] [--workdir W] [--json]

@@ -14,6 +14,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- The VS Code extension now re-checks a stage's blocked verdict that names a closed issue or PR, as the Go scheduler does: it refreshes the base once and re-runs the stage when the base advanced, ends the run `merge_conflict` on a conflict, and otherwise books the verdict with a note that the re-check ran. New verb: `nightgauge pr-stage recheck-blocker` (#3618).
+
 ### Changed
 
 - OpenCode is now tested up to 2.3.2 (the floor stays 2.2.7). The pinned models catalog is re-captured from 2.3.2, which bundles 327 providers to 2.2.7's 233, so credential withholding and output redaction now cover the new providers' variables. 2.3.2 no longer lists deprecated models, so `anthropic/claude-sonnet-4-5` and its dated id are now refused like any model OpenCode does not know. The OpenCode integration suite passes on 2.3.2, and CI installs 2.3.2 for it (#3608).

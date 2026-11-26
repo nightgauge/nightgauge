@@ -9,6 +9,10 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- The VS Code extension now re-checks a stage's blocked verdict that names a closed issue or PR, as the Go scheduler does: it refreshes the base once and re-runs the stage when the base advanced, ends the run `merge_conflict` on a conflict, and otherwise books the verdict with a note that the re-check ran. New verb: `nightgauge pr-stage recheck-blocker` (#3618).
+
 ## [0.8.8] - 2026-11-25
 
 ### Fixed

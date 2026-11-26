@@ -45,6 +45,8 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 /** Budget for `pr-stage refresh-base`: a fetch plus a merge (#2962). */
 const BASE_REFRESH_TIMEOUT_MS = 120_000;
+/** Budget for `pr-stage recheck-blocker`: up to 10 forge reads plus a base refresh (#3618). */
+const BLOCKER_RECHECK_TIMEOUT_MS = BASE_REFRESH_TIMEOUT_MS + 60_000;
 const BASE_REFRESH_SKIPPED = "Base refresh skipped — continuing on the tree as found";
 import { BinaryResolver } from "./BinaryResolver";
 import {
@@ -1726,6 +1728,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * present as complete. Reset at every runPipeline() entry.
    */
   private blockedTerminalState: BlockedTerminalState | null = null;
+
+  /** Set once the closed-named-blocker re-check ran in this run (#3618). */
+  private blockerRechecked = false;
 
   /**
    * Issues whose run is scoped to a partial-delivery remainder: their
@@ -6642,6 +6647,68 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         err,
       });
       return null;
+    }
+  }
+
+  /**
+   * The closed-named-blocker re-check (#2897 ADR-003) for a stage-declared
+   * blocked verdict, through `pr-stage recheck-blocker` (#3618). At most once
+   * per run. `rerun`: the base advanced, so the stage runs again. `stop`: the
+   * refresh conflicted and the run ends merge_conflict. `book`: the verdict
+   * stands, with `note` appended when the re-check ran. Any failure to run the
+   * CLI books the verdict unchanged.
+   */
+  private async recheckClosedBlockers(
+    issueNumber: number,
+    signal: PipelineFeedbackSignal
+  ): Promise<
+    { action: "rerun" } | { action: "stop"; reason: string } | { action: "book"; note: string }
+  > {
+    const unchanged = { action: "book" as const, note: "" };
+    if (!this.worktreeOverride || this.blockerRechecked) return unchanged;
+    const workdir = this.worktreeOverride;
+    const detail = [signal.rationale ?? "", ...(signal.evidence ?? [])].join("\n");
+    try {
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) {
+        this.logger.warn("Blocker re-check skipped — nightgauge binary not found", { issueNumber });
+        return unchanged;
+      }
+      const { stdout } = await execFileAsync(
+        binary,
+        [
+          "pr-stage",
+          "recheck-blocker",
+          String(issueNumber),
+          "--workdir",
+          workdir,
+          "--detail",
+          detail,
+        ],
+        { encoding: "utf-8", cwd: workdir, timeout: BLOCKER_RECHECK_TIMEOUT_MS }
+      );
+      const parsed = JSON.parse(stdout) as {
+        ran?: unknown;
+        rerun?: unknown;
+        closed?: unknown;
+        note?: unknown;
+        stop_reason?: unknown;
+      };
+      if (parsed.ran !== true) return unchanged;
+      this.blockerRechecked = true;
+      this.logger.info("Closed named blocker re-check ran", {
+        issueNumber,
+        closed: parsed.closed,
+        rerun: parsed.rerun,
+      });
+      if (typeof parsed.stop_reason === "string" && parsed.stop_reason !== "") {
+        return { action: "stop", reason: parsed.stop_reason };
+      }
+      if (parsed.rerun === true) return { action: "rerun" };
+      return { action: "book", note: typeof parsed.note === "string" ? parsed.note : "" };
+    } catch (err) {
+      this.logger.warn("Blocker re-check skipped — verdict stands", { issueNumber, err });
+      return unchanged;
     }
   }
 
@@ -12338,6 +12405,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     }
     this.auditCorrelationId = crypto.randomUUID();
     this.blockedTerminalState = null;
+    this.blockerRechecked = false;
     // #3163: a partial-rerun scope belongs to the run whose feature-dev prompt
     // carried it; never inherit one from an earlier run of this issue.
     this.partialRerunIssues.delete(issueNumber);
@@ -14083,7 +14151,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
           const validateVerdict = this.verifyPostValidateState(issueNumber);
           if (validateVerdict) {
-            const validateVerdictError = validateVerdict.error;
+            let validateVerdictError = validateVerdict.error;
             // #1348 revived on the failed path (#1142): a run that discovers
             // mid-flight it was under-estimated could never say so, because the
             // halt below preempted the learning engine 640 lines further down.
@@ -14115,7 +14183,26 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               stageIndex = disposition.targetIndex - 1;
               continue;
             }
+            let blockerStop: string | null = null;
             if (disposition.kind === "blocked") {
+              // #3618: a verdict naming a closed blocker gets one base refresh
+              // first — before any finding is recorded, so a re-run leaves none.
+              const recheck = await this.recheckClosedBlockers(issueNumber, disposition.signal);
+              if (recheck.action === "rerun") {
+                // Clear the duplicate-completion guard so the re-run resolves (#698).
+                this.completedStageSet.delete(stage);
+                stageIndex -= 1;
+                continue;
+              }
+              if (recheck.action === "stop") {
+                blockerStop = recheck.reason;
+                validateVerdictError = new Error(recheck.reason);
+              } else if (recheck.note) {
+                disposition.signal.rationale = `${disposition.signal.rationale ?? ""}${recheck.note}`;
+                validateVerdictError = new Error(`${validateVerdictError.message}${recheck.note}`);
+              }
+            }
+            if (disposition.kind === "blocked" && blockerStop === null) {
               // A blocking signal that no re-plan can clear. Book the existing
               // first-class `blocked` terminal state (#190) rather than a
               // generic failure, so outcome telemetry and the learning loop see
@@ -14162,7 +14249,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             failedStage = stage;
             error = validateVerdictError;
             // #2874: carry the verdict's kind so the halt card is not unclassified.
-            gateTerminalKind = validateVerdict.terminalKind;
+            gateTerminalKind =
+              blockerStop !== null ? "merge_conflict" : validateVerdict.terminalKind;
             break;
           }
 
@@ -14542,7 +14630,27 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             );
             let gateError = gateFail.error;
             let gateKind = gateFail.terminalKind;
+            let gateBlockerStop = false;
+            let gateNote = "";
             if (gateDisposition.kind === "blocked") {
+              // #3618: one base refresh when the verdict names a closed blocker.
+              const recheck = await this.recheckClosedBlockers(issueNumber, gateDisposition.signal);
+              if (recheck.action === "rerun") {
+                // Clear the duplicate-completion guard so the re-run resolves (#698).
+                this.completedStageSet.delete(stage);
+                stageIndex -= 1;
+                continue;
+              }
+              if (recheck.action === "stop") {
+                gateBlockerStop = true;
+                gateKind = "merge_conflict";
+                gateError = new Error(recheck.reason);
+              } else if (recheck.note) {
+                gateDisposition.signal.rationale = `${gateDisposition.signal.rationale ?? ""}${recheck.note}`;
+                gateNote = recheck.note;
+              }
+            }
+            if (gateDisposition.kind === "blocked" && !gateBlockerStop) {
               // RE-STAMP the terminal kind and the error text. The gate's own
               // verdict is `dev_produced_no_changes` — accurate about the tree
               // and wrong about the cause — and it is what the run record, the
@@ -14585,7 +14693,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               // TYPE in recordOutOfScopeBlockedFinding, not by this kind.
               gateKind = "not_pipeline_actionable";
               gateError = new Error(
-                `[not-pipeline-actionable] ${gateDisposition.reason} — ${gateFail.error.message}`
+                `[not-pipeline-actionable] ${gateDisposition.reason} — ${gateFail.error.message}${gateNote}`
               );
               this.blockedTerminalState = {
                 blocker: `out-of-scope: ${gateDisposition.signal.signal_type}`,
