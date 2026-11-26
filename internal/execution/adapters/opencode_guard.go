@@ -311,7 +311,7 @@ func openCodeScalarPermission(g *openCodeToolGrant) string {
 // openCodeShellPermission is always a pattern map: "*" from g, every scoped
 // pattern g grants, then the deny-list backstop last, so it always wins even
 // over a scoped allow that happened to overlap it.
-func openCodeShellPermission(g *openCodeToolGrant) *openCodePatternMap {
+func openCodeShellPermission(g *openCodeToolGrant, binDir string) *openCodePatternMap {
 	pm := newOpenCodePatternMap()
 	base := openCodeDeny
 	if g != nil && g.bare {
@@ -326,7 +326,41 @@ func openCodeShellPermission(g *openCodeToolGrant) *openCodePatternMap {
 	for _, pattern := range openCodeShellDenyBackstop {
 		pm.set(pattern, openCodeDeny)
 	}
+	for _, pattern := range openCodeShellBinDirDenyPatterns(binDir) {
+		pm.set(pattern, openCodeDeny)
+	}
 	return pm
+}
+
+// openCodeShellBinDirWriteVerbs are the commands that put a file into a
+// directory named as an argument.
+var openCodeShellBinDirWriteVerbs = []string{"cp", "mv", "ln", "install", "tee", "rsync"}
+
+// openCodeShellBinDirDenyPatterns denies a shell command that writes into
+// binDir (NIGHTGAUGE_BIN's directory), the bash leg of the bin-dir guard
+// (#1638). OpenCode 2.2.7 refused such a `cp` through external_directory. 2.3.2
+// does not: its shell scanner derives external_directory resources only from
+// the arguments of cd, chdir, pushd, popd, push-location and set-location, so
+// `cp payload <binDir>/gh` completed (observed in the 2.3.2 binary and by
+// TestOpenCodeBinDirCpDenied, #3608). Like openCodeShellDenyBackstop this is a
+// glob deny-list a stage can route around (`sh -c`, a variable), not the only
+// control; the edit and write maps deny binDir too. Running a binary from
+// binDir stays allowed: only the write verbs are matched.
+func openCodeShellBinDirDenyPatterns(binDir string) []string {
+	if binDir == "" {
+		return nil
+	}
+	dirs := []string{binDir}
+	if resolved, err := filepath.EvalSymlinks(binDir); err == nil && resolved != binDir {
+		dirs = append(dirs, resolved)
+	}
+	var out []string
+	for _, dir := range dirs {
+		for _, verb := range openCodeShellBinDirWriteVerbs {
+			out = append(out, verb+" *"+dir+"*")
+		}
+	}
+	return out
 }
 
 // openCodeReadPermission is always a pattern map: "*" from g, every scoped
@@ -937,7 +971,7 @@ func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJS
 		Write:    openCodeEditPermission(grants["write"], editDenyDirPatterns),
 		Glob:     openCodeScalarPermission(grants["glob"]),
 		Grep:     openCodeScalarPermission(grants["grep"]),
-		Shell:    openCodeShellPermission(grants["shell"]),
+		Shell:    openCodeShellPermission(grants["shell"], binDir),
 		// subagent is denied whatever the stage grants: gates.js refuses
 		// every subagent call (ADR-022 AC9, #1748), and OpenCode drops a tool
 		// whose permission is a bare deny from the tool list it offers the

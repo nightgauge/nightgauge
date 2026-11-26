@@ -1,1 +1,1 @@
-opencode v2.2.7
+opencode v2.3.2

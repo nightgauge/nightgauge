@@ -78,7 +78,7 @@ export const ADAPTER_COMPAT: Readonly<Record<AdapterCompatKey, AdapterCompatEntr
     },
     "opencode": {
       minVersion: "2.2.7",
-      maxTested: "2.2.7",
+      maxTested: "2.3.2",
       floorPolicy: "fail_closed",
       installer: "https://opencode.ai/v2/install",
       installerSha256: "b60226508704fc97d7b9d12ae6d4a6f819dfe02b22c190a0425c14ef632b056b",

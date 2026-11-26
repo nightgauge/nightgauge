@@ -8,7 +8,7 @@
 [ADR-018](018-adapter-usage-quota-model.md) (§ 4, `local` plan kind)
 **Extends:** [ADR-020](020-value-adding-features-default-on.md) (§ 15, security and privacy as
 reasons for a pipeline default to be off)
-**Observed against:** opencode 1.18.30; opencode 2.2.7 (§ 20 amendment, #3307)
+**Observed against:** opencode 1.18.30; opencode 2.2.7 (§ 20 amendment, #3307); opencode 2.3.2 (§ 20 amendment, #3608)
 
 ---
 
@@ -1664,8 +1664,8 @@ the manifest's `install.installer_sha256`, and only then runs it for
   1.18.30 until the 2.x port, the version the observations in this body were
   made on). Below it, or with a version that cannot be read, dispatch fails
   closed before anything is created.
-- **Max-tested (tested up to): 2.2.7** (`max_tested`; 1.18.30 before the
-  port). Information only (amendment above). A newer version dispatches
+- **Max-tested (tested up to): 2.3.2** (`max_tested`; 2.2.7 until #3608,
+  1.18.30 before the port). Information only (amendment above). A newer version dispatches
   exactly like a tested one: no warning, no
   extra probe, no refusal. The behavioural checks of the observation method
   above (stdin delivery, the `--format json` event types, `ask`
@@ -1778,6 +1778,18 @@ the manifest's `install.installer_sha256`, and only then runs it for
 >   `opencode models --standalone`, with no provider argument and no `--verbose`.
 > - `openCodeCatalogVersion` is `2.2.7`, so it equals max-tested again. The
 >   1.18.30 pending exception is removed.
+
+> **Amendment 2026-11-25 (#3608): max-tested 2.3.2.** The `opencode_integration`
+> suite was re-run on 2.3.2. The floor stays 2.2.7.
+>
+> | Behaviour                                | 2.3.2 status    | Evidence                                                                                                                                                                                                                                                                                                                                                    |
+> | ---------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Config-merge answers Q1–Q6               | **re-observed** | Every merge-contract test passes unchanged. The harness sets `OPENCODE_DISABLE_FILEWATCHER=1`: `debug --standalone` now starts a `serve --stdio` child that watches every directory above the project, ~10 s a call                                                                                                                                         |
+> | `opencode run --help`                    | **re-observed** | Byte-identical to 2.2.7 (`testdata/cli-help/opencode-run-2.3.2.txt`)                                                                                                                                                                                                                                                                                        |
+> | Bundled models catalog                   | **changed**     | 327 providers (233 on 2.2.7), `snapshot-035fj037.txt`; re-pinned, `openCodeCatalogEnv` re-derived, no new code binding; 2.3.2 no longer lists a `status: "deprecated"` model, so `openCodeAnthropicModels` drops `claude-sonnet-4-5` and `claude-sonnet-4-5-20250929`                                                                                       |
+> | A shell `cp` into the bin dir is refused | **changed**     | 2.3.2 derives `external_directory` resources for a shell command only from the arguments of `cd`, `chdir`, `pushd`, `popd`, `push-location` and `set-location`, so the `cp` completed. The shell map now denies `cp`, `mv`, `ln`, `install`, `tee` and `rsync` naming the bin dir (`openCodeShellBinDirDenyPatterns`), a glob backstop like § 9's deny-list |
+>
+> `openCodeCatalogVersion` is `2.3.2`, equal to max-tested.
 
 ### 21. Capability spine
 

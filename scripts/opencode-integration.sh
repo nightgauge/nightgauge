@@ -58,6 +58,10 @@ case "$got" in
     exit 1
     ;;
 esac
-PATH="$bin:$PATH" go test -tags opencode_integration -count=1 -v -timeout 10m \
+# 20m: on 2.3.2 the bundled catalog has 327 providers (233 on 2.2.7), and
+# TestOpenCodeCatalogEnvMatchesTheBinary probes each catalog variable alone,
+# four at a time; that one test measured 435s locally (#3608), so 10m no longer
+# covers the suite.
+PATH="$bin:$PATH" go test -tags opencode_integration -count=1 -v -timeout 20m \
   -run '^Test(OpenCode(Integration.*|PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess|MergeHarnessReclaimsOrphanedLocks|CatalogEnvMatchesTheBinary|AnthropicModelsMatchTheBinary)|RealOpenCodePinRelaxedUnderCanary|PluginLoadsOnRealOpenCode|ToolExecuteBeforeFiresInSubagentAgainstRealOpenCode|RealPluginDeniesTaskAgainstRealOpenCode|CompactionAutocontinueSuppressionAgainstRealOpenCode|PermissionAskEventAgainstRealOpenCode)$' \
   ./internal/execution/ ./internal/execution/adapters/ ./internal/execution/opencodeplugin/

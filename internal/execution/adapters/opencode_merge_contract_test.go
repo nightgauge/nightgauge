@@ -60,7 +60,12 @@ import (
 
 // mcVersion is the opencode version every answer here was observed on. A
 // different binary fails rather than skips: its behaviour is unverified.
-const mcVersion = "2.2.7"
+//
+// Moved from 2.2.7 to 2.3.2 (#3608). Config discovery above the worktree and
+// OPENCODE_DISABLE_PROJECT_CONFIG=1 behave as on 2.2.7, so Q5/Q6 are unchanged.
+// What changed: `debug ... --standalone` now starts a file watcher over every
+// directory up to /, slow enough to pass mcTimeout, so env() turns it off.
+const mcVersion = "2.3.2"
 
 // mcTimeout caps every opencode process the suite starts.
 const mcTimeout = 60 * time.Second
@@ -205,6 +210,14 @@ func (h *mcHarness) env(extra map[string]string) []string {
 		"OPENCODE_DISABLE_MODELS_FETCH": "1",
 		"OPENCODE_DISABLE_AUTOUPDATE":   "1",
 		"OPENCODE_DISABLE_SHARE":        "1",
+		// 2.3.2's `debug ... --standalone` starts a `serve --stdio` child
+		// whose file watcher subscribes to the project and every directory
+		// above it up to /. Observed (--print-logs): about 10s for one
+		// `debug config` from a TempDir, and past mcTimeout once the suite's
+		// parallel tests run together, so Q5/Q6 and the lock test were
+		// killed mid-listing. No question here reads a file change; with
+		// the watcher off the same call takes about 0.35s (#3608).
+		"OPENCODE_DISABLE_FILEWATCHER": "1",
 	}
 	maps.Copy(env, iso)
 	maps.Copy(env, extra)

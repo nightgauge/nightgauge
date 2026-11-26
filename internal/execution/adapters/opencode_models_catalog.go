@@ -48,6 +48,12 @@ var openCodeCodeBoundEnv = map[string][]string{
 // catalog model of any other type.
 var openCodeListedModelTypes = []string{"chat", "decision", "image"}
 
+// openCodeUnlistedModelStatus is the catalog status 2.3.2 does not list: with
+// ANTHROPIC_API_KEY set it lists neither claude-sonnet-4-5 nor
+// claude-sonnet-4-5-20250929, the two anthropic models marked "deprecated" in
+// its bundled catalog (TestOpenCodeAnthropicModelsMatchTheBinary, #3608).
+const openCodeUnlistedModelStatus = "deprecated"
+
 // openCodeModelsCatalogReader streams the pinned catalog's JSON out of the
 // embedded gzip. The caller closes it.
 func openCodeModelsCatalogReader() (io.ReadCloser, error) {
@@ -86,6 +92,7 @@ type openCodeCatalogProvider struct {
 type openCodeCatalogModel struct {
 	ID           string `json:"id"`
 	Type         string `json:"type"`
+	Status       string `json:"status"`
 	Experimental *struct {
 		Modes map[string]json.RawMessage `json:"modes"`
 	} `json:"experimental"`
@@ -129,7 +136,7 @@ func openCodeParseCatalog(data []byte, codeBound map[string][]string) (env map[s
 	}
 	anthropic = map[string]string{}
 	for _, m := range providers[openCodeAnthropicKey].Models {
-		if !slices.Contains(openCodeListedModelTypes, m.Type) {
+		if !slices.Contains(openCodeListedModelTypes, m.Type) || m.Status == openCodeUnlistedModelStatus {
 			continue
 		}
 		anthropic[m.ID] = m.ID

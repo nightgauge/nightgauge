@@ -4,7 +4,7 @@
   "min_version": "2.2.7",
   "min_version_reason": "OpenCode 2.x replaced the 1.x run contract (no run --dir, a new config schema, a new install channel); the 2.x behaviour the adapter relies on was observed on 2.2.7 (spike #3197 section 5). 1.x is no longer supported.",
   "floor_policy": "fail_closed",
-  "max_tested": "2.2.7",
+  "max_tested": "2.3.2",
   "max_tested_reason": "The newest version observed: Nightgauge is tested up to it. A newer version is never refused, degraded or warned about (ADR-022 section 20, 2026-09-25 amendment).",
   "feeds": [
     {
@@ -29,7 +29,7 @@
     "internal/execution/adapters/testdata/opencode-cli/version.txt",
     "internal/adaptercompat/testdata/opencode-feed/releases.txt",
     "internal/adaptercompat/testdata/opencode-feed/tags.txt",
-    "internal/execution/adapters/testdata/cli-help/opencode-run-2.2.7.txt",
+    "internal/execution/adapters/testdata/cli-help/opencode-run-2.3.2.txt",
     "internal/doctor/testdata/opencode-1.18.30-debug-config-invalid.txt",
     "internal/doctor/testdata/opencode-1.18.30-models-configured.txt",
     "internal/doctor/testdata/opencode-1.18.30-models-other.txt",

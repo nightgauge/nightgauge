@@ -58,8 +58,8 @@ func TestGet_OpenCodeIsPinnedAndFailsClosed(t *testing.T) {
 	if !ok {
 		t.Fatal(`Get("opencode") found no manifest`)
 	}
-	if m.MinVersion != "2.2.7" || m.MaxTested != "2.2.7" {
-		t.Errorf("opencode min_version=%q max_tested=%q, want both 2.2.7", m.MinVersion, m.MaxTested)
+	if m.MinVersion != "2.2.7" || m.MaxTested != "2.3.2" {
+		t.Errorf("opencode min_version=%q max_tested=%q, want 2.2.7 and 2.3.2", m.MinVersion, m.MaxTested)
 	}
 	if m.FloorPolicy != FloorFailClosed {
 		t.Errorf("opencode floor_policy=%q, want %q", m.FloorPolicy, FloorFailClosed)
@@ -78,7 +78,7 @@ func TestManifests_ExistingFloorsAndStartingValues(t *testing.T) {
 		"gemini":          {"0.29.0", "", FloorWarn},
 		"copilot":         {"", "", FloorWarn},
 		"grok":            {"1.0.0", "1.0.4", FloorWarn},
-		"opencode":        {"2.2.7", "2.2.7", FloorFailClosed},
+		"opencode":        {"2.2.7", "2.3.2", FloorFailClosed},
 	}
 	for adapter, w := range want {
 		m, ok := Get(adapter)

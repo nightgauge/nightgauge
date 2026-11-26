@@ -1,4 +1,4 @@
-# adapter=opencode version=2.2.7 command=opencode run --help
+# adapter=opencode version=2.3.2 command=opencode run --help
 DESCRIPTION
   Run OpenCode with a message
 

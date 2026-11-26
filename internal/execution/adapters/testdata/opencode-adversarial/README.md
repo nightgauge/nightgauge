@@ -13,7 +13,7 @@ go test -tags opencode_integration ./internal/execution/adapters/ -count=1 -v \
 ```
 
 The tests skip when `opencode` is not on `PATH`, except on CI (`CI=true`), where
-they fail. A binary other than 2.2.7 fails them.
+they fail. A binary other than 2.3.2 fails them.
 
 ## How a run is kept safe
 
@@ -60,7 +60,14 @@ its own, and `@PROJECT_DIR@` in a JSON file becomes the copy's absolute path.
 `@REMOTE_URL@` in `q3-array-merge/remote-project/opencode.json` becomes the
 loopback model stub's URL.
 
-## Observed answers (opencode 2.2.7)
+## Observed answers (opencode 2.3.2)
+
+Re-run on 2.3.2 (#3608): every answer below is unchanged from 2.2.7. One
+harness change was needed. 2.3.2's `debug ... --standalone` starts a
+`serve --stdio` child whose file watcher subscribes to the project and each
+directory above it up to `/`: about 10 s per call from a temp directory, and
+past the suite's 60 s cap once its tests ran in parallel. The harness sets
+`OPENCODE_DISABLE_FILEWATCHER=1`; no question reads a file change.
 
 2.x's `debug config --standalone` lists configuration sources (each
 directory and document, with the document's own keys) rather than the merged
@@ -68,7 +75,7 @@ config, and `debug agents --standalone` prints each agent's resolved rules.
 The suite reads both. Every `debug` call passes `--standalone`, so it never
 reaches a shared background service.
 
-| Question                             | Answer on 2.2.7                                                                                                                                                                                                                                     |
+| Question                             | Answer on 2.3.2                                                                                                                                                                                                                                     |
 | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Q1 `--pure` and plugins              | Skipped: needs a 2.x `opencode run` (#3303) and a directory plugin (#3302).                                                                                                                                                                         |
 | Q2 inline deny vs project allow      | Each layer's `permissions` list is appended after the one below, the inline document last; the last match wins. The 1.x `reordered` hole is closed.                                                                                                 |

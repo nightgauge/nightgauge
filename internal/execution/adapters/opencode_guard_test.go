@@ -432,7 +432,7 @@ func TestOpenCodeBashScopedEntry(t *testing.T) {
 	// entries must be the LAST entries the pattern map marshals, so nothing
 	// added earlier (a scoped allow) can be reordered ahead of them by
 	// encoding/json's usual key-sort.
-	raw2, err := json.Marshal(openCodeShellPermission(&openCodeToolGrant{scopes: []string{"git *"}}))
+	raw2, err := json.Marshal(openCodeShellPermission(&openCodeToolGrant{scopes: []string{"git *"}}, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1099,5 +1099,41 @@ func TestOpenCodePermissionMapDeniesExecuteAndQuestion(t *testing.T) {
 		if decoded["*"] != openCodeAllow {
 			t.Errorf(`permission.%s["*"] = %v, want %q with every tool granted`, key, decoded["*"], openCodeAllow)
 		}
+	}
+}
+
+// TestOpenCodeShellPermissionDeniesBinDirWrites: the shell map denies every
+// write verb into the bin dir, whatever the stage grants, and leaves running a
+// binary from it allowed (#3608: 2.3.2 no longer stops a shell cp there
+// through external_directory).
+func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
+	binDir := filepath.Join(t.TempDir(), "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}, WorktreeDir: t.TempDir()}, binDir)
+	raw, err := json.Marshal(pm.Shell)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["*"] != "allow" {
+		t.Fatalf(`shell "*" = %q, want allow for a stage granted Bash`, got["*"])
+	}
+	for _, verb := range openCodeShellBinDirWriteVerbs {
+		if p := verb + " *" + binDir + "*"; got[p] != "deny" {
+			t.Errorf("shell %q = %q, want deny", p, got[p])
+		}
+	}
+	for p := range got {
+		if strings.HasPrefix(p, binDir) || strings.HasPrefix(p, "*"+binDir) {
+			t.Errorf("shell %q denies running a binary from the bin dir", p)
+		}
+	}
+	if pats := openCodeShellBinDirDenyPatterns(""); pats != nil {
+		t.Errorf("no bin dir: patterns = %q, want none", pats)
 	}
 }

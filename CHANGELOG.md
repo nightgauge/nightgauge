@@ -14,8 +14,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- OpenCode is now tested up to 2.3.2 (the floor stays 2.2.7). The pinned models catalog is re-captured from 2.3.2, which bundles 327 providers to 2.2.7's 233, so credential withholding and output redaction now cover the new providers' variables. 2.3.2 no longer lists deprecated models, so `anthropic/claude-sonnet-4-5` and its dated id are now refused like any model OpenCode does not know. The OpenCode integration suite passes on 2.3.2, and CI installs 2.3.2 for it (#3608).
+
 ### Fixed
 
+- On OpenCode 2.3.2 a stage's shell could copy a file into Nightgauge's binary directory: 2.3.2 checks a shell command's paths against `external_directory` only for `cd`-like commands. The shell permission now denies `cp`, `mv`, `ln`, `install`, `tee` and `rsync` into that directory. Running the binary from it is still allowed (#3608).
 - The PR review no longer discards a review with more than 30 findings. It keeps the first 30 by severity (blockers, then majors, then nitpicks) and the comment says how many were dropped and of which severities. A review that reaches its turn limit still posts nothing, even when it had written findings (#2902).
 - feature-dev now passes the issue's base branch to `nightgauge format run --base`, so an epic sub-issue on a Dart project formats only the `.dart` files it changed, not every file its epic branch changed. With no base recorded it diffs against the default branch as before (#3602).
 - A run started from the queue (`nightgauge queue run`, `nightgauge run`, the extension's run command and autonomous dispatch) keeps its remote run id, its requested adapter and model, and private visibility. They were dropped because the queue removed the item before the run read them. The scheduler also gains internal groundwork for the headless trigger (#3586): a pre-minted run id on a queue item, and an in-memory queue that leaves the checkout's queue file alone (#3605).
