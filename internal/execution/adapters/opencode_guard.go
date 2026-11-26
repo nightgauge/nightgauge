@@ -343,8 +343,19 @@ var openCodeShellBinDirWriteVerbs = []string{
 
 // openCodeShellVerbBoundaries are the characters that can precede a command
 // word inside a command line: a verb counts only after one of these (or at
-// the start), so `git add` never matches `dd`.
-var openCodeShellVerbBoundaries = []string{" ", "\"", "'", ";", "&", "|", "(", "`"}
+// the start), so `git add` never matches `dd`. Newline, tab and carriage
+// return cover multi-line and tab-separated scripts, and `/` covers a
+// path-qualified verb (`/bin/cp`, `/usr/bin/install`) (#3623).
+var openCodeShellVerbBoundaries = []string{
+	" ", "\t", "\n", "\r", "\"", "'", ";", "&", "|", "(", "`", "/",
+}
+
+// openCodeShellVerbArgSeparators are the whitespace characters that can follow
+// a verb before its arguments (#3623). The newline entry only helps a matcher
+// that sees the whole command: OpenCode 2.4.2 checks each line on its own, so
+// `cp\n<src> <dst>` completes there. That is harmless only because the shell
+// ends `cp` at the newline and writes nothing.
+var openCodeShellVerbArgSeparators = []string{" ", "\t", "\n"}
 
 // openCodeShellBinDirDenyPatterns denies a shell command that writes into
 // binDir (NIGHTGAUGE_BIN's directory), the bash leg of the bin-dir guard
@@ -354,7 +365,7 @@ var openCodeShellVerbBoundaries = []string{" ", "\"", "'", ";", "&", "|", "(", "
 // `cp payload <binDir>/gh` completed (#3608).
 //
 // OpenCode anchors a shell glob at both ends of the command text, so each
-// pattern is unanchored (#3615): `*<sep><verb> *<form>*` matches the verb after
+// pattern is unanchored (#3615): `*<sep><verb><argsep>*<form>*` matches the verb after
 // any command boundary (`sh -c "cp …"`, `a && cp …`, `xargs cp …`), and
 // `*>*<form>*` matches any redirection into binDir (`>`, `>>`, `2>`, `&>`). The forms are every
 // absolute form of binDir (openCodePathForms) and, when binDir lies outside
@@ -400,9 +411,11 @@ func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
 	var out []string
 	for _, form := range forms {
 		for _, verb := range openCodeShellBinDirWriteVerbs {
-			out = append(out, verb+" *"+form+"*")
-			for _, sep := range openCodeShellVerbBoundaries {
-				out = append(out, "*"+sep+verb+" *"+form+"*")
+			for _, argSep := range openCodeShellVerbArgSeparators {
+				out = append(out, verb+argSep+"*"+form+"*")
+				for _, sep := range openCodeShellVerbBoundaries {
+					out = append(out, "*"+sep+verb+argSep+"*"+form+"*")
+				}
 			}
 		}
 		out = append(out, "*>*"+form+"*")
