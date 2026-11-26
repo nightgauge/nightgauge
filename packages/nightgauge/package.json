@@ -1816,7 +1816,7 @@
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^4.1.1",
     "esbuild": "^0.28.2",
-    "hono": "^4.13.20",
+    "hono": "^4.13.21",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0"
