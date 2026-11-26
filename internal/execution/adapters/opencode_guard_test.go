@@ -1172,6 +1172,18 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 					"truncate -s0 " + gh,
 					"chmod +x " + gh,
 					"cat /tmp/payload.sh &> " + gh,
+					"true\ncp /tmp/payload.sh " + gh, // #3623: multi-line script
+					"echo hi\nmv /tmp/payload.sh " + gh,
+					"cp\n/tmp/payload.sh " + gh,
+					"cp\t/tmp/payload.sh " + gh,
+					"true\r\ncp /tmp/payload.sh " + gh,
+					"/bin/cp /tmp/payload.sh " + gh, // path-qualified verb
+					"/usr/bin/install -m 0755 /tmp/payload.sh " + gh,
+					"true;\tcp /tmp/payload.sh " + gh, // tab boundary on its own
+					"true\rcp /tmp/payload.sh " + gh,  // carriage return on its own
+					// The `/` boundary's accepted false deny (#3615 ADR-002): a
+					// path ending in a write verb, then running the binary.
+					"ls /usr/bin/install && " + gh + " doctor",
 				} {
 					if got := openCodePatternAction(pm, cmd); got != openCodeDeny {
 						t.Errorf("%s, %s: shell %q resolves to %q, want %q", c.name, grantName, cmd, got, openCodeDeny)
@@ -1188,6 +1200,9 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 					gh + " layout path plans 2>/dev/null",
 					"cat " + filepath.Join(dir, "README"),
 					"git add . && " + gh + " pr create",
+					"cd /tmp\n" + gh + " pr view 1",
+					"/usr/bin/env " + gh + " doctor",
+					"git status\t&& " + gh + " doctor",
 				} {
 					if got := openCodePatternAction(pm, cmd); got == openCodeDeny {
 						t.Errorf("%s, %s: shell %q resolves to deny; running a binary from the bin dir must stay allowed", c.name, grantName, cmd)
