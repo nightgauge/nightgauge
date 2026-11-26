@@ -363,6 +363,40 @@ var openCodeShellVerbArgSeparators = []string{" ", "\t", "\n"}
 // matches, so no line it checks ends in one.
 var openCodeShellBareVerbSuffixes = []string{"", " ", "\t"}
 
+// openCodeShellContinuation is the glob tail of a line that ends in a
+// line-continuation backslash (#3627).
+const openCodeShellContinuation = "\\"
+
+// openCodeShellJoined matches a backslash-newline inside one command's text
+// and whatever follows it (#3627).
+const openCodeShellJoined = "\\\n*"
+
+// openCodeShellQuotedVerbSpellings are the whole-word spellings of verb the
+// shell still runs as verb: alias-bypassing `\cp` and quoted `"cp"`, `'cp'`
+// (#3627).
+func openCodeShellQuotedVerbSpellings(verb string) []string {
+	return []string{"\\" + verb, "\"" + verb + "\"", "'" + verb + "'"}
+}
+
+// openCodeShellSplitVerbQuotes are inserted at one interior gap of a write
+// verb to spell it so the shell still runs it: `c”p`, `c""p`, `c\p`, and
+// through the single `'` or `"` also `'c'p`, `c'p'`, `"c"p` and `c"p"`
+// (#3627). A spelling with two or more splits, ANSI-C quoting (`$'\x63p'`)
+// or a verb built from variables still routes around the globs.
+var openCodeShellSplitVerbQuotes = []string{"''", "\"\"", "'", "\"", "\\"}
+
+// openCodeShellSplitVerbSpellings returns verb with each entry of
+// openCodeShellSplitVerbQuotes inserted at each interior gap (#3627).
+func openCodeShellSplitVerbSpellings(verb string) []string {
+	var out []string
+	for i := 1; i < len(verb); i++ {
+		for _, q := range openCodeShellSplitVerbQuotes {
+			out = append(out, verb[:i]+q+verb[i:])
+		}
+	}
+	return out
+}
+
 // openCodeShellBinDirDenyPatterns denies a shell command that writes into
 // binDir (NIGHTGAUGE_BIN's directory), the bash leg of the bin-dir guard
 // (#1638). OpenCode 2.2.7 refused such a `cp` through external_directory. 2.3.2
@@ -379,18 +413,36 @@ var openCodeShellBareVerbSuffixes = []string{"", " ", "\t"}
 // top-level (worktreeDir itself outside a git checkout; none when worktreeDir
 // is ""). A binDir inside the worktree (the dev-only `bin/`) gets no
 // relative form: `*cp *bin*` would deny unrelated writes, and the edit/write
-// maps deny it. A path assembled from variables or split quoting, or a
-// relative path after `cd`, still routes around a glob; the edit and write
-// maps deny binDir too. Running a binary from binDir stays allowed: no write
-// verb or `>` precedes the path. A command that writes elsewhere and then runs
-// the binary (`rm -f x && <binDir>/gh …`) is denied too, accepted as fail-safe.
+// maps deny it. A path assembled from variables, or a relative path after
+// `cd`, still routes around a glob; the edit and write maps deny binDir too.
+// Running a binary from binDir stays allowed: no write verb or `>` precedes
+// the path. A command that writes elsewhere and then runs the binary
+// (`rm -f x && <binDir>/gh …`) is denied too, accepted as fail-safe.
 //
 // OpenCode checks each line of a multi-line command as its own command, so a
 // split `cp\n<src> <binDir>/gh` leaves a bare `cp` line and an argument line
 // no binDir pattern can catch without denying a run of the binary (#3623).
 // Each write verb is therefore also denied as a bare command (`cp`, `cp `,
-// `cp\t`, `/bin/cp`): a write verb with no arguments writes nothing, and one
-// denied line refuses the whole call. `which cp` and `ls /bin/cp` stay allowed.
+// `cp\t`, `/bin/cp`, `\cp`, `"cp"`, `'cp'`): a write verb with no arguments
+// writes nothing, and one denied line refuses the whole call. `which cp` and
+// `ls /bin/cp` stay allowed.
+//
+// Escaped, quoted and brace-expanded verbs (`\cp src dst`, `"cp" src dst`,
+// `{cp,src,dst}`) get their own per-form patterns (#3627). A split spelling
+// (`c”p`, `c\p`, `'c'p`) is nonsense in an ordinary command, so it is denied
+// anywhere in a line, whatever the line writes to: one pattern per spelling,
+// not per binDir form, which keeps the map small enough for the single
+// environment variable that carries OpenCode's config.
+//
+// A line that ends in a line-continuation backslash hides its next line from
+// a per-line matcher (#3627), so it is denied when it holds a write verb after
+// a boundary (`cp src \`, `npm install x \`), when it ends in a proper prefix
+// of one (`c\` + newline + `p src dst`), or when it holds a redirection
+// (`echo x > /opt/ng\` + newline + `bin/gh`), wherever it points. A
+// multi-line `curl …\` or `cmd 2>&1 \` is therefore refused in OpenCode
+// stages, accepted as fail-safe. OpenCode 2.4.2 checks one parsed command at
+// a time and keeps a continued command whole, backslash-newline included, so
+// each continuation deny is also emitted for that joined text.
 func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
 	if binDir == "" {
 		return nil
@@ -422,22 +474,67 @@ func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
 		}
 	}
 	var out []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
 	for _, verb := range openCodeShellBinDirWriteVerbs {
 		for _, suffix := range openCodeShellBareVerbSuffixes {
-			out = append(out, verb+suffix)
+			add(verb + suffix)
+			for _, spelling := range openCodeShellQuotedVerbSpellings(verb) {
+				add(spelling + suffix)
+			}
 		}
-		out = append(out, "/*/"+verb)
+		add("/*/" + verb)
+		for _, spelling := range openCodeShellSplitVerbSpellings(verb) {
+			add("*" + spelling + "*")
+		}
+		// Continuation: the whole verb, then each proper prefix at line end.
+		add(verb + "*" + openCodeShellContinuation)
+		add("*\\" + verb + "*" + openCodeShellContinuation)
+		for _, sep := range openCodeShellVerbBoundaries {
+			add("*" + sep + verb + "*" + openCodeShellContinuation)
+		}
+		for i := 1; i < len(verb); i++ {
+			add(verb[:i] + openCodeShellContinuation)
+			for _, sep := range append([]string{"\\", "{"}, openCodeShellVerbBoundaries...) {
+				add("*" + sep + verb[:i] + openCodeShellContinuation)
+			}
+		}
 	}
+	add("*>*" + openCodeShellContinuation)
+	// OpenCode keeps a continued command in one parsed command, its text
+	// holding the backslash-newline, so the same denies hold across it.
+	for _, verb := range openCodeShellBinDirWriteVerbs {
+		add(verb + "*" + openCodeShellJoined)
+		for _, sep := range openCodeShellVerbBoundaries {
+			add("*" + sep + verb + "*" + openCodeShellJoined)
+		}
+		for i := 1; i < len(verb); i++ {
+			add("*" + verb[:i] + "\\\n" + verb[i:] + "*")
+		}
+	}
+	add("*>*" + openCodeShellJoined)
 	for _, form := range forms {
 		for _, verb := range openCodeShellBinDirWriteVerbs {
 			for _, argSep := range openCodeShellVerbArgSeparators {
-				out = append(out, verb+argSep+"*"+form+"*")
+				add(verb + argSep + "*" + form + "*")
+				add("*\\" + verb + argSep + "*" + form + "*")
 				for _, sep := range openCodeShellVerbBoundaries {
-					out = append(out, "*"+sep+verb+argSep+"*"+form+"*")
+					add("*" + sep + verb + argSep + "*" + form + "*")
 				}
 			}
+			for _, q := range []string{"\"", "'"} {
+				add("*" + q + verb + q + "*" + form + "*")
+				add("*/" + verb + q + "*" + form + "*")
+			}
+			add("*{" + verb + ",*" + form + "*")
+			add("*/" + verb + ",*" + form + "*")
 		}
-		out = append(out, "*>*"+form+"*")
+		add("*>*" + form + "*")
 	}
 	return out
 }

