@@ -168,12 +168,20 @@ sleep %d
 func TestOpenCodePluginHandshakeRunsWithoutRunIdentity(t *testing.T) {
 	isolateOpenCodeHome(t)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
-	_, pidFile := installOpenCodeFakeNoSentinelTimeout(t, 12*time.Second)
+	// The fake sleeps far past anything a killed handshake costs: the 1s
+	// kill window plus the marker's `opencode --version` probe (bounded at
+	// 5s) left a fixed 6s budget no headroom under a loaded race run (#2794,
+	// 7.28s on a merge-group run of #3615). The property is "did not wait
+	// out the sleep", so the bound sits far from both.
+	const fakeSleep = 60 * time.Second
+	// Below the 30s at which an un-handshaken stage is stopped anyway.
+	const handshakeBound = 15 * time.Second
+	_, pidFile := installOpenCodeFakeNoSentinelTimeout(t, fakeSleep)
 
 	workspace := openCodeWorkspace(t)
 	m := NewManager(workspace, adapters.NewOpenCodeAdapter())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), fakeSleep+30*time.Second)
 	defer cancel()
 
 	started := time.Now()
@@ -186,7 +194,7 @@ func TestOpenCodePluginHandshakeRunsWithoutRunIdentity(t *testing.T) {
 	})
 	elapsed := time.Since(started)
 
-	if elapsed > 6*time.Second {
+	if elapsed > handshakeBound {
 		t.Fatalf("RunStage took %s; a dispatch with no run identity must still fail its handshake quickly, not wait out the fake's sleep", elapsed)
 	}
 
