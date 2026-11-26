@@ -445,12 +445,12 @@ func TestOpenCodeRedactedEnv(t *testing.T) {
 
 // TestOpenCodeCatalogEnvSnapshot guards the catalog snapshot the credential
 // policy stands on against an edit by hand. It is derived from the models
-// catalog pinned for opencode 2.2.7 (TestOpenCodeCatalogEnvMatchesThePinnedCatalog):
-// 233 provider keys, with the bindings ADR-022 § 8 and the forge exception
+// catalog pinned for opencode 2.3.2 (TestOpenCodeCatalogEnvMatchesThePinnedCatalog):
+// 327 provider keys, with the bindings ADR-022 § 8 and the forge exception
 // name.
 func TestOpenCodeCatalogEnvSnapshot(t *testing.T) {
-	if n := len(openCodeCatalogEnv); n != 233 {
-		t.Errorf("the catalog snapshot holds %d provider keys; the catalog pinned for opencode 2.2.7 lists 233", n)
+	if n := len(openCodeCatalogEnv); n != 327 {
+		t.Errorf("the catalog snapshot holds %d provider keys; the catalog pinned for opencode 2.3.2 lists 327", n)
 	}
 	for provider, want := range map[string][]string{
 		"anthropic":      {"ANTHROPIC_API_KEY"},

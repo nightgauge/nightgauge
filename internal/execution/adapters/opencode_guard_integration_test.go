@@ -511,9 +511,11 @@ func TestOpenCodeBinDirEditDenied(t *testing.T) {
 // it — so openCodeExternalDirectoryAllowList no longer allow-lists it at
 // all (kept only for TestOpenCodeBinDirEditDenied's own edit-deny leg,
 // unaffected). This probe is the bash leg the issue's own item 4 asked for:
-// a bash `cp` planting a file into NIGHTGAUGE_BIN is refused by opencode's
-// own external_directory check, naming that permission in the rejected
-// tool_use event.
+// a bash `cp` planting a file into NIGHTGAUGE_BIN is refused, and the
+// rejected tool_use event names the shell permission (openCodeShellDenied):
+// the shell map's bin-dir deny (openCodeShellBinDirDenyPatterns). 2.2.7
+// refused it through external_directory; 2.3.2 no longer checks a cp target
+// against external_directory (#3608).
 func TestOpenCodeBinDirCpDenied(t *testing.T) {
 	runOpenCodeBinDirCpDeniedProbe(t)
 }
@@ -552,16 +554,23 @@ func runOpenCodeBinDirCpDeniedProbe(t *testing.T) {
 	exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
 	t.Logf("exit=%d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout, stderr)
 
+	shellEvents := 0
 	for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
 		tool, status, errText, ok := guardToolUseEvent(line)
 		if !ok || tool != "shell" {
 			continue
 		}
+		shellEvents++
 		if status != "error" {
 			t.Errorf("the bash cp into NIGHTGAUGE_BIN was not rejected (status=%q)", status)
-		} else if !strings.Contains(errText, openCodeExternalDirectoryDenied) {
-			t.Errorf("the rejection's error text does not name permission external_directory: %s", errText)
+		} else if !strings.Contains(errText, openCodeShellDenied) {
+			t.Errorf("the rejection's error text does not name permission shell: %s", errText)
 		}
+	}
+	// Without a shell event the rejection checks above never ran, and the
+	// os.Stat check alone cannot tell a refusal from a cp never attempted.
+	if shellEvents == 0 {
+		t.Error("no shell tool_use event: the probe's cp never reached opencode's permission check")
 	}
 	if _, err := os.Stat(planted); err == nil {
 		t.Errorf("NIGHTGAUGE_BIN dir is writable via bash: cp planted %s", planted)
@@ -864,3 +873,8 @@ func TestOpenCodeTmpDirAllowDoesNotReachANestedFile(t *testing.T) {
 // call the external_directory permission refused (observed on 2.2.7, #3304).
 // 1.18.30 named the permission as JSON, `"permission":"external_directory"`.
 const openCodeExternalDirectoryDenied = "Permission denied: external_directory"
+
+// openCodeShellDenied is the error text OpenCode 2.3.2 gives a shell call the
+// shell permission refused, here the bin-dir write deny (observed by
+// TestOpenCodeBinDirCpDenied, #3608).
+const openCodeShellDenied = "Permission denied: shell"

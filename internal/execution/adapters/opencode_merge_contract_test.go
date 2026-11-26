@@ -60,7 +60,12 @@ import (
 
 // mcVersion is the opencode version every answer here was observed on. A
 // different binary fails rather than skips: its behaviour is unverified.
-const mcVersion = "2.2.7"
+//
+// Moved from 2.2.7 to 2.3.2 (#3608). Config discovery above the worktree and
+// OPENCODE_DISABLE_PROJECT_CONFIG=1 behave as on 2.2.7, so Q5/Q6 are unchanged.
+// What changed: `debug ... --standalone` now starts a file watcher over every
+// directory up to /, slow enough to pass mcTimeout, so env() turns it off.
+const mcVersion = "2.3.2"
 
 // mcTimeout caps every opencode process the suite starts.
 const mcTimeout = 60 * time.Second
@@ -205,6 +210,14 @@ func (h *mcHarness) env(extra map[string]string) []string {
 		"OPENCODE_DISABLE_MODELS_FETCH": "1",
 		"OPENCODE_DISABLE_AUTOUPDATE":   "1",
 		"OPENCODE_DISABLE_SHARE":        "1",
+		// 2.3.2's `debug ... --standalone` starts a `serve --stdio` child
+		// whose file watcher subscribes to the project and every directory
+		// above it up to /. Observed (--print-logs): about 10s for one
+		// `debug config` from a TempDir, and past mcTimeout once the suite's
+		// parallel tests run together, so Q5/Q6 and the lock test were
+		// killed mid-listing. No question here reads a file change; with
+		// the watcher off the same call takes about 0.35s (#3608).
+		"OPENCODE_DISABLE_FILEWATCHER": "1",
 	}
 	maps.Copy(env, iso)
 	maps.Copy(env, extra)
@@ -1020,8 +1033,8 @@ func (h *mcHarness) mcAgents(dir, inline string, extra map[string]string) map[st
 	return out
 }
 
-// mcBuiltinAgents are the agents 2.2.7 defines itself (`debug agents` with no
-// config).
+// mcBuiltinAgents are the agents 2.3.2 defines itself (`debug agents
+// --standalone` with no config); the list is the same as 2.2.7's.
 var mcBuiltinAgents = []string{"build", "compaction", "explore", "general", "plan", "summary", "title"}
 
 // mcFixtureAgents is the id of every resolved agent that is not built in,
@@ -1253,13 +1266,13 @@ func (h *mcHarness) git(dir string, args ...string) {
 // in the directory above it, read through `debug config --standalone`'s
 // sources and `debug agents --standalone`.
 //
-// KNOWN, changed on 2.2.7: discovery no longer stops at a git root. 1.18.30
-// stopped at the worktree's own root; 2.2.7 walks up past the worktree and
-// the checkout, so from the worktree the checkout's opencode.json and
-// .opencode/ and the opencode.json above the checkout all load. A dispatch
-// sets OPENCODE_DISABLE_PROJECT_CONFIG=1 (InstallNightgaugePlugin), and the
-// last arm proves that switch drops every one of those sources from the
-// worktree as well. Whether the AGENTS.md files above reach a model request
+// KNOWN, changed on 2.2.7 and unchanged on 2.3.2: discovery does not stop at
+// a git root. 1.18.30 stopped at the worktree's own root; 2.2.7 and 2.3.2 walk
+// up past the worktree and the checkout, so from the worktree the checkout's
+// opencode.json and .opencode/ and the opencode.json above the checkout all
+// load. A dispatch sets OPENCODE_DISABLE_PROJECT_CONFIG=1
+// (InstallNightgaugePlugin), and the last arm proves that switch drops every
+// one of those sources from the worktree as well, on 2.3.2 as on 2.2.7. Whether the AGENTS.md files above reach a model request
 // needs a 2.x run (#3303).
 func TestOpenCodeConfigDiscoveryAboveWorktree(t *testing.T) {
 	t.Parallel()

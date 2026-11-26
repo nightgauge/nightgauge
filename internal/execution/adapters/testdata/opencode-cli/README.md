@@ -16,17 +16,17 @@ and update the table below in the same change.
 | Field       | Value                                                                       |
 | ----------- | --------------------------------------------------------------------------- |
 | Host OS     | macOS 27.2 (Darwin 27.2.0, arm64)                                           |
-| Captured at | 2026-11-14                                                                  |
+| Captured at | 2026-11-25                                                                  |
 | Command     | `opencode run --help`, stdin from `/dev/null`                               |
 | Stream      | stdout; stderr is empty (1.x printed it on stderr). `capture.sh` keeps both |
-| CLI version | `2.2.7` (`opencode --version` prints `opencode v2.2.7`, `version.txt`)      |
-| Install     | `https://opencode.ai/v2/install --version 2.2.7`                            |
+| CLI version | `2.3.2` (`opencode --version` prints `opencode v2.3.2`, `version.txt`)      |
+| Install     | `https://opencode.ai/v2/install --version 2.3.2`                            |
 | Exit code   | 0                                                                           |
 | Redaction   | `capture.sh`; nothing needed redacting                                      |
 
 ## Pinned models catalog (#3315)
 
-`../../opencode-models-catalog.json.gz` is the models catalog OpenCode 2.2.7
+`../../opencode-models-catalog.json.gz` is the models catalog OpenCode 2.3.2
 bundles: the document it reads when `OPENCODE_MODELS_PATH` names no file and
 nothing is cached, before it would fetch models.dev. Every run and probe hands
 OpenCode a copy through `OPENCODE_MODELS_PATH`, and `openCodeCatalogEnv` and
@@ -34,11 +34,11 @@ OpenCode a copy through `OPENCODE_MODELS_PATH`, and `openCodeCatalogEnv` and
 
 | Field       | Value                                                                   |
 | ----------- | ----------------------------------------------------------------------- |
-| CLI version | `2.2.7`                                                                 |
-| Captured at | 2026-11-17, on the host above                                           |
-| Source      | `/$bunfs/root/snapshot-czv35j7j.txt` in the binary's Bun module graph   |
-| Content     | 233 providers, each with `env`; UTF-16LE in the binary, stored as UTF-8 |
-| Stored      | `gzip -9 -n` (8,247,427 bytes of JSON, sha256 `3ea43e2d…494aea33`)      |
+| CLI version | `2.3.2`                                                                 |
+| Captured at | 2026-11-25, on the host above                                           |
+| Source      | `/$bunfs/root/snapshot-035fj037.txt` in the binary's Bun module graph   |
+| Content     | 327 providers, each with `env`; UTF-16LE in the binary, stored as UTF-8 |
+| Stored      | `gzip -9 -n` (9,372,523 bytes of JSON, sha256 `d4e2d43a…4a002286`)      |
 
 To re-capture for a new max-tested version:
 
@@ -58,7 +58,9 @@ To re-capture for a new max-tested version:
    dropped from a copy disappears). They also check that each catalog
    variable, set alone, loads only the providers the policy binds it to. That
    last check found the one code binding 2.2.7 adds, `CLOUDFLARE_API_TOKEN` to
-   `cloudflare-workers-ai` (`openCodeCodeBoundEnv`).
+   `cloudflare-workers-ai` (`openCodeCodeBoundEnv`); 2.3.2 adds the same one
+   and no other. Re-deriving `openCodeAnthropicModels` drops a model whose
+   catalog status is `deprecated`, which 2.3.2 does not list.
 
 ## OpenCode 2.2.7 stream captures (#3305)
 

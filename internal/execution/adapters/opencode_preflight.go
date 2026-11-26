@@ -89,7 +89,7 @@ const openCodeBinaryName = "opencode"
 // (opencode-models-catalog.json.gz) the version bundles, which every run reads
 // through OPENCODE_MODELS_PATH: re-capture it from the new binary first
 // (testdata/opencode-cli/README.md).
-const openCodeCatalogVersion = "2.2.7"
+const openCodeCatalogVersion = "2.3.2"
 
 // OpenCodeManifest is the opencode compat manifest (#1613), the single
 // source of the floor, the max-tested version and the pinned installer;

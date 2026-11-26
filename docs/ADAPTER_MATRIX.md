@@ -105,7 +105,7 @@ version runs exactly like a tested one. Only the floor is enforced, as its
 | `copilot`         | none                  | warn         | none captured               |
 | `gemini`          | `0.29.0`              | warn         | none captured               |
 | `grok`            | `1.0.0`               | warn         | `1.0.4`                     |
-| `opencode`        | `2.2.7`               | fail closed  | `2.2.7`                     |
+| `opencode`        | `2.2.7`               | fail closed  | `2.3.2`                     |
 
 `nightgauge doctor` reports the tested-up-to version as a note on the
 adapter's row, never as a warning.
@@ -625,9 +625,9 @@ probe landing `adapter_auth_failed`) is recorded in
 `internal/execution/adapters/opencode.go` (Go). Full design record:
 [ADR-022](decisions/022-opencode-multi-provider-adapter.md).
 
-**Versions:** floor `2.2.7` (fail closed) and tested up to `2.2.7`, from the
+**Versions:** floor `2.2.7` (fail closed) and tested up to `2.3.2`, from the
 [version table](#tested-up-to) and ADR-022 § 20's
-[2026-11-16 amendment](decisions/022-opencode-multi-provider-adapter.md#20-version-policy).
+[2026-11-25 amendment](decisions/022-opencode-multi-provider-adapter.md#20-version-policy).
 
 **Release status:** Experimental. `Manager.RunStage` (Go) and
 `OpenCodeAdapter.validateAuth`/`createQueryFunction` (TS) refuse every dispatch
@@ -642,7 +642,7 @@ recorded yet (pending #1659).
 | Auth method            | Per model, at dispatch: `ANTHROPIC_API_KEY` for `anthropic/*`; no credential for a local endpoint; a platform-provider key (`github-copilot`, `gitlab`, `amazon-bedrock`, `google-vertex*`) is refused (ADR-022 § 17) |
 | Prompt delivery        | stdin                                                                                                                                                                                                                 |
 | Default args           | `run --standalone --format json --print-logs --log-level error`                                                                                                                                                       |
-| Min version            | `2.2.7` (fail-closed below floor; tested up to `2.2.7`, and a newer version runs unchanged with no warning — ADR-022 § 20)                                                                                            |
+| Min version            | `2.2.7` (fail-closed below floor; tested up to `2.3.2`, and a newer version runs unchanged with no warning — ADR-022 § 20)                                                                                            |
 | `requiresDirectApiKey` | `false`                                                                                                                                                                                                               |
 
 One adapter id reaches every provider: the provider is a property of the
