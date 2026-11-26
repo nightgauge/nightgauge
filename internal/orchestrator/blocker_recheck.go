@@ -78,28 +78,43 @@ func closedNamedBlockers(ctx context.Context, repo string, self int, detail stri
 	return closed
 }
 
-// blockerRecheck is the answer to "does a blocked outcome stand?" (#2897).
-type blockerRecheck struct {
+// BlockerRecheck is the answer to "does a blocked outcome stand?" (#2897).
+type BlockerRecheck struct {
 	// Ran reports that a closed named blocker triggered a base refresh.
-	Ran bool
+	Ran bool `json:"ran"`
 	// Rerun says the base advanced, so the stage runs again on it.
-	Rerun bool
+	Rerun bool `json:"rerun"`
+	// Closed names the blockers the forge reads closed.
+	Closed []string `json:"closed"`
 	// Note is appended to the outcome text when the verdict stands, so the
 	// record shows the re-check ran.
-	Note string
+	Note string `json:"note"`
 	// ConflictReason is set when the refresh conflicted; it replaces the
 	// verdict and the run books merge_conflict.
-	ConflictReason string
+	ConflictReason string `json:"stop_reason"`
+	// ConflictFiles lists the files the conflicting refresh named.
+	ConflictFiles []string `json:"conflict_files"`
 }
 
-// recheckBlockedOutcome re-checks a stage-declared blocked outcome whose named
-// blockers include a CLOSED issue or PR (#2897): the run may be working on a
-// base from before the blocker merged. It refreshes the base once. When the
-// base advanced, the stage re-runs on it; when it did not, the verdict stands
-// with a note that the re-check ran.
-func recheckBlockedOutcome(ctx context.Context, repo string, issueNumber int, workdir, detail string) blockerRecheck {
-	var verdict blockerRecheck
-	if workdir == "" || !IsStageDeclaredBlockedOutcome(detail) {
+// recheckBlockedOutcome re-checks a stage-declared blocked outcome; any other
+// outcome is left alone. See RecheckNamedBlockers.
+func recheckBlockedOutcome(ctx context.Context, repo string, issueNumber int, workdir, detail string) BlockerRecheck {
+	if !IsStageDeclaredBlockedOutcome(detail) {
+		return BlockerRecheck{Closed: []string{}, ConflictFiles: []string{}}
+	}
+	return RecheckNamedBlockers(ctx, repo, issueNumber, workdir, detail)
+}
+
+// RecheckNamedBlockers re-checks a blocked outcome whose named blockers
+// include a CLOSED issue or PR (#2897): the run may be working on a base from
+// before the blocker merged. It refreshes the base once. When the base
+// advanced, the stage re-runs on it; when it did not, the verdict stands with
+// a note that the re-check ran. The caller has established that the outcome is
+// stage-declared blocked; `pr-stage recheck-blocker` exposes this to the
+// extension (#3618).
+func RecheckNamedBlockers(ctx context.Context, repo string, issueNumber int, workdir, detail string) BlockerRecheck {
+	verdict := BlockerRecheck{Closed: []string{}, ConflictFiles: []string{}}
+	if workdir == "" || repo == "" {
 		return verdict
 	}
 	closed := closedNamedBlockers(ctx, repo, issueNumber, detail)
@@ -107,11 +122,15 @@ func recheckBlockedOutcome(ctx context.Context, repo string, issueNumber int, wo
 		return verdict
 	}
 	verdict.Ran = true
+	verdict.Closed = closed
 	names := strings.Join(closed, ", ")
 	res, reason := refreshRunBase(ctx, issueNumber, workdir)
 	switch {
 	case reason != "":
 		verdict.ConflictReason = reason
+		if res.ConflictFiles != nil {
+			verdict.ConflictFiles = res.ConflictFiles
+		}
 	case res.Advanced():
 		verdict.Rerun = true
 		log.Printf("#%d: named blocker(s) %s closed and base advanced — re-running the stage on the refreshed base", issueNumber, names)

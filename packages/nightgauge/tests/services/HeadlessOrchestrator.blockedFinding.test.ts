@@ -545,3 +545,87 @@ describe("HeadlessOrchestrator — a recorded finding defers the re-dispatch for
     expect(assembler.generateDeterministicContext).toHaveBeenCalled();
   });
 });
+
+describe("HeadlessOrchestrator — a closed named blocker is re-checked before booking (#3618)", () => {
+  // The CLI call and its parsing are covered in
+  // HeadlessOrchestrator.blockerRecheck.test.ts; this drives the stage-loop
+  // wiring at the blocked booking site through runPipeline().
+  type Action =
+    { action: "rerun" } | { action: "stop"; reason: string } | { action: "book"; note: string };
+  let logger: Logger;
+
+  function runWith(...answers: Action[]) {
+    const orch = new HeadlessOrchestrator(createMockStateService(), logger, {
+      contextFileWaitMs: 0,
+    } as never);
+    const spy = vi.spyOn(
+      orch as unknown as { recheckClosedBlockers: () => Promise<Action> },
+      "recheckClosedBlockers"
+    );
+    for (const a of answers) spy.mockResolvedValueOnce(a);
+    spy.mockResolvedValue({ action: "book", note: "" });
+    const record = vi.spyOn(
+      orch as unknown as { recordOutOfScopeBlockedFinding: () => Promise<boolean> },
+      "recordOutOfScopeBlockedFinding"
+    );
+    return { orch, spy, record };
+  }
+  const validateRuns = () =>
+    vi.mocked(runStageSkillHeadless).mock.calls.filter((c) => c[0] === "feature-validate").length;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    writes.length = 0;
+    shellCommands.length = 0;
+    findingOnDisk.value = null;
+    validateContext.value = failedValidateWithOutOfScopeSignal();
+    logger = makeLogger();
+    mockSkills();
+    attentionRaise.mockResolvedValue({ outcome: "created", id: "dr_test" });
+  });
+
+  it("rerun re-dispatches the stage without booking; the next blocked verdict books", async () => {
+    const { orch, spy, record } = runWith({ action: "rerun" });
+    const result = await orch.runPipeline(ISSUE);
+
+    expect(validateRuns()).toBe(2);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(result.outcomeType).toBe("blocked");
+    // Only the second verdict recorded a finding: the re-check runs first.
+    expect(record).toHaveBeenCalledTimes(1);
+  });
+
+  it("stop ends the run merge_conflict, with no blocked booking or finding", async () => {
+    const conflict =
+      "[merge-conflict] resumed worktree conflicts with origin/main in a.go — resolve by hand";
+    const { orch, record } = runWith({ action: "stop", reason: conflict });
+    const result = await orch.runPipeline(ISSUE);
+
+    expect(result.success).toBe(false);
+    expect(result.outcomeType).not.toBe("blocked");
+    expect(result.blocked).toBeUndefined();
+    expect(result.error?.message).toBe(conflict);
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it("a note books blocked with the note in the remediation and the error", async () => {
+    const note = " (named blocker(s) #77 closed; base already contains origin/main)";
+    const { orch } = runWith({ action: "book", note });
+    const result = await orch.runPipeline(ISSUE);
+
+    expect(validateRuns()).toBe(1);
+    expect(result.outcomeType).toBe("blocked");
+    expect(result.blocked?.remediation).toContain(note);
+    expect(result.error?.message).toContain(note);
+  });
+
+  it("an unchanged verdict books as before", async () => {
+    const { orch, record } = runWith();
+    const result = await orch.runPipeline(ISSUE);
+
+    expect(validateRuns()).toBe(1);
+    expect(result.outcomeType).toBe("blocked");
+    expect(result.blocked?.remediation).not.toContain("named blocker");
+    expect(record).toHaveBeenCalledTimes(1);
+  });
+});

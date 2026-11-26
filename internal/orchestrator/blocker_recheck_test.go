@@ -284,3 +284,35 @@ func TestRunPipeline_BlockedOnAClosedIssueRefreshesOnce(t *testing.T) {
 		})
 	}
 }
+
+// RecheckNamedBlockers carries no declared-outcome guard (the extension's
+// disposition already established it) and reports the closed blockers and the
+// conflicting files for the CLI (#3618).
+//
+// Serial: swaps package var reconcileExecGh (via stubIssueStates).
+func TestRecheckNamedBlockers_ExportedContract(t *testing.T) {
+	const repo = "nightgauge/nightgauge"
+	stubIssueStates(t, map[string]string{repo + "#77": "closed"})
+	calls := stubRefresh(t, pmstages.BaseRefresh{Base: "main", Outcome: gitpkg.BaseMergeConflict,
+		ConflictFiles: []string{"a.go"}}, nil)
+	got := RecheckNamedBlockers(context.Background(), repo, 42, t.TempDir(), "depends on #77")
+	if *calls != 1 || !got.Ran || strings.Join(got.Closed, ",") != "#77" {
+		t.Fatalf("got %+v (calls %d)", got, *calls)
+	}
+	if strings.Join(got.ConflictFiles, ",") != "a.go" || ClassifyTerminalKind(got.ConflictReason) != TerminalKindMergeConflict {
+		t.Fatalf("conflict = %q files %v", got.ConflictReason, got.ConflictFiles)
+	}
+	// The scheduler's wrapper keeps its guard: the same text is not re-checked there.
+	if w := recheckBlockedOutcome(context.Background(), repo, 42, t.TempDir(), "depends on #77"); w.Ran || *calls != 1 {
+		t.Fatalf("guarded wrapper ran: %+v", w)
+	}
+	// No worktree, or no repository (even with a fully qualified reference the
+	// forge would answer), refreshes nothing.
+	stubIssueStates(t, map[string]string{repo + "#77": "closed"})
+	for name, args := range map[string][2]string{"no worktree": {repo, ""}, "no repo": {"", t.TempDir()}} {
+		g := RecheckNamedBlockers(context.Background(), args[0], 42, args[1], "depends on "+repo+"#77")
+		if g.Ran || g.Closed == nil || *calls != 1 {
+			t.Fatalf("%s: %+v (calls %d)", name, g, *calls)
+		}
+	}
+}

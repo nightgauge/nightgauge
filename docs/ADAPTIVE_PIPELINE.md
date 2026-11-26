@@ -344,4 +344,10 @@ a `skipped` refresh is logged and the run continues.
 When a stage declares the issue blocked and names an issue or PR the forge now
 reads closed, the scheduler refreshes the base once. If the base advanced, the
 stage runs again on it. If not, the verdict stands, with a note that the
-re-check ran. This happens at most once per run.
+re-check ran. This happens at most once per run. The extension's
+`HeadlessOrchestrator` runs the same re-check through
+`nightgauge pr-stage recheck-blocker` (#3618) at both places it books a
+stage-declared blocked verdict, before recording any finding, and only on a
+worktree run. A conflict ends
+the run `merge_conflict`; a missing binary or a failed call books the verdict
+unchanged.
