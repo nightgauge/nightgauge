@@ -1102,35 +1102,80 @@ func TestOpenCodePermissionMapDeniesExecuteAndQuestion(t *testing.T) {
 	}
 }
 
-// TestOpenCodeShellPermissionDeniesBinDirWrites: the shell map denies every
-// write verb into the bin dir, whatever the stage grants, and leaves running a
-// binary from it allowed (#3608: 2.3.2 no longer stops a shell cp there
-// through external_directory).
+// TestOpenCodeShellPermissionDeniesBinDirWrites: the shell map resolves every
+// write verb into the bin dir to deny, whatever the stage grants, and leaves
+// running a binary from it allowed (#3608: 2.3.2 no longer stops a shell cp
+// there through external_directory). Each case is a concrete command resolved
+// by last-match-wins (openCodePatternAction), not a lookup of the pattern the
+// code builds, so a glob that misses the command OpenCode checks goes red.
 func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
-	binDir := filepath.Join(t.TempDir(), "bin")
-	if err := os.Mkdir(binDir, 0o755); err != nil {
+	realBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.Mkdir(realBin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}, WorktreeDir: t.TempDir()}, binDir)
-	raw, err := json.Marshal(pm.Shell)
+	linkBin := filepath.Join(t.TempDir(), "bin-link")
+	if err := os.Symlink(realBin, linkBin); err != nil {
+		t.Fatal(err)
+	}
+	// The real directory, and a symlink to it: the symlink's resolved form is
+	// denied too (openCodeShellBinDirDenyPatterns' EvalSymlinks branch).
+	resolvedBin, err := filepath.EvalSymlinks(realBin)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got map[string]string
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name, binDir string
+		forms        []string
+	}{
+		{"real dir", realBin, []string{realBin}},
+		{"symlinked dir", linkBin, []string{linkBin, resolvedBin}},
 	}
-	if got["*"] != "allow" {
-		t.Fatalf(`shell "*" = %q, want allow for a stage granted Bash`, got["*"])
+	// A scoped grant that overlaps a write verb must still lose to the bin-dir
+	// deny (last match wins). runs says whether the grant lets the stage run
+	// an arbitrary binary at all, so the allow arm applies.
+	grants := []struct {
+		name  string
+		tools []string
+		runs  bool
+	}{
+		{"bare Bash", []string{"Bash"}, true},
+		{"scoped any", []string{"Bash(*)"}, true},
+		{"scoped cp", []string{"Bash(cp *)", "Bash(install *)", "Bash(git *)"}, false},
 	}
-	for _, verb := range openCodeShellBinDirWriteVerbs {
-		if p := verb + " *" + binDir + "*"; got[p] != "deny" {
-			t.Errorf("shell %q = %q, want deny", p, got[p])
-		}
-	}
-	for p := range got {
-		if strings.HasPrefix(p, binDir) || strings.HasPrefix(p, "*"+binDir) {
-			t.Errorf("shell %q denies running a binary from the bin dir", p)
+	for _, c := range cases {
+		for _, g := range grants {
+			grantName := g.name
+			opts := RunOptions{AllowedTools: g.tools, WorktreeDir: t.TempDir()}
+			pm := openCodePermissionMap(opts, c.binDir).Shell
+			for _, dir := range c.forms {
+				gh := filepath.Join(dir, "gh")
+				for _, cmd := range []string{
+					fmt.Sprintf("cp %q %q", "/tmp/payload.sh", gh), // the integration probe's form
+					"cp /tmp/payload.sh " + gh,
+					"cp -f /tmp/payload.sh " + dir + "/",
+					"mv /tmp/payload.sh " + gh,
+					"ln -sf /tmp/payload.sh " + gh,
+					"install -m 0755 /tmp/payload.sh " + gh,
+					"tee " + gh,
+					"rsync -a /tmp/payload.sh " + gh,
+				} {
+					if got := openCodePatternAction(pm, cmd); got != openCodeDeny {
+						t.Errorf("%s, %s: shell %q resolves to %q, want %q", c.name, grantName, cmd, got, openCodeDeny)
+					}
+				}
+				if !g.runs {
+					continue
+				}
+				for _, cmd := range []string{
+					gh + " pr view 1",
+					fmt.Sprintf("%q pr view 1", gh),
+					fmt.Sprintf("PATH=%q:$PATH nightgauge doctor", dir),
+				} {
+					if got := openCodePatternAction(pm, cmd); got == openCodeDeny {
+						t.Errorf("%s, %s: shell %q resolves to deny; running a binary from the bin dir must stay allowed", c.name, grantName, cmd)
+					}
+				}
+			}
 		}
 	}
 	if pats := openCodeShellBinDirDenyPatterns(""); pats != nil {

@@ -1033,8 +1033,8 @@ func (h *mcHarness) mcAgents(dir, inline string, extra map[string]string) map[st
 	return out
 }
 
-// mcBuiltinAgents are the agents 2.2.7 defines itself (`debug agents` with no
-// config).
+// mcBuiltinAgents are the agents 2.3.2 defines itself (`debug agents
+// --standalone` with no config); the list is the same as 2.2.7's.
 var mcBuiltinAgents = []string{"build", "compaction", "explore", "general", "plan", "summary", "title"}
 
 // mcFixtureAgents is the id of every resolved agent that is not built in,
@@ -1266,13 +1266,13 @@ func (h *mcHarness) git(dir string, args ...string) {
 // in the directory above it, read through `debug config --standalone`'s
 // sources and `debug agents --standalone`.
 //
-// KNOWN, changed on 2.2.7: discovery no longer stops at a git root. 1.18.30
-// stopped at the worktree's own root; 2.2.7 walks up past the worktree and
-// the checkout, so from the worktree the checkout's opencode.json and
-// .opencode/ and the opencode.json above the checkout all load. A dispatch
-// sets OPENCODE_DISABLE_PROJECT_CONFIG=1 (InstallNightgaugePlugin), and the
-// last arm proves that switch drops every one of those sources from the
-// worktree as well. Whether the AGENTS.md files above reach a model request
+// KNOWN, changed on 2.2.7 and unchanged on 2.3.2: discovery does not stop at
+// a git root. 1.18.30 stopped at the worktree's own root; 2.2.7 and 2.3.2 walk
+// up past the worktree and the checkout, so from the worktree the checkout's
+// opencode.json and .opencode/ and the opencode.json above the checkout all
+// load. A dispatch sets OPENCODE_DISABLE_PROJECT_CONFIG=1
+// (InstallNightgaugePlugin), and the last arm proves that switch drops every
+// one of those sources from the worktree as well, on 2.3.2 as on 2.2.7. Whether the AGENTS.md files above reach a model request
 // needs a 2.x run (#3303).
 func TestOpenCodeConfigDiscoveryAboveWorktree(t *testing.T) {
 	t.Parallel()

@@ -13,7 +13,7 @@ import (
 	"slices"
 )
 
-// openCodeModelsCatalogGzip is the models catalog opencode 2.2.7 bundles, the
+// openCodeModelsCatalogGzip is the models catalog opencode 2.3.2 bundles, the
 // document it reads when no file is named and nothing is cached, gzipped
 // (testdata/opencode-cli/README.md says how it is captured). It is pinned, not
 // fetched: every run and every probe hands OpenCode this file
@@ -24,9 +24,12 @@ import (
 //go:embed opencode-models-catalog.json.gz
 var openCodeModelsCatalogGzip []byte
 
-// openCodeModelsPathEnv names the catalog file OpenCode 2.2.7 reads in place
-// of its cache, its bundled snapshot and models.dev. Read from the 2.2.7
-// binary: models:{file:OPENCODE_MODELS_PATH,fetch:!OPENCODE_DISABLE_MODELS_FETCH}.
+// openCodeModelsPathEnv names the catalog file OpenCode reads in place of its
+// cache, its bundled snapshot and models.dev. Read from the 2.2.7 binary, and
+// still honoured by 2.3.2 (TestOpenCodeReadsThePinnedCatalog):
+//
+//	models:{file:OPENCODE_MODELS_PATH,fetch:!OPENCODE_DISABLE_MODELS_FETCH}
+//
 // OPENCODE_DISABLE_MODELS_FETCH stays set beside it (openCodeDisableFlags).
 const openCodeModelsPathEnv = "OPENCODE_MODELS_PATH"
 
@@ -35,7 +38,7 @@ const openCodeModelsPathEnv = "OPENCODE_MODELS_PATH"
 // sweep never removes it.
 const openCodeModelsCatalogFile = "nightgauge-models-catalog.json"
 
-// openCodeCodeBoundEnv are the provider bindings opencode 2.2.7 makes in code
+// openCodeCodeBoundEnv are the provider bindings opencode 2.3.2 makes in code
 // that its catalog does not declare. Observed with each catalog variable set
 // alone (TestOpenCodeCatalogEnvMatchesTheBinary): CLOUDFLARE_API_TOKEN, which
 // the catalog binds to cloudflare-ai-gateway only, also loads
@@ -109,7 +112,7 @@ func openCodePinnedCatalog() (env map[string][]string, anthropic map[string]stri
 
 // openCodeParseCatalog parses a models catalog into what openCodeCatalogEnv
 // and openCodeAnthropicModels hold: each provider key's variables (the
-// catalog's, then codeBound's), and each anthropic model 2.2.7 lists mapped to
+// catalog's, then codeBound's), and each anthropic model 2.3.2 lists mapped to
 // the id it sends.
 func openCodeParseCatalog(data []byte, codeBound map[string][]string) (env map[string][]string, anthropic map[string]string, err error) {
 	var providers map[string]openCodeCatalogProvider

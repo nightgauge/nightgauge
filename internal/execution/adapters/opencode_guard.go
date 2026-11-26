@@ -309,8 +309,9 @@ func openCodeScalarPermission(g *openCodeToolGrant) string {
 }
 
 // openCodeShellPermission is always a pattern map: "*" from g, every scoped
-// pattern g grants, then the deny-list backstop last, so it always wins even
-// over a scoped allow that happened to overlap it.
+// pattern g grants, the deny-list backstop, then the bin-dir write denies for
+// binDir (openCodeShellBinDirDenyPatterns; none when binDir is ""). The denies
+// come last, so they win even over a scoped allow that overlaps them.
 func openCodeShellPermission(g *openCodeToolGrant, binDir string) *openCodePatternMap {
 	pm := newOpenCodePatternMap()
 	base := openCodeDeny

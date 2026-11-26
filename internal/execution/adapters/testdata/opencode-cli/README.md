@@ -58,7 +58,9 @@ To re-capture for a new max-tested version:
    dropped from a copy disappears). They also check that each catalog
    variable, set alone, loads only the providers the policy binds it to. That
    last check found the one code binding 2.2.7 adds, `CLOUDFLARE_API_TOKEN` to
-   `cloudflare-workers-ai` (`openCodeCodeBoundEnv`).
+   `cloudflare-workers-ai` (`openCodeCodeBoundEnv`); 2.3.2 adds the same one
+   and no other. Re-deriving `openCodeAnthropicModels` drops a model whose
+   catalog status is `deprecated`, which 2.3.2 does not list.
 
 ## OpenCode 2.2.7 stream captures (#3305)
 

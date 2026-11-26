@@ -1,9 +1,9 @@
 package adapters
 
-// openCodeAnthropicModels is every model opencode 2.2.7 lists for the
+// openCodeAnthropicModels is every model opencode 2.3.2 lists for the
 // anthropic provider of the pinned models catalog
 // (opencode-models-catalog.json.gz), mapped to the model id OpenCode sends for
-// each. 2.2.7 lists a catalog model under its id, and derives one more entry,
+// each. 2.3.2 lists a catalog model under its id, and derives one more entry,
 // <id>-<mode>, from each of its experimental modes; it sends that entry under
 // the base model's id with a body and a header of its own, so a fast-mode
 // entry maps to its base model (ADR-022 § 17).

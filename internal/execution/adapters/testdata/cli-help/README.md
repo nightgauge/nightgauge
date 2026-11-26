@@ -75,8 +75,8 @@ hand.
 | `grok-1.0.4.txt`              | `grok --help`         | `https://x.ai/cli/install.sh` with version argument `1.0.4` (installer sha256 `7fd6fdc75d9418b2e58356726fcbf1ae849416f773925da07d0ccc7a60d3e791`) | 0         |
 | `opencode-run-2.3.2.txt`      | `opencode run --help` | `https://opencode.ai/v2/install` with `--version 2.3.2` (installer sha256 `b60226508704fc97d7b9d12ae6d4a6f819dfe02b22c190a0425c14ef632b056b`)     | 0         |
 
-opencode 2.3.2 prints `run --help` on stdout, byte for byte what 2.2.7 printed (1.x printed it on stderr); the
-script captures stdout and stderr together, as `../opencode-cli/capture.sh`
+opencode 2.3.2 prints `run --help` on stdout, byte for byte what 2.2.7
+printed (1.x printed it on stderr); the script captures stdout and stderr together, as `../opencode-cli/capture.sh`
 does. 2.x no longer defines `run --dir`, and the adapter no longer emits it:
 the dispatch runs in the worktree as its working directory (#3300).
 

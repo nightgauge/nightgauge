@@ -54,7 +54,7 @@ func openCodeCatalogBinaryVersion(t *testing.T, path string) {
 }
 
 // openCodeModels runs the installed opencode's `models --standalone`, the
-// listing 2.2.7 accepts (no provider argument, no --verbose), in throwaway
+// listing 2.3.2 accepts (no provider argument, no --verbose), in throwaway
 // HOME and XDG directories with the model fetch off, as in a run. With pinned,
 // OPENCODE_MODELS_PATH names a written copy of the pinned catalog, as in a
 // run; without it, the binary reads the catalog it bundles. content, when set,
@@ -169,7 +169,7 @@ func openCodeListedProviders(lines []string) map[string]bool {
 //     no longer listed (the known-bad case);
 //   - set alone, each variable loads only providers openCodeCatalogEnv binds
 //     it to, so no variable makes a provider reachable that the policy does
-//     not know (a binding 2.2.7 makes in code included, openCodeCodeBoundEnv).
+//     not know (a binding 2.3.2 makes in code included, openCodeCodeBoundEnv).
 func TestOpenCodeCatalogEnvMatchesTheBinary(t *testing.T) {
 	path := openCodeCatalogBinary(t)
 	openCodeCatalogBinaryVersion(t, path)
@@ -253,7 +253,7 @@ func TestOpenCodeReadsThePinnedCatalog(t *testing.T) {
 // the pin accepts must also stay listed under the per-run config the builder
 // makes for it.
 //
-// 2.2.7's `models` prints no served id and no limits (it has no --verbose), so
+// 2.3.2's `models` prints no served id and no limits (it has no --verbose), so
 // the ids each entry is sent under, a fast-mode entry's base id included, are
 // read from the pinned catalog the binary was shown to read
 // (openCodeParseCatalog, TestOpenCodeReadsThePinnedCatalog), not from a
