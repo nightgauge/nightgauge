@@ -464,7 +464,7 @@ func TestCacheFor_ShippedManifestsAndUnknownAdapter(t *testing.T) {
 // capture scripts check, because they read it from the manifest.
 func TestShippedInstallersCarryTheirPin(t *testing.T) {
 	want := map[string]string{
-		"grok":     "bdd23859b10bd0c1492ffc3443e8413b73a9b09966d48d4d3fa32121043956fc",
+		"grok":     "a7916e6d5cc606564dd589037043b4c6cbb58f3b54c3b9865af9e0aed2a5bc77",
 		"opencode": "b60226508704fc97d7b9d12ae6d4a6f819dfe02b22c190a0425c14ef632b056b",
 	}
 	ms, err := Load()

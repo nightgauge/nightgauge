@@ -16,6 +16,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The adapter canary accepts the grok CLI installer again: the manifest now pins the
+  installer's current reviewed sha256, so the flag-contract check can install grok (#3611).
 - Skills now find the per-user binary shim `~/.nightgauge/bin/nightgauge` when no
   host exports `NIGHTGAUGE_BIN` and it is not on `PATH`, with the same Darwin
   signature check the Claude hook applies. `nightgauge preflight skill-portability`
