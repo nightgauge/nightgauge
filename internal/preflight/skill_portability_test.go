@@ -3,6 +3,7 @@ package preflight
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -71,6 +72,7 @@ name: feature-dev
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+`+shimRung+`
 [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ] || true
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
@@ -270,6 +272,7 @@ func TestSkillPortability_FullCascadePasses(t *testing.T) {
 	writeSkillFile(t, root, "nightgauge-feature-dev/_includes/gate.md", "```bash"+`
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+`+shimRung+`
 [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ] || true
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
@@ -293,6 +296,7 @@ func TestSkillPortability_FlagsUngatedRepoRungs(t *testing.T) {
 	writeSkillFile(t, root, "nightgauge-feature-dev/_includes/gate.md", "```bash"+`
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+`+shimRung+`
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
@@ -318,6 +322,7 @@ func TestSkillPortability_FullCascadeCannotHideTruncatedSibling(t *testing.T) {
 `+"```bash"+`
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+`+shimRung+`
 [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ] || true
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 [ -z "$BINARY" ] && [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
@@ -345,10 +350,10 @@ BINARY="${NIGHTGAUGE_BIN:-}"
 	if f.Check != CheckTruncatedBinaryCascade {
 		t.Errorf("check = %q, want %q", f.Check, CheckTruncatedBinaryCascade)
 	}
-	if f.Line != 16 {
-		t.Errorf("line = %d, want truncated cascade start at line 16", f.Line)
+	if f.Line != 19 {
+		t.Errorf("line = %d, want truncated cascade start at line 19", f.Line)
 	}
-	for _, want := range []string{"bash block line 15", "repo bin", "canonical repo bin", "dev repo bin gate"} {
+	for _, want := range []string{"bash block line 18", "repo bin", "canonical repo bin", "dev repo bin gate"} {
 		if !strings.Contains(f.Match, want) {
 			t.Errorf("finding must name offending block/missing rung %q, got %q", want, f.Match)
 		}
@@ -472,5 +477,91 @@ func TestSkillPortability_SkillsDirScansBundle(t *testing.T) {
 	if len(res.Findings) != 1 || res.Findings[0].Check != CheckSourceRepoPath ||
 		res.Findings[0].SkillFile != filepath.Join("dist", "skills", "nightgauge-retro", "SKILL.md") {
 		t.Fatalf("findings = %+v", res.Findings)
+	}
+}
+
+// shimRung is the per-user shim rung exactly as PREFLIGHT.md carries it.
+const shimRung = `NG_SHIM="$HOME/.nightgauge/bin/nightgauge"
+[ -z "$BINARY" ] && [ -f "$NG_SHIM" ] && [ -x "$NG_SHIM" ] && { [ "$(uname -s)" != Darwin ] || \\
+  codesign --verify --strict '-R=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "RZJPN7Y7BG"' "$NG_SHIM" >/dev/null 2>&1; } && BINARY="$NG_SHIM"`
+
+func cascadeFixture(lines ...string) string {
+	return "```bash\n" + strings.Join(lines, "\n") + "\n```\n"
+}
+
+const (
+	fxEnv   = `BINARY="${NIGHTGAUGE_BIN:-}"`
+	fxPath  = `[ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")`
+	fxShim  = shimRung
+	fxGate  = `[ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ] || true`
+	fxRepo  = `REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"`
+	fxCanon = `GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"`
+	fxGo    = `[ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"`
+)
+
+// TestSkillPortability_ShimRungPresenceAndOrder pins #2928: the per-user shim
+// rung is required, and the rungs must appear in the documented order.
+func TestSkillPortability_ShimRungPresenceAndOrder(t *testing.T) {
+	cases := map[string]struct {
+		block string
+		want  string // "" means no finding
+	}{
+		"in order":                    {cascadeFixture(fxEnv, fxPath, fxShim, fxGate, fxRepo, fxCanon, fxGo), ""},
+		"missing shim":                {cascadeFixture(fxEnv, fxPath, fxGate, fxRepo, fxCanon, fxGo), "missing: shim, shim signature gate"},
+		"shim after repo bin":         {cascadeFixture(fxEnv, fxPath, fxGate, fxRepo, fxShim, fxCanon, fxGo), "out of order: repo bin before shim"},
+		"shim before PATH":            {cascadeFixture(fxEnv, fxShim, fxPath, fxGate, fxRepo, fxCanon, fxGo), "out of order: shim before PATH"},
+		"unrelated lines above start": {cascadeFixture(fxRepo, `X=$(command -v nightgauge)`, fxEnv, fxPath, fxShim, fxGate, fxRepo, fxCanon, fxGo), ""},
+		"rung only above start":       {cascadeFixture(fxGate, fxEnv, fxPath, fxShim, fxRepo, fxCanon, fxGo), "missing: dev repo bin gate"},
+		"shim without signature gate": {cascadeFixture(fxEnv, fxPath, `NG_SHIM="$HOME/.nightgauge/bin/nightgauge"; [ -x "$NG_SHIM" ] && BINARY="$NG_SHIM"`, fxGate, fxRepo, fxCanon, fxGo), "missing: shim signature gate"},
+		"shim with unpinned codesign": {cascadeFixture(fxEnv, fxPath, `NG_SHIM="$HOME/.nightgauge/bin/nightgauge"; codesign --verify --strict "$NG_SHIM" && BINARY="$NG_SHIM"`, fxGate, fxRepo, fxCanon, fxGo), "missing: shim signature gate"},
+		"bare call still flagged":     {cascadeFixture(fxEnv, fxPath, fxShim, fxGate, fxRepo, fxCanon, fxGo, "nightgauge status"), "nightgauge status"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeSkillFile(t, root, "nightgauge-feature-dev/_includes/gate.md", tc.block)
+			res, err := RunSkillPortabilityCheck(context.Background(), SkillPortabilityOptions{Root: root})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !strings.Contains(tc.want, "nightgauge status") {
+				assertShellMirrorAgrees(t, root, tc.want)
+			}
+			if tc.want == "" {
+				if len(res.Findings) != 0 {
+					t.Fatalf("expected no findings, got %+v", res.Findings)
+				}
+				return
+			}
+			if len(res.Findings) != 1 || !strings.Contains(res.Findings[0].Match, tc.want) {
+				t.Fatalf("expected one finding containing %q, got %+v", tc.want, res.Findings)
+			}
+		})
+	}
+}
+
+// assertShellMirrorAgrees runs scripts/lint-skills/portability.sh on root and
+// checks it reaches the Go gate's verdict on the cascade (#2928).
+func assertShellMirrorAgrees(t *testing.T, root, want string) {
+	t.Helper()
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	repo, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bash, filepath.Join(repo, "scripts", "lint-skills", "portability.sh"), root)
+	cmd.Dir = root
+	out, runErr := cmd.CombinedOutput()
+	if want == "" {
+		if runErr != nil {
+			t.Fatalf("shell mirror failed where the Go gate passed:\n%s", out)
+		}
+		return
+	}
+	if runErr == nil || !strings.Contains(string(out), want) {
+		t.Fatalf("shell mirror disagrees with the Go gate; want %q:\n%s", want, out)
 	}
 }

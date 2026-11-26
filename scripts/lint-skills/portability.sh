@@ -8,7 +8,7 @@
 # Scope: every *.md under skills/ (SKILL.md + _includes/ + _shared/).
 #
 # Provider-neutral discovery is the contract:
-#   $NIGHTGAUGE_BIN → PATH → gated repo bin → gated canonical-repo bin → ~/go/bin
+#   $NIGHTGAUGE_BIN → PATH → ~/.nightgauge/bin shim → gated repo bin → gated canonical-repo bin → ~/go/bin
 # (see skills/_shared/PREFLIGHT.md). The Claude-only
 # claude-plugins/.../guard.sh intentionally keeps the vscode glob (it is not
 # a skill) and is NOT scanned by this gate.
@@ -44,7 +44,7 @@ if [ -n "$raw" ]; then
   printf '%s\n' "$raw" >&2
   echo "" >&2
   echo "Skills must resolve the nightgauge binary provider-neutrally:" >&2
-  echo "  \$NIGHTGAUGE_BIN → PATH → gated repo bin → gated canonical-repo bin → ~/go/bin" >&2
+  echo "  \$NIGHTGAUGE_BIN → PATH → ~/.nightgauge/bin shim → gated repo bin → gated canonical-repo bin → ~/go/bin" >&2
   echo "See skills/_shared/PREFLIGHT.md and docs/SKILL_PORTABILITY.md (#4029)." >&2
 fi
 
@@ -66,18 +66,30 @@ while IFS= read -r f; do
   hits=$(awk -v file="$f" '
     function reset_block() {
       started = 0; start_line = 0
-      env_rung = 0; path_rung = 0; repo_rung = 0; canonical_rung = 0; gate_rung = 0; go_rung = 0
+      env_rung = 0; path_rung = 0; shim_rung = 0; sig_rung = 0; repo_rung = 0; canonical_rung = 0; gate_rung = 0; go_rung = 0
+    }
+    function order_check(name, at) {
+      if (!at) return
+      if (at < prev_at && order == "") order = "out of order: " name " before " prev_name
+      prev_at = at; prev_name = name
     }
     function report_block(    missing, sep) {
       if (!started) return
       missing = ""; sep = ""
       if (!env_rung)       { missing = missing sep "NIGHTGAUGE_BIN"; sep = ", " }
       if (!path_rung)      { missing = missing sep "PATH"; sep = ", " }
+      if (!shim_rung)      { missing = missing sep "shim"; sep = ", " }
+      if (!sig_rung)       { missing = missing sep "shim signature gate"; sep = ", " }
       if (!repo_rung)      { missing = missing sep "repo bin"; sep = ", " }
       if (!canonical_rung) { missing = missing sep "canonical repo bin"; sep = ", " }
       if (!gate_rung)      { missing = missing sep "dev repo bin gate"; sep = ", " }
       if (!go_rung)        { missing = missing sep "go bin" }
-      if (missing != "") printf "%s:%d: truncated binary-discovery bash block (missing: %s)\n", file, start_line, missing
+      if (missing != "") { printf "%s:%d: truncated binary-discovery bash block (missing: %s)\n", file, start_line, missing; return }
+      order = ""; prev_at = 0; prev_name = ""
+      order_check("NIGHTGAUGE_BIN", env_rung); order_check("PATH", path_rung)
+      order_check("shim", shim_rung); order_check("repo bin", repo_rung)
+      order_check("canonical repo bin", canonical_rung); order_check("go bin", go_rung)
+      if (order != "") printf "%s:%d: binary-discovery bash block (%s)\n", file, start_line, order
     }
     BEGIN { in_bash = 0; fence = ""; reset_block() }
     tolower($0) ~ /^[[:space:]]*```+[[:space:]]*(bash|sh|shell)[[:space:]]*$/ {
@@ -93,12 +105,16 @@ while IFS= read -r f; do
       report_block(); in_bash = 0; fence = ""; next
     }
     in_bash {
-      if (index($0, "BINARY=\"${NIGHTGAUGE_BIN")) { started = 1; env_rung = 1; if (!start_line) start_line = NR }
-      if (index($0, "command -v nightgauge")) path_rung = 1
-      if (index($0, "git rev-parse --show-toplevel")) repo_rung = 1
-      if (index($0, "git rev-parse --git-common-dir")) canonical_rung = 1
+      # Rungs count from the cascade start; lines above it are unrelated code.
+      if (index($0, "BINARY=\"${NIGHTGAUGE_BIN")) { started = 1; if (!env_rung) env_rung = NR; if (!start_line) start_line = NR }
+      if (!started) next
+      if (index($0, "command -v nightgauge") && !path_rung) path_rung = NR
+      if (index($0, ".nightgauge/bin/nightgauge") && !shim_rung) shim_rung = NR
+      if (index($0, "codesign --verify --strict \047-R=anchor apple generic") && index($0, "certificate leaf[subject.OU] = \"RZJPN7Y7BG\"")) sig_rung = 1
+      if (index($0, "git rev-parse --show-toplevel") && !repo_rung) repo_rung = NR
+      if (index($0, "git rev-parse --git-common-dir") && !canonical_rung) canonical_rung = NR
       if (index($0, "NIGHTGAUGE_DEV_REPO_BIN:-")) gate_rung = 1
-      if (index($0, "go/bin/nightgauge")) go_rung = 1
+      if (index($0, "go/bin/nightgauge") && !go_rung) go_rung = NR
     }
     END { if (in_bash) report_block() }
   ' "$f")

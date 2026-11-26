@@ -144,6 +144,11 @@ REPO=$(echo "$REMOTE_URL" | sed -E 's|.*[:/]([^/]+)/([^/.]+)(\.git)?$|\2|')
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+# Per-user shim (#2928, guard.sh 3a); on Darwin codesign follows its symlinks to the target.
+NG_SHIM="$HOME/.nightgauge/bin/nightgauge"
+[ -z "$BINARY" ] && [ -f "$NG_SHIM" ] && [ -x "$NG_SHIM" ] && { [ "$(uname -s)" != Darwin ] || \
+  codesign --verify --strict '-R=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "RZJPN7Y7BG"' "$NG_SHIM" >/dev/null 2>&1; } && BINARY="$NG_SHIM"
+unset NG_SHIM
 if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
   for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
     "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
@@ -159,7 +164,7 @@ fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
 if [ -z "$BINARY" ]; then
-  echo "ERROR: nightgauge binary not found via NIGHTGAUGE_BIN, PATH or ~/go/bin"
+  echo "ERROR: nightgauge binary not found via NIGHTGAUGE_BIN, PATH, ~/.nightgauge/bin or ~/go/bin"
   echo "Install via: go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest"
   exit 1
 fi

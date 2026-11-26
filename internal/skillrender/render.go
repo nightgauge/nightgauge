@@ -564,7 +564,11 @@ func includeBudget(opts Options) int {
 // push run-tests.md back to a read; 80 KiB holds the contract plus the six
 // includes feature-validate already got (77.6 KB in total). pr-merge now also
 // gets post-merge.md.
-const DefaultIncludeBudget = 80 * 1024
+//
+// #2928: 84 KiB, up from 80. The per-user shim rung added ~420 bytes to each
+// binary-discovery cascade; feature-validate's six includes carry five of
+// them, which put run-tests.md 0.3 KB over the old budget and back to a read.
+const DefaultIncludeBudget = 84 * 1024
 
 // SupplyFirstMarker, on a line of its own in an `_includes/` file, makes
 // SupplyPhaseIncludes take that include before unmarked ones (#3031). An

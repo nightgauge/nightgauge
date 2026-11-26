@@ -52,11 +52,16 @@ bare `nightgauge <verb>` (#2933):
 
 1. `$NIGHTGAUGE_BIN` (host-exported — primary under any adapter)
 2. `command -v nightgauge` (PATH)
-3. `$REPO_ROOT/bin/nightgauge`, development only
-4. canonical-repo `bin/nightgauge` (git worktrees), development only
-5. `$HOME/go/bin/nightgauge`
+3. `$HOME/.nightgauge/bin/nightgauge`, the per-user shim the extension writes;
+   on Darwin its symlink target must verify against the Nightgauge Developer ID
+   requirement (#2928, the same check as guard.sh step 3a; guard.sh tries it
+   after the repo bins)
+4. `$REPO_ROOT/bin/nightgauge`, development only
+5. canonical-repo `bin/nightgauge` (git worktrees), development only
+6. `$HOME/go/bin/nightgauge`
 
-Steps 3 and 4 run only with `NIGHTGAUGE_DEV_REPO_BIN=1` in a verified Nightgauge
+The portability gate checks that every cascade carries these rungs in this
+order. Steps 4 and 5 run only with `NIGHTGAUGE_DEV_REPO_BIN=1` in a verified Nightgauge
 core checkout, so a foreign repository can never supply the binary (#2758).
 
 No VSCode-extension path appears anywhere in `skills/`.
@@ -162,7 +167,7 @@ No adapter guard is needed. See `packages/nightgauge-sdk/src/events/phaseRegistr
 carry MORE Claude-Code-specific directives than the original audit recorded —
 the full set is below, each with its off-Claude behavior. The portability gate
 asserts three things mechanically (no VSCode-extension paths; no `hooks:`
-frontmatter; every fenced bash resolver block carries all five PREFLIGHT rungs
+frontmatter; every fenced bash resolver block carries every PREFLIGHT rung, in order
 — see §5); everything else is documented degradation, so a future
 skill adding a genuinely Claude-only, non-degrading directive still needs
 authoring care.
@@ -263,10 +268,10 @@ How the `opencode` adapter
 
 ## 5. Validation
 
-| Tier                    | What                                                                                                                                      | Where                                                                                               | CI?                                                |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| Deterministic gate      | No `.vscode/extensions` paths; no `hooks:` frontmatter; every fenced bash resolver block contains all five PREFLIGHT cascade rungs (#365) | `nightgauge preflight skill-portability` (Go) + `scripts/lint-skills/portability.sh` (shell mirror) | ✅ `.github/workflows/lint.yml`                    |
-| Live cross-adapter eval | Behavioral parity of the 6 core skills across adapters                                                                                    | `docs/SKILL_EVALUATION.md` (live mode)                                                              | ❌ requires adapter binaries + auth — run manually |
+| Tier                    | What                                                                                                                                                   | Where                                                                                               | CI?                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Deterministic gate      | No `.vscode/extensions` paths; no `hooks:` frontmatter; every fenced bash resolver block contains every PREFLIGHT cascade rung, in order (#365, #2928) | `nightgauge preflight skill-portability` (Go) + `scripts/lint-skills/portability.sh` (shell mirror) | ✅ `.github/workflows/lint.yml`                    |
+| Live cross-adapter eval | Behavioral parity of the 6 core skills across adapters                                                                                                 | `docs/SKILL_EVALUATION.md` (live mode)                                                              | ❌ requires adapter binaries + auth — run manually |
 
 The deterministic gate is the regression guard: it fails the moment any skill
 reintroduces a VSCode-extension path, a Claude-only `hooks:` completion gate,

@@ -285,6 +285,14 @@ func TestGuardShParity_SignatureGate(t *testing.T) {
 		t.Fatalf("guard.sh must carry bundleCodeRequirement verbatim")
 	}
 
+	preflight, err := os.ReadFile(filepath.Join(filepath.Dir(guardPath), "..", "..", "..", "..", "skills", "_shared", "PREFLIGHT.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(preflight), "'-R="+bundleCodeRequirement+"'") {
+		t.Fatalf("skills/_shared/PREFLIGHT.md shim rung must carry bundleCodeRequirement verbatim (#2928)")
+	}
+
 	cases := map[string]func(t *testing.T, home string){
 		"recorded unsigned, sibling signed": func(t *testing.T, home string) {
 			installBundle(t, home, bundleDirPrefix+"0.2.0-darwin-arm64", true)

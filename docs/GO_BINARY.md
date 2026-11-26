@@ -1147,7 +1147,8 @@ now asserts that **no** directive survives expansion.
 **`skill-portability` check enum:** `vscode_extension_path` (hardcoded
 VSCode-extension binary path), `hooks_frontmatter` (Claude-only completion
 hook), and `truncated_binary_cascade` (a fenced bash resolver block missing any
-of the six PREFLIGHT rungs, the `NIGHTGAUGE_DEV_REPO_BIN` gate included),
+of the PREFLIGHT rungs, the `NIGHTGAUGE_DEV_REPO_BIN` gate and the shim's
+signature requirement included, or carrying them out of order, #2928),
 `hooks_dir_reference`, `source_repo_path`, `claude_skill_flag` (#2764), and
 `bare_binary_invocation` (a bare `nightgauge <verb>` at command position in a
 bash block, where `"${NIGHTGAUGE_BIN:-nightgauge}"` is required, #2933), and
@@ -1155,7 +1156,8 @@ bash block, where `"${NIGHTGAUGE_BIN:-nightgauge}"` is required, #2933), and
 #3334). The cascade check is per block, not per file: one
 complete resolver cannot hide a truncated sibling (#365). Scans every `*.md`
 under `skills/`; skills must resolve the binary provider-neutrally
-(`$NIGHTGAUGE_BIN` → PATH → gated repo bin → gated canonical-repo bin → `~/go/bin`). See
+(`$NIGHTGAUGE_BIN` → PATH → signature-gated `~/.nightgauge/bin` shim → gated repo
+bin → gated canonical-repo bin → `~/go/bin`). See
 docs/SKILL_PORTABILITY.md (#4029).
 
 **No subcommand exposes `--fix`.** No deterministic auto-fix exists for broken
