@@ -74,7 +74,7 @@ export const ADAPTER_COMPAT: Readonly<Record<AdapterCompatKey, AdapterCompatEntr
       maxTested: "1.0.4",
       floorPolicy: "warn",
       installer: "https://x.ai/cli/install.sh",
-      installerSha256: "bdd23859b10bd0c1492ffc3443e8413b73a9b09966d48d4d3fa32121043956fc",
+      installerSha256: "a7916e6d5cc606564dd589037043b4c6cbb58f3b54c3b9865af9e0aed2a5bc77",
     },
     "opencode": {
       minVersion: "2.2.7",
