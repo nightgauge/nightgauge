@@ -68,6 +68,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/nightgauge/nightgauge/internal/gitworktree"
@@ -696,12 +697,21 @@ var openCodeWildcardEscapeRE = regexp.MustCompile(`[.+^${}()|\[\]\\]`)
 // fix round finding that added this function, models a different, weaker
 // rule than the one opencode itself enforces.
 func openCodeWildcardMatch(target, pattern string) bool {
+	if re, ok := openCodeWildcardCache.Load(pattern); ok {
+		return re.(*regexp.Regexp).MatchString(target)
+	}
 	escaped := openCodeWildcardEscapeRE.ReplaceAllString(pattern, `\$0`)
 	escaped = strings.ReplaceAll(escaped, "*", ".*")
 	escaped = strings.ReplaceAll(escaped, "?", ".")
 	re := regexp.MustCompile("(?s)^" + escaped + "$")
+	openCodeWildcardCache.Store(pattern, re)
 	return re.MatchString(target)
 }
+
+// openCodeWildcardCache holds each pattern's compiled regexp. Compiling on
+// every call made the bin-dir permission sweep run for minutes under -race
+// and pushed the package past CI's 10-minute test timeout (#3623).
+var openCodeWildcardCache sync.Map
 
 // openCodeDirPatterns returns the external_directory allow pattern(s) for
 // dir's content, recursively, each with "/**" appended: dir as given, and,
