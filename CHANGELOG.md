@@ -20,6 +20,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The VS Code extension now merges origin/<base> into a resumed worktree before any stage runs, as the Go scheduler does, so a blocker that merged since the worktree was made no longer re-blocks the run. A conflict stops the run before dispatch with a `[merge-conflict]` reason; a refresh that cannot be attempted is logged and the run continues. New verb: `nightgauge pr-stage refresh-base` (#2962).
 - On OpenCode 2.3.2 a stage's shell could copy a file into Nightgauge's binary directory: 2.3.2 checks a shell command's paths against `external_directory` only for `cd`-like commands. The shell permission now denies `cp`, `mv`, `ln`, `install`, `tee` and `rsync` into that directory. Running the binary from it is still allowed, and CI's OpenCode integration run now checks the refusal against the real binary (#3608).
 - The adapter canary accepts the grok CLI installer again: the manifest now pins the
   installer's current reviewed sha256, so the flag-contract check can install grok (#3611).

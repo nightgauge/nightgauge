@@ -69,6 +69,7 @@ scheduler contract instead of maintaining a second, divergent implementation.`,
 	cmd.AddCommand(prStageReviewRoundCmd())
 	cmd.AddCommand(prStageReviewGateCmd())
 	cmd.AddCommand(prStageResumePointCmd())
+	cmd.AddCommand(prStageRefreshBaseCmd())
 	return cmd
 }
 
@@ -638,6 +639,59 @@ func prStageResumePointCmd() *cobra.Command {
 			data, err := json.Marshal(res)
 			if err != nil {
 				return fmt.Errorf("marshal resume point: %w", err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), string(data))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
+	return cmd
+}
+
+// prStageRefreshBaseJSON is the wire shape `pr-stage refresh-base` prints:
+// the refresh result, Skipped when it could not be attempted, and StopReason
+// when the run must stop on a conflict.
+type prStageRefreshBaseJSON struct {
+	pmstages.BaseRefresh
+	// ConflictFiles shadows the embedded omitempty field so the key is
+	// always present.
+	ConflictFiles []string `json:"conflict_files"`
+	Skipped       string   `json:"skipped"`
+	StopReason    string   `json:"stop_reason"`
+}
+
+// prStageRefreshBaseCmd runs `nightgauge pr-stage refresh-base <N>`: the
+// resumed-worktree base refresh the scheduler applies before a dispatch's
+// first stage (#2897), for the extension's HeadlessOrchestrator (#2962).
+// Exit 0 whenever it ran; non-zero only for a usage error.
+func prStageRefreshBaseCmd() *cobra.Command {
+	var workdir string
+	cmd := &cobra.Command{
+		Use:          "refresh-base <issue-number>",
+		Short:        "Merge origin/<base> into a resumed worktree before its stages run",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			issue, err := parseIssueNumberArg(args[0])
+			if err != nil {
+				return err
+			}
+			workspace, err := resolvePrStageWorkspace(workdir)
+			if err != nil {
+				return err
+			}
+			res, rerr := pmstages.RefreshResumedBase(cmd.Context(), workspace, issue)
+			out := prStageRefreshBaseJSON{BaseRefresh: res, ConflictFiles: res.ConflictFiles, StopReason: res.ConflictReason()}
+			if out.ConflictFiles == nil {
+				out.ConflictFiles = []string{}
+			}
+			if rerr != nil {
+				out.Skipped = rerr.Error()
+				out.StopReason = ""
+			}
+			data, err := json.Marshal(out)
+			if err != nil {
+				return fmt.Errorf("marshal base refresh: %w", err)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), string(data))
 			return nil

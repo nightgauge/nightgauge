@@ -242,3 +242,18 @@ func TestRefreshResumedBase_FetchFailureIsAnError(t *testing.T) {
 		t.Fatalf("HEAD moved %s -> %s", before, after)
 	}
 }
+
+func TestBaseRefreshConflictReason(t *testing.T) {
+	if got := (BaseRefresh{Base: "main", Outcome: gitpkg.BaseMergeMerged}).ConflictReason(); got != "" {
+		t.Fatalf("non-conflict reason = %q, want empty", got)
+	}
+	got := BaseRefresh{Base: "main", Outcome: gitpkg.BaseMergeConflict,
+		ConflictFiles: []string{"a.txt", "b.txt"}, Reason: "why"}.ConflictReason()
+	want := "[merge-conflict] resumed worktree conflicts with origin/main in a.txt, b.txt (why) — resolve the merge by hand"
+	if got != want {
+		t.Fatalf("reason = %q, want %q", got, want)
+	}
+	if got := (BaseRefresh{Base: "dev", Outcome: gitpkg.BaseMergeConflict}).ConflictReason(); !strings.Contains(got, "origin/dev in the worktree") {
+		t.Fatalf("reason without files = %q", got)
+	}
+}

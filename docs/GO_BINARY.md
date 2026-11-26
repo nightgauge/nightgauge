@@ -3296,6 +3296,10 @@ nightgauge pr-stage review-round end <issue> [--workdir W]
 # Whether a re-dispatch can resume at feature-validate, restoring preserved work
 nightgauge pr-stage resume-point <issue> [--workdir W]
 
+# Merge origin/<base> into a resumed worktree before its stages run (#2962);
+# exit 0 when it ran, JSON with outcome, skipped and stop_reason
+nightgauge pr-stage refresh-base <issue> [--workdir W]
+
 # Run merge-queue recovery (conflict or merge-group code failure) for a refused
 # pr-merge; read `outcome`, not the exit code
 nightgauge pr-stage recover <issue> --reason <text> [--run-id <id>] [--workdir W] [--json]

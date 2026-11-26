@@ -335,6 +335,12 @@ changed, aborts the merge and ends the run `merge_conflict`, naming the files. A
 failed fetch is logged and the run continues. A pr-merge resume is skipped,
 because that stage brings an open PR up to date itself.
 
+The VS Code extension's `HeadlessOrchestrator` runs the same refresh through
+`nightgauge pr-stage refresh-base` (#2962), after its preserved-resume and
+open-PR checks and only on a worktree run. A conflict stops the run before any
+stage with the shared `[merge-conflict]` reason; a missing binary, a timeout or
+a `skipped` refresh is logged and the run continues.
+
 When a stage declares the issue blocked and names an issue or PR the forge now
 reads closed, the scheduler refreshes the base once. If the base advanced, the
 stage runs again on it. If not, the verdict stands, with a note that the

@@ -38,22 +38,7 @@ func refreshRunBase(ctx context.Context, issueNumber int, workdir string) (pmsta
 	if res.Outcome != gitpkg.BaseMergeConflict {
 		return res, ""
 	}
-	return res, baseConflictReason(res)
-}
-
-// baseConflictReason is the stop reason for a conflicting refresh. The
-// [merge-conflict] marker makes every re-classification of the text agree
-// with the merge_conflict kind the caller books.
-func baseConflictReason(res pmstages.BaseRefresh) string {
-	where := strings.Join(res.ConflictFiles, ", ")
-	if where == "" {
-		where = "the worktree"
-	}
-	reason := fmt.Sprintf("[merge-conflict] resumed worktree conflicts with origin/%s in %s", res.Base, where)
-	if res.Reason != "" {
-		reason += " (" + res.Reason + ")"
-	}
-	return reason + " — resolve the merge by hand"
+	return res, res.ConflictReason()
 }
 
 // closedNamedBlockers returns the references in a stage's blocked outcome

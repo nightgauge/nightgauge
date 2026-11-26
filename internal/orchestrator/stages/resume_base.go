@@ -38,6 +38,26 @@ func (r BaseRefresh) Advanced() bool {
 	return r.Outcome == gitpkg.BaseMergeMerged || r.Outcome == gitpkg.BaseMergeChangelogResolved
 }
 
+// ConflictReason is the stop reason for a conflicting refresh, or "" when
+// the refresh did not conflict. The [merge-conflict] marker makes every
+// re-classification of the text agree with the merge_conflict kind the caller
+// books. The scheduler and `pr-stage refresh-base` share it, so the Go and
+// extension runtimes stop with identical text (#2962).
+func (r BaseRefresh) ConflictReason() string {
+	if r.Outcome != gitpkg.BaseMergeConflict {
+		return ""
+	}
+	where := strings.Join(r.ConflictFiles, ", ")
+	if where == "" {
+		where = "the worktree"
+	}
+	reason := fmt.Sprintf("[merge-conflict] resumed worktree conflicts with origin/%s in %s", r.Base, where)
+	if r.Reason != "" {
+		reason += " (" + r.Reason + ")"
+	}
+	return reason + " — resolve the merge by hand"
+}
+
 // RefreshResumedBase brings a resumed run worktree up to date with
 // origin/<base> before its stages run (#2897). A re-dispatch reuses the
 // surviving worktree as it was, so a blocker that has since merged to the base
