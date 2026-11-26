@@ -1189,6 +1189,25 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 						t.Errorf("%s, %s: shell %q resolves to %q, want %q", c.name, grantName, cmd, got, openCodeDeny)
 					}
 				}
+				// OpenCode checks each line alone (#3623): the bare verb left
+				// by `cp\n<src> <dst>` must be denied on its own line.
+				split := "cp\n/tmp/payload.sh " + gh
+				lineDenied := false
+				for _, line := range strings.Split(split, "\n") {
+					if openCodePatternAction(pm, line) == openCodeDeny {
+						lineDenied = true
+					}
+				}
+				if !lineDenied {
+					t.Errorf("%s, %s: no line of %q resolves to deny", c.name, grantName, split)
+				}
+				for _, verb := range openCodeShellBinDirWriteVerbs {
+					for _, cmd := range []string{verb, verb + " ", verb + "\t", "/bin/" + verb, "/usr/bin/" + verb} {
+						if got := openCodePatternAction(pm, cmd); got != openCodeDeny {
+							t.Errorf("%s, %s: bare shell %q resolves to %q, want %q", c.name, grantName, cmd, got, openCodeDeny)
+						}
+					}
+				}
 				if !g.runs {
 					continue
 				}
@@ -1203,6 +1222,16 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 					"cd /tmp\n" + gh + " pr view 1",
 					"/usr/bin/env " + gh + " doctor",
 					"git status\t&& " + gh + " doctor",
+					gh + " doctor",
+					"which cp",
+					"man rm",
+					"ls /bin/cp",
+					"cp /tmp/a /tmp/b",
+					"rmdir /tmp/x",
+					"cpio -i",
+					"npm install",
+					"go install ./cmd/x",
+					"ddate",
 				} {
 					if got := openCodePatternAction(pm, cmd); got == openCodeDeny {
 						t.Errorf("%s, %s: shell %q resolves to deny; running a binary from the bin dir must stay allowed", c.name, grantName, cmd)
