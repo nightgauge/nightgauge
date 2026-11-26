@@ -333,13 +333,13 @@ func TestOpenCodeRejectsARelativeOrUnrunnablePin(t *testing.T) {
 // TestOpenCodeCatalogSnapshotIsTheMaxTestedVersion ties the catalog snapshots
 // credential withholding and output redaction rest on
 // (opencode_catalog_env.go, opencode_catalog_anthropic.go, both derived from
-// the pinned opencode-models-catalog.json.gz) to the version the adapter is
+// the pinned opencode-models-catalog.json.bz2) to the version the adapter is
 // tested against: raising max_tested without re-capturing the catalog from
 // the new binary turns this red.
 func TestOpenCodeCatalogSnapshotIsTheMaxTestedVersion(t *testing.T) {
 	m := openCodeManifestForTest(t)
 	if openCodeCatalogVersion != m.MaxTested {
-		t.Fatalf("the catalog snapshots were read from opencode %s, and the compat manifest's max_tested is %s: re-capture opencode-models-catalog.json.gz from %s (testdata/opencode-cli/README.md), re-derive openCodeCatalogEnv and openCodeAnthropicModels, then set openCodeCatalogVersion",
+		t.Fatalf("the catalog snapshots were read from opencode %s, and the compat manifest's max_tested is %s: re-capture opencode-models-catalog.json.bz2 from %s (testdata/opencode-cli/README.md), re-derive openCodeCatalogEnv and openCodeAnthropicModels, then set openCodeCatalogVersion",
 			openCodeCatalogVersion, m.MaxTested, m.MaxTested)
 	}
 }

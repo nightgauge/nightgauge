@@ -4,7 +4,7 @@ package adapters
 
 // The catalog snapshots (opencode_catalog_env.go, opencode_catalog_anthropic.go)
 // and the pinned models catalog they are derived from
-// (opencode-models-catalog.json.gz), checked against the installed opencode
+// (opencode-models-catalog.json.bz2), checked against the installed opencode
 // binary of the version they were captured from:
 //
 //	go test -tags opencode_integration ./internal/execution/adapters/ -run 'OpenCodeCatalogEnvMatchesTheBinary|OpenCodeReadsThePinnedCatalog|OpenCodeAnthropicModelsMatchTheBinary' -count=1
