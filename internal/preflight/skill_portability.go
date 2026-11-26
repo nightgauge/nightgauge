@@ -7,7 +7,7 @@
 // Gemini "without modification". Binary discovery must therefore be
 // provider-neutral: the host that spawns the skill exports $NIGHTGAUGE_BIN
 // (skillRunner / the Go auto-CLI manager) and the PREFLIGHT cascade falls back
-// to PATH → repo bin → canonical-repo bin → ~/go/bin. A
+// to PATH → per-user shim → repo bin → canonical-repo bin → ~/go/bin. A
 // `~/.vscode/extensions/...` path is VSCode-only and silently fails to resolve
 // under any other adapter, so it must never appear in a skill. The Claude-only
 // `claude-plugins/.../guard.sh` keeps that glob deliberately (it is NOT a skill
@@ -62,7 +62,8 @@ const (
 	CheckStopHook = "hooks_frontmatter"
 
 	// CheckTruncatedBinaryCascade flags a fenced bash binary-discovery block
-	// that lost any rung from the canonical PREFLIGHT.md cascade (#55, #365).
+	// that lost any rung from the canonical PREFLIGHT.md cascade (#55, #365),
+	// or whose rungs are out of the documented order (#2928).
 	CheckTruncatedBinaryCascade = "truncated_binary_cascade"
 
 	// CheckHooksDirReference flags a `$HOOKS_DIR/<file>` call naming a file
@@ -119,8 +120,11 @@ var vscodeExtensionPathRE = regexp.MustCompile(`(?i)\.vscode/extensions/nightgau
 var stopHookRE = regexp.MustCompile(`^hooks:\s*$`)
 
 // Cascade checks are block-scoped: a complete cascade elsewhere in the same
-// Markdown file must not hide a truncated sibling (#365). The six rungs are
-// the provider-neutral discovery contract from PREFLIGHT.md.
+// Markdown file must not hide a truncated sibling (#365). The rungs are the
+// provider-neutral discovery contract from PREFLIGHT.md, counted from the
+// cascade's first line. "shim signature gate" pins the Nightgauge team in the
+// codesign requirement, and "dev repo bin gate" guards the repo rungs; both
+// are conditions on another rung, so cascadeOrder leaves them out.
 var (
 	cascadeStartRE  = regexp.MustCompile(`BINARY="\$\{NIGHTGAUGE_BIN`)
 	bashFenceOpenRE = regexp.MustCompile("(?i)^\\s*([`~]{3,})\\s*(bash|sh|shell)\\s*$")
@@ -130,12 +134,41 @@ var (
 	}{
 		{name: "NIGHTGAUGE_BIN", pattern: regexp.MustCompile(`BINARY="\$\{NIGHTGAUGE_BIN`)},
 		{name: "PATH", pattern: regexp.MustCompile(`command -v nightgauge`)},
+		{name: "shim", pattern: regexp.MustCompile(`\.nightgauge/bin/nightgauge`)},
+		{name: "shim signature gate", pattern: regexp.MustCompile(`codesign --verify --strict '-R=anchor apple generic .*certificate leaf\[subject\.OU\] = "RZJPN7Y7BG"'`)},
 		{name: "repo bin", pattern: regexp.MustCompile(`git rev-parse --show-toplevel`)},
 		{name: "canonical repo bin", pattern: regexp.MustCompile(`git rev-parse --git-common-dir`)},
 		{name: "dev repo bin gate", pattern: regexp.MustCompile(`NIGHTGAUGE_DEV_REPO_BIN:-`)},
 		{name: "go bin", pattern: regexp.MustCompile(`go/bin/nightgauge`)},
 	}
+	// cascadeOrder names the rungs that must first appear in this order (#2928).
+	cascadeOrder = []string{"NIGHTGAUGE_BIN", "PATH", "shim", "repo bin", "canonical repo bin", "go bin"}
 )
+
+// cascadeOrderViolation returns "out of order: <a> before <b>" when, from the
+// cascade's first line on, a later rung's first line precedes an earlier
+// rung's first line, or "". Lines above the cascade start are unrelated code.
+func cascadeOrderViolation(lines []string) string {
+	pos := map[string]int{}
+	for _, rung := range cascadeRungs {
+		pos[rung.name] = firstMatchingLine(lines, rung.pattern)
+	}
+	prevName, prev := "", -1
+	for _, name := range cascadeOrder {
+		at, known := pos[name]
+		if !known {
+			panic("cascadeOrder names unknown rung " + name)
+		}
+		if at < 0 {
+			continue
+		}
+		if at < prev {
+			return fmt.Sprintf("out of order: %s before %s", name, prevName)
+		}
+		prevName, prev = name, at
+	}
+	return ""
+}
 
 // bareBinaryInvocationRE matches `nightgauge <verb>` at command position: line
 // start, after `$(`, a pipe, `&&`, `||`, `;`, `!`, `(`, or a shell keyword. A
@@ -281,21 +314,26 @@ func RunSkillPortabilityCheck(_ context.Context, opts SkillPortabilityOptions) (
 				result.Findings = append(result.Findings, bareBinaryFindings(rel, block)...)
 				result.Findings = append(result.Findings, unsetBinaryReadFindings(rel, block)...)
 			}
-			body := strings.Join(block.lines, "\n")
 			startOffset := firstMatchingLine(block.lines, cascadeStartRE)
 			if startOffset < 0 {
 				continue
 			}
+			// Rungs count from the cascade start, as the shell mirror does.
+			body := strings.Join(block.lines[startOffset:], "\n")
 			var missing []string
 			for _, rung := range cascadeRungs {
 				if !rung.pattern.MatchString(body) {
 					missing = append(missing, rung.name)
 				}
 			}
+			line := block.lines[startOffset]
 			if len(missing) == 0 {
+				if v := cascadeOrderViolation(block.lines[startOffset:]); v != "" {
+					match := fmt.Sprintf("%s [bash block line %d %s]", strings.TrimSpace(line), block.openLine, v)
+					result.Findings = append(result.Findings, finding(rel, block.openLine+startOffset+1, CheckTruncatedBinaryCascade, match))
+				}
 				continue
 			}
-			line := block.lines[startOffset]
 			match := fmt.Sprintf("%s [bash block line %d missing: %s]", strings.TrimSpace(line), block.openLine, strings.Join(missing, ", "))
 			result.Findings = append(result.Findings, finding(rel, block.openLine+startOffset+1, CheckTruncatedBinaryCascade, match))
 		}

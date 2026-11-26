@@ -123,30 +123,12 @@ issue context present. ON by default
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-# Full PREFLIGHT.md discovery cascade (#55 — this block had diverged to a
-# 3-rung variant, missing the canonical-repo and ~/go/bin fallbacks).
-BINARY="${NIGHTGAUGE_BIN:-}"
-[ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
-[ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
-  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
-    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
-    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
-    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
-    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
-    case "${NG_ORIGIN%.git}" in
-      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
-        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
-    esac
-  done
-fi
-[ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
-if [ -n "$BINARY" ]; then
-  "$BINARY" ground "$ISSUE_NUMBER" || {
-    echo "GROUNDING FAILED — do NOT edit files. Switch to the issue's feature branch / re-run issue-pickup, or stop and surface the mismatch."
-    exit 1
-  }
-fi
+# Phase -1 preflight resolved the binary; this block calls it as
+# "${NIGHTGAUGE_BIN:-nightgauge}" (#2933) instead of repeating the cascade.
+"${NIGHTGAUGE_BIN:-nightgauge}" ground "$ISSUE_NUMBER" || {
+  echo "GROUNDING FAILED — do NOT edit files. Switch to the issue's feature branch / re-run issue-pickup, or stop and surface the mismatch."
+  exit 1
+}
 ```
 
 When the gate prints `recommendation=pull-human` (grounded but no acceptance

@@ -1338,6 +1338,9 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 // are the rule that an operator-revised plan binds feature-dev.
 // All four captures were re-pinned for #3334: every changed line replaces a
 // read of $BINARY, unset in that block, with "${NIGHTGAUGE_BIN:-nightgauge}".
+// All four captures were re-pinned for #2928: every changed line is the per-user
+// shim rung (#2765) inserted after the PATH rung of each discovery cascade, and
+// the PREFLIGHT.md prose naming it.
 func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	root := realSkillsRoot(t)
 	// Render resolves _includes paths to their absolute filesystem form, which

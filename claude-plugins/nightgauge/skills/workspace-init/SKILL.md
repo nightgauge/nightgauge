@@ -119,19 +119,24 @@ identically under every adapter (Claude, Codex, Gemini, …) and references no
 VSCode-extension-specific path. The host that spawns the skill (the VSCode
 extension's `skillRunner`, or the Go `nightgauge` binary in auto/CLI mode)
 resolves the binary authoritatively and exports `NIGHTGAUGE_BIN`, which
-this cascade honors first. The remaining steps (PATH, the development-only repo
-`bin/` and worktree canonical-repo `bin/`, `~/go/bin`) are fallbacks for direct
-or terminal invocation.
+this cascade honors first. The remaining steps (PATH, the per-user shim
+`~/.nightgauge/bin/nightgauge`, the development-only repo `bin/` and worktree
+canonical-repo `bin/`, `~/go/bin`) are fallbacks for direct or terminal
+invocation. The shim is written by the extension on activation (#2765); on
+Darwin it runs only when `codesign`, which follows its symlinks, verifies it against the
+Nightgauge Developer ID requirement, exactly as guard.sh step 3a does (#2928).
 
 This intentionally **diverges** from
 `claude-plugins/nightgauge/hooks/lib/guard.sh` (issue 3262 → issue 4029): guard.sh is
 Claude-Code-only and retains a trailing `~/.vscode/extensions/...` glob to serve
 the standalone-terminal-Claude case (where no host exports `NIGHTGAUGE_BIN`).
 Skills must stay portable Markdown and cannot reference that VSCode-only path —
-so the shared resolution order (`NIGHTGAUGE_BIN` → PATH → gated repo → gated
-canonical → `~/go/bin`) stays in sync, and only guard.sh carries the extra Claude-only
-fallback. The `nightgauge preflight skill-portability` gate enforces that
-no skill reintroduces a `.vscode/extensions` path, and that every cascade keeps
+so the shared rungs (`NIGHTGAUGE_BIN`, PATH, signature-gated shim, gated repo,
+gated canonical, `~/go/bin`) stay in sync and only guard.sh carries the extra Claude-only
+fallback. The order differs in one place: skills try the shim before the repo bins,
+which are development-only here, while guard.sh tries the repo bins first. The `nightgauge preflight skill-portability` gate enforces that
+no skill reintroduces a `.vscode/extensions` path, that every cascade carries
+its rungs in that order, including the shim and its signature gate, and that it keeps
 the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 `bin/nightgauge` must never run.
 
@@ -143,12 +148,17 @@ never a bare `nightgauge`, and `nightgauge preflight skill-portability` fails
 a bare call at command position (#2933).
 
 ```bash
-# Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
-# bin → gated canonical-repo bin → ~/go/bin). No VSCode-extension path — see issue 4029.
+# Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → signed shim →
+# gated repo bin → gated canonical-repo bin → ~/go/bin). No VSCode-extension path — see issue 4029.
 # Repo bins need NIGHTGAUGE_DEV_REPO_BIN=1 and a verified core checkout (#2758).
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+# Per-user shim (#2928, guard.sh 3a); on Darwin codesign follows its symlinks to the target.
+NG_SHIM="$HOME/.nightgauge/bin/nightgauge"
+[ -z "$BINARY" ] && [ -f "$NG_SHIM" ] && [ -x "$NG_SHIM" ] && { [ "$(uname -s)" != Darwin ] || \
+  codesign --verify --strict '-R=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "RZJPN7Y7BG"' "$NG_SHIM" >/dev/null 2>&1; } && BINARY="$NG_SHIM"
+unset NG_SHIM
 if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
   for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
     "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
@@ -163,7 +173,7 @@ if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 if [ -z "$BINARY" ]; then
-  echo "ERROR: nightgauge binary not found via NIGHTGAUGE_BIN, PATH or ~/go/bin" >&2
+  echo "ERROR: nightgauge binary not found via NIGHTGAUGE_BIN, PATH, ~/.nightgauge/bin or ~/go/bin" >&2
   echo "" >&2
   echo "Install via: go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest" >&2
   echo "Or download from: https://github.com/nightgauge/nightgauge/releases" >&2

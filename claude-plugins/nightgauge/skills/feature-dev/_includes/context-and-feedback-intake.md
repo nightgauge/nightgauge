@@ -85,6 +85,11 @@ fi
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+# Per-user shim (#2928, guard.sh 3a); on Darwin codesign follows its symlinks to the target.
+NG_SHIM="$HOME/.nightgauge/bin/nightgauge"
+[ -z "$BINARY" ] && [ -f "$NG_SHIM" ] && [ -x "$NG_SHIM" ] && { [ "$(uname -s)" != Darwin ] || \
+  codesign --verify --strict '-R=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "RZJPN7Y7BG"' "$NG_SHIM" >/dev/null 2>&1; } && BINARY="$NG_SHIM"
+unset NG_SHIM
 if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
   for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
     "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do

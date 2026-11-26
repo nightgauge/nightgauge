@@ -76,10 +76,11 @@
 # invocation on ordinary extensions.json sizes, paid 2-3x per tool call — so
 # "no fork" was the expensive option by two orders of magnitude.
 #
-# Sync contract with skills/_shared/PREFLIGHT.md (#3262 → #4029): the SHARED
-# resolution order ($NIGHTGAUGE_BIN → PATH → gated repo → gated canonical →
-# ~/go/bin) stays mirrored in both. This file INTENTIONALLY diverges by keeping
-# step 3a (the per-user shim) and step 4 (the ~/.vscode/extensions glob):
+# Sync contract with skills/_shared/PREFLIGHT.md (#3262 → #4029 → #2928): the
+# SHARED rungs ($NIGHTGAUGE_BIN, PATH, gated repo, gated canonical, the
+# signature-gated per-user shim, ~/go/bin) stay mirrored in both; skills try the
+# shim before their development-only repo bins. This file INTENTIONALLY diverges
+# by keeping step 4 (the ~/.vscode/extensions glob):
 # guard.sh is Claude-Code-only and must serve the standalone-terminal-Claude
 # case where no host exports $NIGHTGAUGE_BIN.
 # Skills must stay portable Markdown (Claude/Codex/Cursor/Gemini) and therefore
