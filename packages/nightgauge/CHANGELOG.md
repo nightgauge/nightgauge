@@ -13,6 +13,7 @@ and this project adheres to
 
 ### Fixed
 
+- The VS Code extension now merges origin/<base> into a resumed worktree before any stage runs, as the Go scheduler does, so a blocker that merged since the worktree was made no longer re-blocks the run. A conflict stops the run before dispatch with a `[merge-conflict]` reason; a refresh that cannot be attempted is logged and the run continues. New verb: `nightgauge pr-stage refresh-base` (#2962).
 - On a bundled build the Claude plugin gate now names the supported Claude CLI floor and the detected version when a stage stops below it, stops a `nightgauge` plugin that loaded from anywhere but the bundled directory (naming its source and path), and stops instead of warning when a stamped bundle's plugin lost `hooks/hooks.json`. Builds with no bundle still warn and continue (#2883).
 - A feature-validate halt now names its terminal kind (such as `validation_failed`) on the halt card instead of `unclassified` (#2874).
 - Issues dispatched together by autonomous mode no longer sit queued until a window reload: a fill pass that takes nothing while items are pending schedules one later pass (#3553).

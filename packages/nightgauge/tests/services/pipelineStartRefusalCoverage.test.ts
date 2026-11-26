@@ -38,6 +38,18 @@ const EXPECTED_REFUSALS = [
   "budget-cancelled-by-user",
 ] as const;
 
+/**
+ * `pipeline-start` failures that deliberately carry NO `startRefusal`, each
+ * marked in its literal with `// genuine-failure: <name>`, with the argument:
+ *
+ * - base-refresh-conflict (#2962): merging origin/<base> into a resumed
+ *   worktree conflicted. The worktree needs a human to resolve the merge, the
+ *   Go scheduler books the same stop as a merge_conflict failure (#2897), and
+ *   the "In review" move plus the failure comment are how the operator learns
+ *   of it. Suppressing them would hide a stuck issue.
+ */
+const GENUINE_FAILURES = ["base-refresh-conflict"] as const;
+
 describe("pipeline-start refusal coverage (#1170)", () => {
   const source = readFileSync(SOURCE, "utf8");
   const lines = source.split("\n");
@@ -59,6 +71,8 @@ describe("pipeline-start refusal coverage (#1170)", () => {
       const window = lines.slice(site.index, site.index + 12);
       const end = window.findIndex((l) => /^\s*\};?\s*$/.test(l));
       const body = (end === -1 ? window : window.slice(0, end + 1)).join("\n");
+      const genuine = /\/\/ genuine-failure: ([a-z-]+)/.exec(body)?.[1];
+      if (genuine && (GENUINE_FAILURES as readonly string[]).includes(genuine)) continue;
       if (!/\bstartRefusal:\s*"/.test(body)) {
         unstamped.push(site.index + 1);
       }
@@ -70,6 +84,11 @@ describe("pipeline-start refusal coverage (#1170)", () => {
         `"In review" and comments on the issue (#1170). Add the kind to the PipelineStartRefusal ` +
         `union, or argue here why this refusal is a genuine failure that deserves both.`
     ).toEqual([]);
+  });
+
+  it("marks exactly the argued genuine failures", () => {
+    const marked = [...source.matchAll(/\/\/ genuine-failure: ([a-z-]+)/g)].map((m) => m[1]);
+    expect(marked).toEqual([...GENUINE_FAILURES]);
   });
 
   it("stamps exactly the refusals #1170 enumerated", () => {

@@ -43,6 +43,9 @@ import { promisify } from "util";
 // rule in eslint.config.js blocks re-introducing the sync variants for
 // any file under packages/nightgauge/src/services/.
 const execFileAsync = promisify(execFile);
+/** Budget for `pr-stage refresh-base`: a fetch plus a merge (#2962). */
+const BASE_REFRESH_TIMEOUT_MS = 120_000;
+const BASE_REFRESH_SKIPPED = "Base refresh skipped — continuing on the tree as found";
 import { BinaryResolver } from "./BinaryResolver";
 import {
   clearStalePrMergeFixMarker,
@@ -6585,6 +6588,93 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     return true;
   }
 
+  /**
+   * Merge origin/<base> into a resumed worktree through
+   * `nightgauge pr-stage refresh-base` (#2962), so a blocker that merged since
+   * the worktree was made is visible. The git logic lives in Go
+   * (`stages.RefreshResumedBase`). Returns the `[merge-conflict]` stop reason,
+   * or null to continue: no worktree, a pr-merge resume (that stage brings the
+   * PR up to date), or a refresh that could not be attempted.
+   */
+  private async refreshResumedBase(issueNumber: number): Promise<string | null> {
+    if (!this.worktreeOverride || this.resumedAtPrMerge) return null;
+    const workdir = this.worktreeOverride;
+    try {
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) {
+        this.logger.warn(BASE_REFRESH_SKIPPED, {
+          issueNumber,
+          reason: "nightgauge binary not found",
+        });
+        return null;
+      }
+      const { stdout } = await execFileAsync(
+        binary,
+        ["pr-stage", "refresh-base", String(issueNumber), "--workdir", workdir],
+        { encoding: "utf-8", cwd: workdir, timeout: BASE_REFRESH_TIMEOUT_MS }
+      );
+      const parsed = JSON.parse(stdout) as {
+        base?: unknown;
+        behind?: unknown;
+        outcome?: unknown;
+        skipped?: unknown;
+        stop_reason?: unknown;
+      };
+      if (typeof parsed.skipped === "string" && parsed.skipped !== "") {
+        this.logger.warn(BASE_REFRESH_SKIPPED, {
+          issueNumber,
+          reason: parsed.skipped,
+        });
+        return null;
+      }
+      this.logger.info("Resumed worktree base refresh", {
+        issueNumber,
+        base: parsed.base,
+        behind: parsed.behind,
+        outcome: parsed.outcome,
+      });
+      return typeof parsed.stop_reason === "string" && parsed.stop_reason !== ""
+        ? parsed.stop_reason
+        : null;
+    } catch (err) {
+      this.logger.warn(BASE_REFRESH_SKIPPED, {
+        issueNumber,
+        err,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * The pre-dispatch failure for a base refresh that conflicted (#2962), or
+   * null to continue. No `startRefusal`: a conflict needs an operator.
+   */
+  private async baseRefreshStop(
+    issueNumber: number,
+    startTime: number
+  ): Promise<PipelineRunResult | null> {
+    const reason = await this.refreshResumedBase(issueNumber);
+    if (!reason) return null;
+    const result: PipelineRunResult = {
+      success: false,
+      completedStages: [],
+      skippedStages: [],
+      deferredStages: [],
+      failedStage: "pipeline-start",
+      // genuine-failure: base-refresh-conflict (argued in pipelineStartRefusalCoverage.test.ts)
+      error: new Error(reason),
+      totalDurationMs: Date.now() - startTime,
+    };
+    this.eventDispatcher.onStderr("pipeline-start", `${reason}\n`);
+    this.firePipelineComplete(result, issueNumber);
+    if (this.queueService) {
+      this.handleQueueAutoStart(result.success, issueNumber);
+    }
+    this.isRunning = false;
+    this.abortController = null;
+    return result;
+  }
+
   /** What the resume rests on, from `pr-stage resume-point`; null for no resume. */
   private async preservedResumePoint(issueNumber: number): Promise<string | null> {
     try {
@@ -12957,6 +13047,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // @see Issue #500 - pr-merge failure causes full pipeline re-run
     // ===================================================================
     await this.detectAndRestoreExistingPr(issueNumber);
+
+    // ===================================================================
+    // RESUMED-BASE REFRESH (Issue #2962): bring a reused worktree up to date
+    // with origin/<base> before any stage runs, as the Go scheduler does
+    // (#2897). After the preserved-resume decision, which counts the branch's
+    // own commits. A conflict stops the run before any stage dispatches.
+    // ===================================================================
+    const baseStop = await this.baseRefreshStop(issueNumber, startTime);
+    if (baseStop) return baseStop;
 
     // ===================================================================
     // POST-GATE EXIT RECORD (Issue #125)
