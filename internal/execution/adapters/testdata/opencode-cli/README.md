@@ -26,7 +26,7 @@ and update the table below in the same change.
 
 ## Pinned models catalog (#3315)
 
-`../../opencode-models-catalog.json.gz` is the models catalog OpenCode 2.3.2
+`../../opencode-models-catalog.json.bz2` is the models catalog OpenCode 2.3.2
 bundles: the document it reads when `OPENCODE_MODELS_PATH` names no file and
 nothing is cached, before it would fetch models.dev. Every run and probe hands
 OpenCode a copy through `OPENCODE_MODELS_PATH`, and `openCodeCatalogEnv` and
@@ -38,7 +38,13 @@ OpenCode a copy through `OPENCODE_MODELS_PATH`, and `openCodeCatalogEnv` and
 | Captured at | 2026-11-25, on the host above                                           |
 | Source      | `/$bunfs/root/snapshot-035fj037.txt` in the binary's Bun module graph   |
 | Content     | 327 providers, each with `env`; UTF-16LE in the binary, stored as UTF-8 |
-| Stored      | `gzip -9 -n` (9,372,523 bytes of JSON, sha256 `d4e2d43a…4a002286`)      |
+| JSON        | 9,372,523 bytes, sha256 `d4e2d43a…4a002286`                             |
+| Stored      | `bzip2 -9`, 277,370 bytes, sha256 `cb3cc779…131a18e0`                   |
+
+The catalog is stored as bzip2, not gzip (496,213 bytes), to keep the Linux
+amd64 release binary under its 30 MiB stripped limit (#3616,
+`docs/RELEASE_BINARIES.md`). A larger catalog eats that headroom: the stored
+size `pack-catalog.sh` prints is the number to watch.
 
 To re-capture for a new max-tested version:
 
@@ -49,9 +55,11 @@ To re-capture for a new max-tested version:
 2. Each module table entry is 52 bytes and starts with the name and the
    contents, each a `u32` offset and length. Find the entry whose name is
    `/$bunfs/root/snapshot-*.txt`, and decode its contents from UTF-16LE.
-3. Write the JSON as UTF-8, `gzip -9 -n` it over the embedded file, re-derive
-   both maps (the unit tests print the entries to paste), and raise
-   `openCodeCatalogVersion`.
+3. Write the JSON as UTF-8 and pack it over the embedded file:
+   `bash internal/execution/adapters/testdata/opencode-cli/pack-catalog.sh <catalog.json>`.
+   Copy the sizes and sha256 values it prints into the table above and into
+   `openCodeModelsCatalogSHA256`, re-derive both maps (the unit tests print the
+   entries to paste), and raise `openCodeCatalogVersion`.
 4. Run the `opencode_integration` tests in `opencode_catalog_integration_test.go`
    against the new binary. They check that the pinned file lists the same
    models as the bundled catalog, and that the binary reads the file (a model

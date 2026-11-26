@@ -1758,11 +1758,12 @@ the manifest's `install.installer_sha256`, and only then runs it for
 > Observed in the binary: `models:{file:OPENCODE_MODELS_PATH,fetch:!OPENCODE_DISABLE_MODELS_FETCH}`.
 > With the fetch off, a run read that bundled snapshot, and nothing pinned it.
 >
-> - **One pinned catalog.** `internal/execution/adapters/opencode-models-catalog.json.gz`
+> - **One pinned catalog.** `internal/execution/adapters/opencode-models-catalog.json.bz2`
 >   is 2.2.7's bundled snapshot, extracted from the binary
->   (`testdata/opencode-cli/README.md`). § 8's `openCodeCatalogEnv` and § 17's
->   `openCodeAnthropicModels` are derived from it, and unit tests hold them
->   equal to it. A fast-mode entry is `<id>-<mode>` for each of a model's
+>   (`testdata/opencode-cli/README.md`). It is stored as bzip2, not gzip, to
+>   keep the Linux amd64 binary under its 30 MiB stripped limit (#3616).
+>   § 8's `openCodeCatalogEnv` and § 17's `openCodeAnthropicModels` are
+>   derived from it, and unit tests hold them equal to it. A fast-mode entry is `<id>-<mode>` for each of a model's
 >   `experimental.modes`, sent under the base id.
 > - **Every run reads it.** The run root and each probe directory get
 >   `nightgauge-models-catalog.json` (0600, renamed into place, outside the

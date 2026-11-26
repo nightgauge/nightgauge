@@ -2,7 +2,7 @@ package adapters
 
 import (
 	"bytes"
-	"compress/gzip"
+	"compress/bzip2"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -13,16 +13,18 @@ import (
 	"slices"
 )
 
-// openCodeModelsCatalogGzip is the models catalog opencode 2.3.2 bundles, the
-// document it reads when no file is named and nothing is cached, gzipped
-// (testdata/opencode-cli/README.md says how it is captured). It is pinned, not
-// fetched: every run and every probe hands OpenCode this file
+// openCodeModelsCatalogBzip2 is the models catalog opencode 2.3.2 bundles, the
+// document it reads when no file is named and nothing is cached, compressed
+// with bzip2 (testdata/opencode-cli/README.md says how it is captured, and
+// testdata/opencode-cli/pack-catalog.sh packs it). bzip2 rather than gzip
+// keeps the Linux amd64 release binary under its stripped size limit (#3616).
+// It is pinned, not fetched: every run and every probe hands OpenCode this file
 // (openCodeModelsPathEnv), and the credential policy (openCodeCatalogEnv) and
 // the anthropic id pin (openCodeAnthropicModels) are derived from it, so a run
 // reads exactly the catalog its policy was derived from (ADR-022 § 8, § 20).
 //
-//go:embed opencode-models-catalog.json.gz
-var openCodeModelsCatalogGzip []byte
+//go:embed opencode-models-catalog.json.bz2
+var openCodeModelsCatalogBzip2 []byte
 
 // openCodeModelsPathEnv names the catalog file OpenCode reads in place of its
 // cache, its bundled snapshot and models.dev. Read from the 2.2.7 binary, and
@@ -37,6 +39,10 @@ const openCodeModelsPathEnv = "OPENCODE_MODELS_PATH"
 // probe directory. It matches none of openCodeCatalogCacheFiles, so the cache
 // sweep never removes it.
 const openCodeModelsCatalogFile = "nightgauge-models-catalog.json"
+
+// openCodeModelsCatalogTempPattern names the temporary file the catalog is
+// written to before it is renamed to openCodeModelsCatalogFile.
+const openCodeModelsCatalogTempPattern = ".models-catalog-*"
 
 // openCodeCodeBoundEnv are the provider bindings opencode 2.3.2 makes in code
 // that its catalog does not declare. Observed with each catalog variable set
@@ -58,24 +64,16 @@ var openCodeListedModelTypes = []string{"chat", "decision", "image"}
 const openCodeUnlistedModelStatus = "deprecated"
 
 // openCodeModelsCatalogReader streams the pinned catalog's JSON out of the
-// embedded gzip. The caller closes it.
-func openCodeModelsCatalogReader() (io.ReadCloser, error) {
-	zr, err := gzip.NewReader(bytes.NewReader(openCodeModelsCatalogGzip))
-	if err != nil {
-		return nil, fmt.Errorf("opencode models catalog: %w", err)
-	}
-	return zr, nil
+// embedded bzip2. bzip2 has no header to check up front, so a corrupt stream
+// surfaces as an error from Read, and the callers wrap it.
+func openCodeModelsCatalogReader() io.Reader {
+	return bzip2.NewReader(bytes.NewReader(openCodeModelsCatalogBzip2))
 }
 
 // openCodeModelsCatalogJSON returns the pinned catalog's JSON. Nothing holds
 // it after the call: a run only needs the file (writeOpenCodeModelsCatalog).
 func openCodeModelsCatalogJSON() ([]byte, error) {
-	zr, err := openCodeModelsCatalogReader()
-	if err != nil {
-		return nil, err
-	}
-	defer zr.Close()
-	data, err := io.ReadAll(zr)
+	data, err := io.ReadAll(openCodeModelsCatalogReader())
 	if err != nil {
 		return nil, fmt.Errorf("opencode models catalog: %w", err)
 	}
@@ -164,16 +162,11 @@ func OpenCodeModelsCatalogPath(dir string) string {
 // followed, and a file a stage changed is replaced with the pinned bytes on
 // every dispatch.
 func writeOpenCodeModelsCatalog(dir string) error {
-	zr, err := openCodeModelsCatalogReader()
-	if err != nil {
-		return err
-	}
-	defer zr.Close()
-	tmp, err := os.CreateTemp(dir, ".models-catalog-*")
+	tmp, err := os.CreateTemp(dir, openCodeModelsCatalogTempPattern)
 	if err != nil {
 		return fmt.Errorf("opencode models catalog: %w", err)
 	}
-	_, writeErr := io.Copy(tmp, zr)
+	_, writeErr := io.Copy(tmp, openCodeModelsCatalogReader())
 	closeErr := tmp.Close()
 	if err := errors.Join(writeErr, closeErr); err != nil {
 		_ = os.Remove(tmp.Name())

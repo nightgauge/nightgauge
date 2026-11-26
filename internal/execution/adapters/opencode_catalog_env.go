@@ -1,7 +1,7 @@
 package adapters
 
 // openCodeCatalogEnv is every provider key in the models catalog pinned for
-// opencode 2.3.2 (opencode-models-catalog.json.gz, the snapshot 2.3.2 bundles),
+// opencode 2.3.2 (opencode-models-catalog.json.bz2, the snapshot 2.3.2 bundles),
 // with the environment variables the catalog binds to it (ADR-022 § 8), plus
 // the bindings 2.3.2 adds in code (openCodeCodeBoundEnv). OpenCode loads a
 // catalog provider when any one of its variables is set, and reads the

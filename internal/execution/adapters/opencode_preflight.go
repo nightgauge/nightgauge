@@ -86,7 +86,7 @@ const openCodeBinaryName = "opencode"
 // opencode_integration), then raise this.
 // TestOpenCodeCatalogSnapshotIsTheMaxTestedVersion holds the two together.
 // On 2.x both are derived from the pinned models catalog
-// (opencode-models-catalog.json.gz) the version bundles, which every run reads
+// (opencode-models-catalog.json.bz2) the version bundles, which every run reads
 // through OPENCODE_MODELS_PATH: re-capture it from the new binary first
 // (testdata/opencode-cli/README.md).
 const openCodeCatalogVersion = "2.3.2"

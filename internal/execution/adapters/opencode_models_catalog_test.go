@@ -3,6 +3,8 @@ package adapters
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"os"
@@ -61,6 +63,54 @@ func TestOpenCodeAnthropicModelsMatchThePinnedCatalog(t *testing.T) {
 	} {
 		if got := anthropic[entry]; got != base {
 			t.Errorf("pinned catalog: %s is sent as %q, want %q", entry, got, base)
+		}
+	}
+}
+
+// openCodeModelsCatalogSHA256 is the sha256 of the pinned catalog's JSON, as
+// testdata/opencode-cli/README.md records it and pack-catalog.sh prints it.
+const openCodeModelsCatalogSHA256 = "d4e2d43a133e12b30dcbe356202f5bc09eb2956c79380c704993767e4a002286"
+
+// TestOpenCodeModelsCatalogContent: the embedded file decodes to the JSON the
+// README records, so re-packing it (pack-catalog.sh, #3616) cannot change what
+// a run reads without this test and the README moving with it.
+func TestOpenCodeModelsCatalogContent(t *testing.T) {
+	data, err := openCodeModelsCatalogJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	if got := hex.EncodeToString(sum[:]); got != openCodeModelsCatalogSHA256 {
+		t.Errorf("the pinned catalog decodes to %d bytes with sha256 %s, want %s (testdata/opencode-cli/README.md)",
+			len(data), got, openCodeModelsCatalogSHA256)
+	}
+}
+
+// TestOpenCodeModelsCatalogCorrupt: bzip2 reports a corrupt stream on Read,
+// not on open, so both readers of the embedded file must surface it, and a
+// failed write leaves neither a catalog nor a temporary file behind. A bad
+// header fails before anything is written; a truncated stream fails mid-copy,
+// after part of the temporary file is written.
+func TestOpenCodeModelsCatalogCorrupt(t *testing.T) {
+	saved := openCodeModelsCatalogBzip2
+	t.Cleanup(func() { openCodeModelsCatalogBzip2 = saved })
+	for name, stream := range map[string][]byte{
+		"bad header": []byte("not a bzip2 stream"),
+		"truncated":  saved[:len(saved)/2],
+	} {
+		openCodeModelsCatalogBzip2 = stream
+		if _, err := openCodeModelsCatalogJSON(); err == nil || !strings.Contains(err.Error(), "opencode models catalog") {
+			t.Errorf("%s: openCodeModelsCatalogJSON: err = %v, want a wrapped decode error", name, err)
+		}
+		dir := t.TempDir()
+		if err := writeOpenCodeModelsCatalog(dir); err == nil || !strings.Contains(err.Error(), "opencode models catalog") {
+			t.Errorf("%s: writeOpenCodeModelsCatalog: err = %v, want a wrapped decode error", name, err)
+		}
+		if _, err := os.Lstat(OpenCodeModelsCatalogPath(dir)); !os.IsNotExist(err) {
+			t.Errorf("%s: a failed decode left %s (err = %v)", name, OpenCodeModelsCatalogPath(dir), err)
+		}
+		if left, _ := filepath.Glob(filepath.Join(dir, openCodeModelsCatalogTempPattern)); len(left) > 0 {
+			t.Errorf("%s: a failed decode left %q", name, left)
 		}
 	}
 }
@@ -215,7 +265,7 @@ func TestWriteOpenCodeModelsCatalogFailsCleanly(t *testing.T) {
 	if err := writeOpenCodeModelsCatalog(dir); err == nil {
 		t.Error("replacing a non-empty directory succeeded")
 	}
-	if left, _ := filepath.Glob(filepath.Join(dir, ".models-catalog-*")); len(left) > 0 {
+	if left, _ := filepath.Glob(filepath.Join(dir, openCodeModelsCatalogTempPattern)); len(left) > 0 {
 		t.Errorf("a failed write left %q", left)
 	}
 }
