@@ -14,6 +14,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- A `nightgauge serve` daemon with no VS Code extension attached now runs a
+  dashboard `trigger` itself instead of letting it expire. It refuses, with a
+  reason the dashboard shows, a trigger that is missing its repo or issue, names
+  a repo outside the workspace, comes from a conversation not posted by this
+  host's operator, asks for an adapter or model this machine cannot serve, or
+  targets an issue already running or queued here. Otherwise it acknowledges the
+  trigger, runs the pipeline on the configured adapter under a fresh run id, and
+  reports the platform run's end once as success, failure or cancelled. With an
+  extension attached, triggers still go to it, and other command types are
+  unchanged (#3586).
+
 ### Fixed
 
 - `nightgauge hook careful-gate` now evaluates here-document bodies that a shell

@@ -84,6 +84,9 @@ type Server struct {
 	methods   map[string]Handler
 	execMgr   *execution.Manager
 	scheduler *orchestrator.Scheduler
+	// busyChecks: see AddIssueBusyCheck; guarded by busyMu.
+	busyMu     sync.Mutex
+	busyChecks []func(repo string, issueNumber int) bool
 
 	// postMergeReruns holds one entry per repo#issue whose post-merge re-run
 	// runs in the background; postMergeRerunWG lets tests wait for them, and

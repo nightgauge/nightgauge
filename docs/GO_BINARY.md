@@ -398,12 +398,26 @@ types itself, never relaying either (see
 to its own queue (below, #2440). It relays every other
 command to the extension over the `agent.command` IPC event, `{agentId, frame}`, and the
 extension carries it out and acknowledges it under `agentId`, the agent the
-platform addressed. A daemon with no extension attached has nobody to relay
-to, and such a command expires on the platform. The extension says it is
+platform addressed. The extension says it is
 attached with the `agent.attachExecutor` IPC method, on the daemon's stdio
 transport only, each time it connects; until then a conversation turn
 dispatches no run to this host (#1894,
 [CONVERSATION_TURNS.md § Dispatching a run](CONVERSATION_TURNS.md#dispatching-a-run)).
+
+A daemon with no extension attached executes a `trigger` itself (#3586). It
+refuses the trigger, acking it `rejected` with a reason, when the payload lacks
+an owner, repo or issue number (`invalid-command`); the repo is not one the
+workspace declares (`not-covered`); a conversation dispatched it and
+`posterIsOperator` is not `true` (`operator-required`); its adapter or model
+fails the remote-pin validation `queue.validatePin` applies; or the issue
+already has a live or queued run here (`already-running`). Otherwise it acks
+the trigger under the addressed agent and runs the pipeline on its own
+scheduler with the adapter `run` resolves, under a fresh run id; the ack's run
+id is only the run's `remoteRunId`. When the run ends the daemon posts one
+`pipeline_done` for the ack's run id: `success: true`, `success: false`, or no
+`success` for a cancelled run. A redelivered trigger starts nothing. Every
+other relayed command type still expires on the platform when no extension is
+attached.
 
 #### A queue item added in the cloud
 
