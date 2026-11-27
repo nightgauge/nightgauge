@@ -15,12 +15,19 @@ Exit status is non-zero when a listed test fails, when `go test` fails, or
 when a listed test produced no `run` event: an entry whose test was renamed or
 deleted guards nothing, so it fails the gate and is named.
 
+A `go test` killed by a signal asserted nothing (#3646): its package is not
+listed as failed and its entries are not checked for staleness. The signal and
+the tests still running are named, and when nothing else failed the runner
+prints a HARNESS ERROR line and exits 2, the code it uses for "could not run".
+A kill beside a real failure or a stale entry stays exit 1 (#3637).
+
 Usage:
     python3 scripts/go-test-uncached.py [--race] [--timeout 20m]
         [--json go-test.json] [--list scripts/go-test-uncached.txt]
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -31,6 +38,19 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_LIST = os.path.join(SCRIPT_DIR, "go-test-uncached.txt")
 ECHO = os.path.join(SCRIPT_DIR, "go-test-json-echo.py")
 TEST_NAME = re.compile(r"^Test[A-Za-z0-9_]*$")
+PROG = "go-test-uncached"
+
+
+def _load_shard():
+    """Load go-test-shard.py (hyphenated, so not importable by name)."""
+    spec = importlib.util.spec_from_file_location(
+        "go_test_shard", os.path.join(SCRIPT_DIR, "go-test-shard.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+SHARD = _load_shard()
 
 
 def read_list(path):
@@ -54,20 +74,25 @@ def read_list(path):
 
 
 def run_package(pkg, tests, args, sink):
-    """Run one package's listed tests. Return (go exit code, set of tests seen)."""
+    """Run one package's listed tests. Return (go exit code, tests seen, tests running).
+
+    The code is Popen's, so -N when go test was killed by signal N.
+    """
     cmd = ["go", "test", "-json", "-count=1"]
     if args.race:
         cmd.append("-race")
     cmd += ["-timeout", args.timeout, "-run", "^(%s)$" % "|".join(tests), pkg]
-    print("go-test-uncached: %s" % " ".join(cmd), flush=True)
+    print(PROG + ": %s" % " ".join(cmd), flush=True)
 
     seen = set()
+    running = {}
     echo = subprocess.Popen([sys.executable, ECHO], stdin=subprocess.PIPE, text=True)
     go = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
     for line in go.stdout:
         if sink is not None:
             sink.write(line)
         echo.stdin.write(line)
+        SHARD.track_running(running, line)
         stripped = line.strip()
         if not stripped.startswith("{"):
             continue
@@ -80,7 +105,7 @@ def run_package(pkg, tests, args, sink):
     code = go.wait()
     echo.stdin.close()
     echo.wait()
-    return code, seen
+    return code, seen, running
 
 
 def main():
@@ -94,18 +119,23 @@ def main():
     try:
         entries = read_list(args.list)
     except (OSError, ValueError) as err:
-        print("go-test-uncached: %s" % err, file=sys.stderr)
+        print(PROG + ": %s" % err, file=sys.stderr)
         return 2
     if not entries:
-        print("go-test-uncached: %s lists no tests" % os.path.relpath(args.list))
+        print(PROG + ": %s lists no tests" % os.path.relpath(args.list))
         return 0
 
     failed_pkgs = []
     stale = []
+    killed = []
     sink = open(args.json, "a") if args.json else None
     try:
         for pkg, tests in entries.items():
-            code, seen = run_package(pkg, tests, args, sink)
+            code, seen, running = run_package(pkg, tests, args, sink)
+            if code < 0:
+                # Killed: it asserted nothing, and its unrun entries are not stale.
+                killed.append((code, running))
+                continue
             if code != 0:
                 failed_pkgs.append(pkg)
             # A package that did not compile ran nothing; that is its failure,
@@ -140,7 +170,12 @@ def main():
             ),
             file=sys.stderr,
         )
-    return 1 if failed_pkgs or stale else 0
+    asserted = bool(failed_pkgs or stale)
+    for code, running in killed:
+        SHARD.report_signal_kill(PROG, code, running, declare=not asserted)
+    if asserted:
+        return 1
+    return 2 if killed else 0
 
 
 if __name__ == "__main__":

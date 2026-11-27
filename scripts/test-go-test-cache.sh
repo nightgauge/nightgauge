@@ -8,7 +8,10 @@
 #     under CI_LOCAL_NO_TEST_CACHE=1, and the rest steps run the always-uncached
 #     list otherwise (plain and --race);
 #   - go-test-uncached.py runs each package's entries with -count=1 -run, fails
-#     on a failing listed test, and fails naming a listed test that ran nothing.
+#     on a failing listed test, and fails naming a listed test that ran nothing;
+#   - a go test the runner starts that is killed by a signal is a HARNESS ERROR
+#     naming the signal and the running tests, exit 2, not a failed package or
+#     stale entries; beside a real failure it stays exit 1 (#3646).
 #
 # A stub `go` that records its argv, so seconds.
 # Run: bash scripts/test-go-test-cache.sh   (also run by scripts/ci-local.sh)
@@ -95,6 +98,7 @@ if [ -n "$run" ]; then
   for t in "${list[@]}"; do
     [ "$t" = "${STUB_MISSING:-}" ] && continue
     echo "{\"Action\":\"run\",\"Package\":\"$pkg\",\"Test\":\"$t\"}"
+    [ "$t" = "${STUB_SIGTERM:-}" ] && kill -TERM $$
     echo "{\"Action\":\"pass\",\"Package\":\"$pkg\",\"Test\":\"$t\"}"
   done
 fi
@@ -174,9 +178,35 @@ check "a listed test that ran nothing fails the runner" $?
 grep -qF 'example/one TestBeta' <<<"$err"
 check "the stale entry is named" $?
 
-STUB_EXIT=1 python3 "$UNCACHED" --list "$TMP/list.txt" >/dev/null 2>&1
+err="$(STUB_EXIT=1 python3 "$UNCACHED" --list "$TMP/list.txt" 2>&1 >/dev/null)"
 [ $? -eq 1 ]
 check "a failing go test fails the runner" $?
+grep -qx '  example/one' <<<"$err" && ! grep -q '^HARNESS ERROR:' <<<"$err"
+check "a failing package is listed and declares no HARNESS ERROR" $?
+
+: > "$STUB_ARGV"
+err="$(STUB_SIGTERM=TestAlpha python3 "$UNCACHED" --list "$TMP/list.txt" 2>&1 >/dev/null)"
+[ $? -eq 2 ]
+check "a go test killed by a signal exits 2" $?
+grep -q -- '-run ^(TestGamma)\$ example/two' "$STUB_ARGV"
+check "the runner moves on to the next package after a kill" $?
+grep -q '^HARNESS ERROR:.*SIGTERM' <<<"$err"
+check "the kill is declared a HARNESS ERROR naming the signal" $?
+grep -qx 'go-test-uncached: go test was killed by SIGTERM; tests still running: example/one TestAlpha' \
+  <<<"$err"
+check "the kill names the test still running" $?
+! grep -q 'FAIL: always-uncached tests failed in:' <<<"$err" && ! grep -q 'ran no test' <<<"$err"
+check "a killed package is neither a failed package nor stale entries" $?
+
+err="$(STUB_SIGTERM=TestAlpha STUB_MISSING=TestGamma python3 "$UNCACHED" \
+  --list "$TMP/list.txt" 2>&1 >/dev/null)"
+[ $? -eq 1 ]
+check "a kill beside a stale entry stays exit 1" $?
+grep -qF 'example/two TestGamma' <<<"$err" && ! grep -q '^HARNESS ERROR:' <<<"$err"
+check "the mixed run names the stale entry and declares no HARNESS ERROR" $?
+grep -qx 'go-test-uncached: go test was killed by SIGTERM; tests still running: example/one TestAlpha' \
+  <<<"$err"
+check "the mixed run still reports the kill" $?
 
 printf 'example/one\n' > "$TMP/bad.txt"
 python3 "$UNCACHED" --list "$TMP/bad.txt" >/dev/null 2>&1
