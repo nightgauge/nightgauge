@@ -200,20 +200,30 @@ def stream(cmd, json_path):
         echo.stdin.close()
         echo.wait()
     if code < 0:
-        signum = -code
-        try:
-            name = signal.Signals(signum).name
-        except ValueError:
-            name = "signal %d" % signum
-        tests = ", ".join("%s %s" % key for key in sorted(running)) or "none"
-        print("%s: go test was killed by %s; tests still running: %s" % (PROG, name, tests),
-              file=sys.stderr, flush=True)
-        # The declaration classify_failure reads (#3637): a signal death is the OS
-        # reporting the process was stopped, so the step asserted nothing.
+        return report_signal_kill(PROG, code, running)
+    return code
+
+
+def report_signal_kill(prog, code, running, declare=True):
+    """Report a `go test` killed by signal -code; return 128+N.
+
+    Names the signal and the top-level tests still running (#3443). When
+    declare is true it also prints the HARNESS ERROR line classify_failure
+    reads (#3637): a signal death is the OS reporting the process was stopped,
+    so the step asserted nothing. go-test-uncached.py shares this (#3646).
+    """
+    signum = -code
+    try:
+        name = signal.Signals(signum).name
+    except ValueError:
+        name = "signal %d" % signum
+    tests = ", ".join("%s %s" % key for key in sorted(running)) or "none"
+    print("%s: go test was killed by %s; tests still running: %s" % (prog, name, tests),
+          file=sys.stderr, flush=True)
+    if declare:
         print("HARNESS ERROR: go test was killed by %s before it finished; this step "
               "asserts nothing about the change" % name, file=sys.stderr, flush=True)
-        return 128 + signum
-    return code
+    return 128 + signum
 
 
 def track_running(running, line):
