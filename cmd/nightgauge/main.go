@@ -329,10 +329,8 @@ func waitForDaemonTurnHosts(d time.Duration) {
 // and the daemon does not execute, to the extension attached over IPC (#2335).
 // The extension runs this workspace's pipelines, so it carries out the
 // trigger or verb and acknowledges it under the agent id the platform
-// addressed. A daemon with no extension attached executes a `trigger` itself
-// (#3586, headlessTriggerRelay), so a trigger never reaches this relay then.
-// Every other relayed type still has nobody to hand it to, and expires on the
-// platform as it did before.
+// addressed. A daemon with no extension attached has nobody to hand it to, and
+// the command expires on the platform as it did before.
 func relayAgentCommandToExtension(ext eventEmitter) platform.AgentCommandRelay {
 	return func(agentID string, cmd platform.PendingCommand) {
 		if len(cmd.Frame) == 0 {
@@ -442,13 +440,6 @@ func runDaemonPlatformAgent(
 		// here reaches this daemon and no other on the machine (#1421).
 		WithWorkspaceRoot(workspaceRoot)
 	relay := relayAgentCommandToExtension(ext)
-	// With no extension attached the daemon executes a trigger itself
-	// (#3586); an ext that cannot decide one keeps the relay as it is.
-	if host, ok := ext.(headlessTriggerHost); ok {
-		triggers := newHeadlessTriggers(ctx, platformClient, host, workspaceRoot, served)
-		daemonHeadlessTriggers.add(triggers)
-		relay = headlessTriggerRelay(host, triggers.HandleCommand, relay)
-	}
 	turns := newDaemonTurnHost(ctx, conversation.Config{
 		WorkspaceRoot: workspaceRoot,
 		Platform:      conversation.NewPlatform(platformClient),
@@ -4857,18 +4848,6 @@ func resolveStageAdapter(flagValue, configDefault string) (adapters.SkillRunner,
 	return adapter, explicit, nil
 }
 
-// resolveRunAdapter is the adapter `run` executes its stages on: the
-// ui.core.adapter default of runCfg, when it loaded (cfgErr nil), passed to
-// resolveStageAdapter with adapterName as the flag. A headless `serve`
-// executing a platform trigger resolves its adapter here too (#3586).
-func resolveRunAdapter(adapterName string, runCfg *config.Config, cfgErr error) (adapters.SkillRunner, string, error) {
-	globalAdapterDefault := ""
-	if cfgErr == nil && runCfg != nil && runCfg.UI != nil && runCfg.UI.Core != nil {
-		globalAdapterDefault = runCfg.UI.Core.Adapter
-	}
-	return resolveStageAdapter(adapterName, globalAdapterDefault)
-}
-
 func runCmd() *cobra.Command {
 	var (
 		owner         string
@@ -4929,13 +4908,17 @@ func runCmd() *cobra.Command {
 			// stage loop unless the flag/env pinned the adapter explicitly.
 			cwd, _ := os.Getwd()
 			onFailureStatus := "ready"
+			globalAdapterDefault := ""
 			runCfg, cfgLoadErr := config.Load(cwd)
 			if cfgLoadErr == nil && runCfg != nil {
 				if runCfg.Autonomous != nil {
 					onFailureStatus = runCfg.Autonomous.ResolvedOnFailureStatus()
 				}
+				if runCfg.UI != nil && runCfg.UI.Core != nil {
+					globalAdapterDefault = runCfg.UI.Core.Adapter
+				}
 			}
-			adapter, adapterExplicit, err := resolveRunAdapter(adapterName, runCfg, cfgLoadErr)
+			adapter, adapterExplicit, err := resolveStageAdapter(adapterName, globalAdapterDefault)
 			if err != nil {
 				return err
 			}
@@ -6221,7 +6204,6 @@ func serveCmd() *cobra.Command {
 				log.Printf("IPC server exited cleanly")
 			}
 			waitForDaemonTurnHosts(conversation.ShutdownWait)
-			daemonHeadlessTriggers.waitFor(conversation.ShutdownWait)
 			return err
 		},
 	}

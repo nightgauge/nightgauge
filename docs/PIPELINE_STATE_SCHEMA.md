@@ -215,13 +215,10 @@ never rewritten: a cap-hop shows as `stageAdapters` / `stageModels` differing
 from them.
 
 `remoteRunId` is the platform run id of the trigger the run serves (#2339),
-set once, either from the first stage transition that carries it or at run
-start from the queue item's served remote run (`QueueItem.RemoteRunID`, as a
-headless `serve` sets it for a trigger it executes, #3586), and absent on every
+set once from the first stage transition that carries it and absent on every
 run no trigger started. It is correlation, not the run's identity (ADR-017
-Decision 2): when the queue item also carries a caller-minted `runId`, that id
-is the run's id and takes precedence (#3605). A window that finds a paused
-snapshot after a reload reads it to know which platform run it holds.
+Decision 2). A window that finds a paused snapshot after a reload reads it to
+know which platform run it holds.
 
 `visibility` is `private` when the member who started the run chose to keep it
 private on the hosted service (#2400), and absent for a team run. It is raised
