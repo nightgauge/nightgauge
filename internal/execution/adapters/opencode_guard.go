@@ -358,6 +358,15 @@ var openCodeShellVerbBoundaries = []string{
 // and `\` are absent, so `grep -P '\d\d'` holds no command start.
 var openCodeShellCommandStarts = []string{" ", ";", "&", "|", "("}
 
+// openCodeShellContinuationBoundaries are the characters a write verb may
+// follow on a continued line or in joined text (#3638): the quotes, `/`
+// (`/bin/cp src \`), tab and backtick, then the command starts. Each costs one
+// pattern per verb, so newline and carriage return are left out: no line
+// OpenCode checks on its own holds one, and in joined text a verb after a
+// newline is caught by the per-form `\n` boundary when the target is whole.
+var openCodeShellContinuationBoundaries = append(
+	[]string{"\"", "'", "/", "\t", "`"}, openCodeShellCommandStarts...)
+
 // openCodeShellBareVerbSuffixes end a write verb that stands alone on a
 // command line (#3623). Newline is absent: OpenCode splits lines before it
 // matches, so no line it checks ends in one.
@@ -519,7 +528,9 @@ func openCodeCommonPathSuffix(forms []string) string {
 // of one (`c\` + newline + `p src dst`), or when it holds a redirection
 // (`echo x > /opt/ng\` + newline + `bin/gh`), wherever it points. A
 // multi-line `curl …\` or `cmd 2>&1 \` is therefore refused in OpenCode
-// stages, accepted as fail-safe. OpenCode 2.4.2 checks one parsed command at
+// stages, accepted as fail-safe, and so is a continued line naming a verb
+// after `/`, a tab or a backtick (`ls /usr/bin/install \`), since a verb
+// there can run (#3638). OpenCode 2.4.2 checks one parsed command at
 // a time and keeps a continued command whole, backslash-newline included, so
 // each continuation deny is also emitted for that joined text.
 func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
@@ -559,7 +570,7 @@ func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
 		// Continuation: the whole verb, then each proper prefix at line end.
 		add(verb + "*" + openCodeShellContinuation)
 		add("*\\" + verb + "*" + openCodeShellContinuation)
-		for _, sep := range append([]string{"\"", "'"}, openCodeShellCommandStarts...) {
+		for _, sep := range openCodeShellContinuationBoundaries {
 			add("*" + sep + verb + "*" + openCodeShellContinuation)
 		}
 		for i := 1; i < len(verb); i++ {
@@ -573,7 +584,8 @@ func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
 	// holding the backslash-newline, so the same denies hold across it.
 	for _, verb := range openCodeShellBinDirWriteVerbs {
 		add(verb + "*" + openCodeShellJoined)
-		for _, sep := range openCodeShellCommandStarts {
+		add("*\\" + verb + "*" + openCodeShellJoined)
+		for _, sep := range openCodeShellContinuationBoundaries {
 			add("*" + sep + verb + "*" + openCodeShellJoined)
 		}
 		for i := 1; i < len(verb); i++ {

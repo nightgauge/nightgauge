@@ -1310,8 +1310,8 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 // pattern doing it (the per-form `verb?*<form>*` also matches, and some first
 // lines hit another verb's prefix pattern), so the list is also checked to emit
 // verb+"*"+openCodeShellJoined and verb+"*"+openCodeShellContinuation per verb.
-// No pattern is added, so TestOpenCodeShellBinDirDenyPatternsSize still bounds
-// the unchanged list.
+// TestOpenCodeConfigFitsEnvLimit bounds the whole config
+// that carries the list.
 func TestOpenCodeShellPermissionDeniesContinuedWriteVerb(t *testing.T) {
 	binDir := filepath.Join(t.TempDir(), "bin")
 	if err := os.Mkdir(binDir, 0o755); err != nil {
@@ -1383,16 +1383,11 @@ func TestOpenCodeShellSplitVerbSpellings(t *testing.T) {
 // (MAX_ARG_STRLEN), which OPENCODE_CONFIG_CONTENT=<config> must fit (#3627).
 const openCodeConfigEnvLimit = 128 << 10
 
-// openCodeShellDenyBudget is the share of that limit the bin-dir shell denies
-// may take: the rest of the golden config is about 23 KiB.
-const openCodeShellDenyBudget = 96 << 10
-
-// TestOpenCodeShellBinDirDenyPatternsSize bounds the deny list: spawning
-// OpenCode failed with E2BIG once it outgrew the variable that carries the
-// config (#3627). It measures the permission entries the config carries for a
-// long bin dir and worktree, both reached through a symlink, so every form a
-// real run can produce is present.
-func TestOpenCodeShellBinDirDenyPatternsSize(t *testing.T) {
+// openCodeWorstCaseDirs is the longest bin dir and worktree a real run
+// produces, each reached through a symlink, so every bin-dir form is present
+// (#3627, #3638). It skips when symlinks are unavailable.
+func openCodeWorstCaseDirs(t *testing.T) (binDir, worktree string) {
+	t.Helper()
 	long := filepath.Join(t.TempDir(), strings.Repeat("x", 40), ".vscode", "extensions",
 		"nightgauge.nightgauge-0.8.9-rc.2")
 	realBin := filepath.Join(long, "dist", "bin")
@@ -1402,25 +1397,139 @@ func TestOpenCodeShellBinDirDenyPatternsSize(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	linkBin := filepath.Join(t.TempDir(), "bin-link")
-	linkWorktree := filepath.Join(t.TempDir(), "worktree-link")
-	if err := os.Symlink(realBin, linkBin); err != nil {
+	binDir = filepath.Join(t.TempDir(), "bin-link")
+	worktree = filepath.Join(t.TempDir(), "worktree-link")
+	if err := os.Symlink(realBin, binDir); err != nil {
 		t.Skipf("cannot create a symlink here: %v", err)
 	}
-	if err := os.Symlink(realWorktree, linkWorktree); err != nil {
+	if err := os.Symlink(realWorktree, worktree); err != nil {
 		t.Fatal(err)
 	}
-	var rules []openCodeRuleJSON
-	for _, p := range openCodeShellBinDirDenyPatterns(linkBin, linkWorktree) {
-		rules = append(rules, openCodeRuleJSON{Action: "shell", Resource: p, Effect: openCodeDeny})
-	}
-	b, err := json.Marshal(rules)
+	return binDir, worktree
+}
+
+// TestOpenCodeConfigFitsEnvLimit asserts the whole worst-case config fits
+// the variable that carries it: spawning OpenCode failed with E2BIG once the
+// bin-dir denies outgrew it (#3627, #3638).
+func TestOpenCodeConfigFitsEnvLimit(t *testing.T) {
+	binDir, worktree := openCodeWorstCaseDirs(t)
+	in, err := OpenCodeConfigInputFor(lmStudioSettings(), RunOptions{
+		Stage:        "feature-dev",
+		Model:        "lmstudio/qwen/qwen3.8-27b",
+		MaxTurns:     40,
+		AllowedTools: []string{"Bash", "Read", "Edit", "Write", "Glob", "Grep", "Task"},
+		WorktreeDir:  worktree,
+	}, goldenRunRoot, envLookup(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(b) > openCodeShellDenyBudget {
-		t.Errorf("bin-dir shell deny rules serialise to %d bytes, want <= %d of the %d-byte limit",
-			len(b), openCodeShellDenyBudget, openCodeConfigEnvLimit)
+	in.Repository = goldenRepository(t)
+	in.BinDir = binDir
+	cfg, err := BuildOpenCodeConfig(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range openCodeShellBinDirDenyPatterns(binDir, worktree) {
+		enc, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(cfg.Content, string(enc)) {
+			t.Fatalf("the config does not carry bin-dir deny %s", enc)
+		}
+	}
+	// MAX_ARG_STRLEN counts the whole NAME=value string and its NUL.
+	if n := len("OPENCODE_CONFIG_CONTENT=") + len(cfg.Content) + 1; n > openCodeConfigEnvLimit {
+		t.Errorf("OPENCODE_CONFIG_CONTENT is %d bytes, want <= %d", n, openCodeConfigEnvLimit)
+	} else {
+		t.Logf("OPENCODE_CONFIG_CONTENT is %d bytes of %d", n, openCodeConfigEnvLimit)
+	}
+}
+
+// TestOpenCodeShellBinDirDenyWorstCaseBypasses pins every spelling #3638
+// lists against the worst-case bin dir, for every form of it: each is denied
+// as whole text (OpenCode 2.4.2) and on at least one line (older OpenCode).
+func TestOpenCodeShellBinDirDenyWorstCaseBypasses(t *testing.T) {
+	binDir, worktree := openCodeWorstCaseDirs(t)
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}, WorktreeDir: worktree}, binDir).Shell
+	resolvedBin, err := filepath.EvalSymlinks(binDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedWorktree, err := filepath.EvalSymlinks(worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type form struct{ label, dir string }
+	forms := []form{{"link", binDir}, {"resolved", resolvedBin}}
+	for _, w := range []struct{ label, dir string }{{"link", worktree}, {"resolved", resolvedWorktree}} {
+		for _, b := range forms[:2] {
+			if rel, err := filepath.Rel(w.dir, b.dir); err == nil {
+				forms = append(forms, form{"rel-" + b.label + "-from-" + w.label, rel})
+			}
+		}
+	}
+	denied := func(t *testing.T, cmd string) {
+		t.Helper()
+		if got := openCodePatternAction(pm, cmd); got != openCodeDeny {
+			t.Errorf("whole text %q resolves to %q, want %q", cmd, got, openCodeDeny)
+		}
+		for _, line := range strings.Split(cmd, "\n") {
+			if openCodePatternAction(pm, line) == openCodeDeny {
+				return
+			}
+		}
+		t.Errorf("no line of %q resolves to %q", cmd, openCodeDeny)
+	}
+	seen := map[string]bool{}
+	for _, f := range forms {
+		if seen[f.dir] {
+			continue
+		}
+		seen[f.dir] = true
+		gh := f.dir + "/gh"
+		// The continuation lands inside the bin dir, before "bin/gh", so no
+		// line names a whole bin-dir form.
+		splitAt := len(gh) - len("bin/gh") - 1
+		cases := []struct{ name, cmd string }{
+			{"braced", "{cp,src," + gh + "}"},
+			{"split backslash", "c\\p src " + gh},
+			{"split double quotes", `c""p src ` + gh},
+			{"split single quote", "'c'p src " + gh},
+			{"joined", "cp \\\nsrc " + gh},
+		}
+		for _, verb := range openCodeShellBinDirWriteVerbs {
+			cases = append(cases,
+				struct{ name, cmd string }{verb + " escaped", "\\" + verb + " src " + gh},
+				struct{ name, cmd string }{verb + " double-quoted", `"` + verb + `" src ` + gh},
+				struct{ name, cmd string }{verb + " single-quoted", "'" + verb + "' src " + gh},
+			)
+			for _, spelling := range []string{verb, "/bin/" + verb, "x=1 /bin/" + verb, "\t" + verb,
+				"`" + verb, "\\" + verb, `"` + verb + `"`, "'" + verb + "'"} {
+				cases = append(cases,
+					struct{ name, cmd string }{
+						fmt.Sprintf("%q continued", spelling), spelling + " src \\\n" + gh,
+					},
+					struct{ name, cmd string }{
+						fmt.Sprintf("%q path split across continuation", spelling),
+						spelling + " src " + gh[:splitAt] + "\\\n" + gh[splitAt:],
+					},
+				)
+			}
+		}
+		for _, c := range cases {
+			t.Run(f.label+"/"+c.name, func(t *testing.T) { denied(t, c.cmd) })
+		}
+		for _, cmd := range []string{gh + " pr view", "which cp", "ls /bin/cp", "go test ./... \\",
+			gh + " pr create --title x \\"} {
+			if got := openCodePatternAction(pm, cmd); got != openCodeAllow {
+				t.Errorf("%s: %q resolves to %q, want %q", f.label, cmd, got, openCodeAllow)
+			}
+		}
+	}
+	// Accepted fail-safe (#3638): a continued line naming a verb after `/`.
+	if got := openCodePatternAction(pm, "ls /usr/bin/install \\"); got != openCodeDeny {
+		t.Errorf("continued ls /usr/bin/install resolves to %q, want the accepted fail-safe %q", got, openCodeDeny)
 	}
 }
 
