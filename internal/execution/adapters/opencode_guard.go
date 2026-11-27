@@ -351,12 +351,12 @@ var openCodeShellVerbBoundaries = []string{
 	" ", "\t", "\n", "\r", "\"", "'", ";", "&", "|", "(", "`", "/",
 }
 
-// openCodeShellVerbArgSeparators are the whitespace characters that can follow
-// a verb before its arguments (#3623). The newline entry serves a matcher that
-// sees the whole command. OpenCode 2.4.2 checks each line on its own, so
-// `cp\n<src> <dst>` reaches it as a bare `cp` line and a verb-less argument
-// line: the bare write-verb deny in openCodeShellBinDirDenyPatterns refuses it.
-var openCodeShellVerbArgSeparators = []string{" ", "\t", "\n"}
+// openCodeShellCommandStarts are the characters after which a command word
+// starts: a space and the shell's command separators (#3627). The set is
+// kept short for the config's size limit: a split verb after a tab or inside
+// backticks routes around it. Quotes, `/`
+// and `\` are absent, so `grep -P '\d\d'` holds no command start.
+var openCodeShellCommandStarts = []string{" ", ";", "&", "|", "("}
 
 // openCodeShellBareVerbSuffixes end a write verb that stands alone on a
 // command line (#3623). Newline is absent: OpenCode splits lines before it
@@ -395,6 +395,85 @@ func openCodeShellSplitVerbSpellings(verb string) []string {
 		}
 	}
 	return out
+}
+
+// openCodeShellBinDirForms returns the spellings of binDir a shell command can
+// name: binDir with and without symlinks resolved, and each relative to the
+// worktree's git top-level (#1638). Forms that end in one suffix of at least
+// two path components are returned as that suffix alone: each form holds it,
+// so its patterns deny whatever theirs did, and one pattern set per group
+// instead of one per form (up to six) keeps OpenCode's config under Linux's 128 KiB limit on the one
+// variable that carries it (#3627). A write to another directory ending in the
+// same components is denied too, accepted as fail-safe.
+func openCodeShellBinDirForms(binDir, worktreeDir string) []string {
+	forms := openCodePathForms(binDir)
+	absForms := append([]string(nil), forms...)
+	if worktreeDir != "" {
+		root, ok := openCodeGitTopLevel(worktreeDir)
+		if !ok {
+			root = worktreeDir
+		}
+		for _, r := range openCodePathForms(root) {
+			for _, f := range absForms {
+				rel, err := filepath.Rel(r, f)
+				if err != nil || !strings.HasPrefix(rel, "../") {
+					continue
+				}
+				dup := false
+				for _, x := range forms {
+					if x == rel {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					forms = append(forms, rel)
+				}
+			}
+		}
+	}
+	var groups []string
+	for _, f := range forms {
+		merged := false
+		for i, g := range groups {
+			if suffix := openCodeCommonPathSuffix([]string{g, f}); strings.Count(suffix, "/") >= 2 {
+				groups[i] = suffix
+				merged = true
+				break
+			}
+		}
+		if !merged {
+			groups = append(groups, f)
+		}
+	}
+	return groups
+}
+
+// openCodeCommonPathSuffix returns the longest suffix every form shares that
+// starts at a path separator ("/a/b" of "/x/a/b" and "../a/b"), or "" (#3627).
+// A form equal to that suffix less its leading "/" never occurs: each
+// relative form starts with "../".
+func openCodeCommonPathSuffix(forms []string) string {
+	if len(forms) == 0 {
+		return ""
+	}
+	if len(forms) == 1 {
+		return forms[0]
+	}
+	suffix := forms[0]
+	for _, f := range forms[1:] {
+		for !strings.HasSuffix(f, suffix) {
+			i := strings.Index(suffix[1:], "/")
+			if i < 0 {
+				return ""
+			}
+			suffix = suffix[i+1:]
+		}
+	}
+	if !strings.HasPrefix(suffix, "/") {
+		return ""
+	}
+	return suffix
 }
 
 // openCodeShellBinDirDenyPatterns denies a shell command that writes into
@@ -447,32 +526,7 @@ func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
 	if binDir == "" {
 		return nil
 	}
-	forms := openCodePathForms(binDir)
-	absForms := append([]string(nil), forms...)
-	if worktreeDir != "" {
-		root, ok := openCodeGitTopLevel(worktreeDir)
-		if !ok {
-			root = worktreeDir
-		}
-		for _, r := range openCodePathForms(root) {
-			for _, f := range absForms {
-				rel, err := filepath.Rel(r, f)
-				if err != nil || !strings.HasPrefix(rel, "../") {
-					continue
-				}
-				dup := false
-				for _, x := range forms {
-					if x == rel {
-						dup = true
-						break
-					}
-				}
-				if !dup {
-					forms = append(forms, rel)
-				}
-			}
-		}
-	}
+	forms := openCodeShellBinDirForms(binDir, worktreeDir)
 	var out []string
 	seen := map[string]bool{}
 	add := func(p string) {
@@ -490,19 +544,28 @@ func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
 		}
 		add("/*/" + verb)
 		for _, spelling := range openCodeShellSplitVerbSpellings(verb) {
+			if strings.Contains(spelling, "\\") {
+				// `l\n` and `d\d` are ordinary text (`printf 'total\n'`,
+				// `grep -P '\d\d'`): a backslash split counts only where a
+				// command word starts.
+				add(spelling + "*")
+				for _, sep := range openCodeShellCommandStarts {
+					add("*" + sep + spelling + "*")
+				}
+				continue
+			}
 			add("*" + spelling + "*")
 		}
 		// Continuation: the whole verb, then each proper prefix at line end.
 		add(verb + "*" + openCodeShellContinuation)
 		add("*\\" + verb + "*" + openCodeShellContinuation)
-		for _, sep := range openCodeShellVerbBoundaries {
+		for _, sep := range append([]string{"\"", "'"}, openCodeShellCommandStarts...) {
 			add("*" + sep + verb + "*" + openCodeShellContinuation)
 		}
 		for i := 1; i < len(verb); i++ {
-			add(verb[:i] + openCodeShellContinuation)
-			for _, sep := range append([]string{"\\", "{"}, openCodeShellVerbBoundaries...) {
-				add("*" + sep + verb[:i] + openCodeShellContinuation)
-			}
+			// No boundary: a line ending in a letter run glued to the
+			// backslash is denied whatever precedes it, one pattern per prefix.
+			add("*" + verb[:i] + openCodeShellContinuation)
 		}
 	}
 	add("*>*" + openCodeShellContinuation)
@@ -510,7 +573,7 @@ func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
 	// holding the backslash-newline, so the same denies hold across it.
 	for _, verb := range openCodeShellBinDirWriteVerbs {
 		add(verb + "*" + openCodeShellJoined)
-		for _, sep := range openCodeShellVerbBoundaries {
+		for _, sep := range openCodeShellCommandStarts {
 			add("*" + sep + verb + "*" + openCodeShellJoined)
 		}
 		for i := 1; i < len(verb); i++ {
@@ -518,21 +581,19 @@ func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
 		}
 	}
 	add("*>*" + openCodeShellJoined)
+	// One pattern per boundary, with `?` for the character after the verb,
+	// keeps the config under Linux's 128 KiB limit on the one variable that
+	// carries it (#3627): a pattern per argument separator and per quoting
+	// overflowed it. `?` also takes `"cp"`, `'cp'`, `/cp"` and `{cp,`, and a
+	// word that merely starts with a verb (`mvn`, `cpp`) in a command naming
+	// binDir is denied too, accepted as fail-safe.
+	perFormBoundaries := append([]string{"\\", "{"}, openCodeShellVerbBoundaries...)
 	for _, form := range forms {
 		for _, verb := range openCodeShellBinDirWriteVerbs {
-			for _, argSep := range openCodeShellVerbArgSeparators {
-				add(verb + argSep + "*" + form + "*")
-				add("*\\" + verb + argSep + "*" + form + "*")
-				for _, sep := range openCodeShellVerbBoundaries {
-					add("*" + sep + verb + argSep + "*" + form + "*")
-				}
+			add(verb + "?*" + form + "*")
+			for _, sep := range perFormBoundaries {
+				add("*" + sep + verb + "?*" + form + "*")
 			}
-			for _, q := range []string{"\"", "'"} {
-				add("*" + q + verb + q + "*" + form + "*")
-				add("*/" + verb + q + "*" + form + "*")
-			}
-			add("*{" + verb + ",*" + form + "*")
-			add("*/" + verb + ",*" + form + "*")
 		}
 		add("*>*" + form + "*")
 	}

@@ -1191,6 +1191,9 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 					`c''p /tmp/payload.sh ` + gh,
 					`c""p /tmp/payload.sh ` + gh,
 					`c\p /tmp/payload.sh ` + gh,
+					`true;c\p /tmp/payload.sh ` + gh,
+					`a&&t\ee /tmp/payload.sh ` + gh,
+					`(c\p /tmp/payload.sh ` + gh + ")",
 					`'c'p /tmp/payload.sh ` + gh,
 					"{cp,/tmp/payload.sh," + gh + "}",
 					"{/bin/cp,/tmp/payload.sh," + gh + "}",
@@ -1267,9 +1270,12 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 					"ddate",
 					`git commit -m "fix" && ` + gh + " doctor",
 					"echo 'a,b' && " + gh + " doctor",
-					"echo 'cp,mv' && " + gh + " doctor",
 					"go test ./... \\",
 					gh + " pr create --title x \\",
+					// #3627: a backslash split counts only where a word starts.
+					"printf 'total\\n' && " + gh + " doctor",
+					`echo -e "fail\n"`,
+					`grep -P '\d\d' f.txt`,
 				} {
 					if got := openCodePatternAction(pm, cmd); got == openCodeDeny {
 						t.Errorf("%s, %s: shell %q resolves to deny; running a binary from the bin dir must stay allowed", c.name, grantName, cmd)
@@ -1280,7 +1286,12 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 	}
 	// Accepted fail-safe denies of a continued line (#3627).
 	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}}, realBin).Shell
-	for _, line := range []string{"curl -sS \\", "npm install foo \\", "go install ./cmd/x \\", "cmd 2>&1 \\"} {
+	for _, line := range []string{
+		"curl -sS \\", "npm install foo \\", "go install ./cmd/x \\", "cmd 2>&1 \\",
+		"ls src\\", // a verb prefix glued to the backslash
+		// The per-form `?`: a quoted verb before a run of the binary.
+		"echo 'cp,mv' && " + realBin + "/gh doctor",
+	} {
 		if got := openCodePatternAction(pm, line); got != openCodeDeny {
 			t.Errorf("continued %q resolves to %q, want the accepted fail-safe %q", line, got, openCodeDeny)
 		}
@@ -1302,16 +1313,71 @@ func TestOpenCodeShellSplitVerbSpellings(t *testing.T) {
 	}
 }
 
-// TestOpenCodeShellBinDirDenyPatternsSize bounds the deny list: OpenCode's
-// config travels in one environment variable, capped at 128 KiB on Linux.
+// openCodeConfigEnvLimit is Linux's cap on one environment string
+// (MAX_ARG_STRLEN), which OPENCODE_CONFIG_CONTENT=<config> must fit (#3627).
+const openCodeConfigEnvLimit = 128 << 10
+
+// openCodeShellDenyBudget is the share of that limit the bin-dir shell denies
+// may take: the rest of the golden config is about 23 KiB.
+const openCodeShellDenyBudget = 96 << 10
+
+// TestOpenCodeShellBinDirDenyPatternsSize bounds the deny list: spawning
+// OpenCode failed with E2BIG once it outgrew the variable that carries the
+// config (#3627). It measures the permission entries the config carries for a
+// long bin dir and worktree, both reached through a symlink, so every form a
+// real run can produce is present.
 func TestOpenCodeShellBinDirDenyPatternsSize(t *testing.T) {
-	forms := "/private/var/folders/xx/yyyyyyyyyyyyyyyyyyyyyyyy/T/nightgauge-bin-1234567890"
-	b, err := json.Marshal(openCodeShellBinDirDenyPatterns(forms, ""))
+	long := filepath.Join(t.TempDir(), strings.Repeat("x", 40), ".vscode", "extensions",
+		"nightgauge.nightgauge-0.8.9-rc.2")
+	realBin := filepath.Join(long, "dist", "bin")
+	realWorktree := filepath.Join(t.TempDir(), "state", "worktrees", "5fe10573cac3", "nightgauge-issue-3627")
+	for _, d := range []string{realBin, realWorktree} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	linkBin := filepath.Join(t.TempDir(), "bin-link")
+	linkWorktree := filepath.Join(t.TempDir(), "worktree-link")
+	if err := os.Symlink(realBin, linkBin); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	if err := os.Symlink(realWorktree, linkWorktree); err != nil {
+		t.Fatal(err)
+	}
+	var rules []openCodeRuleJSON
+	for _, p := range openCodeShellBinDirDenyPatterns(linkBin, linkWorktree) {
+		rules = append(rules, openCodeRuleJSON{Action: "shell", Resource: p, Effect: openCodeDeny})
+	}
+	b, err := json.Marshal(rules)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(b) > 80<<10 {
-		t.Errorf("bin-dir shell deny patterns for one form serialise to %d bytes, want <= %d", len(b), 80<<10)
+	if len(b) > openCodeShellDenyBudget {
+		t.Errorf("bin-dir shell deny rules serialise to %d bytes, want <= %d of the %d-byte limit",
+			len(b), openCodeShellDenyBudget, openCodeConfigEnvLimit)
+	}
+}
+
+// TestOpenCodeCommonPathSuffix pins the shared suffix the bin-dir forms
+// collapse to (#3627).
+func TestOpenCodeCommonPathSuffix(t *testing.T) {
+	for _, c := range []struct {
+		forms []string
+		want  string
+	}{
+		{[]string{"/a/b/c"}, "/a/b/c"},
+		{[]string{"/var/x/bin", "/private/var/x/bin", "../../x/bin"}, "/x/bin"},
+		{[]string{"/a/bin", "../bin"}, "/bin"},
+		{[]string{"/a/b", "/c/d"}, ""},
+		{nil, ""},
+	} {
+		if got := openCodeCommonPathSuffix(c.forms); got != c.want {
+			t.Errorf("openCodeCommonPathSuffix(%q) = %q, want %q", c.forms, got, c.want)
+		}
+	}
+	// One component is too broad to stand for the forms: they stay separate.
+	if got := openCodeShellBinDirForms("/a/bin", ""); !slices.Equal(got, []string{"/a/bin"}) {
+		t.Errorf("forms of /a/bin = %q", got)
 	}
 }
 
