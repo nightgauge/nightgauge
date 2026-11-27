@@ -5228,7 +5228,7 @@ Used by Claude Code hook entry points (thin shell wrappers):
 
 ```bash
 nightgauge hook workflow-gate       # PreToolUse gate (stdin JSON)
-nightgauge hook careful-gate        # PreToolUse:Bash — block prod-destructive cmds while /careful is on
+nightgauge hook careful-gate        # PreToolUse:Bash — block prod-destructive cmds while /careful is on; in OpenCode, writes into NIGHTGAUGE_BIN's dir (#3622)
 nightgauge hook stage-gate          # PreToolUse:Bash — fence analysis stages from git/forge mutations (#4145)
 nightgauge hook skill-usage         # PreToolUse:Skill — catalog telemetry (stdin JSON)
 nightgauge hook sanitize-prompt     # PreToolUse:Task — prompt-injection screen (stdin JSON)

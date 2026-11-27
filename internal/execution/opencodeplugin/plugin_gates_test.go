@@ -283,6 +283,61 @@ func TestShellChainOrderAndMarkers(t *testing.T) {
 	})
 }
 
+// TestCarefulGateBinDirRuntimeResolution drives the shell gate chain through
+// the real plugin with NIGHTGAUGE_ADAPTER=opencode: each verdict matches
+// hooks.EvaluateCarefulGate with the same env, and every denial carries the
+// [nightgauge-gate:careful] marker (#3622).
+func TestCarefulGateBinDirRuntimeResolution(t *testing.T) {
+	node := requireNode(t)
+	bin := buildNightgaugeBin(t)
+	home := isolatedHomeEnv(t)
+	env := map[string]string{"NIGHTGAUGE_ADAPTER": "opencode"}
+	for k, v := range home {
+		env[k] = v
+	}
+	t.Setenv("NIGHTGAUGE_ADAPTER", "opencode")
+	// EvaluateCarefulGate reads the process env; set the hook binary through
+	// hookBinEnv so the notification opt-out travels with it (#3250).
+	for _, kv := range hookBinEnv(bin) {
+		k, v, _ := strings.Cut(kv, "=")
+		t.Setenv(k, v)
+	}
+	cases := []struct {
+		cmd  string
+		deny bool
+	}{
+		{`d="$(dirname "$NIGHTGAUGE_BIN")"; cp x "$d/gh"`, true},
+		{`d="$(dirname "$NIGHTGAUGE_BIN")"; cp x "$d"'/gh'`, true},
+		{`cd "$(dirname "$NIGHTGAUGE_BIN")" && cp x gh`, true},
+		{`cp x "$(cat f)$NIGHTGAUGE_BIN"`, true},
+		// buildNightgaugeBin puts the binary in os.TempDir(), so the allowed
+		// target sits outside it on every platform.
+		{`cp x /nonexistent-ng-3622/elsewhere`, false},
+		{`ls "$(dirname "$NIGHTGAUGE_BIN")"`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.cmd, func(t *testing.T) {
+			root := t.TempDir()
+			payload := marshalJSON(t, map[string]any{
+				"tool_name":  "Bash",
+				"cwd":        root,
+				"tool_input": map[string]any{"command": tc.cmd},
+			})
+			goDeny := hooks.EvaluateCarefulGate([]byte(payload)).Decision == "block"
+			if goDeny != tc.deny {
+				t.Fatalf("Go verdict deny=%v, want %v", goDeny, tc.deny)
+			}
+			res := runToolHarness(t, node, root, "shell", marshalJSON(t, map[string]any{"command": tc.cmd}), bin, env)
+			if res.Threw != goDeny {
+				t.Fatalf("plugin deny=%v, Go deny=%v (message %q)", res.Threw, goDeny, res.Message)
+			}
+			if res.Threw && !strings.HasPrefix(res.Message, "[nightgauge-gate:careful]") {
+				t.Errorf("message = %q, want the [nightgauge-gate:careful] marker", res.Message)
+			}
+		})
+	}
+}
+
 // --- AC2: edit/write run workflow-gate with Claude-shaped file_path ---
 
 func TestFileMutationGate(t *testing.T) {
