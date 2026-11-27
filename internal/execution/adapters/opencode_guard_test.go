@@ -1305,8 +1305,13 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 // continuation after or inside a write verb (#3632): bash joins the lines, so
 // one cp, mv, install or ln writes into binDir. Each case is checked as the
 // whole text (OpenCode 2.4.2 keeps a continued command whole) and line by line
-// (older OpenCode splits lines). No pattern is added for this, so
-// TestOpenCodeShellBinDirDenyPatternsSize still bounds the unchanged list.
+// (older OpenCode splits lines). Every verb in openCodeShellBinDirWriteVerbs is
+// run as `verb\<newline> src <binDir>/gh` (#3634). Denial alone cannot name the
+// pattern doing it (the per-form `verb?*<form>*` also matches, and some first
+// lines hit another verb's prefix pattern), so the list is also checked to emit
+// verb+"*"+openCodeShellJoined and verb+"*"+openCodeShellContinuation per verb.
+// No pattern is added, so TestOpenCodeShellBinDirDenyPatternsSize still bounds
+// the unchanged list.
 func TestOpenCodeShellPermissionDeniesContinuedWriteVerb(t *testing.T) {
 	binDir := filepath.Join(t.TempDir(), "bin")
 	if err := os.Mkdir(binDir, 0o755); err != nil {
@@ -1314,18 +1319,26 @@ func TestOpenCodeShellPermissionDeniesContinuedWriteVerb(t *testing.T) {
 	}
 	gh := filepath.Join(binDir, "gh")
 	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}}, binDir).Shell
-	for _, c := range []struct{ name, cmd string }{
-		{"cp continued after verb", "cp\\\n /tmp/payload.sh " + gh},
+	cases := []struct{ name, cmd string }{
 		{"cp continued inside verb", "c\\\np /tmp/payload.sh " + gh},
-		{"mv continued after verb", "mv\\\n /tmp/payload.sh " + gh},
 		{"mv continued inside verb", "m\\\nv /tmp/payload.sh " + gh},
-		// Also denied by ln's prefix pattern `*l\`, so this case does not pin
-		// `install*\` on its own.
+		// install's first line is also denied by ln's prefix pattern `*l\`.
 		{"install continued after verb", "install\\\n -m 0755 /tmp/payload.sh " + gh},
 		{"install continued inside verb", "ins\\\ntall -m 0755 /tmp/payload.sh " + gh},
-		{"ln continued after verb", "ln\\\n -sf /tmp/payload.sh " + gh},
 		{"ln continued inside verb", "l\\\nn -sf /tmp/payload.sh " + gh},
-	} {
+	}
+	emitted := openCodeShellBinDirDenyPatterns(binDir, "")
+	for _, verb := range openCodeShellBinDirWriteVerbs {
+		cases = append(cases, struct{ name, cmd string }{
+			verb + " continued after verb", verb + "\\\n /tmp/payload.sh " + gh,
+		})
+		for _, want := range []string{verb + "*" + openCodeShellJoined, verb + "*" + openCodeShellContinuation} {
+			if !slices.Contains(emitted, want) {
+				t.Errorf("deny patterns do not include %q for %s", want, verb)
+			}
+		}
+	}
+	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			if got := openCodePatternAction(pm, c.cmd); got != openCodeDeny {
 				t.Errorf("whole text %q resolves to %q, want %q", c.cmd, got, openCodeDeny)
