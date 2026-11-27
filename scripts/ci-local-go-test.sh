@@ -22,7 +22,8 @@
 # concatenates the plain events into go-test.json, checks that every sharded
 # test ran exactly once in each pass, runs the skip accounting, and records the
 # tree only when every step passed and the fingerprint still matches --prepare's,
-# so an edit during the run records nothing.
+# so an edit during the run records nothing. When every failed step died to a
+# signal it also prints a HARNESS ERROR line, so the gate reports infrastructure.
 #
 # Go's test cache is used (#3208): no -count=1, so an unchanged package replays
 # its last result. The tests the cache cannot track, listed in
@@ -135,11 +136,25 @@ case "$mode" in
     done < <(python3 "$SHARD" "${shard_config[@]}" steps)
 
     not_passed=()
+    # Infrastructure only when EVERY failed step died to a signal (#3637): one real
+    # failure, or a step with no exit code, may still assert something about the
+    # change, and an assertion must never be booked as infrastructure. A signal
+    # death is 128+N for N in 1..64 (SIGRTMAX on Linux), so 129..192.
+    all_signal=1
     for step in plain/rest race/rest "${steps[@]}"; do
       code="$(cat "$state/$step.exitcode" 2>/dev/null || echo "no exit code")"
-      [ "$code" = "0" ] || not_passed+=("$step ($code)")
+      [ "$code" = "0" ] && continue
+      not_passed+=("$step ($code)")
+      case "$code" in
+        '' | *[!0-9]*) all_signal=0 ;;
+        *) { [ "$code" -ge 129 ] && [ "$code" -le 192 ]; } || all_signal=0 ;;
+      esac
     done
     if [ "${#not_passed[@]}" -gt 0 ]; then
+      if [ "$all_signal" = 1 ]; then
+        echo "HARNESS ERROR: every failed Go test step was killed by a signal, so this" \
+          "step asserts nothing about the change" >&2
+      fi
       # Each failed step is reported under its own label. Accounting over a
       # partial run would only add noise, and a partial run must not record.
       echo "FAIL: not every Go test step passed, so the tree is not recorded and the" >&2

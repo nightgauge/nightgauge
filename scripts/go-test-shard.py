@@ -208,6 +208,10 @@ def stream(cmd, json_path):
         tests = ", ".join("%s %s" % key for key in sorted(running)) or "none"
         print("%s: go test was killed by %s; tests still running: %s" % (PROG, name, tests),
               file=sys.stderr, flush=True)
+        # The declaration classify_failure reads (#3637): a signal death is the OS
+        # reporting the process was stopped, so the step asserted nothing.
+        print("HARNESS ERROR: go test was killed by %s before it finished; this step "
+              "asserts nothing about the change" % name, file=sys.stderr, flush=True)
         return 128 + signum
     return code
 

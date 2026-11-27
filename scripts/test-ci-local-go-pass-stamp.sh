@@ -12,6 +12,9 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/ci-local-go-test.sh"
+# shellcheck source=lib/ci_local_failures.sh
+. "$REPO_ROOT/scripts/lib/ci_local_failures.sh" ||
+  { echo "HARNESS ERROR: cannot source ci_local_failures.sh"; exit 1; }
 PASS=0
 FAIL=0
 TMP="$(mktemp -d)"
@@ -128,6 +131,33 @@ gate_go_steps >/dev/null
 check "a failing plan step fails before any test runs" "9" "$?"
 check "a failing plan step clears the record" "no" "$(recorded)"
 printf 'shard example/sharded 2\n' > "$TMP/shards.txt"
+
+# Finalize over forged exit codes (#3637): only an all-signal failure is infra.
+# $1 = code for race shard 1, $2 = code for race shard 2 ("" removes the file).
+finalize_forged() {
+  gate_go_steps >/dev/null || { echo "HARNESS ERROR: fixture gate run failed"; return; }
+  local d=.logs/go-test/race
+  if [ -n "$1" ]; then echo "$1" > "$d/shard-example-sharded-1.exitcode"; else
+    rm -f "$d/shard-example-sharded-1.exitcode"; fi
+  echo "$2" > "$d/shard-example-sharded-2.exitcode"
+  bash "$SCRIPT" --finalize .logs/go-test .logs/pass.tree > "$TMP/finalize.log" 2>&1
+  local code=$?
+  echo "$code $(classify_failure "$TMP/finalize.log" "$code")"
+}
+check "a shard killed by SIGTERM makes finalize declare infrastructure" "1 infra" \
+  "$(finalize_forged 0 143)"
+check "a shard that failed (1) still classifies as an assertion" "1 assert" \
+  "$(finalize_forged 0 1)"
+check "a signal plus a real failure classifies as an assertion" "1 assert" \
+  "$(finalize_forged 143 1)"
+check "a signal plus a missing exit code classifies as an assertion" "1 assert" \
+  "$(finalize_forged "" 143)"
+check "every failure a signal still declares infrastructure" "1 infra" \
+  "$(finalize_forged 137 143)"
+check "128 is not a signal code" "1 assert" "$(finalize_forged 0 128)"
+check "129 (SIGHUP) is a signal code" "1 infra" "$(finalize_forged 0 129)"
+check "192 (signal 64) is a signal code" "1 infra" "$(finalize_forged 0 192)"
+check "193 is not a signal code" "1 assert" "$(finalize_forged 0 193)"
 
 echo tracked.txt >> .git/info/exclude
 echo ignored > tracked-twin.txt
