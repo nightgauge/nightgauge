@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `nightgauge hook careful-gate` now parses bundled curl and wget short options
+  (`curl -sSLo`, `curl -sO`, `wget -qO`, `wget -qP`), so an option cluster no longer
+  hides a write into the directory the pipeline runs `nightgauge` from (#3649).
 - The local gate's always-uncached Go test run (`scripts/go-test-uncached.py`) now reports a `go test` killed by a signal as infrastructure: it names the signal and the tests still running, prints a `HARNESS ERROR` line and exits 2, instead of listing the package as failed and its unrun entries as stale, so the Go test rest step classifies as infrastructure. A kill beside a real failure or a stale entry still fails the step (#3646).
 - An OpenCode stage can no longer write into the directory the pipeline runs `nightgauge` from through a path its permission globs cannot see: a variable (`d="$(dirname "$NIGHTGAUGE_BIN")"; cp x "$d/gh"`), a quote-split target, a relative write after `cd`, a redirection or `sh -c`. `nightgauge hook careful-gate` now resolves the target of each file-writing command (`cp`, `mv`, `tee`, `sed -i`, redirections and the rest) at runtime and refuses one inside that directory, whether or not `/careful` is on, and refuses an unresolvable target derived from `NIGHTGAUGE_BIN`. Claude Code sessions are unaffected (#3622).
 - A `go test` shard killed by a signal (SIGTERM from outside the gate) now reports as `! … (INFRASTRUCTURE ERROR …)` instead of a failed check, and so does the shard-coverage step when every failed Go step was signal-killed. Real test failures are unchanged (#3637).
