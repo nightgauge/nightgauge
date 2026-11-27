@@ -750,6 +750,9 @@ func addNightgaugePluginToConfig(content, entry string) (string, error) {
 	if err := validateOpenCodeConfigDocument(string(out)); err != nil {
 		return "", err
 	}
+	if err := checkOpenCodeConfigContentSize(string(out)); err != nil {
+		return "", err
+	}
 	return string(out), nil
 }
 

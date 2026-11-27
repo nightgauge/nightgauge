@@ -9134,7 +9134,9 @@ for the servers. Without `--repo`, or when GitHub cannot be read, the stage
 gets no MCP server and stderr says why. A server whose variable holds a value
 OpenCode cannot paste into its config text, in the environment OpenCode is
 spawned with, is left out, and a dispatch whose `ANTHROPIC_API_KEY` holds one
-is refused. Without `--run-id` a
+is refused. A config whose `OPENCODE_CONFIG_CONTENT=<config>` string would
+exceed 120 KiB, below Linux's 128 KiB limit on one environment string, is
+refused with an error naming its size (#3628). Without `--run-id` a
 new root is minted, and a root no stage uses for 7 days is swept.
 `--max-turns` becomes the steps cap of the build agent and each subagent, 200
 when it is 0. The cap is advisory on OpenCode 1.18.30 (ADR-022 § 7): the
