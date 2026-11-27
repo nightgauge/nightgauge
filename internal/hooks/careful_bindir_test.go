@@ -70,6 +70,39 @@ func TestCarefulGateBinDirRuntime(t *testing.T) {
 		{"curl -o", `curl -o "$(dirname "$NIGHTGAUGE_BIN")/gh" https://x`, true},
 		{"wget into cwd", `cd "$(dirname "$NIGHTGAUGE_BIN")" && wget https://x/gh`, true},
 		{"sudo prefix", `sudo cp x "$(dirname "$NIGHTGAUGE_BIN")/gh"`, true},
+		{"heredoc to bash", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash <<EOF\ncp x $d/gh\nEOF", true},
+		{"heredoc quoted delim to sh", "d=$(dirname \"$NIGHTGAUGE_BIN\"); sh <<'EOF'\ncp x $d/gh\nEOF", true},
+		{"heredoc dash tabs", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash <<-EOF\n\tcp x \"$d/gh\"\n\tEOF", true},
+		{"heredoc piped to bash", "d=$(dirname \"$NIGHTGAUGE_BIN\"); cat <<EOF | bash\ncp x $d/gh\nEOF", true},
+		{"heredoc bash -s", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash -s <<EOF\ncp x $d/gh\nEOF", true},
+		{"heredoc bash -", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash - <<EOF\ncp x $d/gh\nEOF", true},
+		{"heredoc env bash", "d=$(dirname \"$NIGHTGAUGE_BIN\"); env bash <<EOF\ncp x $d/gh\nEOF", true},
+		{"heredoc source stdin", "d=$(dirname \"$NIGHTGAUGE_BIN\"); source /dev/stdin <<EOF\ncp x $d/gh\nEOF", true},
+		{"heredoc body redirection", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash <<EOF\necho x > $d/gh\nEOF", true},
+		{"heredoc nested", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash <<A\nbash <<B\ncp x $d/gh\nB\nA", true},
+		{"heredoc inside sh -c", "d=$(dirname \"$NIGHTGAUGE_BIN\"); sh -c 'bash <<E\ncp x '\"$d\"'/gh\nE'", true},
+		{"heredoc literal dir", "bash <<EOF\ncp x " + dir + "/gh\nEOF", true},
+		{"heredoc prose to cat", "d=$(dirname \"$NIGHTGAUGE_BIN\"); cat <<EOF\ncp x $d/gh is prose\nEOF", false},
+		{"heredoc commit message", "d=$(dirname \"$NIGHTGAUGE_BIN\"); git commit -F - <<EOF\nrm $d/gh\nEOF", false},
+		{"heredoc benign bash", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash <<EOF\necho hello\nEOF", false},
+		{"heredoc bash script operand", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash script.sh <<EOF\ncp x $d/gh\nEOF", false},
+		{"heredoc bash -c stdin data", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash -c 'echo hi' <<EOF\ncp x $d/gh\nEOF", false},
+		{"heredoc in substitution rm", "rm $(cat <<EOF\nfoo\nEOF\n) " + dir + "/nightgauge", true},
+		{"heredoc in substitution mv", "mv a $(cat <<EOF\nb\nEOF\n) " + dir + "/", true},
+		{"heredoc bash unresolved operand", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash \"$(cat f)\" <<EOF\ncp x $d/gh\nEOF", true},
+		{"heredoc bash --", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash -- <<EOF\ncp x $d/gh\nEOF", true},
+		{"heredoc bash -- /dev/stdin", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash -- /dev/stdin <<EOF\ncp x $d/gh\nEOF", true},
+		{"heredoc bash -o pipefail", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash -o pipefail <<EOF\ncp x $d/gh\nEOF", true},
+		{"heredoc bash -x", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash -x <<EOF\ncp x $d/gh\nEOF", true},
+		{"heredoc bash --norc", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash --norc <<EOF\ncp x $d/gh\nEOF", true},
+		{"heredoc bash --rcfile", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash --rcfile /dev/null <<EOF\ncp x $d/gh\nEOF", true},
+		{"heredoc dot fd0", "d=$(dirname \"$NIGHTGAUGE_BIN\"); . /dev/fd/0 <<EOF\ncp x $d/gh\nEOF", true},
+		{"heredoc sh proc fd0", "d=$(dirname \"$NIGHTGAUGE_BIN\"); sh /proc/self/fd/0 <<EOF\ncp x $d/gh\nEOF", true},
+		{"heredoc brace group", "d=$(dirname \"$NIGHTGAUGE_BIN\"); {\nbash\n} <<EOF\ncp x $d/gh\nEOF", true},
+		{"heredoc outer cd flows in", "cd \"$(dirname \"$NIGHTGAUGE_BIN\")\"; bash <<EOF\ncp x gh\nEOF", true},
+		{"heredoc body cd does not leak", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash <<EOF\ncd $d\nEOF\ncp x gh", false},
+		{"heredoc body reassigns var", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash <<'EOF'\nd=/tmp\ncp x $d/gh\nEOF", false},
+		{"heredoc later non-shell body", "d=$(dirname \"$NIGHTGAUGE_BIN\"); bash <<A\nA\ncat <<B\ncp x $d/gh\nB", false},
 		{"AC4 write elsewhere", `cp x /tmp/x`, false},
 		{"AC4 copy the binary out", `cp "$NIGHTGAUGE_BIN" /tmp/copy`, false},
 		{"AC4 relative write in cwd", `cp a b && echo ok > out.txt`, false},
@@ -176,5 +209,21 @@ func TestCarefulGateBinDirWithCarefulLock(t *testing.T) {
 	d = EvaluateCarefulGate(carefulPayload(t, root, "docker compose down -v"))
 	if d.Decision != "block" || !strings.Contains(d.Reason, "/careful is ON") {
 		t.Fatalf("destructive command under careful lock: %+v", d)
+	}
+}
+
+func TestBinDirHeredocReasonNamesVerb(t *testing.T) {
+	bin, cwd := binDirFixture(t)
+	r := binDirWriteReason("d=$(dirname \"$NIGHTGAUGE_BIN\"); bash <<EOF\ncp x $d/gh\nEOF", cwd, bin)
+	if !strings.Contains(r, "cp writes") || !strings.Contains(r, "gh") {
+		t.Errorf("reason = %q, want the body's verb and target", r)
+	}
+	deep := "true $NIGHTGAUGE_BIN\n"
+	for i := 0; i < 7; i++ {
+		deep += "bash <<E" + string(rune('0'+i)) + "\n"
+	}
+	deep += "echo hi"
+	if r := binDirWriteReason(deep, cwd, bin); !strings.Contains(r, "nested script writes") {
+		t.Errorf("deep nesting reason = %q, want a named verb", r)
 	}
 }

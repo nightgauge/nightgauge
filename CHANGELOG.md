@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `nightgauge hook careful-gate` now evaluates here-document bodies that a shell
+  reads as its script (`bash <<EOF`, `cat <<EOF | bash`, `bash -s`, `env bash`,
+  `source /dev/stdin`), so a write into `NIGHTGAUGE_BIN`'s directory inside such
+  a body is denied. Bodies fed to other commands are still ignored (#3651).
 - `nightgauge hook careful-gate` now parses bundled curl and wget short options
   (`curl -sSLo`, `curl -sO`, `wget -qO`, `wget -qP`), so an option cluster no longer
   hides a write into the directory the pipeline runs `nightgauge` from (#3649).

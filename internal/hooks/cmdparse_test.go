@@ -161,3 +161,43 @@ func TestParserNoPanicOnMalformed(t *testing.T) {
 		_ = Pipelines(SplitSegments(cmd))
 	}
 }
+
+func TestSplitHeredocs(t *testing.T) {
+	cases := []struct {
+		name   string
+		cmd    string
+		texts  []string
+		bodies [][]string
+	}{
+		{"no heredoc", "echo a\necho b", []string{"echo a\necho b"}, [][]string{nil}},
+		{"two on one line", "cat <<A <<'B'\na1\nA\nb1\nB\necho done",
+			[]string{"cat <<A <<'B'", "echo done"}, [][]string{{"a1", "b1"}, nil}},
+		{"dash strips tabs", "bash <<-EOF\n\tcp x y\n\tEOF", []string{"bash <<-EOF"}, [][]string{{"cp x y"}}},
+		{"backslash delim", "sh <<\\EOF\n$x\nEOF", []string{"sh <<\\EOF"}, [][]string{{"$x"}}},
+		{"unterminated", "bash <<EOF\ncp a b", []string{"bash <<EOF"}, [][]string{{"cp a b"}}},
+		{"unterminated pair", "bash <<A <<B\na", []string{"bash <<A <<B"}, [][]string{{"a", ""}}},
+		{"empty", "", []string{""}, [][]string{nil}},
+		{"trailing newline", "sh <<E\nx\nE\n", []string{"sh <<E", ""}, [][]string{{"x"}, nil}},
+		{"crlf terminator", "sh <<E\nx\nE\r\necho", []string{"sh <<E", "echo"}, [][]string{{"x"}, nil}},
+		{"multi-line chunk", "cd /\nsh <<E\nx\nE", []string{"cd /\nsh <<E"}, [][]string{{"x"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := splitHeredocs(tc.cmd)
+			if len(got) != len(tc.texts) {
+				t.Fatalf("chunks = %#v, want texts %q", got, tc.texts)
+			}
+			var texts []string
+			for i, c := range got {
+				texts = append(texts, c.text)
+				if c.text != tc.texts[i] || strings.Join(c.bodies, "|") != strings.Join(tc.bodies[i], "|") ||
+					len(c.bodies) != len(tc.bodies[i]) {
+					t.Errorf("chunk %d = %#v, want text %q bodies %q", i, c, tc.texts[i], tc.bodies[i])
+				}
+			}
+			if j := strings.Join(texts, "\n"); j != stripHeredocs(tc.cmd) {
+				t.Errorf("join %q != stripHeredocs %q", j, stripHeredocs(tc.cmd))
+			}
+		})
+	}
+}

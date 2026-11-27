@@ -71,7 +71,9 @@ type binDirEval struct {
 // binDirWriteReason returns a deny reason when command writes inside the
 // directory of binPath, or "" to allow. It is a conservative static evaluator:
 // variables, quote concatenation, `cd`, static dirname/basename/pwd/realpath
-// substitutions, redirections and `sh -c` are resolved; whatever it cannot
+// substitutions, redirections, `sh -c`, and heredoc bodies a shell reads as
+// its script (`bash <<EOF`, `cat <<EOF | bash`) are resolved; bodies fed to
+// other commands are ignored. Whatever it cannot
 // resolve is denied only when it derives from NIGHTGAUGE_BIN (fail closed for
 // that variable, open otherwise).
 func binDirWriteReason(command, cwd, binPath string) string {
@@ -90,24 +92,155 @@ func binDirWriteReason(command, cwd, binPath string) string {
 	if e.cwdOK {
 		e.vars["PWD"] = shVal{val: cwd, ok: true}
 	}
-	if e.run(stripHeredocs(command)) {
+	if e.run(command) {
 		return e.denyVerb + " writes " + e.denyWhat + " inside " + binDirEnvVar + "'s directory " + dir
 	}
 	return ""
 }
 
 // run evaluates a script; true means deny (denyVerb/denyWhat set).
+//
+// The script's command text (heredoc bodies removed) is lexed and evaluated as
+// one unit, so a statement spanning a heredoc opened inside `$( … )` stays
+// whole. Then every heredoc body opened by a chunk that runs a shell reading
+// its script from stdin (readsStdinScript) is evaluated as a script, with the
+// state reached at that chunk. Unquoted delimiters: the outer shell expands the
+// body with that state, so this is exact. Quoted ones: the inner shell expands
+// it; it inherits NIGHTGAUGE_BIN, and using outer non-exported variables only
+// over-approximates (fails closed). Every body of such a chunk is evaluated,
+// even one feeding another command on the same line.
 func (e *binDirEval) run(script string) bool {
 	if e.depth > 4 {
-		return e.mentions
+		if e.mentions {
+			return e.deny("a deeply nested script", "a command that names "+binDirEnvVar)
+		}
+		return false
 	}
-	for _, st := range lexShell(script) {
+	chunks := splitHeredocs(script)
+	texts := make([]string, len(chunks))
+	for i, c := range chunks {
+		texts[i] = c.text
+	}
+	for _, st := range lexShell(strings.Join(texts, "\n")) {
 		if e.stmt(st) {
 			return true
 		}
 	}
+	for k, ch := range chunks {
+		if len(ch.bodies) == 0 {
+			continue
+		}
+		// State at this chunk: replay the text through it on a throwaway
+		// clone (its decisions are already covered by the pass above).
+		pre := e.clone()
+		for _, st := range lexShell(strings.Join(texts[:k+1], "\n")) {
+			pre.stmt(st)
+		}
+		stdinShell := false
+		for _, st := range lexShell(ch.text) {
+			if pre.readsStdinScript(st) {
+				stdinShell = true
+				break
+			}
+		}
+		if !stdinShell {
+			continue
+		}
+		for _, body := range ch.bodies {
+			sub := pre.clone()
+			sub.depth++
+			if sub.run(body) {
+				e.denyVerb, e.denyWhat = sub.denyVerb, sub.denyWhat
+				return true
+			}
+		}
+	}
 	return false
 }
+
+// stdinScriptPaths are operands naming the shell's own standard input.
+var stdinScriptPaths = map[string]bool{
+	"-": true, "/dev/stdin": true, "/dev/fd/0": true, "/proc/self/fd/0": true,
+}
+
+// readsStdinScript reports whether st runs a shell (or source) that reads its
+// script from standard input, so a heredoc on the line is executed.
+func (e *binDirEval) readsStdinScript(st shStmt) bool {
+	words := st.words
+	i := 0
+	for i < len(words) && assignRE.MatchString(words[i]) {
+		i++
+	}
+	words = words[i:]
+	argv := make([]shVal, len(words))
+	for j, w := range words {
+		argv[j] = e.expand(w)
+	}
+	argv, _ = e.stripWrappers(argv, words)
+	if len(argv) == 0 || !argv[0].ok {
+		return false
+	}
+	verb := filepath.Base(argv[0].val)
+	args := argv[1:]
+	// An operand that cannot be resolved may be /dev/stdin: fail closed when
+	// it derives from NIGHTGAUGE_BIN, open otherwise (ADR-002).
+	unresolvedIsStdin := func(a shVal) bool { return a.tainted || e.mentions }
+	if verb == "source" || verb == "." {
+		if len(args) == 0 {
+			return false
+		}
+		if !args[0].ok {
+			return unresolvedIsStdin(args[0])
+		}
+		return stdinScriptPaths[args[0].val]
+	}
+	if !shellWrappers[verb] {
+		return false
+	}
+	for j := 0; j < len(args); j++ {
+		a := args[j]
+		if !a.ok {
+			return unresolvedIsStdin(a)
+		}
+		v := a.val
+		switch {
+		case v == "--":
+			if j+1 >= len(args) {
+				return true
+			}
+			if !args[j+1].ok {
+				return unresolvedIsStdin(args[j+1])
+			}
+			return stdinScriptPaths[args[j+1].val]
+		case v == "-":
+			return true
+		case v == "--rcfile" || v == "--init-file":
+			j++ // takes a file value
+		case strings.HasPrefix(v, "--"):
+			continue // long option (--norc, --login, ...)
+		case strings.HasPrefix(v, "-") || strings.HasPrefix(v, "+"):
+			flags := v[1:]
+			if strings.ContainsRune(flags, shellCommandLetter) {
+				return false // -c script: stdin is data
+			}
+			if strings.ContainsRune(flags, shellStdinLetter) {
+				return true
+			}
+			if strings.ContainsAny(flags, shellValueLetters) && j+1 < len(args) {
+				j++ // -o option takes a value
+			}
+		default:
+			return stdinScriptPaths[v]
+		}
+	}
+	return true // no script operand: the shell reads its script from stdin
+}
+
+const (
+	shellCommandLetter = 'c'  // -c SCRIPT: stdin is data, not the script
+	shellStdinLetter   = 's'  // -s: read the script from stdin
+	shellValueLetters  = "oO" // -o/-O OPTION take a value
+)
 
 func (e *binDirEval) deny(verb, what string) bool {
 	e.denyVerb, e.denyWhat = verb, what
