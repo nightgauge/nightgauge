@@ -1307,8 +1307,9 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 // one cp, mv, install or ln writes into binDir. Each case is checked as the
 // whole text (OpenCode 2.4.2 keeps a continued command whole) and line by line
 // (older OpenCode splits lines). Every verb in openCodeShellBinDirWriteVerbs is
-// run as `verb\<newline> src <binDir>/gh` (#3634). Denial alone cannot name the
-// pattern doing it (the per-form `verb?*<form>*` also matches, and some first
+// run as `verb\<newline> src <binDir>/gh` (#3634) and as `verb \<newline>
+// src <binDir>/gh`, every argument on the next line (#3629). Denial alone
+// cannot name the pattern doing it (the per-form `verb?*<form>*` also matches, and some first
 // lines hit another verb's prefix pattern), so the list is also checked to emit
 // verb+"*"+openCodeShellJoined and verb+"*"+openCodeShellContinuation per verb.
 // TestOpenCodeConfigFitsEnvLimit bounds the whole config
@@ -1332,6 +1333,8 @@ func TestOpenCodeShellPermissionDeniesContinuedWriteVerb(t *testing.T) {
 	for _, verb := range openCodeShellBinDirWriteVerbs {
 		cases = append(cases, struct{ name, cmd string }{
 			verb + " continued after verb", verb + "\\\n /tmp/payload.sh " + gh,
+		}, struct{ name, cmd string }{
+			verb + " continued before args", verb + " \\\n/tmp/payload.sh " + gh,
 		})
 		for _, want := range []string{verb + "*" + openCodeShellJoined, verb + "*" + openCodeShellContinuation} {
 			if !slices.Contains(emitted, want) {
@@ -1359,10 +1362,13 @@ func TestOpenCodeShellPermissionDeniesContinuedWriteVerb(t *testing.T) {
 		{"which cp", "which cp"},
 		{"ls /bin/cp", "ls /bin/cp"},
 		{"run gh", gh + " doctor"},
+		// #3629: a continued line with no write verb is not denied.
+		{"continued grep", "grep \\\nfoo"},
+		{"grep continuation line", "grep \\"},
 	} {
 		t.Run("allow "+c.name, func(t *testing.T) {
 			if got := openCodePatternAction(pm, c.cmd); got != openCodeAllow {
-				t.Errorf("%q resolves to %q, want %q: inspecting or running must stay allowed", c.cmd, got, openCodeAllow)
+				t.Errorf("%q resolves to %q, want %q: inspecting, running or continuing a non-writing verb must stay allowed", c.cmd, got, openCodeAllow)
 			}
 		})
 	}

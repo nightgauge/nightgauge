@@ -538,7 +538,8 @@ func TestOpenCodeBinDirCpDeniedUnderTmpdirTmp(t *testing.T) {
 // against the real opencode: a plain cp, a cp wrapped in `sh -c`, a
 // redirection, a worktree-relative cp (#3615), and a cp split by a newline or
 // tab or called by path (#3623), an escaped, quoted, split, brace-expanded or
-// continued verb (#3627), and a continuation right after cp or mv (#3632). Each must be refused
+// continued verb (#3627), a continuation right after cp or mv (#3632), and
+// `cp \` with every argument on the next line (#3629). Each must be refused
 // naming permission shell, and nothing may land in binDir.
 func runOpenCodeBinDirCpDeniedProbe(t *testing.T) {
 	forms := []struct {
@@ -563,6 +564,8 @@ func runOpenCodeBinDirCpDeniedProbe(t *testing.T) {
 		// #3632: a continuation right after the whole verb.
 		{"cp continued after verb", func(s, b, _ string) string { return "cp\\\n " + s + " " + filepath.Join(b, "gh") }},
 		{"mv continued after verb", func(s, b, _ string) string { return "mv\\\n " + s + " " + filepath.Join(b, "gh") }},
+		// #3629: `cp \` with every argument on the next line.
+		{"cp continued before args", func(s, b, _ string) string { return "cp \\\n" + s + " " + filepath.Join(b, "gh") }},
 		{"continued cp", func(s, b, _ string) string { return "cp " + s + " \\\n" + filepath.Join(b, "gh") }},
 	}
 	for _, f := range forms {
