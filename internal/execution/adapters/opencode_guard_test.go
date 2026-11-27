@@ -1301,6 +1301,59 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 	}
 }
 
+// TestOpenCodeShellPermissionDeniesContinuedWriteVerb pins a backslash-newline
+// continuation after or inside a write verb (#3632): bash joins the lines, so
+// one cp, mv, install or ln writes into binDir. Each case is checked as the
+// whole text (OpenCode 2.4.2 keeps a continued command whole) and line by line
+// (older OpenCode splits lines). No pattern is added for this, so
+// TestOpenCodeShellBinDirDenyPatternsSize still bounds the unchanged list.
+func TestOpenCodeShellPermissionDeniesContinuedWriteVerb(t *testing.T) {
+	binDir := filepath.Join(t.TempDir(), "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gh := filepath.Join(binDir, "gh")
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}}, binDir).Shell
+	for _, c := range []struct{ name, cmd string }{
+		{"cp continued after verb", "cp\\\n /tmp/payload.sh " + gh},
+		{"cp continued inside verb", "c\\\np /tmp/payload.sh " + gh},
+		{"mv continued after verb", "mv\\\n /tmp/payload.sh " + gh},
+		{"mv continued inside verb", "m\\\nv /tmp/payload.sh " + gh},
+		// Also denied by ln's prefix pattern `*l\`, so this case does not pin
+		// `install*\` on its own.
+		{"install continued after verb", "install\\\n -m 0755 /tmp/payload.sh " + gh},
+		{"install continued inside verb", "ins\\\ntall -m 0755 /tmp/payload.sh " + gh},
+		{"ln continued after verb", "ln\\\n -sf /tmp/payload.sh " + gh},
+		{"ln continued inside verb", "l\\\nn -sf /tmp/payload.sh " + gh},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := openCodePatternAction(pm, c.cmd); got != openCodeDeny {
+				t.Errorf("whole text %q resolves to %q, want %q", c.cmd, got, openCodeDeny)
+			}
+			denied := false
+			for _, line := range strings.Split(c.cmd, "\n") {
+				if openCodePatternAction(pm, line) == openCodeDeny {
+					denied = true
+				}
+			}
+			if !denied {
+				t.Errorf("no line of %q resolves to %q", c.cmd, openCodeDeny)
+			}
+		})
+	}
+	for _, c := range []struct{ name, cmd string }{
+		{"which cp", "which cp"},
+		{"ls /bin/cp", "ls /bin/cp"},
+		{"run gh", gh + " doctor"},
+	} {
+		t.Run("allow "+c.name, func(t *testing.T) {
+			if got := openCodePatternAction(pm, c.cmd); got != openCodeAllow {
+				t.Errorf("%q resolves to %q, want %q: inspecting or running must stay allowed", c.cmd, got, openCodeAllow)
+			}
+		})
+	}
+}
+
 // TestOpenCodeShellSplitVerbSpellings pins the split spellings (#3627).
 func TestOpenCodeShellSplitVerbSpellings(t *testing.T) {
 	got := openCodeShellSplitVerbSpellings("tee")
