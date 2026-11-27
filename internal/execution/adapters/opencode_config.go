@@ -112,6 +112,38 @@ const OpenCodeConfigSchemaVersion = "1.3"
 // of every layer Nightgauge does not refuse.
 const openCodeConfigContentEnvVar = "OPENCODE_CONFIG_CONTENT"
 
+// openCodeConfigEnvLimit is Linux's cap on one environment string
+// (MAX_ARG_STRLEN), which counts NAME=value and its NUL. Past it the spawn
+// fails with E2BIG and names nothing (#3627, #3628).
+const openCodeConfigEnvLimit = 128 << 10
+
+// openCodeConfigContentBudget is the size OPENCODE_CONFIG_CONTENT=<config>
+// must stay within, set below openCodeConfigEnvLimit so growth in the
+// bin-dir shell deny list is refused by name before it reaches the cap (#3628).
+const openCodeConfigContentBudget = 120 << 10
+
+// ErrOpenCodeConfigTooLarge reports a per-run config too large for the
+// environment variable that carries it (#3628).
+var ErrOpenCodeConfigTooLarge = errors.New("size budget exceeded")
+
+// openCodeConfigEnvSize is the size of OPENCODE_CONFIG_CONTENT=<content> as
+// the kernel counts it: the name, the '=', the value and the trailing NUL.
+func openCodeConfigEnvSize(content string) int {
+	return len(openCodeConfigContentEnvVar) + len("=") + len(content) + len("\x00")
+}
+
+// checkOpenCodeConfigContentSize refuses content whose environment string
+// exceeds openCodeConfigContentBudget.
+func checkOpenCodeConfigContentSize(content string) error {
+	n := openCodeConfigEnvSize(content)
+	if n <= openCodeConfigContentBudget {
+		return nil
+	}
+	return fmt.Errorf("opencode config: %s would be %d bytes, over the %d-byte budget below Linux's %d-byte limit on one environment string; "+
+		"the bin-dir shell deny list is the likely cause of the growth: %w",
+		openCodeConfigContentEnvVar, n, openCodeConfigContentBudget, openCodeConfigEnvLimit, ErrOpenCodeConfigTooLarge)
+}
+
 // openCodeDefaultSteps is the steps cap of the build agent and every
 // subagent when a stage sets no turn cap (RunOptions.MaxTurns is 0). A step
 // is one model request with its tool calls. The cap is not a hard stop on
@@ -1187,6 +1219,9 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 			strings.Join(names, ", "))
 	}
 	if err := validateOpenCodeConfigDocument(string(raw)); err != nil {
+		return OpenCodeRunConfig{}, err
+	}
+	if err := checkOpenCodeConfigContentSize(string(raw)); err != nil {
 		return OpenCodeRunConfig{}, err
 	}
 	built.Content = string(raw)

@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1379,10 +1380,6 @@ func TestOpenCodeShellSplitVerbSpellings(t *testing.T) {
 	}
 }
 
-// openCodeConfigEnvLimit is Linux's cap on one environment string
-// (MAX_ARG_STRLEN), which OPENCODE_CONFIG_CONTENT=<config> must fit (#3627).
-const openCodeConfigEnvLimit = 128 << 10
-
 // openCodeWorstCaseDirs is the longest bin dir and worktree a real run
 // produces, each reached through a symlink, so every bin-dir form is present
 // (#3627, #3638). It skips when symlinks are unavailable.
@@ -1438,11 +1435,67 @@ func TestOpenCodeConfigFitsEnvLimit(t *testing.T) {
 			t.Fatalf("the config does not carry bin-dir deny %s", enc)
 		}
 	}
-	// MAX_ARG_STRLEN counts the whole NAME=value string and its NUL.
-	if n := len("OPENCODE_CONFIG_CONTENT=") + len(cfg.Content) + 1; n > openCodeConfigEnvLimit {
-		t.Errorf("OPENCODE_CONFIG_CONTENT is %d bytes, want <= %d", n, openCodeConfigEnvLimit)
-	} else {
-		t.Logf("OPENCODE_CONFIG_CONTENT is %d bytes of %d", n, openCodeConfigEnvLimit)
+	if openCodeConfigContentBudget >= openCodeConfigEnvLimit {
+		t.Fatalf("budget %d is not below the limit %d", openCodeConfigContentBudget, openCodeConfigEnvLimit)
+	}
+	n := openCodeConfigEnvSize(cfg.Content)
+	if err := checkOpenCodeConfigContentSize(cfg.Content); err != nil {
+		t.Errorf("worst-case config refused: %v", err)
+	}
+	t.Logf("OPENCODE_CONFIG_CONTENT is %d bytes, budget %d, limit %d", n, openCodeConfigContentBudget, openCodeConfigEnvLimit)
+}
+
+// openCodeShellBinDirDenyListBudget caps the bin-dir shell deny entries. The
+// rest of the worst-case config is about 58 KiB, so 72 KiB of denies keeps
+// the whole config near the 120 KiB budget and flags deny-list growth in a
+// test before the runtime check refuses a real run (#3628).
+const openCodeShellBinDirDenyListBudget = 72 << 10
+
+// TestBuildOpenCodeConfigRefusesOverBudget: a bin dir long enough to push
+// the deny list past the budget fails the build with the named error (#3628).
+func TestBuildOpenCodeConfigRefusesOverBudget(t *testing.T) {
+	_, worktree := openCodeWorstCaseDirs(t)
+	longBin := filepath.Join(t.TempDir(), strings.Repeat("b", 200), strings.Repeat("c", 200))
+	if err := os.MkdirAll(longBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	in, err := OpenCodeConfigInputFor(lmStudioSettings(), RunOptions{
+		Stage:        "feature-dev",
+		Model:        "lmstudio/qwen/qwen3.8-27b",
+		MaxTurns:     40,
+		AllowedTools: []string{"Bash", "Read", "Edit", "Write", "Glob", "Grep", "Task"},
+		WorktreeDir:  worktree,
+	}, goldenRunRoot, envLookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Repository = goldenRepository(t)
+	in.BinDir = longBin
+	cfg, err := BuildOpenCodeConfig(in)
+	if !errors.Is(err, ErrOpenCodeConfigTooLarge) {
+		t.Fatalf("err = %v, want ErrOpenCodeConfigTooLarge", err)
+	}
+	if cfg.Content != "" {
+		t.Error("a refused build returned content")
+	}
+}
+
+// TestOpenCodeShellBinDirDenyListSize holds the bin-dir shell deny entries
+// for the worst-case dirs within openCodeShellBinDirDenyListBudget (#3628).
+func TestOpenCodeShellBinDirDenyListSize(t *testing.T) {
+	binDir, worktree := openCodeWorstCaseDirs(t)
+	patterns := openCodeShellBinDirDenyPatterns(binDir, worktree)
+	total := 0
+	for _, p := range patterns {
+		enc, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		total += len(enc) + len(`:"deny",`)
+	}
+	t.Logf("bin-dir deny list: %d patterns, %d bytes", len(patterns), total)
+	if total > openCodeShellBinDirDenyListBudget {
+		t.Errorf("bin-dir deny list is %d bytes, want <= %d", total, openCodeShellBinDirDenyListBudget)
 	}
 }
 

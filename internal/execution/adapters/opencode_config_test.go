@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -1539,5 +1540,40 @@ func TestOpenCodeEndpointsHostedMarkOnALocalPricedID(t *testing.T) {
 	eps, err := OpenCodeEndpoints(cfg)
 	if err != nil || len(eps) != 1 || eps[0].SelfHosted == nil || *eps[0].SelfHosted {
 		t.Fatalf("litellm marked hosted = %+v, %v; want the mark passed through", eps, err)
+	}
+}
+
+// TestOpenCodeConfigContentSizeRefused pins the budget boundary and the
+// named refusal on the plugin path (#3628).
+func TestOpenCodeConfigContentSizeRefused(t *testing.T) {
+	overhead := openCodeConfigEnvSize("")
+	if err := checkOpenCodeConfigContentSize(strings.Repeat("a", openCodeConfigContentBudget-overhead)); err != nil {
+		t.Fatalf("content exactly at the budget refused: %v", err)
+	}
+	err := checkOpenCodeConfigContentSize(strings.Repeat("a", openCodeConfigContentBudget-overhead+1))
+	if !errors.Is(err, ErrOpenCodeConfigTooLarge) {
+		t.Fatalf("one byte over: err = %v, want ErrOpenCodeConfigTooLarge", err)
+	}
+	for _, want := range []string{"OPENCODE_CONFIG_CONTENT", fmt.Sprint(openCodeConfigContentBudget + 1), fmt.Sprint(openCodeConfigContentBudget)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not name %q: %v", want, err)
+		}
+	}
+	built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(built.Content), &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["instructions"] = []string{strings.Repeat("x", openCodeConfigContentBudget)}
+	enc, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(enc)
+	if _, err := addNightgaugePluginToConfig(doc, "file:///plugin.js"); !errors.Is(err, ErrOpenCodeConfigTooLarge) {
+		t.Errorf("plugin path: err = %v, want ErrOpenCodeConfigTooLarge", err)
 	}
 }
