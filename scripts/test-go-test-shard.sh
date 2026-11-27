@@ -20,6 +20,9 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SHARD="$REPO_ROOT/scripts/go-test-shard.py"
+# shellcheck source=lib/ci_local_failures.sh
+. "$REPO_ROOT/scripts/lib/ci_local_failures.sh" ||
+  { echo "HARNESS ERROR: cannot source ci_local_failures.sh"; exit 1; }
 PASS=0
 FAIL=0
 TMP="$(mktemp -d)"
@@ -180,9 +183,11 @@ grep -qx -- 'test -json -race -count=1 -timeout 7m -run ^(FuzzKilo|TestFoxtrot)$
 check "CI_LOCAL_NO_TEST_CACHE=1 adds -count=1, and --race adds -race" $?
 
 STUB_EXIT=1 shard run --plan "$TMP/plan.json" --pkg example/a --shard 1 --timeout 7m \
-  --json "$TMP/fail.json" >/dev/null 2>&1
+  --json "$TMP/fail.json" >"$TMP/fail.log" 2>&1
 [ $? -eq 1 ]
 check "a failing go test fails run" $?
+! grep -qF 'HARNESS ERROR' "$TMP/fail.log" && [ "$(classify_failure "$TMP/fail.log" 1)" = assert ]
+check "a failing go test, not a signal, classifies as an assertion (#3637)" $?
 
 empty_index=1
 [ -z "$(shards_of "$TMP/plan.json" example/b | sed -n 1p)" ] || empty_index=2
@@ -203,6 +208,11 @@ STUB_SIGTERM=TestGolf shard run --plan "$TMP/plan.json" --pkg example/a --shard 
     "$TMP/killed.err" &&
   ! grep -qF 'TestGolf/sub' "$TMP/killed.err"
 check "a go test killed by SIGTERM exits 143 naming the signal and the in-flight test (#3443)" $?
+STUB_SIGTERM=TestGolf shard run --plan "$TMP/plan.json" --pkg example/a --shard 1 \
+  --timeout 7m --json "$TMP/killed2.json" >"$TMP/killed.log" 2>&1
+[ $? -eq 143 ] && grep -q '^HARNESS ERROR: go test was killed by SIGTERM' "$TMP/killed.log" &&
+  [ "$(classify_failure "$TMP/killed.log" 143)" = infra ]
+check "a go test killed by SIGTERM declares itself infrastructure (#3637)" $?
 
 # ── rest ────────────────────────────────────────────────────────────────────
 : > "$STUB_ARGV"

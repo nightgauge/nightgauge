@@ -1542,7 +1542,11 @@ record` merges the plain events into `go-test.json` and checks that every
   two, and the finalize step fails when a planned test ran zero times or twice.
 - **Killed shards.** A shard whose `go test` is killed by a signal exits `128+N`
   (143 for SIGTERM) and prints the signal and the top-level tests still running.
-  That is a kill, not a test failure: look for who sent the signal (#3443).
+  That is a kill, not a test failure: look for who sent the signal (#3443). The
+  shard also prints a `HARNESS ERROR` line, so the gate reports it as
+  `! … (INFRASTRUCTURE ERROR …)`. The finalize step does the same only when every
+  failed Go step died to a signal; a real failure or a missing exit code among
+  them stays an assertion failure (#3637).
 - **Adding a package.** Add a `shard <import path> <N>` line, slowest first,
   then refresh `scripts/ci-local-steps.txt` with `--list-steps`. Before you do,
   look for state that two processes of the package would share: a fixed port, a
