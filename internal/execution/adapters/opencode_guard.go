@@ -72,6 +72,7 @@ import (
 	"sync/atomic"
 
 	"github.com/nightgauge/nightgauge/internal/gitworktree"
+	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/opencodeallow"
 )
 
@@ -336,11 +337,9 @@ func openCodeShellPermission(g *openCodeToolGrant, binDir, worktreeDir string) *
 }
 
 // openCodeShellBinDirWriteVerbs are the commands that write, replace or
-// remove a file named as an argument (dd through of=, curl -o, wget -O).
-var openCodeShellBinDirWriteVerbs = []string{
-	"cp", "mv", "ln", "install", "tee", "rsync",
-	"dd", "curl", "wget", "rm", "unlink", "truncate", "chmod",
-}
+// remove a file named as an argument; the careful gate's runtime resolver
+// shares the list (#3622).
+var openCodeShellBinDirWriteVerbs = hooks.BinDirWriteVerbs
 
 // openCodeShellVerbBoundaries are the characters that can precede a command
 // word inside a command line: a verb counts only after one of these (or at
@@ -502,7 +501,8 @@ func openCodeCommonPathSuffix(forms []string) string {
 // is ""). A binDir inside the worktree (the dev-only `bin/`) gets no
 // relative form: `*cp *bin*` would deny unrelated writes, and the edit/write
 // maps deny it. A path assembled from variables, or a relative path after
-// `cd`, still routes around a glob; the edit and write maps deny binDir too.
+// `cd`, routes around a glob; `nightgauge hook careful-gate` resolves those
+// at runtime and denies them (#3622), and the edit and write maps deny binDir.
 // Running a binary from binDir stays allowed: no write verb or `>` precedes
 // the path. A command that writes elsewhere and then runs the binary
 // (`rm -f x && <binDir>/gh …`) is denied too, accepted as fail-safe.
