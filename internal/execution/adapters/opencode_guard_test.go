@@ -1374,6 +1374,82 @@ func TestOpenCodeShellPermissionDeniesContinuedWriteVerb(t *testing.T) {
 	}
 }
 
+// TestOpenCodeShellBinDirDenyIssueForms3631 pins each #3631 bypass form to the
+// pattern that denies it: the pattern is emitted and matches the form, so
+// deleting it fails here even where an overlapping pattern still denies.
+// The size budget is unchanged; TestOpenCodeConfigFitsEnvLimit and
+// TestOpenCodeShellBinDirDenyListSize check it.
+func TestOpenCodeShellBinDirDenyIssueForms3631(t *testing.T) {
+	binDir := filepath.Join(t.TempDir(), "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gh := filepath.Join(binDir, "gh")
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}}, binDir).Shell
+	emitted := openCodeShellBinDirDenyPatterns(binDir, "")
+	forms := openCodeShellBinDirForms(binDir, "")
+	perForm := func(prefix string) []string {
+		var out []string
+		for _, form := range forms {
+			out = append(out, prefix+"?*"+form+"*")
+		}
+		return out
+	}
+	cases := []struct {
+		name, cmd string
+		// target is the text the patterns must match: a line or the whole command.
+		targets []string
+		want    []string
+		perForm bool
+	}{
+		{"continued", "cp src \\\n" + gh, []string{"cp src \\", "cp src \\\n" + gh},
+			[]string{"cp*" + openCodeShellContinuation, "cp*" + openCodeShellJoined}, false},
+		{"escaped", "\\cp src " + gh, nil, perForm("*\\cp"), true},
+		{"double-quoted", "\"cp\" src " + gh, nil, perForm("*\"cp"), true},
+		{"split", "c''p src " + gh, nil, []string{"*c''p*"}, false},
+		{"braced", "{cp,src," + gh + "}", nil, perForm("*{cp"), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := openCodePatternAction(pm, c.cmd); got != openCodeDeny {
+				t.Errorf("%q resolves to %q, want %q", c.cmd, got, openCodeDeny)
+			}
+			for _, p := range c.want {
+				if !slices.Contains(emitted, p) {
+					t.Errorf("deny patterns do not include %q", p)
+				}
+			}
+			if c.perForm {
+				// The command names one bin-dir form; at least one per-form pattern must match it.
+				matched := false
+				for _, p := range c.want {
+					if openCodeWildcardMatch(c.cmd, p) {
+						matched = true
+					}
+				}
+				if !matched {
+					t.Errorf("no per-form pattern %q matches %q", c.want, c.cmd)
+				}
+				return
+			}
+			for i, p := range c.want {
+				target := c.cmd
+				if c.targets != nil {
+					target = c.targets[i]
+				}
+				if !openCodeWildcardMatch(target, p) {
+					t.Errorf("pattern %q does not match %q", p, target)
+				}
+			}
+		})
+	}
+	for _, cmd := range []string{gh + " --version", "which cp"} {
+		if got := openCodePatternAction(pm, cmd); got != openCodeAllow {
+			t.Errorf("%q resolves to %q, want %q", cmd, got, openCodeAllow)
+		}
+	}
+}
+
 // TestOpenCodeShellSplitVerbSpellings pins the split spellings (#3627).
 func TestOpenCodeShellSplitVerbSpellings(t *testing.T) {
 	got := openCodeShellSplitVerbSpellings("tee")
