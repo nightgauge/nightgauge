@@ -351,50 +351,61 @@ var openCodeShellVerbBoundaries = []string{
 	" ", "\t", "\n", "\r", "\"", "'", ";", "&", "|", "(", "`", "/",
 }
 
-// openCodeShellVerbArgSeparators are the whitespace characters that can follow
-// a verb before its arguments (#3623). The newline entry serves a matcher that
-// sees the whole command. OpenCode 2.4.2 checks each line on its own, so
-// `cp\n<src> <dst>` reaches it as a bare `cp` line and a verb-less argument
-// line: the bare write-verb deny in openCodeShellBinDirDenyPatterns refuses it.
-var openCodeShellVerbArgSeparators = []string{" ", "\t", "\n"}
+// openCodeShellCommandStarts are the characters after which a command word
+// starts: a space and the shell's command separators (#3627). The set is
+// kept short for the config's size limit: a split verb after a tab or inside
+// backticks routes around it. Quotes, `/`
+// and `\` are absent, so `grep -P '\d\d'` holds no command start.
+var openCodeShellCommandStarts = []string{" ", ";", "&", "|", "("}
 
 // openCodeShellBareVerbSuffixes end a write verb that stands alone on a
 // command line (#3623). Newline is absent: OpenCode splits lines before it
 // matches, so no line it checks ends in one.
 var openCodeShellBareVerbSuffixes = []string{"", " ", "\t"}
 
-// openCodeShellBinDirDenyPatterns denies a shell command that writes into
-// binDir (NIGHTGAUGE_BIN's directory), the bash leg of the bin-dir guard
-// (#1638). OpenCode 2.2.7 refused such a `cp` through external_directory. 2.3.2
-// does not: its shell scanner derives external_directory resources only from
-// the arguments of cd, chdir, pushd, popd, push-location and set-location, so
-// `cp payload <binDir>/gh` completed (#3608).
-//
-// OpenCode anchors a shell glob at both ends of the command text, so each
-// pattern is unanchored (#3615): `*<sep><verb><argsep>*<form>*` matches the verb after
-// any command boundary (`sh -c "cp …"`, `a && cp …`, `xargs cp …`), and
-// `*>*<form>*` matches any redirection into binDir (`>`, `>>`, `2>`, `&>`). The forms are every
-// absolute form of binDir (openCodePathForms) and, when binDir lies outside
-// the worktree, its `../` path relative to each form of the worktree's git
-// top-level (worktreeDir itself outside a git checkout; none when worktreeDir
-// is ""). A binDir inside the worktree (the dev-only `bin/`) gets no
-// relative form: `*cp *bin*` would deny unrelated writes, and the edit/write
-// maps deny it. A path assembled from variables or split quoting, or a
-// relative path after `cd`, still routes around a glob; the edit and write
-// maps deny binDir too. Running a binary from binDir stays allowed: no write
-// verb or `>` precedes the path. A command that writes elsewhere and then runs
-// the binary (`rm -f x && <binDir>/gh …`) is denied too, accepted as fail-safe.
-//
-// OpenCode checks each line of a multi-line command as its own command, so a
-// split `cp\n<src> <binDir>/gh` leaves a bare `cp` line and an argument line
-// no binDir pattern can catch without denying a run of the binary (#3623).
-// Each write verb is therefore also denied as a bare command (`cp`, `cp `,
-// `cp\t`, `/bin/cp`): a write verb with no arguments writes nothing, and one
-// denied line refuses the whole call. `which cp` and `ls /bin/cp` stay allowed.
-func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
-	if binDir == "" {
-		return nil
+// openCodeShellContinuation is the glob tail of a line that ends in a
+// line-continuation backslash (#3627).
+const openCodeShellContinuation = "\\"
+
+// openCodeShellJoined matches a backslash-newline inside one command's text
+// and whatever follows it (#3627).
+const openCodeShellJoined = "\\\n*"
+
+// openCodeShellQuotedVerbSpellings are the whole-word spellings of verb the
+// shell still runs as verb: alias-bypassing `\cp` and quoted `"cp"`, `'cp'`
+// (#3627).
+func openCodeShellQuotedVerbSpellings(verb string) []string {
+	return []string{"\\" + verb, "\"" + verb + "\"", "'" + verb + "'"}
+}
+
+// openCodeShellSplitVerbQuotes are inserted at one interior gap of a write
+// verb to spell it so the shell still runs it: `c”p`, `c""p`, `c\p`, and
+// through the single `'` or `"` also `'c'p`, `c'p'`, `"c"p` and `c"p"`
+// (#3627). A spelling with two or more splits, ANSI-C quoting (`$'\x63p'`)
+// or a verb built from variables still routes around the globs.
+var openCodeShellSplitVerbQuotes = []string{"''", "\"\"", "'", "\"", "\\"}
+
+// openCodeShellSplitVerbSpellings returns verb with each entry of
+// openCodeShellSplitVerbQuotes inserted at each interior gap (#3627).
+func openCodeShellSplitVerbSpellings(verb string) []string {
+	var out []string
+	for i := 1; i < len(verb); i++ {
+		for _, q := range openCodeShellSplitVerbQuotes {
+			out = append(out, verb[:i]+q+verb[i:])
+		}
 	}
+	return out
+}
+
+// openCodeShellBinDirForms returns the spellings of binDir a shell command can
+// name: binDir with and without symlinks resolved, and each relative to the
+// worktree's git top-level (#1638). Forms that end in one suffix of at least
+// two path components are returned as that suffix alone: each form holds it,
+// so its patterns deny whatever theirs did, and one pattern set per group
+// instead of one per form (up to six) keeps OpenCode's config under Linux's 128 KiB limit on the one
+// variable that carries it (#3627). A write to another directory ending in the
+// same components is denied too, accepted as fail-safe.
+func openCodeShellBinDirForms(binDir, worktreeDir string) []string {
 	forms := openCodePathForms(binDir)
 	absForms := append([]string(nil), forms...)
 	if worktreeDir != "" {
@@ -421,23 +432,170 @@ func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
 			}
 		}
 	}
-	var out []string
-	for _, verb := range openCodeShellBinDirWriteVerbs {
-		for _, suffix := range openCodeShellBareVerbSuffixes {
-			out = append(out, verb+suffix)
-		}
-		out = append(out, "/*/"+verb)
-	}
-	for _, form := range forms {
-		for _, verb := range openCodeShellBinDirWriteVerbs {
-			for _, argSep := range openCodeShellVerbArgSeparators {
-				out = append(out, verb+argSep+"*"+form+"*")
-				for _, sep := range openCodeShellVerbBoundaries {
-					out = append(out, "*"+sep+verb+argSep+"*"+form+"*")
-				}
+	var groups []string
+	for _, f := range forms {
+		merged := false
+		for i, g := range groups {
+			if suffix := openCodeCommonPathSuffix([]string{g, f}); strings.Count(suffix, "/") >= 2 {
+				groups[i] = suffix
+				merged = true
+				break
 			}
 		}
-		out = append(out, "*>*"+form+"*")
+		if !merged {
+			groups = append(groups, f)
+		}
+	}
+	return groups
+}
+
+// openCodeCommonPathSuffix returns the longest suffix every form shares that
+// starts at a path separator ("/a/b" of "/x/a/b" and "../a/b"), or "" (#3627).
+// A form equal to that suffix less its leading "/" never occurs: each
+// relative form starts with "../".
+func openCodeCommonPathSuffix(forms []string) string {
+	if len(forms) == 0 {
+		return ""
+	}
+	if len(forms) == 1 {
+		return forms[0]
+	}
+	suffix := forms[0]
+	for _, f := range forms[1:] {
+		for !strings.HasSuffix(f, suffix) {
+			i := strings.Index(suffix[1:], "/")
+			if i < 0 {
+				return ""
+			}
+			suffix = suffix[i+1:]
+		}
+	}
+	if !strings.HasPrefix(suffix, "/") {
+		return ""
+	}
+	return suffix
+}
+
+// openCodeShellBinDirDenyPatterns denies a shell command that writes into
+// binDir (NIGHTGAUGE_BIN's directory), the bash leg of the bin-dir guard
+// (#1638). OpenCode 2.2.7 refused such a `cp` through external_directory. 2.3.2
+// does not: its shell scanner derives external_directory resources only from
+// the arguments of cd, chdir, pushd, popd, push-location and set-location, so
+// `cp payload <binDir>/gh` completed (#3608).
+//
+// OpenCode anchors a shell glob at both ends of the command text, so each
+// pattern is unanchored (#3615): `*<sep><verb><argsep>*<form>*` matches the verb after
+// any command boundary (`sh -c "cp …"`, `a && cp …`, `xargs cp …`), and
+// `*>*<form>*` matches any redirection into binDir (`>`, `>>`, `2>`, `&>`). The forms are every
+// absolute form of binDir (openCodePathForms) and, when binDir lies outside
+// the worktree, its `../` path relative to each form of the worktree's git
+// top-level (worktreeDir itself outside a git checkout; none when worktreeDir
+// is ""). A binDir inside the worktree (the dev-only `bin/`) gets no
+// relative form: `*cp *bin*` would deny unrelated writes, and the edit/write
+// maps deny it. A path assembled from variables, or a relative path after
+// `cd`, still routes around a glob; the edit and write maps deny binDir too.
+// Running a binary from binDir stays allowed: no write verb or `>` precedes
+// the path. A command that writes elsewhere and then runs the binary
+// (`rm -f x && <binDir>/gh …`) is denied too, accepted as fail-safe.
+//
+// OpenCode checks each line of a multi-line command as its own command, so a
+// split `cp\n<src> <binDir>/gh` leaves a bare `cp` line and an argument line
+// no binDir pattern can catch without denying a run of the binary (#3623).
+// Each write verb is therefore also denied as a bare command (`cp`, `cp `,
+// `cp\t`, `/bin/cp`, `\cp`, `"cp"`, `'cp'`): a write verb with no arguments
+// writes nothing, and one denied line refuses the whole call. `which cp` and
+// `ls /bin/cp` stay allowed.
+//
+// Escaped, quoted and brace-expanded verbs (`\cp src dst`, `"cp" src dst`,
+// `{cp,src,dst}`) get their own per-form patterns (#3627). A split spelling
+// (`c”p`, `c\p`, `'c'p`) is nonsense in an ordinary command, so it is denied
+// anywhere in a line, whatever the line writes to: one pattern per spelling,
+// not per binDir form, which keeps the map small enough for the single
+// environment variable that carries OpenCode's config.
+//
+// A line that ends in a line-continuation backslash hides its next line from
+// a per-line matcher (#3627), so it is denied when it holds a write verb after
+// a boundary (`cp src \`, `npm install x \`), when it ends in a proper prefix
+// of one (`c\` + newline + `p src dst`), or when it holds a redirection
+// (`echo x > /opt/ng\` + newline + `bin/gh`), wherever it points. A
+// multi-line `curl …\` or `cmd 2>&1 \` is therefore refused in OpenCode
+// stages, accepted as fail-safe. OpenCode 2.4.2 checks one parsed command at
+// a time and keeps a continued command whole, backslash-newline included, so
+// each continuation deny is also emitted for that joined text.
+func openCodeShellBinDirDenyPatterns(binDir, worktreeDir string) []string {
+	if binDir == "" {
+		return nil
+	}
+	forms := openCodeShellBinDirForms(binDir, worktreeDir)
+	var out []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, verb := range openCodeShellBinDirWriteVerbs {
+		for _, suffix := range openCodeShellBareVerbSuffixes {
+			add(verb + suffix)
+			for _, spelling := range openCodeShellQuotedVerbSpellings(verb) {
+				add(spelling + suffix)
+			}
+		}
+		add("/*/" + verb)
+		for _, spelling := range openCodeShellSplitVerbSpellings(verb) {
+			if strings.Contains(spelling, "\\") {
+				// `l\n` and `d\d` are ordinary text (`printf 'total\n'`,
+				// `grep -P '\d\d'`): a backslash split counts only where a
+				// command word starts.
+				add(spelling + "*")
+				for _, sep := range openCodeShellCommandStarts {
+					add("*" + sep + spelling + "*")
+				}
+				continue
+			}
+			add("*" + spelling + "*")
+		}
+		// Continuation: the whole verb, then each proper prefix at line end.
+		add(verb + "*" + openCodeShellContinuation)
+		add("*\\" + verb + "*" + openCodeShellContinuation)
+		for _, sep := range append([]string{"\"", "'"}, openCodeShellCommandStarts...) {
+			add("*" + sep + verb + "*" + openCodeShellContinuation)
+		}
+		for i := 1; i < len(verb); i++ {
+			// No boundary: a line ending in a letter run glued to the
+			// backslash is denied whatever precedes it, one pattern per prefix.
+			add("*" + verb[:i] + openCodeShellContinuation)
+		}
+	}
+	add("*>*" + openCodeShellContinuation)
+	// OpenCode keeps a continued command in one parsed command, its text
+	// holding the backslash-newline, so the same denies hold across it.
+	for _, verb := range openCodeShellBinDirWriteVerbs {
+		add(verb + "*" + openCodeShellJoined)
+		for _, sep := range openCodeShellCommandStarts {
+			add("*" + sep + verb + "*" + openCodeShellJoined)
+		}
+		for i := 1; i < len(verb); i++ {
+			add("*" + verb[:i] + "\\\n" + verb[i:] + "*")
+		}
+	}
+	add("*>*" + openCodeShellJoined)
+	// One pattern per boundary, with `?` for the character after the verb,
+	// keeps the config under Linux's 128 KiB limit on the one variable that
+	// carries it (#3627): a pattern per argument separator and per quoting
+	// overflowed it. `?` also takes `"cp"`, `'cp'`, `/cp"` and `{cp,`, and a
+	// word that merely starts with a verb (`mvn`, `cpp`) in a command naming
+	// binDir is denied too, accepted as fail-safe.
+	perFormBoundaries := append([]string{"\\", "{"}, openCodeShellVerbBoundaries...)
+	for _, form := range forms {
+		for _, verb := range openCodeShellBinDirWriteVerbs {
+			add(verb + "?*" + form + "*")
+			for _, sep := range perFormBoundaries {
+				add("*" + sep + verb + "?*" + form + "*")
+			}
+		}
+		add("*>*" + form + "*")
 	}
 	return out
 }

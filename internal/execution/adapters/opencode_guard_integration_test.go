@@ -553,6 +553,13 @@ func runOpenCodeBinDirCpDeniedProbe(t *testing.T) {
 		{"multi-line cp", func(s, b, _ string) string { return "true\ncp " + s + " " + filepath.Join(b, "gh") }},
 		{"tab cp", func(s, b, _ string) string { return "cp\t" + s + " " + filepath.Join(b, "gh") }},
 		{"/bin/cp", func(s, b, _ string) string { return "/bin/cp " + s + " " + filepath.Join(b, "gh") }},
+		// #3627: escaped, quoted, split, brace-expanded and continued verbs.
+		{`\cp`, func(s, b, _ string) string { return `\cp ` + s + " " + filepath.Join(b, "gh") }},
+		{`"cp"`, func(s, b, _ string) string { return `"cp" ` + s + " " + filepath.Join(b, "gh") }},
+		{`c''p`, func(s, b, _ string) string { return `c''p ` + s + " " + filepath.Join(b, "gh") }},
+		{"brace cp", func(s, b, _ string) string { return "{cp," + s + "," + filepath.Join(b, "gh") + "}" }},
+		{"continued inside verb", func(s, b, _ string) string { return "c\\\np " + s + " " + filepath.Join(b, "gh") }},
+		{"continued cp", func(s, b, _ string) string { return "cp " + s + " \\\n" + filepath.Join(b, "gh") }},
 	}
 	for _, f := range forms {
 		t.Run(f.name, func(t *testing.T) {
