@@ -110,9 +110,36 @@ func stripHeredocs(cmd string) string {
 	if !strings.Contains(cmd, "<<") {
 		return cmd
 	}
+	chunks := splitHeredocs(cmd)
+	texts := make([]string, len(chunks))
+	for i, c := range chunks {
+		texts[i] = c.text
+	}
+	return strings.Join(texts, "\n")
+}
+
+// heredocChunk is a run of command lines ending at a line that opens
+// here-documents (or at end of input), with the bodies opened on that line.
+type heredocChunk struct {
+	text   string   // command lines, newline-joined, bodies and terminators removed
+	bodies []string // bodies opened on text's last line, FIFO order, terminators excluded
+}
+
+// splitHeredocs splits cmd into command chunks and the heredoc bodies each
+// chunk's last line introduces. Joining the chunks' text with "\n" yields
+// stripHeredocs(cmd). For `<<-` bodies, leading tabs are stripped as bash does.
+// An unterminated body runs to end of input.
+func splitHeredocs(cmd string) []heredocChunk {
 	lines := strings.Split(cmd, "\n")
-	var out []string
+	var chunks []heredocChunk
+	var cur []string
 	var pending []heredoc // FIFO queue of open heredoc bodies
+	var bodies []string
+	var body []string
+	flush := func() {
+		chunks = append(chunks, heredocChunk{text: strings.Join(cur, "\n"), bodies: bodies})
+		cur, bodies = nil, nil
+	}
 	for _, line := range lines {
 		if len(pending) > 0 {
 			h := pending[0]
@@ -121,14 +148,32 @@ func stripHeredocs(cmd string) string {
 				cmp = strings.TrimLeft(cmp, "\t")
 			}
 			if strings.TrimRight(cmp, "\r") == h.delim {
+				bodies = append(bodies, strings.Join(body, "\n"))
+				body = nil
 				pending = pending[1:] // terminator — drop it, body closed
+				if len(pending) == 0 {
+					flush()
+				}
+				continue
 			}
-			continue // drop body line
+			body = append(body, cmp)
+			continue
 		}
-		out = append(out, line)
-		pending = append(pending, scanHeredocStarts(line)...)
+		cur = append(cur, line)
+		if starts := scanHeredocStarts(line); len(starts) > 0 {
+			pending = append(pending, starts...)
+		}
 	}
-	return strings.Join(out, "\n")
+	if len(pending) > 0 {
+		bodies = append(bodies, strings.Join(body, "\n"))
+		for range pending[1:] {
+			bodies = append(bodies, "")
+		}
+	}
+	if len(cur) > 0 || len(bodies) > 0 || len(chunks) == 0 {
+		flush()
+	}
+	return chunks
 }
 
 type heredoc struct {
