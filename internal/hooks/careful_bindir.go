@@ -341,13 +341,58 @@ func (e *binDirEval) stripWrappers(argv []shVal, raw []string) ([]shVal, []strin
 	return argv, raw
 }
 
+// Short options that take a value, per `curl --help all` and `wget --help`.
+// A letter after one of these in a cluster belongs to its value, never to the
+// option set, so `curl -do x` is `-d o` and writes nothing (#3649).
+const (
+	curlValueLetters = "AbcCdDeEFHKmoPQrtTuUwxXYyz"
+	wgetValueLetters = "aABDeiIlnoOPQRtTUwX"
+
+	curlTargetLetters    = "o"  // -o <file>
+	curlRemoteNameLetter = 'O'  // -O writes into the cwd
+	wgetTargetLetters    = "OP" // -O <file>, -P <dir>
+)
+
+// scanShortCluster parses a single-dash option cluster such as `-sSLo<path>`
+// with getopt semantics. flags holds the letters before the first
+// value-taking letter; letter is that letter (0 when none), val the rest of
+// the token, and needNext reports that the value is the next argument.
+func scanShortCluster(v, valueLetters string) (letter byte, val string, needNext bool, flags string) {
+	for i := 1; i < len(v); i++ {
+		if strings.IndexByte(valueLetters, v[i]) >= 0 {
+			return v[i], v[i+1:], i+1 == len(v), v[1:i]
+		}
+	}
+	return 0, "", false, v[1:]
+}
+
+// clusterValue records a scanned cluster's value: a target letter's value is
+// a write target (in-token, or the next argument via takeNext); any other
+// value-taking letter's next-argument value is skipped (skipNext).
+func clusterValue(letter byte, val string, needNext bool, targetLetters string, tainted bool, out []shVal) (_ []shVal, takeNext, skipNext bool) {
+	if letter == 0 {
+		return out, false, false
+	}
+	if strings.IndexByte(targetLetters, letter) >= 0 {
+		if needNext {
+			return out, true, false
+		}
+		return append(out, shVal{val: val, ok: true, tainted: tainted}), false, false
+	}
+	return out, false, needNext
+}
+
 // writeTargets returns the operands verb writes to.
 func writeTargets(verb string, args []shVal) []shVal {
 	var ops, out []shVal
 	opts := true
-	takeNext := false
+	takeNext, skipNext := false, false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if skipNext {
+			skipNext = false
+			continue
+		}
 		if takeNext {
 			out = append(out, a)
 			takeNext = false
@@ -370,25 +415,30 @@ func writeTargets(verb string, args []shVal) []shVal {
 				}
 			case "curl":
 				switch {
-				case v == "-o" || v == "--output" || v == "--output-dir":
+				case v == "--output" || v == "--output-dir":
 					takeNext = true
 				case strings.HasPrefix(v, "--output="):
 					out = append(out, shVal{val: strings.TrimPrefix(v, "--output="), ok: true, tainted: a.tainted})
-				case v == "-O" || v == "--remote-name" || v == "--remote-name-all":
+				case v == "--remote-name" || v == "--remote-name-all":
 					out = append(out, shVal{val: ".", ok: true})
-				case strings.HasPrefix(v, "-o") && !strings.HasPrefix(v, "--"):
-					out = append(out, shVal{val: v[2:], ok: true, tainted: a.tainted})
+				case !strings.HasPrefix(v, "--"):
+					letter, val, needNext, flags := scanShortCluster(v, curlValueLetters)
+					if strings.ContainsRune(flags, curlRemoteNameLetter) {
+						out = append(out, shVal{val: ".", ok: true})
+					}
+					out, takeNext, skipNext = clusterValue(letter, val, needNext, curlTargetLetters, a.tainted, out)
 				}
 			case "wget":
 				switch {
-				case v == "-O" || v == "--output-document" || v == "-P" || v == "--directory-prefix":
+				case v == "--output-document" || v == "--directory-prefix":
 					takeNext = true
 				case strings.HasPrefix(v, "--output-document="):
 					out = append(out, shVal{val: strings.TrimPrefix(v, "--output-document="), ok: true, tainted: a.tainted})
 				case strings.HasPrefix(v, "--directory-prefix="):
 					out = append(out, shVal{val: strings.TrimPrefix(v, "--directory-prefix="), ok: true, tainted: a.tainted})
-				case (strings.HasPrefix(v, "-O") || strings.HasPrefix(v, "-P")) && len(v) > 2:
-					out = append(out, shVal{val: v[2:], ok: true, tainted: a.tainted})
+				case !strings.HasPrefix(v, "--"):
+					letter, val, needNext, _ := scanShortCluster(v, wgetValueLetters)
+					out, takeNext, skipNext = clusterValue(letter, val, needNext, wgetTargetLetters, a.tainted, out)
 				}
 			}
 			continue
