@@ -243,6 +243,7 @@ record may carry both fields, neither, or only one.
 | `no_changes_produced`            | pr-create's deterministic fallback confirmed zero commits ahead of base — genuinely nothing to open a PR for (Issue #317) — planning/scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `not_pipeline_actionable`        | A stage declared the issue's deliverable is not producible by any pipeline lap — counsel sign-off, an operator-only credential, a human decision (Issue #1241) — not a failure and not a deferral                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `review_cap_reached`             | The independent review reached its round cap with findings standing; the issue parks, the repository keeps dispatching, and the work stays uncommitted in the run's worktree (Issue #2865)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `needs_decomposition`            | The planning gate found the plan too large for its issue (more files than `max_planned_files`, or an L/XL plan for an XS/S/M issue); the issue parks before feature-dev (Issue #3684)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `issue_closed`                   | The issue was already closed when the run reached pickup or a stage boundary (Issue #3151). A skip, not a failure (Issue #3081): the record books `outcome: cancelled`, `outcome_type: issue_closed`, it joins no failed list or exit-record failure total, and the scheduler holds the issue out of its candidates until the graph shows the close                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `resume_no_op`                   | A run resumed at pr-merge, found the PR already merged, did no work and left the issue open; it parks in Backlog and the repository keeps dispatching (Issue #2878)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `validation_failed`              | feature-validate honestly failed its quality gates (`validation_status="failed"`) — organic implementation failure (Issue #326)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -316,6 +317,7 @@ from the captures in `internal/terminalkind/testdata/opencode/`.
 | 2.x: a provider retry storm (other)      | `adapter_provider_error`      | Ordinary retry                                          |
 | A retry inherited a prior dev context    | `dev_context_stale`           | Parked                                                  |
 | The review reached its round cap         | `review_cap_reached`          | Parked                                                  |
+| The plan is too large for the issue      | `needs_decomposition`         | Parked                                                  |
 | A resumed run merged nothing             | `resume_no_op`                | Parked                                                  |
 | The model server is not listening        | `network_unavailable`         | Generic backoff; outcome recording skipped              |
 | `ProviderModelNotFoundError`             | `model_unavailable`           | Cap recovery (below)                                    |
@@ -352,6 +354,13 @@ cannot drift (#1753).
   carries the `[review-cap-reached]` marker `FeatureValidateGate` reads, and
   the skill's `errorCategory: "review-cap-reached"` is the extension's signal.
   A release re-runs the pipeline with a fresh round count.
+- `needs_decomposition` (#3684): `FeaturePlanningGate` found the plan too large
+  for its issue — more files than `pipeline.size_gate.thresholds.max_planned_files`,
+  or an `L`/`XL` plan for an `XS`/`S`/`M` issue. The gate reason carries the
+  `[needs-decomposition]` marker. The autonomous path labels the issue
+  `needs-decomposition`, posts one comment and moves it to Backlog; a retry
+  would write the same plan, so split or relabel the issue and remove the label
+  before a release.
 - `context_window_exceeded`: reload the model with a larger context, route the
   stage to a model with a larger window, or split the issue. It is not an
   agent failure. The run record carries the kind for the fit check (#1645) and
@@ -653,18 +662,19 @@ Every kind above is retryable by the autonomous scheduler's graph reconcile —
 that is what recovers a crashed run — with two groups of exceptions: the two
 kinds that halt on purpose and say so, and the three parked kinds (#1631):
 
-| Kind                             | Held for                                             | Released by                                                                                                    |
-| -------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `architecture_approval_required` | A human approving a high-impact decision             | The approval label (`approved:architecture` by default) or `approval-<n>.json` in the pipeline state directory |
-| `not_pipeline_actionable`        | A human doing the thing the pipeline cannot          | An explicit `autonomous resume` (fleet or repo), or clearing the issue's failures                              |
-| `context_window_exceeded`        | A larger context, another model, or a split          | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
-| `adapter_permission_rejected`    | A changed permission rule or issue text              | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
-| `adapter_incompatible`           | A binary at or above the floor, installed and pinned | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
-| `adapter_provider_no_route`      | A model id the provider config routes                | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
-| `dev_context_stale`              | A filed pipeline-gap and the stale handoff removed   | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
-| `environment_halt`               | The check's remedy, applied to the environment       | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
-| `gate_plugin_missing`            | An intact bundled plugin, or a newer Claude Code     | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
-| `review_cap_reached`             | The standing findings, fixed or the issue narrowed   | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| Kind                             | Held for                                                                                             | Released by                                                                                                    |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `architecture_approval_required` | A human approving a high-impact decision                                                             | The approval label (`approved:architecture` by default) or `approval-<n>.json` in the pipeline state directory |
+| `not_pipeline_actionable`        | A human doing the thing the pipeline cannot                                                          | An explicit `autonomous resume` (fleet or repo), or clearing the issue's failures                              |
+| `context_window_exceeded`        | A larger context, another model, or a split                                                          | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `adapter_permission_rejected`    | A changed permission rule or issue text                                                              | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `adapter_incompatible`           | A binary at or above the floor, installed and pinned                                                 | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `adapter_provider_no_route`      | A model id the provider config routes                                                                | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `dev_context_stale`              | A filed pipeline-gap and the stale handoff removed                                                   | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `environment_halt`               | The check's remedy, applied to the environment                                                       | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `gate_plugin_missing`            | An intact bundled plugin, or a newer Claude Code                                                     | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `review_cap_reached`             | The standing findings, fixed or the issue narrowed                                                   | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `needs_decomposition`            | The issue split into sub-issues, or its size relabelled, and the `needs-decomposition` label removed | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 
 The scheduler records the kind on the `failed` entry (`FailedItem.Kind`) and
 derives the hold from it via `HoldForTerminalKind`, so retryability has one
@@ -795,50 +805,51 @@ construction (`classifyTerminalKind` / `resolveTerminalKind` in
 
 ### Relationship to `failure_category`
 
-| Terminal Kind                    | Typical `failure_category` (heuristic)                                                      |
-| -------------------------------- | ------------------------------------------------------------------------------------------- |
-| `operator_stop`                  | `infrastructure` — ours, and deliberate; never the issue's                                  |
-| `stall_kill`                     | `agent` — transient runtime issue                                                           |
-| `stage_cap_kill`                 | `agent` — transient runtime issue, same as `stall_kill`                                     |
-| `host_slept`                     | `infrastructure` — the host slept; not the model or the issue                               |
-| `budget_exceeded`                | `agent` — call-pattern under operator control                                               |
-| `validation_error`               | `infrastructure` — pipeline contract failed                                                 |
-| `subagent_crash`                 | `organic` — implementation failure, full weight                                             |
-| `orchestrator_crash`             | `infrastructure` — ours, not the model's                                                    |
-| `network_unavailable`            | `infrastructure` — environmental, excluded from calibration                                 |
-| `stream_idle_timeout`            | `infrastructure` — upstream API, not the issue                                              |
-| `rate_limit_quota_exhausted`     | `infrastructure` — upstream API quota, not the issue                                        |
-| `github_quota_low`               | `infrastructure` — GitHub API quota, not the issue                                          |
-| `api_connection_lost`            | `infrastructure` — local network/transport, not the issue                                   |
-| `github_network_outage`          | `infrastructure` — local network/transport, not the issue                                   |
-| `model_unavailable`              | `infrastructure` — plan/limit environment, not the issue                                    |
-| `premature_turn_end`             | `agent` — the agent's turn-ending behavior, not the issue                                   |
-| `dev_produced_no_changes`        | `agent` — the stage's delegation/turn-ending behavior, not the issue                        |
-| `dev_step_cap_reached`           | `organic` — the plan outgrew the session bound; the issue's scope, not a crash              |
-| `dev_step_progress_unproven`     | `infrastructure` — git could not read the worktree; not the model or the issue              |
-| `adapter_auth_failed`            | `infrastructure` — probe starvation / credential state, not the issue                       |
-| `merge_conflict`                 | `organic` — the branch's content collided with its base                                     |
-| `no_changes_produced`            | `agent` — planning/scope failure (dispatch-eligibility gap), not the model's implementation |
-| `not_pipeline_actionable`        | non-failure — the issue is misfiled, not defective; no lifetime-cap increment, no cascade   |
-| `review_cap_reached`             | non-failure — one issue's review stopped; no lifetime-cap increment, no cascade, no pause   |
-| `validation_failed`              | `organic` — true implementation failure caught by feature-validate's own quality gate       |
-| `branch_forked`                  | `infrastructure` — the pipeline's own orphaned push (or an operator's), not the code        |
-| `worktree_uncommitted`           | recoverable — work preserved, not counted as a failure                                      |
-| `budget_ceiling_hit`             | recoverable — real spend, not a code defect                                                 |
-| `stage_context_unreadable`       | `infrastructure` — the gate's own filesystem read failed, not the issue                     |
-| `dev_build_verification_missing` | `agent` — the skill skipped a contract step and produced nothing, not the issue             |
-| `dev_build_verification_failed`  | `organic` — the stage's own build broke                                                     |
-| `dev_tests_failed`               | `organic` — the stage's own tests failed                                                    |
-| `dev_context_stale`              | `infrastructure` — a prior attempt's handoff survived into a retry, not the issue           |
-| `pr_merge_lookup_failed`         | `infrastructure` — gh / local git could not answer, not the issue                           |
-| `context_window_exceeded`        | parked — the loaded model's limit, not the issue; no lifetime-cap increment, no cascade     |
-| `adapter_permission_rejected`    | parked — a `deny` or `ask` rule on an allowed tool; no lifetime-cap increment, no cascade   |
-| `adapter_incompatible`           | parked — the adapter's binary, not the issue; no lifetime-cap increment, no cascade         |
-| `adapter_provider_no_route`      | parked — the provider config, not the issue; no lifetime-cap increment, no cascade          |
-| `adapter_provider_transport`     | `infrastructure` — the provider endpoint refused or dropped the connection                  |
-| `adapter_provider_error`         | `infrastructure` — the provider failed the request                                          |
-| `environment_halt`               | parked — the operator's environment, not the issue; no lifetime-cap increment, no cascade   |
-| `gate_plugin_missing`            | parked — the install, not the issue; no lifetime-cap increment, no cascade                  |
+| Terminal Kind                    | Typical `failure_category` (heuristic)                                                        |
+| -------------------------------- | --------------------------------------------------------------------------------------------- |
+| `operator_stop`                  | `infrastructure` — ours, and deliberate; never the issue's                                    |
+| `stall_kill`                     | `agent` — transient runtime issue                                                             |
+| `stage_cap_kill`                 | `agent` — transient runtime issue, same as `stall_kill`                                       |
+| `host_slept`                     | `infrastructure` — the host slept; not the model or the issue                                 |
+| `budget_exceeded`                | `agent` — call-pattern under operator control                                                 |
+| `validation_error`               | `infrastructure` — pipeline contract failed                                                   |
+| `subagent_crash`                 | `organic` — implementation failure, full weight                                               |
+| `orchestrator_crash`             | `infrastructure` — ours, not the model's                                                      |
+| `network_unavailable`            | `infrastructure` — environmental, excluded from calibration                                   |
+| `stream_idle_timeout`            | `infrastructure` — upstream API, not the issue                                                |
+| `rate_limit_quota_exhausted`     | `infrastructure` — upstream API quota, not the issue                                          |
+| `github_quota_low`               | `infrastructure` — GitHub API quota, not the issue                                            |
+| `api_connection_lost`            | `infrastructure` — local network/transport, not the issue                                     |
+| `github_network_outage`          | `infrastructure` — local network/transport, not the issue                                     |
+| `model_unavailable`              | `infrastructure` — plan/limit environment, not the issue                                      |
+| `premature_turn_end`             | `agent` — the agent's turn-ending behavior, not the issue                                     |
+| `dev_produced_no_changes`        | `agent` — the stage's delegation/turn-ending behavior, not the issue                          |
+| `dev_step_cap_reached`           | `organic` — the plan outgrew the session bound; the issue's scope, not a crash                |
+| `dev_step_progress_unproven`     | `infrastructure` — git could not read the worktree; not the model or the issue                |
+| `adapter_auth_failed`            | `infrastructure` — probe starvation / credential state, not the issue                         |
+| `merge_conflict`                 | `organic` — the branch's content collided with its base                                       |
+| `no_changes_produced`            | `agent` — planning/scope failure (dispatch-eligibility gap), not the model's implementation   |
+| `not_pipeline_actionable`        | non-failure — the issue is misfiled, not defective; no lifetime-cap increment, no cascade     |
+| `review_cap_reached`             | non-failure — one issue's review stopped; no lifetime-cap increment, no cascade, no pause     |
+| `needs_decomposition`            | non-failure — one issue's plan was oversized; no lifetime-cap increment, no cascade, no pause |
+| `validation_failed`              | `organic` — true implementation failure caught by feature-validate's own quality gate         |
+| `branch_forked`                  | `infrastructure` — the pipeline's own orphaned push (or an operator's), not the code          |
+| `worktree_uncommitted`           | recoverable — work preserved, not counted as a failure                                        |
+| `budget_ceiling_hit`             | recoverable — real spend, not a code defect                                                   |
+| `stage_context_unreadable`       | `infrastructure` — the gate's own filesystem read failed, not the issue                       |
+| `dev_build_verification_missing` | `agent` — the skill skipped a contract step and produced nothing, not the issue               |
+| `dev_build_verification_failed`  | `organic` — the stage's own build broke                                                       |
+| `dev_tests_failed`               | `organic` — the stage's own tests failed                                                      |
+| `dev_context_stale`              | `infrastructure` — a prior attempt's handoff survived into a retry, not the issue             |
+| `pr_merge_lookup_failed`         | `infrastructure` — gh / local git could not answer, not the issue                             |
+| `context_window_exceeded`        | parked — the loaded model's limit, not the issue; no lifetime-cap increment, no cascade       |
+| `adapter_permission_rejected`    | parked — a `deny` or `ask` rule on an allowed tool; no lifetime-cap increment, no cascade     |
+| `adapter_incompatible`           | parked — the adapter's binary, not the issue; no lifetime-cap increment, no cascade           |
+| `adapter_provider_no_route`      | parked — the provider config, not the issue; no lifetime-cap increment, no cascade            |
+| `adapter_provider_transport`     | `infrastructure` — the provider endpoint refused or dropped the connection                    |
+| `adapter_provider_error`         | `infrastructure` — the provider failed the request                                            |
+| `environment_halt`               | parked — the operator's environment, not the issue; no lifetime-cap increment, no cascade     |
+| `gate_plugin_missing`            | parked — the install, not the issue; no lifetime-cap increment, no cascade                    |
 
 **The sweep (#1237).** #9 built the mechanism but left eleven `KindFail`
 sites emitting an empty `TerminalKind` — four in `feature_dev_gate.go`, two
@@ -903,6 +914,7 @@ export const TerminalFailureKindSchema = z.enum([
   "validation_failed", // Issue #326
   "not_pipeline_actionable", // Issue #1241
   "review_cap_reached", // Issue #2865
+  "needs_decomposition", // Issue #3684
   "branch_forked", // Issue #163
 ]);
 

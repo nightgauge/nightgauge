@@ -148,6 +148,7 @@ const HALT_SKIP_PARKED: ReadonlySet<string> = new Set([
   "dev_context_stale",
   "gate_plugin_missing",
   "review_cap_reached",
+  "needs_decomposition",
   "resume_no_op",
 ]);
 

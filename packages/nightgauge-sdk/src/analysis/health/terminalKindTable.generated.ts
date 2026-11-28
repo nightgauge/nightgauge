@@ -1026,6 +1026,20 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
       "why": "pr-create's deterministic fallback confirmed the feature branch has zero commits ahead of base (#317) — genuinely nothing to open a PR for. Deliberately NOT matched on the bare phrase `no commits ahead of`: that phrase also appears in feature-validate's unrelated lost-implementation check, which must keep its organic classification."
     },
     {
+      "id": "needs-decomposition",
+      "kind": "needs_decomposition",
+      "signal": false,
+      "clauses": [
+        [
+          "[needs-decomposition]"
+        ],
+        [
+          "needs_decomposition"
+        ]
+      ],
+      "why": "FeaturePlanningGate found the plan oversized for its issue (#3684): more files than pipeline.size_gate.thresholds.max_planned_files, or an L/XL plan for an XS/S/M issue. It parks before feature-dev, so a retry is never paid for the same plan. The gate's reason opens with the marker."
+    },
+    {
       "id": "review-cap-reached",
       "kind": "review_cap_reached",
       "signal": false,

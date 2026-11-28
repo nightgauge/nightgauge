@@ -37,6 +37,13 @@ type GateConfig struct {
 	// the ordered models a soft-routed over-capacity issue may move to. Each
 	// is a model string for the adapter the check is made against.
 	CapacityFallbackModels []string
+	// MaxPlannedFiles is pipeline.size_gate.thresholds.max_planned_files: a
+	// plan listing more files to create and modify than this stops before
+	// feature-dev (#3684). 0 disables the file-count arm. Default: 25.
+	MaxPlannedFiles int
+	// PlanCheckEnabled allows the post-planning check (EvaluatePlan) to run.
+	// False only when pipeline.size_gate.enabled is false.
+	PlanCheckEnabled bool
 }
 
 // DefaultGateConfig returns a GateConfig with safe defaults.
@@ -48,6 +55,8 @@ func DefaultGateConfig() GateConfig {
 		DecompositionCheckEnabled: true,
 		RejectOnOversized:         true,
 		CapacityEnabled:           true,
+		MaxPlannedFiles:           25,
+		PlanCheckEnabled:          true,
 	}
 }
 

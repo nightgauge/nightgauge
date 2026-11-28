@@ -1612,6 +1612,24 @@
       "rationale": "The second clause shape of the same kind: planning's plan_file exists as far as the context says but cannot be stat'ed (ENOTDIR, EACCES). Pinned separately so a clause deleted for `failed to stat` goes red on its own."
     },
     {
+      "id": "needs-decomposition-gate",
+      "input": "feature-planning gate failed: [needs-decomposition] plan lists 31 files, over max_planned_files=25",
+      "expected": "needs_decomposition",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "FeaturePlanningGate.Verify via checkPlanSize (#3684)",
+      "rationale": "The gate's reason for an oversized plan. It must park as needs_decomposition, not read as a generic gate failure that charges the issue and retries the same plan."
+    },
+    {
+      "id": "needs-decomposition-kind",
+      "input": "needs_decomposition: plan is size L but the issue is labelled size:M",
+      "expected": "needs_decomposition",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "a record quoting the kind name (#3684)",
+      "rationale": "The bare kind clause, pinned separately so deleting it goes red on its own."
+    },
+    {
       "id": "review-cap-reached-extension",
       "input": "[review-cap-reached] feature-validate stopped at the independent review's round cap with findings standing. The code was intentionally NOT committed or pushed and stays in this run's worktree. Parking this issue for an operator.",
       "expected": "review_cap_reached",

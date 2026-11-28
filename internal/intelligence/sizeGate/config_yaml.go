@@ -16,6 +16,7 @@ type gateYAML struct {
 			Thresholds        struct {
 				MaxLocInTitle      *int `yaml:"max_loc_in_title"`
 				DecomposedItemsMin *int `yaml:"decomposed_items_min"`
+				MaxPlannedFiles    *int `yaml:"max_planned_files"`
 			} `yaml:"thresholds"`
 			Heuristics struct {
 				LocPatternEnabled         *bool `yaml:"loc_pattern_enabled"`
@@ -54,6 +55,7 @@ func LoadGateConfigFromYAML(configPath string) GateConfig {
 		cfg.LocPatternEnabled = false
 		cfg.DecompositionCheckEnabled = false
 		cfg.CapacityEnabled = false
+		cfg.PlanCheckEnabled = false
 		return cfg
 	}
 
@@ -65,6 +67,9 @@ func LoadGateConfigFromYAML(configPath string) GateConfig {
 	}
 	if sg.Thresholds.DecomposedItemsMin != nil {
 		cfg.DecomposedItemsMin = *sg.Thresholds.DecomposedItemsMin
+	}
+	if sg.Thresholds.MaxPlannedFiles != nil && *sg.Thresholds.MaxPlannedFiles >= 0 {
+		cfg.MaxPlannedFiles = *sg.Thresholds.MaxPlannedFiles
 	}
 	if sg.Heuristics.LocPatternEnabled != nil {
 		cfg.LocPatternEnabled = *sg.Heuristics.LocPatternEnabled

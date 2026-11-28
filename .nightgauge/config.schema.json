@@ -177,6 +177,74 @@
           "type": "string",
           "description": "Base directory for git worktrees."
         },
+        "size_gate": {
+          "type": "object",
+          "description": "Issue size gate, read by `nightgauge size-gate`, the dispatch-time capacity check and the post-planning plan check (#3684). `enabled: false` turns every size-gate heuristic off.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Run the size gate at all. False disables every heuristic, including the post-planning plan check."
+            },
+            "reject_on_oversized": {
+              "type": "boolean",
+              "default": true,
+              "description": "Reject an oversized issue (true) or only report it (false)."
+            },
+            "thresholds": {
+              "type": "object",
+              "properties": {
+                "max_loc_in_title": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 5000,
+                  "description": "LOC mentioned in an issue title above which the issue is rejected."
+                },
+                "decomposed_items_min": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 2,
+                  "description": "Sub-issues a size:L/XL issue needs before it may run."
+                },
+                "max_planned_files": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 25,
+                  "description": "A plan listing more files to create and modify than this stops before feature-dev as needs_decomposition (#3684). 0 disables the file-count check."
+                }
+              }
+            },
+            "heuristics": {
+              "type": "object",
+              "properties": {
+                "loc_pattern_enabled": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Run the LOC-in-title heuristic."
+                },
+                "decomposition_check_enabled": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Run the size:L/XL decomposition heuristic."
+                }
+              }
+            },
+            "routes": {
+              "type": "object",
+              "properties": {
+                "reject_action": {
+                  "type": "string",
+                  "description": "`soft-route` moves an over-capacity issue to the first capacity_fallback_models entry whose window admits it instead of rejecting it."
+                },
+                "capacity_fallback_models": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Ordered fallback models for a soft-routed over-capacity issue."
+                }
+              }
+            }
+          }
+        },
         "context_schema_repair": {
           "type": "object",
           "description": "Context schema self-correction: re-invoke stages when context file fails Zod validation. Appends error-fix instructions to the original SKILL.md prompt. Each repair attempt consumes tokens (~same cost as a stage run). Issue #2552.",

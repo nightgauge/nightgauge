@@ -13107,9 +13107,12 @@ const maxNPAGateDetail = 600
 // not_pipeline_actionable verdict carries its evidence (the planner's
 // approach, #3354) after the reason: that text becomes the failure detail the
 // autonomous scheduler records and puts on the operator's card. The reason
-// stays first so ClassifyTerminalKind still matches its marker.
+// stays first so ClassifyTerminalKind still matches its marker. A
+// needs_decomposition verdict carries its key=value evidence the same way
+// (#3684): the autonomous action reads the counts and sizes from it.
 func gateFailureError(gateRes gates.GateResult) error {
-	if gateRes.TerminalKind == gates.TerminalKindNotPipelineActionable && len(gateRes.Evidence) > 0 {
+	if (gateRes.TerminalKind == gates.TerminalKindNotPipelineActionable ||
+		gateRes.TerminalKind == gates.TerminalKindNeedsDecomposition) && len(gateRes.Evidence) > 0 {
 		ev := strings.Join(gateRes.Evidence, "; ")
 		if len(ev) > maxNPAGateDetail {
 			ev = ev[:maxNPAGateDetail] + "…"
