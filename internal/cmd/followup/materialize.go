@@ -393,6 +393,9 @@ type Result struct {
 	Reason     string      `json:"reason,omitempty"`
 	Items      []Item      `json:"items"`
 	Refused    int         `json:"refused,omitempty"`
+	// Empty marks RunMaterialize's empty-capture result: nothing was loaded,
+	// so no filer was built.
+	Empty bool `json:"-"`
 }
 
 // Consumed reports whether the record with id leaves the capture file:

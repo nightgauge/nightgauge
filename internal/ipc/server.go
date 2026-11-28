@@ -21,10 +21,12 @@ import (
 	platformapi "github.com/nightgauge/nightgauge/api/generated/go/platform"
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/attention/sweep"
+	"github.com/nightgauge/nightgauge/internal/cmd/followup"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/doctor"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/executionprofile"
+	"github.com/nightgauge/nightgauge/internal/filing"
 	"github.com/nightgauge/nightgauge/internal/focus"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
@@ -287,6 +289,10 @@ type Server struct {
 
 	// resolver auto-resolves GitHub clients from (owner, repo) using per-repo config.
 	resolver *ClientResolver
+
+	// runEndFilerFactory builds the filer for materializeOnRunEnd (#3685);
+	// nil means the live forge. Tests replace it.
+	runEndFilerFactory func(root, repo string, issue int) followup.FilerFactory
 	// partialDeliveryStatus replaces the forge read behind the
 	// partial-delivery-close-refused raise in tests (#3089).
 	partialDeliveryStatus func(ctx context.Context, repo string, issue int) (hooks.PartialDeliveryStatus, error)
@@ -4650,6 +4656,16 @@ func (s *Server) registerMethods() {
 			)
 		}
 
+		// Issue #3685: a run that ends without success never reaches the
+		// post-merge followup-materialize stage, so file its discovered work
+		// now, before the seal clears the run's state. Best-effort: errors are
+		// logged and the records stay for the next attempt.
+		if !p.Success {
+			if root := s.repoRoot(recordRepo); root != "" {
+				s.materializeOnRunEnd(root, recordRepo, p.IssueNumber)
+			}
+		}
+
 		// STEP 3 — COMPARE-AND-DELETE, under runtimesMu: drop the registry entry
 		// only if the entry stored there is the SAME POINTER that was claimed, so
 		// a successor installed during the unlocked step-2 window survives (F5).
@@ -6671,4 +6687,40 @@ func (s *Server) remotePinDeps(repo string) orchestrator.RemotePinDeps {
 		deps.OperatorAdapter = s.scheduler.OperatorAdapter
 	}
 	return deps
+}
+
+// materializeOnRunEnd files the discovered work of an extension-path run that
+// ended without success (#3685), on a fresh bounded context: the request's
+// own context may already be cancelled. Mirrors the scheduler's terminal defer.
+func (s *Server) materializeOnRunEnd(root, repo string, issue int) {
+	dir, err := state.PipelineStateDir(root)
+	if err != nil {
+		log.Printf("notifyComplete: #%d followup-materialize: pipeline state dir: %v", issue, err)
+		return
+	}
+	factory := s.runEndFilerFactory
+	if factory == nil {
+		// Config is loaded inside the returned factory, which RunMaterialize
+		// calls only when the capture holds records.
+		factory = func(root, repo string, issue int) followup.FilerFactory {
+			return func(ctx context.Context, gate filing.Gate) (followup.Filer, bool, error) {
+				cfg, err := config.Load(root)
+				if err != nil {
+					if gate.Files() {
+						return nil, false, fmt.Errorf("load config for %s: %w", root, err)
+					}
+					log.Printf("notifyComplete: #%d followup-materialize: config unreadable, reporting without the forge: %v", issue, err)
+					return nil, false, nil
+				}
+				var resolve followup.ClientResolver
+				if s.resolver != nil {
+					resolve = s.resolver.Resolve
+				}
+				return followup.ForgeFilerFactory(s.client, cfg, resolve, root, repo, issue)(ctx, gate)
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), followup.RunEndTimeout)
+	defer cancel()
+	followup.MaterializeOnRunEnd(ctx, dir, root, issue, factory(root, repo, issue))
 }

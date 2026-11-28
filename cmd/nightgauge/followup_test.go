@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/cmd/discoveredwork"
+	"github.com/nightgauge/nightgauge/internal/cmd/followup"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/github/githubtest"
 )
@@ -62,7 +63,7 @@ func TestFollowupMaterialize_ZeroRecordsIsReported(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &res); err != nil {
 		t.Fatalf("not JSON: %v: %q", err, out)
 	}
-	if res.Issue != 42 || res.Reason != followupEmptyCaptureReason || res.Items == nil {
+	if res.Issue != 42 || res.Reason != followup.EmptyCaptureReason || res.Items == nil {
 		t.Fatalf("result = %+v", res)
 	}
 }

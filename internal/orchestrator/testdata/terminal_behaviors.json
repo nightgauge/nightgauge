@@ -342,7 +342,7 @@
         "delete a successor's worktree.",
         "",
         "EVERY behavior in this manifest, accounted for. This list is exhaustive by construction: if you add a",
-        "behavior row above, add its disposition here, and keep the section counts summing to 29. TestForceClearAccountingIsExhaustive fails when a name is missing. (29 behaviors + this row.)",
+        "behavior row above, add its disposition here, and keep the section counts summing to 30. TestForceClearAccountingIsExhaustive fails when a name is missing. (30 behaviors + this row.)",
         "",
         "PERFORMED (3):",
         "  queue-item-completion       \u2014 completeQueueItem releases the dequeue's `processing` mark, on BOTH",
@@ -453,7 +453,7 @@
         "                                stashing/committing it is unsafe. Preserving the tree keeps the work",
         "                                intact; recovery happens at reclamation time.",
         "",
-        "DELEGATED \u2014 produced later, by an existing subsystem (5):",
+        "DELEGATED \u2014 produced later, by an existing subsystem (6):",
         "  history-record-write        \u2014 Go's pipeline.notifyComplete is the sole writer and is unreachable for",
         "  learning-outcome-record       a run whose promise never settles. If the run later settles, its own",
         "                                notifyComplete reaches Go and writes BOTH \u2014 see KNOWN EXPOSURE below",
@@ -485,6 +485,10 @@
         "                                it at the next server start and removes it under the 14-day cap. The Go",
         "                                scheduler path performs both directly in its terminal defer (#440); this",
         "                                funnel is the extension side, where they are the claim's to do.",
+        "  followup-materialize-on-unsuccessful-end \u2014 #3685; it runs inside pipeline.notifyComplete, which the",
+        "                                force-clear must never call. A run that later settles files its capture",
+        "                                through its own notifyComplete; one that stays wedged keeps the capture,",
+        "                                which NGD050 reports and `nightgauge followup materialize` files.",
         "",
         "NOT APPLICABLE \u2014 Go-only by design (3):",
         "  lifecycle-decision-trace    \u2014 ADR 013 / #179; the extension path emits no trace on either funnel.",
@@ -604,6 +608,18 @@
         "file": "internal/ipc/server.go",
         "anchor": "orchestrator.RaiseGatePluginMissing(s.attentionStore(), recordRepo, p.IssueNumber, runID, string(snap.Stage), errMsg)"
       }
+    },
+    {
+      "name": "followup-materialize-on-unsuccessful-end",
+      "note": "#3685: a run that ends without success never reaches the post-merge followup-materialize stage, so each terminal path files the run's discovered-work capture through followup.MaterializeOnRunEnd before the seal.",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.materializeOnRunEnd(stageWorkspace(runtime, workspaceRoot), item.Repo, item.Number)"
+      },
+      "extension": {
+        "file": "internal/ipc/server.go",
+        "anchor": "s.materializeOnRunEnd(root, recordRepo, p.IssueNumber)"
+      }
     }
   ],
   "fences": [
@@ -612,7 +628,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "443b8a6d7eeec9634b587bc91ffe56020ed006f23f97a05c9b0840f1065ba7eb"
+      "sha256": "2a2a182c2e501c7976082850c5f1cd318e9c868b6183b9fc391e7d0696f4bb58"
     },
     {
       "id": "extension-runSlotPipeline-finally",
