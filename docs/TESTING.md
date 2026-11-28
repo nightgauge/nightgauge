@@ -285,7 +285,12 @@ Implementation notes that are load-bearing rather than incidental:
    the panel's view state as the workbench reported it (#3662): a panel never
    reported visible never had its document built. The
    case sets its own harness timeout (`test(name, fn, { timeoutMs })`), so the
-   harness's 30 s default does not cut the report off.
+   harness's 30 s default does not cut the report off. The host window opens
+   no startup editors (welcome page, walkthroughs, chat) and does not check
+   for updates, and the case reveals the dashboard and waits for it to be
+   visible before it waits for tab posts: a webview hidden from creation never
+   loads a document, so its held `activateTab` posts never flush (#3662). The
+   case logs whether the panel was visible before that reveal.
 
 Findings the tier recorded on its first run — real defects, deliberately not
 fixed in the PR that found them — live in
