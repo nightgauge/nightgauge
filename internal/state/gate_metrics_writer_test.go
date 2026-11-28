@@ -54,7 +54,7 @@ func TestAppendGateMetric_ReservesJudgeGateName(t *testing.T) {
 			return AppendGateMetric(ws, 1, JudgeGateName, "pass", "", "t")
 		},
 		"AppendGateMetricDetail": func(ws string) error {
-			return AppendGateMetricDetail(ws, 1, JudgeGateName, "pass", "", "t", nil, nil)
+			return AppendGateMetricDetail(ws, 1, JudgeGateName, "pass", "", "t", nil, nil, "")
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -176,5 +176,29 @@ func TestAppendGateMetric_LinkedWorktreeRecordSurvivesRemoval(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("main checkout gate input has %d records from the worktree, want 0", len(got))
+	}
+}
+
+// TestAppendGateMetricDetail_Model: a model is written as "model"; an empty one
+// leaves the key off the row (#3683).
+func TestAppendGateMetricDetail_Model(t *testing.T) {
+	ws := layouttest.Repo(t)
+	if err := AppendGateMetricDetail(ws, 1, "adversarial-review", "pass", "", "t", nil, nil, "opus"); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendGateMetricDetail(ws, 1, "build", "pass", "", "t", nil, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	path, err := layout.CheckoutPath(ws, GateMetricsName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(rows) != 2 || !strings.Contains(rows[0], `"model":"opus"`) || strings.Contains(rows[1], `"model"`) {
+		t.Fatalf("rows = %v", rows)
 	}
 }

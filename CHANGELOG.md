@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- The independent review's round cap is now `review.max_rounds` (default 3,
+  1–6), and the cap summary and Action Center card name the cap the run
+  reached. In the last allowed round, a `correctness` major outside the lines
+  changed since the previous round's tree becomes discovered work instead of
+  another fix nobody can review; blockers stay must-fix. `review.model` pins
+  the reviewer's model (default: `feature-validate`'s), and each review row in
+  `gate-metrics.jsonl` records the model it ran on.
 - A `nightgauge serve` daemon with no VS Code extension attached now runs a
   dashboard `trigger` itself instead of letting it expire. It refuses, with a
   reason the dashboard shows, a trigger that is missing its repo or issue, names

@@ -141,6 +141,24 @@
         }
       }
     },
+    "review": {
+      "type": "object",
+      "description": "The independent review feature-validate runs (#3683).",
+      "additionalProperties": false,
+      "properties": {
+        "max_rounds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 6,
+          "default": 3,
+          "description": "Catches one pipeline run may spend before the review stops at its cap."
+        },
+        "model": {
+          "type": "string",
+          "description": "The reviewer's model. Empty follows feature-validate's model."
+        }
+      }
+    },
     "pipeline": {
       "type": "object",
       "description": "Pipeline execution configuration.",

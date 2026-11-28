@@ -25,6 +25,8 @@ type gateMetricRecord struct {
 	AttemptID       string  `json:"attempt_id"`
 	// Findings counts a review's findings per severity (#2839).
 	Findings *FindingCounts `json:"findings"`
+	// Model is the model a review ran on (#3683).
+	Model *string `json:"model,omitempty"`
 }
 
 // ReadGateMetricsForIssue reads gate-metrics.jsonl and returns GateResult records

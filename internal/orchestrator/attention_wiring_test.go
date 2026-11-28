@@ -1739,7 +1739,7 @@ func TestReviewCapOnAnUnchangedTreeFillsTheCard(t *testing.T) {
 	s := review.Session{Root: root, Issue: 2876, PipelineRun: "run", Now: time.Unix(1000, 0)}
 	for _, tree := range []string{"t0", "t1", "t2"} {
 		s.Tree = tree
-		if _, err := review.Record(s, tree, findings, time.Time{}); err != nil {
+		if _, err := review.Record(context.Background(), s, tree, findings, time.Time{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -2199,4 +2199,47 @@ func TestClipBytes(t *testing.T) {
 			t.Errorf("clipBytes(%q, %d) = %q, want %q", tc.in, tc.n, got, tc.want)
 		}
 	}
+}
+
+// TestReviewCapCardNamesTheCapTheRunReached: the card names the cap stored with
+// the record, and without a record the cap the workspace config sets (#3683).
+func TestReviewCapCardNamesTheCapTheRunReached(t *testing.T) {
+	t.Parallel()
+
+	t.Run("from the record", func(t *testing.T) {
+		t.Parallel()
+		as := newAttentionProducerScheduler(t)
+		stored, err := json.Marshal(review.Outcome{Verdict: "catch", Fix: []review.Finding{}, Rounds: 4})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := gateledger.Append(as.workspaceRoot, gateledger.Event{
+			RunID: "review-3683-1", Event: gateledger.EventReviewCap, Kind: gateledger.KindReview,
+			Tree: "t3", Issue: 3683, Review: stored, Worktree: "/tmp/wt",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		as.raiseReviewCapReached("octocat/acme", 3683, "Capped", "text")
+		reqs := openRequests(t, as)
+		if len(reqs) != 1 || !strings.Contains(reqs[0].Body, "cap of 4 rounds") {
+			t.Fatalf("the card must name the stored cap: %+v", reqs)
+		}
+	})
+	t.Run("from the config", func(t *testing.T) {
+		t.Parallel()
+		as := newAttentionProducerScheduler(t)
+		dir := filepath.Join(as.workspaceRoot, ".nightgauge")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		cfg := "owner: o\nproject:\n  number: 1\nreview:\n  max_rounds: 2\n"
+		if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		as.raiseReviewCapReached("octocat/acme", 3683, "Capped", "[review-cap-reached] stopped")
+		reqs := openRequests(t, as)
+		if len(reqs) != 1 || !strings.Contains(reqs[0].Body, "cap of 2 rounds") {
+			t.Fatalf("the card must name the configured cap: %+v", reqs)
+		}
+	})
 }
