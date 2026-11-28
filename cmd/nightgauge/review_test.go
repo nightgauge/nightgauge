@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/layout"
@@ -53,7 +54,7 @@ func reviewRepo(t *testing.T) review.Session {
 	if err := os.WriteFile(filepath.Join(dir, "issue-7.json"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s, err := reviewSession(context.Background(), root, 7, "")
+	s, _, err := reviewSession(context.Background(), root, 7, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,5 +137,64 @@ func TestDisabledReviewDoesNothing(t *testing.T) {
 	p, err := prepareReview(context.Background(), s, false)
 	if err != nil || !p.Disabled || p.Bundle != nil {
 		t.Fatalf("%+v, %v", p, err)
+	}
+}
+
+// TestRunReviewPassesTheReviewerModel: the spawn carries review.model, and a
+// config that sets max_rounds reaches the session (#3683).
+func TestRunReviewPassesTheReviewerModel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NIGHTGAUGE_STAGE", "")
+	t.Setenv("NIGHTGAUGE_DISPATCH_MODEL", "")
+	t.Setenv("NIGHTGAUGE_UI_CORE_DEFAULT_MODEL", "")
+	s := reviewRepo(t)
+	cfg := "owner: o\nproject:\n  number: 1\nreview:\n  max_rounds: 4\n  model: opus\n"
+	if err := os.WriteFile(filepath.Join(s.Root, ".nightgauge", "config.yaml"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, _, err := reviewSession(context.Background(), s.Root, 7, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Model != "opus" || s.MaxRounds != 4 {
+		t.Fatalf("session = model %q, max rounds %d", s.Model, s.MaxRounds)
+	}
+	ctx := context.Background()
+	p, err := prepareReview(ctx, s, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var model string
+	spawn := func(_ context.Context, _ adapters.SkillRunner, o adapters.RunOptions, _ string) error {
+		model = o.Model
+		return os.WriteFile(p.FindingsPath, []byte(`{"schema":1,"findings":[]}`), 0o600)
+	}
+	if _, err := runReview(ctx, s, fakeReviewer{agentic: true}, p, spawn); err != nil {
+		t.Fatal(err)
+	}
+	if model != "opus" {
+		t.Fatalf("spawned model = %q, want opus", model)
+	}
+}
+
+// TestReviewSessionDefaultsAndRejectsAnInvalidCap: no review block leaves the
+// default cap and the adapter's model; an out-of-range cap is an error, never
+// the default (#3683).
+func TestReviewSessionDefaultsAndRejectsAnInvalidCap(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NIGHTGAUGE_STAGE", "")
+	t.Setenv("NIGHTGAUGE_DISPATCH_MODEL", "")
+	t.Setenv("NIGHTGAUGE_UI_CORE_DEFAULT_MODEL", "")
+	s := reviewRepo(t)
+	if s.MaxRounds != config.DefaultReviewMaxRounds || s.Model != "" {
+		t.Fatalf("defaults: max rounds %d, model %q", s.MaxRounds, s.Model)
+	}
+	cfg := "owner: o\nproject:\n  number: 1\nreview:\n  max_rounds: 9\n"
+	if err := os.WriteFile(filepath.Join(s.Root, ".nightgauge", "config.yaml"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := reviewSession(context.Background(), s.Root, 7, ""); err == nil ||
+		!strings.Contains(err.Error(), "review.max_rounds") {
+		t.Fatalf("an out-of-range cap must fail: %v", err)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/cmd/discoveredwork"
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/gateledger"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/hooks"
@@ -124,7 +125,7 @@ func TestRoute(t *testing.T) {
 		{"plan-compliance", "major", 0, 1},
 		{"correctness", "nitpick", 0, 0},
 	} {
-		fix, disc := Route([]Finding{{Pass: tc.pass, Severity: tc.severity}})
+		fix, disc := Route([]Finding{{Pass: tc.pass, Severity: tc.severity}}, nil)
 		if len(fix) != tc.fix || len(disc) != tc.disc {
 			t.Errorf("%s %s: fix=%d discovered=%d", tc.pass, tc.severity, len(fix), len(disc))
 		}
@@ -150,12 +151,12 @@ func filed(t *testing.T, root string) []discoveredwork.Record {
 func TestDiscoveredDroppedByALaterRoundIsNotFiled(t *testing.T) {
 	root := repo(t)
 	s := session(root, "t0")
-	if _, err := Record(s, "t0", writeFindings(t,
+	if _, err := Record(context.Background(), s, "t0", writeFindings(t,
 		finding("correctness", "blocker"), finding("security", "major")), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	s.Tree = "t1"
-	out, err := Record(s, "t1", writeFindings(t), time.Time{})
+	out, err := Record(context.Background(), s, "t1", writeFindings(t), time.Time{})
 	if err != nil || out.Verdict != "pass" {
 		t.Fatalf("%+v, %v", out, err)
 	}
@@ -167,12 +168,12 @@ func TestDiscoveredDroppedByALaterRoundIsNotFiled(t *testing.T) {
 func TestDiscoveredALaterRoundStillReportsIsFiledOnce(t *testing.T) {
 	root := repo(t)
 	s := session(root, "t0")
-	if _, err := Record(s, "t0", writeFindings(t,
+	if _, err := Record(context.Background(), s, "t0", writeFindings(t,
 		finding("correctness", "blocker"), finding("security", "major")), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	s.Tree = "t1"
-	out, err := Record(s, "t1", writeFindings(t, elsewhere("security", "major")), time.Time{})
+	out, err := Record(context.Background(), s, "t1", writeFindings(t, elsewhere("security", "major")), time.Time{})
 	if err != nil || len(out.Discovered) != 1 {
 		t.Fatalf("%+v, %v", out, err)
 	}
@@ -184,15 +185,15 @@ func TestDiscoveredALaterRoundStillReportsIsFiledOnce(t *testing.T) {
 func TestUnfinishedRoundLeavesTheLastFinishedRoundsFindings(t *testing.T) {
 	root := repo(t)
 	s := session(root, "t0")
-	if _, err := Record(s, "t0", writeFindings(t,
+	if _, err := Record(context.Background(), s, "t0", writeFindings(t,
 		finding("correctness", "blocker"), finding("security", "major")), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	s.Tree = "t1"
-	if out, err := Record(s, "t2", writeFindings(t), time.Time{}); err != nil || out.Verdict != "catch" {
+	if out, err := Record(context.Background(), s, "t2", writeFindings(t), time.Time{}); err != nil || out.Verdict != "catch" {
 		t.Fatalf("moved tree: %+v, %v", out, err)
 	}
-	if out, err := Record(s, "t1", filepath.Join(t.TempDir(), "missing.json"), time.Time{}); err != nil || out.Verdict != "catch" {
+	if out, err := Record(context.Background(), s, "t1", filepath.Join(t.TempDir(), "missing.json"), time.Time{}); err != nil || out.Verdict != "catch" {
 		t.Fatalf("missing findings: %+v, %v", out, err)
 	}
 	if got := filed(t, root); len(got) != 1 {
@@ -208,10 +209,10 @@ func TestCatchesToTheCapLeaveOnlyTheLastRoundsFindings(t *testing.T) {
 	for i, tree := range []string{"t0", "t1", "t2"} {
 		s.Tree = tree
 		other := early
-		if i == MaxRounds-1 {
+		if i == config.DefaultReviewMaxRounds-1 {
 			other = late
 		}
-		if _, err := Record(s, tree, writeFindings(t, finding("correctness", "blocker"), other), time.Time{}); err != nil {
+		if _, err := Record(context.Background(), s, tree, writeFindings(t, finding("correctness", "blocker"), other), time.Time{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -233,7 +234,7 @@ func TestAnAgentsRecordSurvivesEveryRound(t *testing.T) {
 	}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Record(session(root, "t0"), "t0", writeFindings(t), time.Time{}); err != nil {
+	if _, err := Record(context.Background(), session(root, "t0"), "t0", writeFindings(t), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := filed(t, root); len(got) != 1 || got[0].SourceStage != Stage {
@@ -243,7 +244,7 @@ func TestAnAgentsRecordSurvivesEveryRound(t *testing.T) {
 
 func TestTwoPassesAtOneLocationStayTwoFindings(t *testing.T) {
 	root := repo(t)
-	if _, err := Record(session(root, "t0"), "t0", writeFindings(t,
+	if _, err := Record(context.Background(), session(root, "t0"), "t0", writeFindings(t,
 		finding("security", "major"), finding("plan-compliance", "major")), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +257,7 @@ func TestRecordCatchThenSameTreeIsReusedAndDurationIsWritten(t *testing.T) {
 	root := repo(t)
 	s := session(root, "tree-a")
 	started := s.Now.Add(-90 * time.Second)
-	out, err := Record(s, "tree-a", writeFindings(t,
+	out, err := Record(context.Background(), s, "tree-a", writeFindings(t,
 		finding("correctness", "blocker"), finding("security", "major"), finding("security", "nitpick")), started)
 	if err != nil {
 		t.Fatal(err)
@@ -288,11 +289,11 @@ func TestRecordCatchThenSameTreeIsReusedAndDurationIsWritten(t *testing.T) {
 func TestPassOnFixedTreeSupersedesCatch(t *testing.T) {
 	root := repo(t)
 	s := session(root, "tree-a")
-	if _, err := Record(s, "tree-a", writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
+	if _, err := Record(context.Background(), s, "tree-a", writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	s.Tree = "tree-b"
-	out, err := Record(s, "tree-b", writeFindings(t), time.Time{})
+	out, err := Record(context.Background(), s, "tree-b", writeFindings(t), time.Time{})
 	if err != nil || out.Verdict != "pass" {
 		t.Fatalf("%+v, %v", out, err)
 	}
@@ -316,7 +317,7 @@ func TestUnfinishedReviewsCatchAndLeaveNoLedgerEvent(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			root := repo(t)
 			s := session(root, "tree-a")
-			out, err := Record(s, tc.current, tc.path, time.Time{})
+			out, err := Record(context.Background(), s, tc.current, tc.path, time.Time{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -342,7 +343,7 @@ func TestCapIsPerPipelineRunAndCountsCatchesOnly(t *testing.T) {
 		if p, err := Consult(s); err != nil || p.CapReached {
 			t.Fatalf("%s: capped early: %+v, %v", tree, p, err)
 		}
-		if _, err := Record(s, tree, writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
+		if _, err := Record(context.Background(), s, tree, writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -365,7 +366,7 @@ func TestCapIsPerPipelineRunAndCountsCatchesOnly(t *testing.T) {
 	if rec.Worktree != root || rec.Tree != "t3" || len(rec.Outcome.Fix) != 1 {
 		t.Fatalf("the record must name the worktree and the findings: %+v", rec)
 	}
-	if n, err := gateledger.ReviewCatches(root, s.Issue, s.PipelineRun); err != nil || n != MaxRounds {
+	if n, err := gateledger.ReviewCatches(root, s.Issue, s.PipelineRun); err != nil || n != config.DefaultReviewMaxRounds {
 		t.Fatalf("the cap record must not count as a round: %d, %v", n, err)
 	}
 	s.PipelineRun = "next"
@@ -383,7 +384,7 @@ func TestReviewEventsDoNotTouchTheLocalGateAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := session(root, "tree-a")
-	if _, err := Record(s, "tree-a", writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
+	if _, err := Record(context.Background(), s, "tree-a", writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	a, err := gateledger.Latest(root, "tree-a", gateledger.KindLocalGate)
@@ -597,7 +598,7 @@ func TestPassesMatchTheDoc(t *testing.T) {
 func TestCapWithNoReadableCatchStillReports(t *testing.T) {
 	root := repo(t)
 	s := session(root, "t3")
-	for i := range MaxRounds {
+	for i := range config.DefaultReviewMaxRounds {
 		if err := gateledger.Append(root, gateledger.Event{
 			RunID: fmt.Sprintf("c%d", i), Event: gateledger.EventFinish, Kind: gateledger.KindReview,
 			Tree: fmt.Sprintf("t%d", i), Verdict: gateledger.VerdictFail, Issue: s.Issue,
@@ -625,7 +626,7 @@ func TestThirdCatchThenSameTreeReachesTheCap(t *testing.T) {
 		if p, err := Consult(s); err != nil || p.CapReached {
 			t.Fatalf("%s: capped early: %+v, %v", tree, p, err)
 		}
-		if _, err := Record(s, tree, writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
+		if _, err := Record(context.Background(), s, tree, writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -644,7 +645,7 @@ func TestThirdCatchThenSameTreeReachesTheCap(t *testing.T) {
 	if rec.Tree != "t2" || rec.Worktree != root || len(rec.Outcome.Fix) != 1 || rec.RunID == "" {
 		t.Fatalf("the record must name the tree, worktree, findings and run: %+v", rec)
 	}
-	if n, err := gateledger.ReviewCatches(root, s.Issue, s.PipelineRun); err != nil || n != MaxRounds {
+	if n, err := gateledger.ReviewCatches(root, s.Issue, s.PipelineRun); err != nil || n != config.DefaultReviewMaxRounds {
 		t.Fatalf("the cap record must not count as a round: %d, %v", n, err)
 	}
 }
@@ -654,7 +655,7 @@ func TestThirdCatchThenSameTreeReachesTheCap(t *testing.T) {
 func TestReuseBelowTheCapAndPassAtTheCap(t *testing.T) {
 	root := repo(t)
 	s := session(root, "t0")
-	if _, err := Record(s, "t0", writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
+	if _, err := Record(context.Background(), s, "t0", writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if p, err := Consult(s); err != nil || !p.Reusable || p.CapReached || p.Result.Verdict != "catch" {
@@ -662,12 +663,12 @@ func TestReuseBelowTheCapAndPassAtTheCap(t *testing.T) {
 	}
 	for _, tree := range []string{"t1", "t2"} {
 		s.Tree = tree
-		if _, err := Record(s, tree, writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
+		if _, err := Record(context.Background(), s, tree, writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	s.Tree = "t3"
-	if _, err := Record(s, "t3", writeFindings(t), time.Time{}); err != nil {
+	if _, err := Record(context.Background(), s, "t3", writeFindings(t), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	p, err := Consult(s)
@@ -758,7 +759,7 @@ func TestRecordLinksTheNamedCriterionAndTheRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := session(root, "t0")
-	if _, err := Record(s, "t0", writeFindings(t,
+	if _, err := Record(context.Background(), s, "t0", writeFindings(t,
 		planFinding("Criterion 2: max_tested was not bumped"),
 		planFinding("Criterion 9: out of range"),
 		planFinding("scope creep in m.json")), time.Time{}); err != nil {
@@ -790,7 +791,7 @@ func TestRecordLinksTheNamedCriterionAndTheRun(t *testing.T) {
 func TestRecordWithoutAnIssueContextLinksNoCriterion(t *testing.T) {
 	root := repo(t)
 	s := session(root, "t0")
-	if _, err := Record(s, "t0", writeFindings(t, planFinding("Criterion 1: absent")), time.Time{}); err != nil {
+	if _, err := Record(context.Background(), s, "t0", writeFindings(t, planFinding("Criterion 1: absent")), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	recs := filed(t, root)
@@ -883,7 +884,7 @@ func TestRecordResolvesACriterionBeyondTheModelList(t *testing.T) {
 	root := repo(t)
 	writeIssueContext(t, root, "First section criterion.")
 	want := writeReconcile(t, root, threeSectionBody)
-	if _, err := Record(session(root, "t0"), "t0",
+	if _, err := Record(context.Background(), session(root, "t0"), "t0",
 		writeFindings(t, planFinding("Criterion 3: docs missing")), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -925,12 +926,12 @@ func claimed(pass, severity, claim string) string {
 func TestReuseRestoresThatRoundsDiscoveredWork(t *testing.T) {
 	root := repo(t)
 	s := session(root, "A")
-	if _, err := Record(s, "A", writeFindings(t, claimed("security", "major", "claim X")), time.Time{}); err != nil {
+	if _, err := Record(context.Background(), s, "A", writeFindings(t, claimed("security", "major", "claim X")), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	want := summaries(filed(t, root))
 	s.Tree = "B"
-	if _, err := Record(s, "B", writeFindings(t, claimed("security", "major", "claim Y")), time.Time{}); err != nil {
+	if _, err := Record(context.Background(), s, "B", writeFindings(t, claimed("security", "major", "claim Y")), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	s.Tree = "A"
@@ -953,11 +954,11 @@ func TestReuseRestoresThatRoundsDiscoveredWork(t *testing.T) {
 func TestReusedPassWithNoDiscoveredClearsAnotherRounds(t *testing.T) {
 	root := repo(t)
 	s := session(root, "A")
-	if _, err := Record(s, "A", writeFindings(t), time.Time{}); err != nil {
+	if _, err := Record(context.Background(), s, "A", writeFindings(t), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	s.Tree = "B"
-	if _, err := Record(s, "B", writeFindings(t, claimed("security", "major", "claim Y")), time.Time{}); err != nil {
+	if _, err := Record(context.Background(), s, "B", writeFindings(t, claimed("security", "major", "claim Y")), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	s.Tree = "A"
@@ -977,7 +978,7 @@ func TestReusedCapRestoresTheLastCatchsDiscoveredWork(t *testing.T) {
 	for i, tree := range []string{"t0", "t1", "t2"} {
 		s.Tree = tree
 		claim := fmt.Sprintf("claim %d", i)
-		if _, err := Record(s, tree, writeFindings(t, finding("correctness", "blocker"),
+		if _, err := Record(context.Background(), s, tree, writeFindings(t, finding("correctness", "blocker"),
 			claimed("security", "major", claim)), time.Time{}); err != nil {
 			t.Fatal(err)
 		}
@@ -1008,7 +1009,7 @@ func TestReusedCapRestoresTheLastCatchsDiscoveredWork(t *testing.T) {
 func TestReuseOfAnEventWithoutDiscoveredLeavesTheCapture(t *testing.T) {
 	root := repo(t)
 	s := session(root, "B")
-	if _, err := Record(s, "B", writeFindings(t, claimed("security", "major", "claim Y")), time.Time{}); err != nil {
+	if _, err := Record(context.Background(), s, "B", writeFindings(t, claimed("security", "major", "claim Y")), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	dir, err := layout.PipelineStateDir(root)
@@ -1035,5 +1036,285 @@ func TestReuseOfAnEventWithoutDiscoveredLeavesTheCapture(t *testing.T) {
 	got := filed(t, root)
 	if len(got) != 2 {
 		t.Fatalf("capture changed: %+v", got)
+	}
+}
+
+// writeTree writes files into root's index and returns the tree git records.
+func writeTree(t *testing.T, root string, files map[string]string) string {
+	t.Helper()
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	if _, err := git(ctx, root, "add", "-A", "--", "."); err != nil {
+		t.Fatal(err)
+	}
+	out, err := git(ctx, root, "write-tree")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func lines(n int, changed map[int]string) string {
+	var b strings.Builder
+	for i := 1; i <= n; i++ {
+		if v, ok := changed[i]; ok {
+			b.WriteString(v + "\n")
+			continue
+		}
+		fmt.Fprintf(&b, "line %d\n", i)
+	}
+	return b.String()
+}
+
+func at(pass, severity, file string, line int, claim string) string {
+	return fmt.Sprintf(`{"pass":%q,"file":%q,"line":%d,"claim":%q,"severity":%q,"fix":"change"}`,
+		pass, file, line, claim, severity)
+}
+
+// TestCapFollowsMaxRounds: the cap is review.max_rounds, and the summary and the
+// cap record name it.
+func TestCapFollowsMaxRounds(t *testing.T) {
+	for _, rounds := range []int{2, 4} {
+		t.Run(fmt.Sprint(rounds), func(t *testing.T) {
+			root := repo(t)
+			s := session(root, "")
+			s.MaxRounds = rounds
+			for i := range rounds {
+				s.Tree = fmt.Sprintf("t%d", i)
+				if p, err := Consult(s); err != nil || p.CapReached || p.Round != i+1 {
+					t.Fatalf("round %d: %+v, %v", i+1, p, err)
+				}
+				if _, err := Record(context.Background(), s, s.Tree, writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.Tree = "next"
+			p, err := Consult(s)
+			if err != nil || !p.CapReached {
+				t.Fatalf("round %d must be capped: %+v, %v", rounds+1, p, err)
+			}
+			if want := fmt.Sprintf("cap of %d reached", rounds); !strings.Contains(p.Result.Summary, want) || p.Result.Rounds != rounds {
+				t.Fatalf("summary %q rounds %d, want %q", p.Result.Summary, p.Result.Rounds, want)
+			}
+			rec, err := LatestCap(root, s.Issue)
+			if err != nil || rec == nil || rec.Outcome.Rounds != rounds {
+				t.Fatalf("the cap record must name %d rounds: %+v, %v", rounds, rec, err)
+			}
+		})
+	}
+}
+
+// TestLastRoundRoutesByChangedLines: in the last allowed round, a correctness
+// major outside the lines changed since the previous round's tree is discovered
+// work; inside them, and any blocker, it is to fix.
+func TestLastRoundRoutesByChangedLines(t *testing.T) {
+	root := repo(t)
+	s := session(root, "")
+	s.MaxRounds = 2
+	s.Tree = writeTree(t, root, map[string]string{"a.go": lines(20, nil), "b.go": lines(5, nil)})
+	if _, err := Record(context.Background(), s, s.Tree, writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	s.Tree = writeTree(t, root, map[string]string{"a.go": lines(20, map[int]string{10: "fixed"})})
+	out, err := Record(context.Background(), s, s.Tree, writeFindings(t,
+		at("correctness", "major", "a.go", 10, "inside"),
+		at("correctness", "major", "a.go", 3, "outside"),
+		at("correctness", "major", "b.go", 1, "untouched file"),
+		at("security", "blocker", "b.go", 2, "blocker outside")), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fix, disc []string
+	for _, f := range out.Fix {
+		fix = append(fix, f.Claim)
+	}
+	for _, f := range out.Discovered {
+		disc = append(disc, f.Claim)
+	}
+	if strings.Join(fix, ",") != "inside,blocker outside" {
+		t.Fatalf("fix = %v", fix)
+	}
+	if strings.Join(disc, ",") != "outside,untouched file" {
+		t.Fatalf("discovered = %v", disc)
+	}
+	if len(out.Warnings) != 0 {
+		t.Fatalf("warnings = %v", out.Warnings)
+	}
+}
+
+// TestLastRoundIgnoresDiffNoprefix: a user's diff.noprefix=true must not drop
+// the scope, which would turn every in-diff correctness major into discovered work.
+func TestLastRoundIgnoresDiffNoprefix(t *testing.T) {
+	root := repo(t)
+	gittest.Run(t, root, "config", "diff.noprefix", "true")
+	s := session(root, "")
+	s.MaxRounds = 2
+	s.Tree = writeTree(t, root, map[string]string{"a.go": lines(20, nil)})
+	if _, err := Record(context.Background(), s, s.Tree, writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	s.Tree = writeTree(t, root, map[string]string{"a.go": lines(20, map[int]string{10: "fixed"})})
+	out, err := Record(context.Background(), s, s.Tree, writeFindings(t,
+		at("correctness", "major", "a.go", 10, "inside")), time.Time{})
+	if err != nil || len(out.Fix) != 1 || len(out.Discovered) != 0 {
+		t.Fatalf("in-diff major must stay to fix under diff.noprefix: %+v, %v", out, err)
+	}
+}
+
+// TestEarlierRoundFixesAnOutsideMajor: before the last round, a correctness
+// major outside the changed lines is still to fix.
+func TestEarlierRoundFixesAnOutsideMajor(t *testing.T) {
+	root := repo(t)
+	s := session(root, "")
+	s.MaxRounds = 3
+	s.Tree = writeTree(t, root, map[string]string{"a.go": lines(20, nil)})
+	if _, err := Record(context.Background(), s, s.Tree, writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	s.Tree = writeTree(t, root, map[string]string{"a.go": lines(20, map[int]string{10: "fixed"})})
+	out, err := Record(context.Background(), s, s.Tree, writeFindings(t,
+		at("correctness", "major", "a.go", 3, "outside")), time.Time{})
+	if err != nil || len(out.Fix) != 1 || len(out.Discovered) != 0 {
+		t.Fatalf("round 2 of 3 routes as before: %+v, %v", out, err)
+	}
+}
+
+// TestLastRoundWithUnknownScopeFixes: a previous tree git cannot read leaves the
+// scope unknown, so the major is to fix and a warning names why.
+func TestLastRoundWithUnknownScopeFixes(t *testing.T) {
+	root := repo(t)
+	s := session(root, "")
+	s.MaxRounds = 2
+	s.Tree = "0000000000000000000000000000000000000001"
+	if _, err := Record(context.Background(), s, s.Tree, writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	s.Tree = writeTree(t, root, map[string]string{"a.go": lines(5, nil)})
+	out, err := Record(context.Background(), s, s.Tree, writeFindings(t,
+		at("correctness", "major", "a.go", 3, "outside")), time.Time{})
+	if err != nil || len(out.Fix) != 1 || len(out.Warnings) != 1 ||
+		!strings.Contains(out.Warnings[0], "last-round scope unknown") {
+		t.Fatalf("an unknown scope is must-fix with a warning: %+v, %v", out, err)
+	}
+}
+
+// TestLastRoundOnAnUnchangedTreeFixes: the previous round reviewed this same
+// tree, so nothing changed and the scope is unknown, not empty.
+func TestLastRoundOnAnUnchangedTreeFixes(t *testing.T) {
+	root := repo(t)
+	s := session(root, "")
+	s.MaxRounds = 2
+	s.Tree = writeTree(t, root, map[string]string{"a.go": lines(5, nil)})
+	if _, err := Record(context.Background(), s, s.Tree, writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Record(context.Background(), s, s.Tree, writeFindings(t,
+		at("correctness", "major", "a.go", 3, "c")), time.Time{})
+	if err != nil || len(out.Fix) != 1 || len(out.Discovered) != 0 {
+		t.Fatalf("an unchanged tree routes as before: %+v, %v", out, err)
+	}
+}
+
+// TestMaxRoundsOneHasNoScope: with one round there is no previous tree, so the
+// rule cannot apply.
+func TestMaxRoundsOneHasNoScope(t *testing.T) {
+	root := repo(t)
+	s := session(root, "")
+	s.MaxRounds = 1
+	s.Tree = writeTree(t, root, map[string]string{"a.go": lines(5, nil)})
+	out, err := Record(context.Background(), s, s.Tree, writeFindings(t,
+		at("correctness", "major", "a.go", 3, "c")), time.Time{})
+	if err != nil || len(out.Fix) != 1 || len(out.Warnings) != 0 {
+		t.Fatalf("max_rounds 1 routes as before: %+v, %v", out, err)
+	}
+}
+
+func TestRouteWithScope(t *testing.T) {
+	one, nine := 1, 9
+	scope := ChangedLines{"a.go": {{5, 10}}}
+	fix, disc := Route([]Finding{
+		{Pass: "correctness", Severity: "major", File: "a.go", Line: &nine, Claim: "in range"},
+		{Pass: "correctness", Severity: "major", File: "a.go", Line: &one, Claim: "out of range"},
+		{Pass: "correctness", Severity: "major", File: "a.go", Claim: "no line, changed file"},
+		{Pass: "correctness", Severity: "major", File: "c.go", Claim: "unchanged file"},
+		{Pass: "security", Severity: "blocker", File: "c.go", Claim: "blocker"},
+		{Pass: "security", Severity: "major", File: "a.go", Line: &nine, Claim: "security major"},
+	}, &scope)
+	claims := func(fs []Finding) string {
+		var out []string
+		for _, f := range fs {
+			out = append(out, f.Claim)
+		}
+		return strings.Join(out, ",")
+	}
+	if got := claims(fix); got != "in range,no line, changed file,blocker" {
+		t.Errorf("fix = %s", got)
+	}
+	if got := claims(disc); got != "out of range,unchanged file,security major" {
+		t.Errorf("discovered = %s", got)
+	}
+}
+
+func TestParseChangedLines(t *testing.T) {
+	diff := `diff --git a/a.go b/a.go
+--- a/a.go
++++ b/a.go
+@@ -3 +3 @@
+-old
++new
+@@ -10,2 +10,3 @@ func x() {
+@@ -20,4 +22,0 @@
+diff --git a/gone.go b/gone.go
+--- a/gone.go
++++ /dev/null
+@@ -1,3 +0,0 @@
+diff --git a/new.go b/new.go
+--- /dev/null
++++ b/new.go
+@@ -0,0 +1,4 @@
+`
+	got := parseChangedLines([]byte(diff))
+	want := ChangedLines{"a.go": {{3, 3}, {10, 12}, {22, 22}}, "new.go": {{1, 4}}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// TestRowNamesTheModel: every review row names the reviewer's model.
+func TestRowNamesTheModel(t *testing.T) {
+	root := repo(t)
+	s := session(root, "t0")
+	s.Model = "opus"
+	if _, err := Record(context.Background(), s, "t0", writeFindings(t), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	s.Model, s.Tree = "", "t1"
+	if _, err := Record(context.Background(), s, "t1", writeFindings(t), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	path, err := layout.CheckoutPath(root, state.GateMetricsName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var models []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var row struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatal(err)
+		}
+		models = append(models, row.Model)
+	}
+	if strings.Join(models, ",") != "opus,adapter-default" {
+		t.Fatalf("models = %v", models)
 	}
 }

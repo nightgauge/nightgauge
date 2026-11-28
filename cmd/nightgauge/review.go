@@ -35,21 +35,31 @@ findings and writes the verdict. See docs/PR_REVIEW_PASSES.md.`,
 	return cmd
 }
 
-func reviewSession(ctx context.Context, workdir string, issue int, tree string) (review.Session, error) {
+// reviewSession loads the workspace config once, for prepare, run and record
+// alike, so every row a subcommand writes names the same cap and model (#3683).
+// A config that does not load is an error: an out-of-range review.max_rounds
+// must never run under the default.
+func reviewSession(ctx context.Context, workdir string, issue int, tree string) (review.Session, *config.Config, error) {
 	root, err := gateWorkdir(workdir)
 	if err != nil {
-		return review.Session{}, err
+		return review.Session{}, nil, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return review.Session{}, nil, err
 	}
 	s := review.Session{
 		Root: root, Issue: issue, Tree: tree, Now: time.Now(),
 		PipelineRun: os.Getenv(adapters.RunIDEnvVar),
 	}
+	s.MaxRounds = cfg.ResolveReviewMaxRounds()
+	s.Model = config.ResolveReviewModel(cfg, os.Getenv)
 	if s.Tree == "" {
 		if s.Tree, err = hooks.TreeFingerprint(ctx, &hooks.ExecCmdRunner{}, root); err != nil {
-			return s, fmt.Errorf("the tree could not be fingerprinted: %w", err)
+			return s, cfg, fmt.Errorf("the tree could not be fingerprinted: %w", err)
 		}
 	}
-	return s, nil
+	return s, cfg, nil
 }
 
 func prepareReview(ctx context.Context, s review.Session, enabled bool) (review.Prepared, error) {
@@ -76,15 +86,11 @@ func reviewPrepareCmd() *cobra.Command {
 		Short:        "Reuse this tree's verdict, or build the bundle for a new review",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			s, err := reviewSession(cmd.Context(), workdir, issue, "")
+			s, cfg, err := reviewSession(cmd.Context(), workdir, issue, "")
 			if err != nil {
 				return err
 			}
-			enabled := true
-			if cfg, err := config.Load(s.Root); err == nil && cfg != nil {
-				enabled = cfg.Pipeline.ResolveAdversarialReviewEnabled()
-			}
-			p, err := prepareReview(cmd.Context(), s, enabled)
+			p, err := prepareReview(cmd.Context(), s, cfg.Pipeline.ResolveAdversarialReviewEnabled())
 			if err != nil {
 				return err
 			}
@@ -151,12 +157,13 @@ func runReview(ctx context.Context, s review.Session, runner adapters.SkillRunne
 		AllowedTools: reviewTools,
 		Prompt:       string(prompt),
 		MaxTurns:     review.MaxTurns,
+		Model:        s.Model,
 	}, p.LogPath)
 	s.Now = time.Now()
 	if err != nil {
 		return review.Unfinished(s, started, "spawn failed, see "+p.LogPath+": "+err.Error())
 	}
-	return review.Record(s, recordTree(ctx, s), p.FindingsPath, started)
+	return review.Record(ctx, s, recordTree(ctx, s), p.FindingsPath, started)
 }
 
 // recordTree is the tree now. An empty answer can never equal the reviewed tree.
@@ -180,11 +187,7 @@ func reviewRunCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), reviewTimeout)
 			defer cancel()
-			s, err := reviewSession(ctx, workdir, issue, "")
-			if err != nil {
-				return err
-			}
-			cfg, err := config.Load(s.Root)
+			s, cfg, err := reviewSession(ctx, workdir, issue, "")
 			if err != nil {
 				return err
 			}
@@ -228,12 +231,12 @@ func reviewRecordCmd() *cobra.Command {
 		Short:        "Validate a findings file and write the verdict for the reviewed tree",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			s, err := reviewSession(cmd.Context(), workdir, issueNumber, tree)
+			s, _, err := reviewSession(cmd.Context(), workdir, issueNumber, tree)
 			if err != nil {
 				return err
 			}
 			started, _ := time.Parse(time.RFC3339Nano, startedAt)
-			out, err := review.Record(s, recordTree(cmd.Context(), s), findings, started)
+			out, err := review.Record(cmd.Context(), s, recordTree(cmd.Context(), s), findings, started)
 			if err != nil {
 				return err
 			}

@@ -33,6 +33,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/deliverable"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	gh "github.com/nightgauge/nightgauge/internal/github"
@@ -696,9 +697,23 @@ func (as *AutonomousScheduler) raiseReviewCapReached(repo string, issue int, tit
 	// Each cap has its own fingerprint, so a cap after a release raises a new
 	// card instead of matching the released one (#2876).
 	fingerprint := fmt.Sprintf("review-cap:fallback:%d", time.Now().UnixNano())
+	// The cap record names the cap the run reached; without one, the cap the
+	// configuration sets now is the best answer (#3683).
+	rounds := 0
+	if rec != nil {
+		rounds = rec.Outcome.Rounds
+	}
+	if rounds == 0 {
+		cfg, cfgErr := config.Load(as.steerRootFor(repo))
+		if cfgErr != nil {
+			log.Printf("attention: load config for the review cap of %s#%d, naming the default (fail-open): %v",
+				repo, issue, cfgErr)
+		}
+		rounds = cfg.ResolveReviewMaxRounds()
+	}
 	var body strings.Builder
 	fmt.Fprintf(&body, "The independent review of %s (%q) reached its cap of %d rounds, so the run stopped. "+
-		"This issue is parked; the rest of the repository keeps dispatching.\n\n", key, title, review.MaxRounds)
+		"This issue is parked; the rest of the repository keeps dispatching.\n\n", key, title, rounds)
 	if rec != nil {
 		fingerprint = "review-cap:" + rec.RunID
 		writeReviewCapRecord(&body, rec, probeReviewCapLocation(as.steerRootFor(repo), rec.Worktree, issue))

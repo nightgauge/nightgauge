@@ -21,14 +21,23 @@ and `scripts/pr-review.mjs` enforces its limits before anything is posted.
 `feature-validate` applies the same passes, severities and finding schema locally
 (Step 2.7.3), through `nightgauge review`. It reviews each tree once, in a fresh
 context holding only the diff, the issue and the tree. Blockers and `correctness`
-majors go to a fix loop of at most three catches per run, other majors become
-discovered work, and nitpicks are counted. Each finished round replaces the
-review's discovered work with its own, so only the last finished round's findings
-are filed, and two passes at one location stay two findings. A reused verdict, or
-the cap, restores the discovered work stored with that round (the last catch, at
-the cap), so the capture always matches the verdict that stands. A review that does
-not finish records a `catch`, never a pass, and changes no discovered work. The
-sections below on comments and identity describe the manual workflow only.
+majors go to a fix loop of at most `review.max_rounds` catches per run (default
+3), other majors become discovered work, and nitpicks are counted. In the last
+round the cap allows, a fix could not be reviewed again, so a `correctness` major
+outside the lines that changed between the previous round's tree and this one
+becomes discovered work instead; blockers, and correctness majors inside those
+lines, are still to fix. With `max_rounds: 1`, or when the previous tree cannot be
+diffed, there is no such scope and the round routes like every other. Each row the
+review writes to `gate-metrics.jsonl` names the reviewer's model, `review.model`
+(default: `feature-validate`'s model), or `adapter-default`.
+
+Each finished round replaces the review's discovered work with its own, so only
+the last finished round's findings are filed, and two passes at one location stay
+two findings. A reused verdict, or the cap, restores the discovered work stored
+with that round (the last catch, at the cap), so the capture always matches the
+verdict that stands. A review that does not finish records a `catch`, never a
+pass, and changes no discovered work. The sections below on comments and identity
+describe the manual workflow only.
 
 The binary carries its own copy of the Passes through Caps sections, as
 `internal/review/passes.md`, and writes it into each review's bundle, so a review
@@ -103,14 +112,21 @@ rejected.
 
 ## Caps
 
-| Limit             | Value | Effect                                                    |
-| ----------------- | ----- | --------------------------------------------------------- |
-| Findings per file | 30    | More keeps the first 30 by severity; the comment says so  |
-| Nitpicks shown    | 5     | The rest are counted in an "N more nitpicks omitted" line |
-| `claim` length    | 300   | Longer is truncated with a marker; the comment says so    |
-| `fix` length      | 1000  | Longer is truncated with a marker; the comment says so    |
-| `file` length     | 300   | Longer drops that finding only; the comment says so       |
-| Turns per review  | 80    | Reaching it stops the review; the job fails, no comment   |
+| Limit             | Value | Effect                                                        |
+| ----------------- | ----- | ------------------------------------------------------------- |
+| Findings per file | 30    | More keeps the first 30 by severity; the comment says so      |
+| Nitpicks shown    | 5     | The rest are counted in an "N more nitpicks omitted" line     |
+| `claim` length    | 300   | Longer is truncated with a marker; the comment says so        |
+| `fix` length      | 1000  | Longer is truncated with a marker; the comment says so        |
+| `file` length     | 300   | Longer drops that finding only; the comment says so           |
+| Turns per review  | 80    | Reaching it stops the review; the job fails, no comment       |
+| Rounds per run    | 3     | Default of `review.max_rounds` (1–6); `feature-validate` only |
+
+In the last round the cap allows, a `correctness` major outside the lines that
+changed between the previous round's tree and this one is discovered work, not a
+fix; blockers of every pass, and correctness majors inside those lines, are still
+to fix. Without such a scope (`max_rounds: 1`, or a previous tree that cannot be
+diffed) the round routes like every other.
 
 ## Turn limit
 

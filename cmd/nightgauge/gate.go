@@ -79,7 +79,7 @@ its own row through ` + "`nightgauge review record`" + `.`,
 			if cmd.Flags().Changed("duration-ms") {
 				duration = &durationMs
 			}
-			if err := state.AppendGateMetricDetail(work, issueNumber, gateName, result, errorSummary, ts, duration, nil); err != nil {
+			if err := state.AppendGateMetricDetail(work, issueNumber, gateName, result, errorSummary, ts, duration, nil, ""); err != nil {
 				fmt.Fprintf(os.Stderr, "gate record-metric: %v\n", err)
 				os.Exit(1)
 			}

@@ -64,11 +64,18 @@ rejected.
 
 ## Caps
 
-| Limit             | Value | Effect                                                    |
-| ----------------- | ----- | --------------------------------------------------------- |
-| Findings per file | 30    | More keeps the first 30 by severity; the comment says so  |
-| Nitpicks shown    | 5     | The rest are counted in an "N more nitpicks omitted" line |
-| `claim` length    | 300   | Longer is truncated with a marker; the comment says so    |
-| `fix` length      | 1000  | Longer is truncated with a marker; the comment says so    |
-| `file` length     | 300   | Longer drops that finding only; the comment says so       |
-| Turns per review  | 80    | Reaching it stops the review; the job fails, no comment   |
+| Limit             | Value | Effect                                                        |
+| ----------------- | ----- | ------------------------------------------------------------- |
+| Findings per file | 30    | More keeps the first 30 by severity; the comment says so      |
+| Nitpicks shown    | 5     | The rest are counted in an "N more nitpicks omitted" line     |
+| `claim` length    | 300   | Longer is truncated with a marker; the comment says so        |
+| `fix` length      | 1000  | Longer is truncated with a marker; the comment says so        |
+| `file` length     | 300   | Longer drops that finding only; the comment says so           |
+| Turns per review  | 80    | Reaching it stops the review; the job fails, no comment       |
+| Rounds per run    | 3     | Default of `review.max_rounds` (1–6); `feature-validate` only |
+
+In the last round the cap allows, a `correctness` major outside the lines that
+changed between the previous round's tree and this one is discovered work, not a
+fix; blockers of every pass, and correctness majors inside those lines, are still
+to fix. Without such a scope (`max_rounds: 1`, or a previous tree that cannot be
+diffed) the round routes like every other.

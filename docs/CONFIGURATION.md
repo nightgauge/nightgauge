@@ -829,7 +829,7 @@ guess.
 
 | Key                                           | Default                    | What it costs while on                                                                                                                                                                                                                                               |
 | --------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pipeline.adversarial_review.enabled`         | `true`                     | **Per-run cost.** One independent review per tree on every `feature-validate`, at most three catches a run. It is the read the implementing model cannot give itself                                                                                                 |
+| `pipeline.adversarial_review.enabled`         | `true`                     | **Per-run cost.** One independent review per tree on every `feature-validate`, at most `review.max_rounds` catches a run. It is the read the implementing model cannot give itself                                                                                   |
 | `pipeline.grounding_gate.enabled`             | `true`                     | **Nothing measurable.** Deterministic pre-`feature-dev` check that the worktree is on the branch the run thinks it is. No model call                                                                                                                                 |
 | `pipeline.feature_dev_sub_sessions`           | `true`                     | **Nothing measurable** on windows of 200,000 tokens or more, where it never engages. Below that, feature-dev runs as one fresh session per plan task, which re-sends the cacheable skill prefix once per step. See [its section](#pipelinefeature_dev_sub_sessions). |
 | `pipeline.test_execution`                     | `true`                     | **Nothing measurable.** Inert in a repo whose test command excludes nothing; it has no off switch by design (see its section)                                                                                                                                        |
@@ -5124,6 +5124,24 @@ performance:
 **Used by:**
 
 - `/nightgauge-feature-validate` - Phase 1.5 minimum duration check
+
+---
+
+### review (Issue #3683)
+
+The independent review `feature-validate` runs through `nightgauge review`
+(see `docs/PR_REVIEW_PASSES.md`).
+
+```yaml
+review:
+  max_rounds: 3 # catches one pipeline run may spend; 1–6
+  model: opus # reviewer model; empty follows feature-validate's
+```
+
+| Key                 | Type   | Default | Description                                                                                                                                                                                                                                |
+| ------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `review.max_rounds` | int    | `3`     | Catches a run may spend before it stops at the cap and parks the issue. A value outside 1–6 fails config load. In the last round, a `correctness` major outside the lines changed since the previous round's tree becomes discovered work. |
+| `review.model`      | string | `""`    | The reviewer's model. Empty resolves to the model `feature-validate` was dispatched with, then `pipeline.stage_models.feature-validate`, then `ui.core.default_model`, then the adapter default. Each review row names the model.          |
 
 ---
 

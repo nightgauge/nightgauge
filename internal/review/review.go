@@ -31,6 +31,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nightgauge/nightgauge/internal/cmd/discoveredwork"
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/gateledger"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/preflight"
@@ -42,8 +43,6 @@ const (
 	GateName = "adversarial-review"
 	// Stage is the stage the review belongs to.
 	Stage = "feature-validate"
-	// MaxRounds caps the catches one pipeline run may spend on an issue.
-	MaxRounds = 3
 	// MaxTurns is the review's turn limit, the workflow's REVIEW_MAX_TURNS.
 	MaxTurns = 80
 
@@ -221,17 +220,125 @@ func Count(findings []Finding) state.FindingCounts {
 // Route splits findings: blockers of any pass and correctness majors must be
 // fixed, other majors become discovered work, and nitpicks are only counted.
 // It compares nothing: two passes at one location stay two findings.
-func Route(findings []Finding) (fix, discovered []Finding) {
+//
+// scope is set only in the last round a run may spend (#3683): there a
+// correctness major outside the lines changed since the previous round's tree
+// becomes discovered work, because fixing it cannot be reviewed again. A nil
+// scope routes as every earlier round does.
+func Route(findings []Finding, scope *ChangedLines) (fix, discovered []Finding) {
 	fix, discovered = []Finding{}, []Finding{}
 	for _, f := range findings {
 		switch {
-		case f.Severity == "blocker", f.Severity == "major" && f.Pass == "correctness":
+		case f.Severity == "blocker":
+			fix = append(fix, f)
+		case f.Severity == "major" && f.Pass == "correctness" && (scope == nil || scope.Contains(f)):
 			fix = append(fix, f)
 		case f.Severity == "major":
 			discovered = append(discovered, f)
 		}
 	}
 	return fix, discovered
+}
+
+// ChangedLines is the new-side lines of a diff, per file: sorted, inclusive
+// ranges.
+type ChangedLines map[string][][2]int
+
+// Contains reports whether f lies in the changed lines. A finding without a
+// line is inside when its file changed.
+func (c ChangedLines) Contains(f Finding) bool {
+	ranges, ok := c[f.File]
+	if !ok {
+		return false
+	}
+	if f.Line == nil {
+		return true
+	}
+	for _, r := range ranges {
+		if *f.Line >= r[0] && *f.Line <= r[1] {
+			return true
+		}
+	}
+	return false
+}
+
+var hunkHeader = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
+
+// parseChangedLines reads `git diff -U0` output. `+++ b/<path>` names the file
+// (a deleted file, `/dev/null`, has no new side); each hunk adds its new-side
+// range, and a pure deletion adds the line it sits at, so a finding at the seam
+// counts as inside.
+func parseChangedLines(diff []byte) ChangedLines {
+	out := ChangedLines{}
+	file := ""
+	for _, line := range strings.Split(string(diff), "\n") {
+		if rest, ok := strings.CutPrefix(line, "+++ "); ok {
+			file = ""
+			if p, ok := strings.CutPrefix(rest, "b/"); ok {
+				file = p
+				if _, seen := out[file]; !seen {
+					out[file] = [][2]int{}
+				}
+			}
+			continue
+		}
+		m := hunkHeader.FindStringSubmatch(line)
+		if m == nil || file == "" {
+			continue
+		}
+		start, _ := strconv.Atoi(m[1])
+		count := 1
+		if m[2] != "" {
+			count, _ = strconv.Atoi(m[2])
+		}
+		end := start + count - 1
+		if count == 0 {
+			end = start
+		}
+		out[file] = append(out[file], [2]int{start, end})
+	}
+	return out
+}
+
+// lastRoundScope is the scope Route applies in this round: the lines changed
+// between the tree the previous round reviewed and this one, when this is the
+// last round the cap allows. Nil otherwise, and nil when the scope cannot be
+// known (no previous round, an unchanged tree, a git failure), which routes as
+// every earlier round: the safe direction. A git failure is returned as a
+// warning.
+func (s Session) lastRoundScope(ctx context.Context, findings []Finding) (*ChangedLines, string) {
+	needed := false
+	for _, f := range findings {
+		if f.Severity == "major" && f.Pass == "correctness" {
+			needed = true
+			break
+		}
+	}
+	if !needed {
+		return nil, ""
+	}
+	catches, err := gateledger.ReviewCatches(s.Root, s.Issue, s.PipelineRun)
+	if err != nil {
+		return nil, "last-round scope: " + err.Error()
+	}
+	if catches+1 != s.maxRounds() {
+		return nil, ""
+	}
+	prev, err := gateledger.LastReviewCatch(s.Root, s.Issue, s.PipelineRun)
+	if err != nil {
+		return nil, "last-round scope: " + err.Error()
+	}
+	if prev == nil || prev.Tree == "" || prev.Tree == s.Tree {
+		return nil, ""
+	}
+	diff, err := git(ctx, s.Root, "diff", "-U0", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/",
+		"--end-of-options",
+		prev.Tree, s.Tree)
+	if err != nil {
+		return nil, "last-round scope unknown, every correctness major is to fix: " + oneLine(err.Error())
+	}
+	scope := parseChangedLines(diff)
+	return &scope, ""
 }
 
 // discoveredProducer marks the review's records, apart from an agent's, so a
@@ -248,6 +355,8 @@ type Outcome struct {
 	// It is stored with the verdict, so a reused or capped verdict restores its
 	// own round's records instead of leaving another round's in the capture.
 	Discovered []Finding `json:"discovered,omitempty"`
+	// Rounds is the round cap a capped outcome reached.
+	Rounds int `json:"rounds,omitempty"`
 	// Warnings names work that could not be recorded.
 	Warnings []string `json:"warnings,omitempty"`
 }
@@ -284,7 +393,23 @@ type Session struct {
 	Tree        string
 	PipelineRun string
 	Now         time.Time
+	// MaxRounds is review.max_rounds; 0 is the default.
+	MaxRounds int
+	// Model is the reviewer's model; "" is the adapter's default.
+	Model string
 }
+
+// maxRounds is the catches this run may spend.
+func (s Session) maxRounds() int {
+	if s.MaxRounds > 0 {
+		return s.MaxRounds
+	}
+	return config.DefaultReviewMaxRounds
+}
+
+// adapterDefaultModel is what a row names when the reviewer ran on the
+// adapter's default model, so every review row names one.
+const adapterDefaultModel = "adapter-default"
 
 // storedOutcome is the part of an outcome the ledger keeps. Discovered has no
 // omitempty: a round with none stores [], and an event written before the field
@@ -296,6 +421,7 @@ type storedOutcome struct {
 	Counts     state.FindingCounts `json:"counts"`
 	Fix        []Finding           `json:"fix"`
 	Discovered []Finding           `json:"discovered"`
+	Rounds     int                 `json:"rounds,omitempty"`
 }
 
 // stored encodes o as the ledger keeps it.
@@ -305,7 +431,7 @@ func (o Outcome) stored() ([]byte, error) {
 		discovered = []Finding{}
 	}
 	return json.Marshal(storedOutcome{Verdict: o.Verdict, Summary: o.Summary, Counts: o.Counts,
-		Fix: o.Fix, Discovered: discovered})
+		Fix: o.Fix, Discovered: discovered, Rounds: o.Rounds})
 }
 
 // restore replaces the review's records in the capture with a stored round's
@@ -346,16 +472,20 @@ func (s Session) row(out Outcome, started time.Time) error {
 		duration = &ms
 	}
 	counts := out.Counts
+	model := s.Model
+	if model == "" {
+		model = adapterDefaultModel
+	}
 	return state.AppendGateMetricDetail(s.Root, s.Issue, GateName, out.Verdict, out.Summary,
-		s.Now.UTC().Format(time.RFC3339), duration, &counts)
+		s.Now.UTC().Format(time.RFC3339), duration, &counts, model)
 }
 
 // capped reports the cap: the last catch's findings stand, and the event names
 // the worktree holding the run's uncommitted work (#2865).
 func (s Session) capped() (Outcome, error) {
 	out := Outcome{
-		Verdict: "catch", Fix: []Finding{},
-		Summary: fmt.Sprintf("%s review round cap of %d reached with defects unfixed", CapMarker, MaxRounds),
+		Verdict: "catch", Fix: []Finding{}, Rounds: s.maxRounds(),
+		Summary: fmt.Sprintf("%s review round cap of %d reached with defects unfixed", CapMarker, s.maxRounds()),
 	}
 	last, err := gateledger.LastReviewCatch(s.Root, s.Issue, s.PipelineRun)
 	if err != nil {
@@ -425,10 +555,10 @@ func Consult(s Session) (Prepared, error) {
 			reuse = &out
 		}
 	}
-	// The cap applies before a stored catch is reused: a third catch that left
-	// the tree unchanged must still write the cap record (#2876). A stored pass
+	// The cap applies before a stored catch is reused: the catch that reaches
+	// the cap on an unchanged tree must still write the cap record (#2876). A stored pass
 	// is not capped, so it still reuses.
-	if reuse != nil && (catches < MaxRounds || reuse.Verdict == "pass") {
+	if reuse != nil && (catches < s.maxRounds() || reuse.Verdict == "pass") {
 		reuse.restore(s)
 		if err := s.row(*reuse, time.Time{}); err != nil {
 			return p, err
@@ -445,7 +575,7 @@ func Consult(s Session) (Prepared, error) {
 		return p, nil
 	}
 	p.Round = catches + 1
-	if catches >= MaxRounds {
+	if catches >= s.maxRounds() {
 		out, err := s.capped()
 		if err != nil {
 			return p, err
@@ -685,7 +815,9 @@ func Unfinished(s Session, started time.Time, reason string) (Outcome, error) {
 // so the capture always holds the latest finished round's discovered work: a
 // finding a fix removed is gone, one that survives is reported again, and a round
 // that does not finish changes nothing, whichever round turns out to be the last.
-func Record(s Session, current, findingsPath string, started time.Time) (Outcome, error) {
+// The last round the cap allows routes with the lines changed since the previous
+// round's tree (lastRoundScope).
+func Record(ctx context.Context, s Session, current, findingsPath string, started time.Time) (Outcome, error) {
 	if current != s.Tree {
 		return Unfinished(s, started, fmt.Sprintf("the tree moved from %s to %s", s.Tree, current))
 	}
@@ -697,8 +829,12 @@ func Record(s Session, current, findingsPath string, started time.Time) (Outcome
 	if err != nil {
 		return Unfinished(s, started, "findings rejected: "+err.Error())
 	}
-	fix, discovered := Route(findings)
+	scope, warning := s.lastRoundScope(ctx, findings)
+	fix, discovered := Route(findings, scope)
 	out := Outcome{Verdict: "pass", Counts: Count(findings), Fix: fix}
+	if warning != "" {
+		out.Warnings = append(out.Warnings, warning)
+	}
 	out.recordDiscovered(s, discovered)
 	verdict := gateledger.VerdictPass
 	if len(fix) > 0 {
