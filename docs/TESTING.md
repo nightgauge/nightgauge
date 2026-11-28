@@ -266,7 +266,10 @@ Implementation notes that are load-bearing rather than incidental:
    step's log, because `run_step` exports the log path as `CI_LOCAL_STEP_LOG`.
    Outside the gate they go to `<scratch>/vscode-logs/`. Scratch
    (`$TMPDIR/nightgauge-host-*`) is removed after a passing run and kept, with
-   its path printed, after a failing one.
+   its path printed, after a failing one. In CI the `vscode-host` job sets
+   `CI_LOCAL_STEP_LOG` and `TMPDIR` under `runner.temp` and, on failure,
+   uploads those logs with the scratch transcripts and `demo-events.jsonl` as
+   the `vscode-host-window-logs` artifact (14 days, #3662).
 6. **Only a launch fault is retried, once, and the retry is printed.** A
    window with no transcript never reached the in-host module, so no test
    ran. It is relaunched once in fresh directories, with a
@@ -278,7 +281,9 @@ Implementation notes that are load-bearing rather than incidental:
    step fails at once if VS Code refused the post. Otherwise it fails after
    30 s with no sign of life from the webview (the post's delivery, or any
    message from it), under a 90 s ceiling. The failure report names each
-   step's post, delivery and reply times, and the last webview message. The
+   step's post, delivery and reply times, and the last webview message, and
+   the panel's view state as the workbench reported it (#3662): a panel never
+   reported visible never had its document built. The
    case sets its own harness timeout (`test(name, fn, { timeoutMs })`), so the
    harness's 30 s default does not cut the report off.
 
