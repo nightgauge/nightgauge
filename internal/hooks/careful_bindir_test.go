@@ -269,6 +269,7 @@ func TestCarefulGateBinDirWrappers(t *testing.T) {
 		{`sudo env -C "$d" cp x gh`, true},
 		{`sudo -u root -- cp x "$d/gh"`, true},
 		{`doas -u root cp x "$d/gh"`, true},
+		{`doas -a style cp x "$d/gh"`, true},
 		{`nice -n 5 cp x "$d/gh"`, true},
 		{`nice --adjustment 5 cp x "$d/gh"`, true},
 		{`ionice -c 2 -n 0 cp x "$d/gh"`, true},

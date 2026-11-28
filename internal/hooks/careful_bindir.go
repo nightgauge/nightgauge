@@ -595,7 +595,7 @@ var wrapperOpts = map[string]wrapperOpt{
 			"preserve-groups", "stdin", "shell", "validate", "version"},
 		completeLong: true, assignments: true, chdir: []string{"D", "chdir"},
 	},
-	"doas": {valueShort: "uC"},
+	"doas": {valueShort: "auC"},
 	"timeout": {
 		valueShort: "sk", valueLong: []string{"signal", "kill-after"},
 		flagLong:     []string{"preserve-status", "foreground", "verbose", "help", "version"},
