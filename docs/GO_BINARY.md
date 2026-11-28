@@ -5154,7 +5154,9 @@ Both `followup materialize` and `spike materialize` resolve the gate from
 
 Files the run's `discovered-work-<N>.json` records (ADR 027) as issues. Behind
 `skills/nightgauge-followup-materialize/SKILL.md`, which the scheduler runs after
-pr-merge on every issue whose capture holds records.
+pr-merge on every issue whose capture holds records. The same sequence runs
+in-process when a run ends without success (#3685), so a manual run is needed
+only for records an error or the per-run cap left behind.
 
 ```bash
 nightgauge followup materialize <issue-number> [flags]

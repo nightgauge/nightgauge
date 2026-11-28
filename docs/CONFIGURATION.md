@@ -8518,7 +8518,11 @@ above, so filing is opt-in. The Nightgauge repository sets `mode: file`.
 
 The scheduler appends `followup-materialize` after pr-merge on every issue and
 skips it without a dispatch when the run's discovered-work capture holds no
-records.
+records. A run that ends without success (review cap, failed validation, halt,
+timeout or cancellation) materializes its capture at run end under the same
+`follow_up_filing` gate, on both the scheduler and the extension path (#3685):
+file mode files the records, report mode logs them and removes them from the
+capture.
 
 ---
 

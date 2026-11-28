@@ -46,6 +46,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A run that ends without success (review cap, failed validation, halt, timeout
+  or cancellation) now materializes its discovered follow-up work at run end,
+  on both the scheduler and the extension path, under `follow_up_filing`: file
+  mode files the records, report mode logs them. `nightgauge doctor` no longer
+  reports NGD050 for that work. Records an error or the per-run cap left
+  undecided stay in the capture and are logged with the issue number.
+
 - A `serve` daemon with no extension attached now runs at most the workspace
   `max-concurrent` headless trigger runs at once, held to the workspace
   throttle. Further triggers are acknowledged and wait for a slot; one whose

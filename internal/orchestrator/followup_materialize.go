@@ -1,11 +1,13 @@
 package orchestrator
 
 import (
+	"context"
 	"errors"
 	"log"
 	"os"
 
 	"github.com/nightgauge/nightgauge/internal/cmd/discoveredwork"
+	"github.com/nightgauge/nightgauge/internal/cmd/followup"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -68,4 +70,23 @@ func recordFollowupSkip(tracer stageSkipEmitter, issue int) {
 		Source: "followup-capture",
 		Reason: followupEmptyCaptureReason,
 	})
+}
+
+// materializeOnRunEnd files the discovered work of a run that ended without
+// success (#3685). It runs on a fresh bounded context because the run's own
+// context is cancelled on cancel or timeout. An empty capture returns before
+// any filer is built. It returns nothing, so it cannot
+// change the run's terminal kind; errors are logged by MaterializeOnRunEnd.
+func (s *Scheduler) materializeOnRunEnd(workspace, repo string, issue int) {
+	if s.runEndFilerFactory == nil {
+		return
+	}
+	dir, err := layout.PipelineStateDir(workspace)
+	if err != nil {
+		log.Printf("#%d: followup-materialize on unsuccessful run end: pipeline state dir: %v", issue, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), followup.RunEndTimeout)
+	defer cancel()
+	followup.MaterializeOnRunEnd(ctx, dir, workspace, issue, s.runEndFilerFactory(workspace, repo, issue))
 }

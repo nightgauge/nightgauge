@@ -181,13 +181,13 @@ design defect, not a configuration choice.
 
 #### Who can file today
 
-| Filer                  | Trigger                                             | Gate                                                | Dedup key                  |
-| ---------------------- | --------------------------------------------------- | --------------------------------------------------- | -------------------------- |
-| Spike materialization  | `spike-materialize` stage, post-merge, `type:spike` | `follow_up_filing` (mode, kill switch, cap)         | Recommendation `id` marker |
-| Follow-up materialize  | `followup-materialize` stage, post-merge, every run | `follow_up_filing` + author trust gate              | Record `id` marker, title  |
-| Release-watch          | `release-watchdog.yml`, daily                       | `autonomous_discovery` + `kill_switch` + threshold  | Per-provider `last-seen`   |
-| Continuous improvement | `continuous-improvement.yml`, weekly                | Same gate, plus `--create-issues` (default `false`) | Label + title prefix       |
-| Skill drift synthesis  | Retro synthesis                                     | `--create-issues` + threshold config                | `skill-drift` label        |
+| Filer                  | Trigger                                                                           | Gate                                                | Dedup key                  |
+| ---------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------- | -------------------------- |
+| Spike materialization  | `spike-materialize` stage, post-merge, `type:spike`                               | `follow_up_filing` (mode, kill switch, cap)         | Recommendation `id` marker |
+| Follow-up materialize  | `followup-materialize` stage, post-merge, every run; unsuccessful run end (#3685) | `follow_up_filing` + author trust gate              | Record `id` marker, title  |
+| Release-watch          | `release-watchdog.yml`, daily                                                     | `autonomous_discovery` + `kill_switch` + threshold  | Per-provider `last-seen`   |
+| Continuous improvement | `continuous-improvement.yml`, weekly                                              | Same gate, plus `--create-issues` (default `false`) | Label + title prefix       |
+| Skill drift synthesis  | Retro synthesis                                                                   | `--create-issues` + threshold config                | `skill-drift` label        |
 
 `nightgauge spike materialize` and `nightgauge followup materialize` are also
 runnable by hand; a hand-run is a human in the loop and is not governed by this
@@ -235,7 +235,9 @@ are different surfaces and the distinction is deliberate.
 The same constraints bind the **in-run** counterpart: a pipeline stage that
 notices real-but-out-of-scope work mid-run and wants it recorded rather than
 absorbed or dropped. Stages record such work to the discovered-work capture
-(ADR 027), and the `followup-materialize` stage files it after merge (#480). It
+(ADR 027), and the `followup-materialize` stage files it after merge (#480). A run
+that ends without success files it at run end instead, from the scheduler's
+terminal defer and from the extension path's `pipeline.notifyComplete` (#3685). It
 is a filer under [Rule 5](#rule-5-autonomous-issue-filing-is-governed) like any
 other: dogfood repos may file, and the built-in default is report-only with
 explicit opt-in (`follow_up_filing.mode: file`) required before anything is

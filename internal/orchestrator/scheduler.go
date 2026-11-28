@@ -967,6 +967,10 @@ type Scheduler struct {
 	// private cross-repo epics use the correct configured identity (#3700).
 	// nil → fall back to the default issueSvc.
 	clientResolver func(ctx context.Context, owner, repo string) (*gh.Client, error)
+
+	// runEndFilerFactory builds the filer that files a run's discovered work
+	// when the run ends without success (#3685). Tests replace it.
+	runEndFilerFactory func(workspace, repo string, issue int) followup.FilerFactory
 	// applyNeedsDecompositionFn replaces the forge behind labelIfNeedsDecomposition
 	// in tests (#3684); nil means ApplyNeedsDecompositionForge over repoClient.
 	applyNeedsDecompositionFn func(ctx context.Context, repo string, issue int, detail string) error
@@ -1599,6 +1603,10 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 	// Bound after the literal so the review filer resolves each repository's
 	// client through s, honouring a resolver wired later (#2837).
 	s.prMergeRunner = newPRMergeRunner(client, cfg.RuntimeConfig, s.reviewFilingClient)
+	runtimeCfg := cfg.RuntimeConfig
+	s.runEndFilerFactory = func(workspace, repo string, issue int) followup.FilerFactory {
+		return followup.ForgeFilerFactory(s.client, runtimeCfg, s.reviewFilingClient, workspace, repo, issue)
+	}
 	s.recoveryRegistry = recovery.Default(cfg.WorkspaceRoot, s.prMergeRunner, s.prCreateRunner)
 	s.trustGate = newSchedulerTrustGate(s, trustedBotsFrom(cfg.RuntimeConfig), cfg.RuntimeConfig.AppOwners(),
 		cfg.RuntimeConfig.ConfiguredGitHubLogins())
@@ -6324,6 +6332,14 @@ func (s *Scheduler) runPipelineSeeded(ctx context.Context, item types.BoardItem,
 				}
 				_, _ = s.execMgr.CleanupLocalBranch(item.Repo, branchName)
 			}
+		}
+
+		// Issue #3685: a run that ends without success never reaches the
+		// post-merge followup-materialize stage, so file its discovered work
+		// here, before the board revert and the seal clear the run's state.
+		// Best-effort: a failure is logged and never changes the terminal kind.
+		if !pipelineSuccess {
+			s.materializeOnRunEnd(stageWorkspace(runtime, workspaceRoot), item.Repo, item.Number)
 		}
 
 		// Revert board status on failure so the autonomous scheduler can re-dispatch.

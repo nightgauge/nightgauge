@@ -1402,7 +1402,8 @@ nightgauge discovered-work record --issue 948 \
 ```
 
 **Lifecycle.** Stages append during the run. pr-merge cleanup never deletes the file. The
-materializer (#480) files the records and is the only deleter of records it did not write; a
+materializer (#480) files the records, also at the end of a run that ends without success
+(#3685), and is the only deleter of records it did not write; a
 `producer:` source may replace its own before filing (#2861). A file with no live run (no
 `issue-{N}.json`) or older than seven days is reported by
 `nightgauge discovered-work orphans` and by doctor check

@@ -1,13 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
 
-	"github.com/nightgauge/nightgauge/internal/cmd/discoveredwork"
 	"github.com/nightgauge/nightgauge/internal/cmd/followup"
 	"github.com/nightgauge/nightgauge/internal/filing"
 	"github.com/nightgauge/nightgauge/internal/layout"
@@ -17,9 +17,6 @@ import (
 // exitCapRefused is the exit code of a filer whose per-run cap refused
 // records (#480, Rule 5): loud, and distinct from a failure to run.
 const exitCapRefused = 3
-
-// followupEmptyCaptureReason is the Result.Reason of a run with no records.
-const followupEmptyCaptureReason = "empty capture: no discovered-work records"
 
 // followupCmd is the "followup" command family (#480).
 func followupCmd() *cobra.Command {
@@ -78,16 +75,37 @@ cap refused records; they stay in the capture file. Exit 1: error.`,
 					return fmt.Errorf("pipeline state dir: %w", err)
 				}
 			}
-			capture, err := discoveredwork.Load(runDir, number)
-			if err != nil {
-				return err
+			gate := filing.ResolveGate(workdir)
+			if dryRun {
+				gate.Mode, gate.Reason = filing.ModeReport, "--dry-run"
 			}
-			if capture == nil || len(capture.Records) == 0 {
+			// Report and dry-run mode build a filer too, best effort: Materialize
+			// only reads the parent's body through it there, so
+			// tracked-by-parent holds in the would-file list (#2872).
+			newFiler := func(ctx context.Context, gate filing.Gate) (followup.Filer, bool, error) {
+				ownerPart, repoPart := splitRepo(owner, repo)
+				client, err := clientFromConfig()
+				switch {
+				case err != nil && gate.Files():
+					return nil, false, fmt.Errorf("create GitHub client: %w", err)
+				case err != nil:
+					fmt.Fprintf(cmd.ErrOrStderr(), "followup materialize: parent body unavailable: %v\n", err)
+					return nil, false, nil
+				}
+				filer := followup.NewGitHubFiler(client, ownerPart, repoPart, projectNumber, getOwnerType(cmd)).
+					WithTrustedBots(followup.TrustedBots(workdir))
+				trusted := gate.Files() && followup.AuthorTrusted(ctx, client, workdir, ownerPart, repoPart, number)
+				return filer, trusted, nil
+			}
+			res, matErr := followup.RunMaterialize(cmd.Context(), runDir, number, gate, newFiler, dryRun)
+			if matErr != nil && !followup.IsCapRefusal(matErr) {
+				return enrichError(matErr)
+			}
+			if res.Empty {
 				// Say so explicitly (#2638): a silent no-op cannot be told
 				// apart from a materializer that never ran.
-				empty := &followup.Result{Issue: number, Reason: followupEmptyCaptureReason, Items: []followup.Item{}}
 				if outputJSON {
-					data, err := json.MarshalIndent(empty, "", "  ")
+					data, err := json.MarshalIndent(res, "", "  ")
 					if err != nil {
 						return err
 					}
@@ -96,46 +114,6 @@ cap refused records; they stay in the capture file. Exit 1: error.`,
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "#%d: no discovered-work records — nothing to file\n", number)
 				return nil
-			}
-
-			gate := filing.ResolveGate(workdir)
-			if dryRun {
-				gate.Mode, gate.Reason = filing.ModeReport, "--dry-run"
-			}
-			// Report and dry-run mode build a filer too, best effort: Materialize
-			// only reads the parent's body through it there, so
-			// tracked-by-parent holds in the would-file list (#2872).
-			var filer followup.Filer
-			trusted := false
-			ownerPart, repoPart := splitRepo(owner, repo)
-			client, err := clientFromConfig()
-			switch {
-			case err != nil && gate.Files():
-				return fmt.Errorf("create GitHub client: %w", err)
-			case err != nil:
-				fmt.Fprintf(cmd.ErrOrStderr(), "followup materialize: parent body unavailable: %v\n", err)
-			default:
-				filer = followup.NewGitHubFiler(client, ownerPart, repoPart, projectNumber, getOwnerType(cmd)).
-					WithTrustedBots(followup.TrustedBots(workdir))
-				if gate.Files() {
-					trusted = followup.AuthorTrusted(cmd.Context(), client, workdir, ownerPart, repoPart, number)
-				}
-			}
-
-			track := followup.LoadTracking(runDir, number)
-			res, matErr := followup.Materialize(cmd.Context(), capture, gate, trusted, track, filer)
-			if matErr != nil && !followup.IsCapRefusal(matErr) {
-				// Consume what was decided before the error so a retry does
-				// not redo it; undecided records stay.
-				_ = discoveredwork.Consume(runDir, number, func(r discoveredwork.Record) bool { return !res.Consumed(r.ID) })
-				return enrichError(matErr)
-			}
-			if !dryRun {
-				if err := discoveredwork.Consume(runDir, number, func(r discoveredwork.Record) bool {
-					return !res.Consumed(r.ID)
-				}); err != nil {
-					return fmt.Errorf("consume capture: %w", err)
-				}
 			}
 			if outputJSON {
 				if err := printJSON(res); err != nil {
