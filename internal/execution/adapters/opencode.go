@@ -599,6 +599,7 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 		Env:                 run.Env,
 		Endpoints:           run.Endpoints,
 		OperatorInstallRisk: run.OperatorInstallRisk,
+		StageBinDir:         OpenCodeStageBinDir(run.RunDir),
 	}
 	if pin != "" {
 		a.pinned.Store(root, pin)

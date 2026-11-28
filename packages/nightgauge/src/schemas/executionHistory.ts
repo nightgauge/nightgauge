@@ -558,6 +558,7 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  *  - `pr_merge_lookup_failed` — pr-merge's gate could not establish the PR's state; infrastructure (#1237)
  *  - `context_window_exceeded` — the prompt outgrew the model server's loaded context; parked, never retried on the same model and adapter (#1631)
  *  - `adapter_permission_rejected` — the adapter auto-rejected a tool the stage's allowed tools grant under an `ask` rule, OpenCode's `.env` read guard included; parked (#1631)
+ *  - `bin_tamper` — an OpenCode stage changed its own copy of the nightgauge binary; its output is discarded and the issue parks (#3688)
  *  - `adapter_incompatible` — the adapter's binary cannot serve the dispatch (version floor or unreadable version); parked (#1631)
  *  - `adapter_provider_no_route` — OpenCode 2.x reported error type provider.no-route (an unrouted model); parked (#3305)
  *  - `adapter_provider_transport` — OpenCode 2.x reported provider.transport, stopped past the retry bound or terminal; retryable (#3305)
@@ -637,6 +638,7 @@ export const TerminalFailureKindSchema = z.enum([
   // an operator.
   "context_window_exceeded", // Issue #1631 — the prompt outgrew the context the model server has the model loaded with; classified only from the adapter's failed-request line, never from model text
   "adapter_permission_rejected", // Issue #1631 — the adapter auto-rejected a tool the stage's allowed tools grant (#1624's marker) under an `ask` rule, OpenCode's `.env` read guard included, distinct from permission_denied
+  "bin_tamper", // Issue #3688 — an OpenCode stage changed its own copy of the nightgauge binary; parked
   "adapter_incompatible", // Issue #1631 — the adapter's binary cannot serve the dispatch (#1627's version floor / unreadable version)
   "adapter_provider_no_route", // Issue #3305 — OpenCode 2.x reported error type provider.no-route; an unrouted model, parked
   "adapter_provider_transport", // Issue #3305 — OpenCode 2.x reported provider.transport; retryable

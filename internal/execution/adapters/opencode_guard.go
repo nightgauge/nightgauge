@@ -1176,6 +1176,15 @@ func OpenCodeExternalDirectoryAllowRoots(opts RunOptions) []string {
 	return opencodeallow.Roots(openCodeAllowOptions(opts))
 }
 
+// OpenCodeStageBinDir is the directory of an OpenCode stage's own copy of the
+// nightgauge binary under the run's root runRoot, or "" for no root (#3688).
+func OpenCodeStageBinDir(runRoot string) string {
+	if runRoot == "" {
+		return ""
+	}
+	return filepath.Join(runRoot, "bin")
+}
+
 // OpenCodeBinDir is the running nightgauge binary's directory
 // (NIGHTGAUGE_BIN's dir), the source of the permission map's
 // external_directory allow-list entry for it (#1638). Exported so the
@@ -1211,13 +1220,17 @@ func SwapOpenCodeBinDirForTest(dir string) (restore func()) {
 
 // openCodePermissionMap builds the ADR-022 § 9 / #1638 permission map for
 // opts. binDir is OpenCodeBinDir()'s result, threaded in by the caller so
-// this function stays pure (BuildOpenCodeConfig's own contract).
-func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJSON {
+// this function stays pure (BuildOpenCodeConfig's own contract). stageBinDir
+// is the directory of the stage's own binary copy (#3688): edit and write
+// deny it, and nothing else here names it — the shell deny-list keeps binDir
+// alone, because the parent's verification of the copy is the boundary.
+func openCodePermissionMap(opts RunOptions, binDir, stageBinDir string) *openCodePermissionJSON {
 	grants := openCodeToolGrants(opts.AllowedTools)
 	editDenyDirPatterns := append(
 		openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, openCodeSkillDir(opts)),
 		openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, binDir)...,
 	)
+	editDenyDirPatterns = append(editDenyDirPatterns, openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, stageBinDir)...)
 	editDenyDirPatterns = append(editDenyDirPatterns, openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, openCodeReadOnlySkillsRoot(opts))...)
 	// The include cache is granted for read only, like the skills tree (#2789).
 	editDenyDirPatterns = append(editDenyDirPatterns, openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, opencodeallow.GrantedIncludeCacheRoot())...)

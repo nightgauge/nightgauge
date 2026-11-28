@@ -1612,6 +1612,24 @@
       "rationale": "The second clause shape of the same kind: planning's plan_file exists as far as the context says but cannot be stat'ed (ENOTDIR, EACCES). Pinned separately so a clause deleted for `failed to stat` goes red on its own."
     },
     {
+      "id": "bin-tamper-manager",
+      "input": "acme/repo#3688 feature-dev: [bin-tamper] bin_tamper: the stage's NIGHTGAUGE_BIN copy /state/opencode/runs/x/bin/nightgauge changed: sha256, ctime differ",
+      "expected": "bin_tamper",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "execution.Manager.RunStage's stage-binary verification (#3688)",
+      "rationale": "A stage that rewrote the binary its gates run through. It must park as bin_tamper, never read as a crash that retries the same stage."
+    },
+    {
+      "id": "bin-tamper-over-free-text",
+      "input": "exit 0: network unavailable: extended github connectivity loss [bin-tamper] bin_tamper: the stage's NIGHTGAUGE_BIN copy changed: inode differ",
+      "expected": "bin_tamper",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "a tampering stage that also printed a retryable phrase (#3688)",
+      "rationale": "The marker outranks every free-text rule: a stage that tampered with its gates chooses the rest of its output."
+    },
+    {
       "id": "needs-decomposition-gate",
       "input": "feature-planning gate failed: [needs-decomposition] plan lists 31 files, over max_planned_files=25",
       "expected": "needs_decomposition",

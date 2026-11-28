@@ -273,6 +273,11 @@
       "effect": "deny"
     },
     {
+      "action": "edit",
+      "resource": "nightgauge-test-home/.nightgauge/opencode/runs/01890a5d-ac96-774b-bcce-b302099a8057/bin/**",
+      "effect": "deny"
+    },
+    {
       "action": "write",
       "resource": "*",
       "effect": "deny"
@@ -330,6 +335,11 @@
     {
       "action": "write",
       "resource": ".opencode/**",
+      "effect": "deny"
+    },
+    {
+      "action": "write",
+      "resource": "nightgauge-test-home/.nightgauge/opencode/runs/01890a5d-ac96-774b-bcce-b302099a8057/bin/**",
       "effect": "deny"
     },
     {

@@ -85,7 +85,7 @@ func TestOpenCodePermissionMap_SkillsRootReadOnlyAndKnowledgeBaseWritable(t *tes
 				KnowledgeDir: kb,
 				AllowedTools: []string{"Read", "Edit", "Write", "Bash"},
 			}
-			perm := openCodePermissionMap(opts, "")
+			perm := openCodePermissionMap(opts, "", "")
 
 			// #2191: the rendered prompt's _shared read is admitted.
 			if got := openCodePatternAction(perm.ExternalDirectory, filepath.Dir(shared)+"/*"); got != openCodeAllow {
@@ -119,7 +119,7 @@ func TestOpenCodePermissionMap_SkillsRootReadOnlyAndKnowledgeBaseWritable(t *tes
 func TestOpenCodePermissionMap_SkillsRootInsideWorktreeStaysEditable(t *testing.T) {
 	_, wt := skillsKBFixture(t)
 	skill := writeSkill(t, filepath.Join(wt, "skills"), "nightgauge-feature-dev")
-	perm := openCodePermissionMap(RunOptions{SkillPath: skill, WorktreeDir: wt, AllowedTools: []string{"Read", "Edit"}}, "")
+	perm := openCodePermissionMap(RunOptions{SkillPath: skill, WorktreeDir: wt, AllowedTools: []string{"Read", "Edit"}}, "", "")
 	other := filepath.Join(wt, "skills", "nightgauge-pr-create", "SKILL.md")
 	if got := openCodePatternAction(perm.Edit, relEdit(t, wt, other)); got != openCodeAllow {
 		t.Errorf("edit %s = %q, want allow", other, got)

@@ -164,6 +164,12 @@ type RunRoot struct {
 	// is a field rather than an Env entry so it never reaches the child's
 	// environment or the printed run config (#1802).
 	OperatorInstallRisk string
+	// StageBinDir is the directory the manager puts each stage's own copy of
+	// the nightgauge binary in, exported to the stage as NIGHTGAUGE_BIN
+	// (OpenCodeStageBinDir, #3688), or "" for a root without one. The manager
+	// creates it before the spawn, verifies the copy after it and removes it;
+	// a field, not an Env entry, because only the manager reads it.
+	StageBinDir string
 }
 
 // RunResult captures the output of a skill execution.

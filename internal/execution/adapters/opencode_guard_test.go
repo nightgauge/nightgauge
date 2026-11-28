@@ -104,7 +104,7 @@ func openCodeFindAsk(decoded any) []string {
 // of a synthetic "ask" planted in a copy — proving the scan assertion below
 // is not vacuously green.
 func TestOpenCodeScanForAskCatchesAsk(t *testing.T) {
-	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Read", "Bash"}}, "")
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Read", "Bash"}}, "", "")
 	raw, err := json.Marshal(pm)
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func TestOpenCodePermissionMap(t *testing.T) {
 				SkillPath:    filepath.Join(skillsRoot, name, "SKILL.md"),
 				WorktreeDir:  worktree,
 			}
-			pm := openCodePermissionMap(opts, "")
+			pm := openCodePermissionMap(opts, "", "")
 			raw, err := json.Marshal(pm)
 			if err != nil {
 				t.Fatal(err)
@@ -305,7 +305,7 @@ func TestOpenCodePermissionMap(t *testing.T) {
 // AllowedTools must never produce a bare "*": "allow" — the issue's own
 // wording — for any key.
 func TestOpenCodePermissionMapEmptyAllowedToolsNeverAllows(t *testing.T) {
-	pm := openCodePermissionMap(RunOptions{}, "")
+	pm := openCodePermissionMap(RunOptions{}, "", "")
 	raw, err := json.Marshal(pm)
 	if err != nil {
 		t.Fatal(err)
@@ -336,7 +336,7 @@ func TestOpenCodePermissionMapEmptyAllowedToolsNeverAllows(t *testing.T) {
 // allow-list must never carry binDir's own pattern, whatever binDir is.
 func TestOpenCodePermissionMapNeverAllowsBinDir(t *testing.T) {
 	binDir := t.TempDir()
-	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Read", "Edit", "Write"}, WorktreeDir: t.TempDir()}, binDir)
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Read", "Edit", "Write"}, WorktreeDir: t.TempDir()}, binDir, "")
 	raw, err := json.Marshal(pm)
 	if err != nil {
 		t.Fatal(err)
@@ -364,7 +364,7 @@ func TestOpenCodePermissionMapNeverAllowsBinDir(t *testing.T) {
 // the assertion back from the same var it is meant to guard would pass
 // vacuously no matter how short the var got.
 func TestOpenCodeDenyListBackstopComplete(t *testing.T) {
-	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Read", "Edit", "Write", "Bash"}}, "")
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Read", "Edit", "Write", "Bash"}}, "", "")
 	raw, err := json.Marshal(pm)
 	if err != nil {
 		t.Fatal(err)
@@ -409,7 +409,7 @@ func TestOpenCodeDenyListBackstopComplete(t *testing.T) {
 // patterns still present and still winning (git push --force* stays denied
 // even though "git *" is allowed).
 func TestOpenCodeBashScopedEntry(t *testing.T) {
-	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash(git *)"}}, "")
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash(git *)"}}, "", "")
 	raw, err := json.Marshal(pm)
 	if err != nil {
 		t.Fatal(err)
@@ -925,7 +925,7 @@ func TestOpenCodePermissionMapCoversTheSystemAliasOfAResolvedWorktree(t *testing
 	}
 	alias := filepath.Join("/tmp", filepath.Base(wt))
 
-	perm := openCodePermissionMap(RunOptions{WorktreeDir: wt, AllowedTools: []string{"Read", "Edit"}}, "")
+	perm := openCodePermissionMap(RunOptions{WorktreeDir: wt, AllowedTools: []string{"Read", "Edit"}}, "", "")
 	if got := openCodePatternAction(perm.ExternalDirectory, alias+"/src/*"); got != openCodeAllow {
 		t.Errorf("external_directory %q = %q, want allow", alias+"/src/*", got)
 	}
@@ -971,7 +971,7 @@ func openCodeStageRuleSets(t *testing.T) map[string][]openCodeRuleJSON {
 	skillsRoot := filepath.Join(repoRootForTest(t), "skills")
 	sets := map[string][]openCodeRuleJSON{}
 	add := func(name string, opts RunOptions) {
-		rules, err := openCodePermissionRules(openCodePermissionMap(opts, ""))
+		rules, err := openCodePermissionRules(openCodePermissionMap(opts, "", ""))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -1081,7 +1081,7 @@ func TestOpenCodePermissionKeyForClaudeTool(t *testing.T) {
 // and question stay denied even when every mapped tool is granted, while the
 // granted tools themselves are allowed (so the deny is not vacuous).
 func TestOpenCodePermissionMapDeniesExecuteAndQuestion(t *testing.T) {
-	pm := openCodePermissionMap(RunOptions{AllowedTools: openCodeAllMappedClaudeTools}, "")
+	pm := openCodePermissionMap(RunOptions{AllowedTools: openCodeAllMappedClaudeTools}, "", "")
 	if pm.Execute != openCodeDeny || pm.Question != openCodeDeny || pm.Subagent != openCodeDeny {
 		t.Errorf("execute, question, subagent = %q, %q, %q; want all %q", pm.Execute, pm.Question, pm.Subagent, openCodeDeny)
 	}
@@ -1147,7 +1147,7 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 		for _, g := range grants {
 			grantName := g.name
 			opts := RunOptions{AllowedTools: g.tools, WorktreeDir: t.TempDir()}
-			pm := openCodePermissionMap(opts, c.binDir).Shell
+			pm := openCodePermissionMap(opts, c.binDir, "").Shell
 			for _, dir := range c.forms {
 				gh := filepath.Join(dir, "gh")
 				for _, cmd := range []string{
@@ -1286,7 +1286,7 @@ func TestOpenCodeShellPermissionDeniesBinDirWrites(t *testing.T) {
 		}
 	}
 	// Accepted fail-safe denies of a continued line (#3627).
-	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}}, realBin).Shell
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}}, realBin, "").Shell
 	for _, line := range []string{
 		"curl -sS \\", "npm install foo \\", "go install ./cmd/x \\", "cmd 2>&1 \\",
 		"ls src\\", // a verb prefix glued to the backslash
@@ -1320,7 +1320,7 @@ func TestOpenCodeShellPermissionDeniesContinuedWriteVerb(t *testing.T) {
 		t.Fatal(err)
 	}
 	gh := filepath.Join(binDir, "gh")
-	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}}, binDir).Shell
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}}, binDir, "").Shell
 	cases := []struct{ name, cmd string }{
 		{"cp continued inside verb", "c\\\np /tmp/payload.sh " + gh},
 		{"mv continued inside verb", "m\\\nv /tmp/payload.sh " + gh},
@@ -1385,7 +1385,7 @@ func TestOpenCodeShellBinDirDenyIssueForms3631(t *testing.T) {
 		t.Fatal(err)
 	}
 	gh := filepath.Join(binDir, "gh")
-	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}}, binDir).Shell
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}}, binDir, "").Shell
 	emitted := openCodeShellBinDirDenyPatterns(binDir, "")
 	forms := openCodeShellBinDirForms(binDir, "")
 	perForm := func(prefix string) []string {
@@ -1586,7 +1586,7 @@ func TestOpenCodeShellBinDirDenyListSize(t *testing.T) {
 // as whole text (OpenCode 2.4.2) and on at least one line (older OpenCode).
 func TestOpenCodeShellBinDirDenyWorstCaseBypasses(t *testing.T) {
 	binDir, worktree := openCodeWorstCaseDirs(t)
-	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}, WorktreeDir: worktree}, binDir).Shell
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}, WorktreeDir: worktree}, binDir, "").Shell
 	resolvedBin, err := filepath.EvalSymlinks(binDir)
 	if err != nil {
 		t.Fatal(err)
@@ -1706,7 +1706,7 @@ func TestOpenCodeShellPermissionDeniesRelativeBinDirWrites(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}, WorktreeDir: wt}, bin).Shell
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}, WorktreeDir: wt}, bin, "").Shell
 	for _, cmd := range []string{
 		"cp /tmp/payload.sh ../../tools/bin/gh",
 		"cp /tmp/payload.sh ./../../tools/bin/gh",
@@ -1726,8 +1726,52 @@ func TestOpenCodeShellPermissionDeniesRelativeBinDirWrites(t *testing.T) {
 			t.Errorf("inside-worktree bin dir emitted bare relative pattern %q", p)
 		}
 	}
-	pm = openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}, WorktreeDir: wt}, inside).Shell
+	pm = openCodePermissionMap(RunOptions{AllowedTools: []string{"Bash"}, WorktreeDir: wt}, inside, "").Shell
 	if got := openCodePatternAction(pm, "cp a build/bin-out"); got == openCodeDeny {
 		t.Errorf("inside-worktree bin dir denies unrelated write")
+	}
+}
+
+// The stage's binary copy directory (#3688) is denied to edit and write, is
+// not on the external_directory allow-list, and is not named by the shell
+// deny-list, which keeps the operator's binDir alone.
+func TestOpenCodePermissionMapDeniesTheStageBinDirToEditAndWrite(t *testing.T) {
+	wt := t.TempDir()
+	root := filepath.Join(t.TempDir(), "runs", "r")
+	stageBinDir := OpenCodeStageBinDir(root)
+	opts := RunOptions{AllowedTools: []string{"Read", "Edit", "Write", "Bash"}, WorktreeDir: wt}
+	with, err := json.Marshal(openCodePermissionMap(opts, "", stageBinDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, err := json.Marshal(openCodePermissionMap(opts, "", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var withMap, withoutMap map[string]json.RawMessage
+	_ = json.Unmarshal(with, &withMap)
+	_ = json.Unmarshal(without, &withoutMap)
+	tail := filepath.ToSlash(filepath.Join("runs", "r", "bin")) + "/**"
+	for key, raw := range withMap {
+		names := strings.Contains(string(raw), tail)
+		switch key {
+		case "edit", "write":
+			if !names || !strings.Contains(string(raw), "deny") {
+				t.Errorf("%s does not deny %s: %s", key, tail, raw)
+			}
+		default:
+			if names {
+				t.Errorf("%s names the stage bin dir; only edit and write may: %s", key, raw)
+			}
+			if string(raw) != string(withoutMap[key]) {
+				t.Errorf("%s changed with a stage bin dir:\nwith    %s\nwithout %s", key, raw, withoutMap[key])
+			}
+		}
+	}
+	if strings.HasPrefix(stageBinDir, wt) {
+		t.Errorf("the stage bin dir %s is under the worktree %s", stageBinDir, wt)
+	}
+	if OpenCodeStageBinDir("") != "" {
+		t.Error("a dispatch with no run root got a stage bin dir")
 	}
 }

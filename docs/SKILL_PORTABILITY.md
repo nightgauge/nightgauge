@@ -42,6 +42,10 @@ it, so discovery is identical under every adapter:
 | VSCode extension | `skillRunner.runStageSkillHeadless` (via `BinaryResolver.resolveSync()`) | `NIGHTGAUGE_BIN` + prepends its dir to `PATH` |
 | Go auto/CLI mode | `internal/execution/manager.go` (via `os.Executable()`)                  | `NIGHTGAUGE_BIN`                              |
 
+An OpenCode stage the Go manager dispatches gets a verified per-stage copy of
+that binary instead, at `<run root>/bin/nightgauge`
+([ADR-022, amendment 2026-11-27](decisions/022-opencode-multi-provider-adapter.md)).
+
 ### The skill cascade (PREFLIGHT)
 
 `skills/_shared/PREFLIGHT.md` resolves `$BINARY` in this **provider-neutral**

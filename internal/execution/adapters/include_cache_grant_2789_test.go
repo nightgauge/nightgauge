@@ -46,7 +46,7 @@ func TestIncludeCacheIsGrantedOnceARenderWroteCopies2789(t *testing.T) {
 	if !slices.Contains(opencodeallow.Roots(openCodeAllowOptions(opts)), cache) {
 		t.Errorf("OpenCode roots omit the include cache %s", cache)
 	}
-	edit := openCodePermissionMap(opts, "").Edit
+	edit := openCodePermissionMap(opts, "", "").Edit
 	denied := false
 	for _, p := range openCodeWorktreeRelativeDirPatterns(worktree, cache) {
 		if edit.values[p] == openCodeDeny {

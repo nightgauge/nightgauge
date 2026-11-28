@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -399,6 +400,35 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 			return nil, fmt.Errorf("dispatch refused for adapter %q: %w", adapter.Name(), prepErr)
 		}
 		runOpts.RunRoot = root
+	}
+
+	// The stage's own copy of this binary (#3688, ADR-022 amendment
+	// 2026-11-27). A root that names a StageBinDir gets a full copy there,
+	// exported as the stage's NIGHTGAUGE_BIN, whose identity is checked once
+	// the stage is reaped and before anything it produced is read. A copy
+	// that cannot be made or recorded refuses the dispatch: an unverifiable
+	// stage must not run. The copy is removed on every return.
+	var stageBin *stageBinary
+	if runOpts.RunRoot != nil && runOpts.RunRoot.StageBinDir != "" {
+		sb, sbErr := prepareStageBinary(runOpts.RunRoot.StageBinDir)
+		if sbErr != nil {
+			fmt.Fprintf(os.Stderr, "[%s] dispatch refused: could not prepare the stage's binary copy: %v\n", adapter.Name(), sbErr)
+			return nil, fmt.Errorf("dispatch refused for adapter %q: stage binary: %w", adapter.Name(), sbErr)
+		}
+		stageBin = sb
+		defer func() {
+			if err := sb.Remove(); err != nil {
+				fmt.Fprintf(os.Stderr, "[%s] could not remove the stage's binary copy %s: %v\n", adapter.Name(), sb.Path(), err)
+			}
+		}()
+		// The root itself is updated, never replaced: the adapter keys its
+		// binary pin by this pointer.
+		env := maps.Clone(runOpts.RunRoot.Env)
+		if env == nil {
+			env = map[string]string{}
+		}
+		env[nightgaugeBinEnv] = sb.Path()
+		runOpts.RunRoot.Env = env
 	}
 
 	// Claude stages name their plugin and prove it loaded (#2723). Set here, the
@@ -1101,6 +1131,19 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	if opts.Runtime != nil {
 		opts.Runtime.SetStageChild(0)
 		m.publishStageChild(opts.Repo, opts.Runtime)
+	}
+
+	// The stage is reaped: check its binary copy before anything it produced
+	// is read (#3688). This is the one point every exit path passes through —
+	// a clean exit, a non-zero exit, a timeout and a stop. A copy that changed
+	// fails the stage as bin_tamper whatever it exited with, and its output,
+	// session database and output file are never read.
+	if stageBin != nil {
+		if verr := stageBin.Verify(); verr != nil {
+			msg := fmt.Sprintf("%s %s: the stage's NIGHTGAUGE_BIN copy %s changed: %v", stageBinTamperMarker, stageBinTamperKind, stageBin.Path(), verr)
+			fmt.Fprintf(os.Stderr, "%s: %s\n", stageLabel, msg)
+			return nil, errors.New(msg)
+		}
 	}
 
 	// OpenCode's usage fold reads its subagent sessions into tokenAcc before
@@ -2002,8 +2045,13 @@ func composeStageEnv(base []string, withhold func(key string) bool, adapterEnv m
 	// authoritative — no duplicate NIGHTGAUGE_BIN with OS-dependent
 	// precedence if one was inherited. Best-effort: a failure to resolve self
 	// never blocks the spawn (the cascade has PATH/repo fallbacks).
-	if self := hostBinaryPath(hostExecutable); self != "" {
-		env = upsertEnvVar(env, "NIGHTGAUGE_BIN", self)
+	// An adapter that exports its own NIGHTGAUGE_BIN keeps it: the opencode
+	// stage's is the manager's per-stage copy of this binary (#3688), and the
+	// host path would hand the stage the operator's file instead.
+	if _, own := adapterEnv[nightgaugeBinEnv]; !own {
+		if self := hostBinaryPath(hostExecutable); self != "" {
+			env = upsertEnvVar(env, nightgaugeBinEnv, self)
+		}
 	}
 
 	// Export the absolute skill directory so agents resolve _includes/_shared

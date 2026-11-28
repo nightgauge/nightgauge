@@ -3642,6 +3642,54 @@ in the binary.
   does not match the pin fails the dispatch before OpenCode starts, like any
   other `VerifyInstalled` refusal. No embedded fallback exists.
 
+## The parent's verification of a per-run binary copy is the boundary (amendment 2026-11-27, #3688)
+
+An OpenCode stage runs its gates and hooks through the `nightgauge` binary
+`NIGHTGAUGE_BIN` names. A stage that could overwrite that binary would judge
+itself. The bin-dir guards so far (the permission map's shell deny globs and
+`internal/hooks/careful_bindir.go`) parse command text, and interpreters and
+filed forms bypass them (#3615, #3622, #3627, #3650). This amendment moves the
+boundary into the parent process.
+
+- **The copy.** For each stage whose run root names a `StageBinDir`
+  (`<run root>/bin`, only the opencode adapter's), `Manager.RunStage` copies
+  its own executable, symlinks resolved, into that directory as a new regular
+  file `nightgauge` with mode 0500. The directory is 0700 and must be empty;
+  the copy is never a hard link or a symlink. The manager exports the copy as
+  the stage's `NIGHTGAUGE_BIN`, which outranks the host path. The SDK path's
+  `nightgauge opencode config` makes no copy and exports none.
+- **Settling ctime.** The parent executes the copy once (`version`, bounded at
+  10 s) before it records anything, so a first exec that sets an extended
+  attribute (macOS) has moved ctime already. A failed exec refuses the
+  dispatch.
+- **The record.** The parent records the copy's SHA-256, size, mode, device,
+  inode and ctime, and the directory's sorted entries, mode, device, inode
+  and ctime, all from `Lstat`.
+- **Verification.** Once the stage is reaped, at the single point every exit
+  path passes (a clean exit, a non-zero exit, a timeout, a stop), the parent
+  re-reads the record in-process, never executing the copy, before it reads
+  the session database, builds the result or returns to a caller that reads
+  the output file. Any difference, including a missing or non-regular file,
+  fails the stage with `[bin-tamper] bin_tamper: ...` and no result, whatever
+  it exited with. The terminal kind `bin_tamper` is first in the ladder and
+  parks: no retry, no lifetime-cap charge, no cascade.
+- **Refusal and cleanup.** A copy or record that cannot be made refuses the
+  dispatch with the reason on stderr. The directory is removed after
+  verification on every return. Replacing the operator's installed binary
+  mid-stage changes neither the copy nor the check.
+- **Permissions.** The edit and write maps deny the copy's directory. It is
+  not on the `external_directory` allow-list and lies outside the worktree.
+- **Detection, not prevention.** Nothing here needs root, `chflags` or
+  `chattr`. A tamper is caught after the fact and the stage's output is
+  discarded. The accepted residual risk is what the stage did between the
+  tamper and its exit: its later gate calls ran its own code, and a side
+  effect they allowed (a push, a forge API call) is not undone. The run stops
+  and the issue parks, so no stage after it builds on that work.
+
+`careful_bindir.go` and the shell deny-glob generator stay unchanged, as an
+advisory first filter. **A parser or glob bypass is therefore not a security
+finding.** The finding is a change to the copy that this check misses.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special
