@@ -4,7 +4,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"go/types"
 	"regexp"
 	"strconv"
 	"strings"
@@ -291,5 +290,5 @@ func acGoValueIs(e ast.Expr, want string) bool {
 		}
 		return bl.Value == want
 	}
-	return types.ExprString(e) == want
+	return acExprString(e) == want
 }

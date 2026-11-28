@@ -154,7 +154,7 @@ scan needs no change.
   check each raw, in a `.tar.gz` and in a `.vsix`. `scripts/ci-local.sh` runs
   them through `go test ./...`.
 - The checker also fails a Linux amd64 binary over 30 MiB stripped, and a test
-  fails if the release CLI links go-git or `modernc.org/` packages. See
+  fails if the release CLI links go-git, `modernc.org/` packages or `go/types`. See
   [Structural fix](#structural-fix-the-release-cli-drops-go-git-and-sqlite).
 - The margin scan and the release gate are described in
   [their own section](#linux-amd64-margin-and-the-margin-scan-3192).
@@ -456,9 +456,10 @@ stripped, against 36.86 MB for `main`. The release CLI no longer links either:
 The build settings are unchanged: unstripped, with uncompressed DWARF. Two
 guards in `cmd/release-dwarf-check` keep the dependencies out:
 
-- `TestReleaseCLIDoesNotLinkGoGitOrSQLite` runs `go list -deps` for the
+- `TestReleaseCLIDoesNotLinkGoGitSQLiteOrGoTypes` runs `go list -deps` for the
   linux/amd64 CLI and fails, naming the importer, on any `github.com/go-git/`,
-  `modernc.org/`, ProtonMail or circl package.
+  `modernc.org/`, ProtonMail or circl package, or on an exact entry of
+  `unlinkedPackages` (`go/types`).
 - The checker itself fails (exit `1`) a Linux amd64 binary whose stripped size —
   file size less its DWARF sections, `.symtab` and `.strtab` — exceeds 30 MiB.
   `staging.yml` and `release.yml` already run it on every packaged binary.
@@ -466,6 +467,18 @@ guards in `cmd/release-dwarf-check` keep the dependencies out:
 The RC margin scan stays the gate. An RC cut after this change must pass it,
 and the operator scans `main`'s Linux amd64 binary at eight or more version
 strings and records each verdict on #3192.
+
+#### go/types (#3675)
+
+One `types.ExprString` call in the PR-create acceptance-criteria matcher linked
+`go/types`, and with it `go/constant`, `go/version`, `internal/types/errors`,
+`internal/gover`, `internal/goversion`, `container/heap` and `hash/maphash`. The
+linux/amd64 CLI measured 30.07 MiB stripped, over the limit. A package-local
+port of the printer (`acExprString`, tested for parity with `types.ExprString`)
+replaced the call; `go list -deps` lost only those eight packages, and the CLI
+built with the release flags measures 28.97 MiB. `go/types` is in
+`unlinkedPackages`, so the guard above fails if it returns. Test files may still
+import it.
 
 ### Cause measurement: the four required variants
 

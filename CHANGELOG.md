@@ -29,6 +29,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The Linux amd64 release CLI no longer links `go/types`, which put it over the
+  30 MiB stripped limit (30.07 MiB, now 28.97 MiB). A test fails if it returns
+  (#3675).
+
 - The OpenCode bin-dir guard in `nightgauge hook careful-gate` no longer lets
   a write into `NIGHTGAUGE_BIN`'s directory through a prefix wrapper. It now
   skips each wrapper option's value (`env -u X`, `sudo -u root`,
