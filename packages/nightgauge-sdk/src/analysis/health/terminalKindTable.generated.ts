@@ -176,6 +176,17 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
   ],
   "rules": [
     {
+      "id": "bin-tamper",
+      "kind": "bin_tamper",
+      "signal": false,
+      "clauses": [
+        [
+          "[bin-tamper]"
+        ]
+      ],
+      "why": "The execution manager found that an OpenCode stage's own copy of the nightgauge binary, the NIGHTGAUGE_BIN it ran its gates and hooks through, changed between the spawn and the reap (#3688, ADR-022 amendment 2026-11-27): its SHA-256, size, mode, device, inode or ctime, or its directory's entries. It discards the stage's output and fails it with `[bin-tamper] bin_tamper: ...`, whatever the stage exited with. FIRST in the ladder: the verdict is the parent's own in-process check, and the rest of the text is whatever a stage that rewrote its own gates chose to print, which can carry any phrase a rule below keys on. Parks: a retry would hand the same issue text and model the same chance, and the event wants an operator's eyes, not a backoff. Not a signal: only the Go manager dispatches opencode."
+    },
+    {
       "id": "api-cloudflare-challenge",
       "kind": "api_overloaded",
       "signal": true,

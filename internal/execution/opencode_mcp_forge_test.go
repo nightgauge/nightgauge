@@ -49,6 +49,10 @@ func TestMain(m *testing.M) {
 	// CLI a test spawns with a temp STATE and the real HOME once migrated the
 	// developer's ~/.nightgauge into that temp STATE, and cleanup deleted it.
 	cleanupHome := hometest.Isolate()
+	// The binary an opencode stage gets a copy of, and executes once before
+	// the copy's identity is recorded (#3688): a stub, never this test binary,
+	// whose `version` would run the whole suite again.
+	restoreHost := stubHostExecutableForTests()
 	restore := adapters.SwapOpenCodeMcpForgeForTest(openCodeMapForge{err: errors.New("the execution test binary reads no forge")})
 	restoreDiscovery := adapters.SwapOpenCodeLocalDiscoveryForTest(func(adapters.OpenCodeEndpoint, string) (models.LocalDescriptor, error) {
 		return models.LocalDescriptor{}, errors.New("the execution test binary asks no model server")
@@ -62,6 +66,7 @@ func TestMain(m *testing.M) {
 	}
 	restoreDiscovery()
 	restore()
+	restoreHost()
 	cleanupHome()
 	os.Exit(code)
 }

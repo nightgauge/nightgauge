@@ -624,6 +624,9 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   // the refusal names (#1631).
   adapter_incompatible: "adapter-incompatible",
 
+  // An OpenCode stage changed the binary its own gates run through (#3688).
+  bin_tamper: "containment-breach",
+
   // A project-declared environment check failed in Phase 0; the operator
   // fixes the environment the check's remedy names (#101).
   environment_halt: "environment-halt",

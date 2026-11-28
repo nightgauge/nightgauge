@@ -67,7 +67,7 @@ func TestOpenCodeGitCommandIsHardened(t *testing.T) {
 // that the folded path still hits the map's deny, and that the raw variant
 // really does slip past the map (why the plugin check exists).
 func TestOpenCodeCaseVariantsHitTheDenyOnceFolded(t *testing.T) {
-	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Read", "Edit", "Write"}}, "")
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Read", "Edit", "Write"}}, "", "")
 	cases := []struct {
 		name string
 		pm   *openCodePatternMap

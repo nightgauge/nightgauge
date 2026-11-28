@@ -186,7 +186,7 @@ func TestOpenCodeConfigSafetyKeys(t *testing.T) {
 // carries meaning (the last matching rule wins), so the expected rules are
 // literal and must appear in this order.
 func TestOpenCodePermissionRulesTranslatesInOrder(t *testing.T) {
-	p := openCodePermissionMap(RunOptions{AllowedTools: []string{"Read", "Bash(git *)"}, WorktreeDir: "/work/w"}, "")
+	p := openCodePermissionMap(RunOptions{AllowedTools: []string{"Read", "Bash(git *)"}, WorktreeDir: "/work/w"}, "", "")
 	rules, err := openCodePermissionRules(p)
 	if err != nil {
 		t.Fatal(err)

@@ -1321,6 +1321,15 @@ func TestOpenCodePrepareRunRoot(t *testing.T) {
 	if want := filepath.Join(first.Dir, "home"); first.Env["HOME"] != want {
 		t.Errorf("Env[HOME] = %q, want %q", first.Env["HOME"], want)
 	}
+	// The manager copies and verifies the stage's binary here (#3688). The
+	// adapter names the directory and leaves NIGHTGAUGE_BIN to the manager,
+	// which exports it only once the copy exists.
+	if want := filepath.Join(first.Dir, "bin"); first.StageBinDir != want {
+		t.Errorf("StageBinDir = %q, want %q", first.StageBinDir, want)
+	}
+	if v, ok := first.Env["NIGHTGAUGE_BIN"]; ok {
+		t.Errorf("Env exports NIGHTGAUGE_BIN=%q before any copy exists", v)
+	}
 	if content := first.Env["OPENCODE_CONFIG_CONTENT"]; !strings.Contains(content, `{"action":"provider.use","effect":"allow","resource":"lmstudio"}`) {
 		t.Errorf("Env does not carry the run's config as OPENCODE_CONFIG_CONTENT: %q", content)
 	}

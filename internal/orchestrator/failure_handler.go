@@ -840,6 +840,13 @@ const (
 	// path labels the issue needs-decomposition, comments once and moves it to
 	// Backlog.
 	TerminalKindNeedsDecomposition = "needs_decomposition"
+	// TerminalKindBinTamper: an OpenCode stage's own copy of the nightgauge
+	// binary (its NIGHTGAUGE_BIN) changed between the spawn and the reap
+	// (#3688, ADR-022 amendment 2026-11-27). The execution manager discards
+	// the stage's output and fails it with `[bin-tamper] bin_tamper: ...`. It
+	// parks: a stage that rewrote the binary its gates run through wants an
+	// operator, and a retry gives the same issue and model the same chance.
+	TerminalKindBinTamper = "bin_tamper"
 	// TerminalKindResumeNoOp: a run resumed at pr-merge, found the PR
 	// already merged, did no work and left the issue open (#2878). A run reports
 	// the kind with success and the report parks the issue: Ready was withheld,
@@ -856,7 +863,7 @@ func TerminalKindParks(kind string) bool {
 	switch kind {
 	case TerminalKindContextWindowExceeded, TerminalKindAdapterPermissionRejected, TerminalKindAdapterIncompatible,
 		TerminalKindAdapterProviderNoRoute, TerminalKindEnvironmentHalt, TerminalKindDevContextStale, TerminalKindGatePluginMissing,
-		TerminalKindReviewCapReached, TerminalKindNeedsDecomposition, TerminalKindResumeNoOp:
+		TerminalKindReviewCapReached, TerminalKindNeedsDecomposition, TerminalKindResumeNoOp, TerminalKindBinTamper:
 		return true
 	}
 	return false
@@ -913,6 +920,10 @@ func TerminalKindRemediation(kind string) string {
 		return "OpenCode's provider config routes no model by the name the stage was dispatched with " +
 			"(error type provider.no-route); fix the model id in the stage's routing or add the model to the " +
 			"provider's opencode config, " + parkedReleaseStep + " — a retry asks for the same model"
+	case TerminalKindBinTamper:
+		return "the stage changed its own copy of the nightgauge binary (the failure text names what differed), so its " +
+			"gates and hooks cannot be trusted and its output was discarded; read the run's preserved OpenCode session and " +
+			"tool call evidence to see what the stage ran, and fix the issue text or routing that led it there, " + parkedReleaseStep
 	case TerminalKindAdapterIncompatible:
 		return "the adapter's binary cannot serve this dispatch; install a version at or above the floor the refusal names " +
 			"or pin the adapter's binary to it, " + parkedReleaseStep

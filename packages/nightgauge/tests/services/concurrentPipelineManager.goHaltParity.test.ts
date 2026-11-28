@@ -195,6 +195,7 @@ describe("Go/extension halt-decision parity (#1169)", () => {
       "adapter_incompatible",
       "adapter_permission_rejected",
       "adapter_provider_no_route",
+      "bin_tamper",
       "context_window_exceeded",
       "dev_context_stale",
       "environment_halt",

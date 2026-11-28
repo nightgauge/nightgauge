@@ -362,7 +362,7 @@ func TestOpenCodeIncludesReadAllowed(t *testing.T) {
 	guardWriteFile(t, filepath.Join(dir, "README.md"), "probe worktree\n")
 
 	opts := RunOptions{AllowedTools: []string{"Read", "Edit"}, SkillPath: filepath.Join(skillDir, "SKILL.md"), WorktreeDir: dir}
-	permission := openCodePermissionMap(opts, "")
+	permission := openCodePermissionMap(opts, "", "")
 
 	stub := newGuardStubServer(t, []guardStubTurn{
 		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"path": includeFile}}},
@@ -444,7 +444,7 @@ func TestOpenCodeIncludesEditDeniedInGitWorktree(t *testing.T) {
 	guardGitInit(t, dir)
 
 	opts := RunOptions{AllowedTools: []string{"Read", "Edit"}, SkillPath: filepath.Join(skillDir, "SKILL.md"), WorktreeDir: dir}
-	permission := openCodePermissionMap(opts, "")
+	permission := openCodePermissionMap(opts, "", "")
 
 	stub := newGuardStubServer(t, []guardStubTurn{
 		{ToolCall: &guardStubToolCall{Name: "edit", Arguments: map[string]any{"path": includeFile, "oldString": "PROBE-1638-INCLUDE-CONTENT", "newString": "TAMPERED"}}},
@@ -489,7 +489,7 @@ func TestOpenCodeBinDirEditDenied(t *testing.T) {
 	planted := filepath.Join(binDir, "gh")
 
 	opts := RunOptions{AllowedTools: []string{"Read", "Edit", "Write"}, WorktreeDir: dir}
-	permission := openCodePermissionMap(opts, binDir)
+	permission := openCodePermissionMap(opts, binDir, "")
 
 	stub := newGuardStubServer(t, []guardStubTurn{
 		{ToolCall: &guardStubToolCall{Name: "write", Arguments: map[string]any{"path": planted, "content": "#!/bin/sh\necho PLANTED\n"}}},
@@ -584,7 +584,7 @@ func runOpenCodeBinDirCpDeniedProbe(t *testing.T) {
 			}
 
 			opts := RunOptions{AllowedTools: []string{"Read", "Bash"}, WorktreeDir: dir}
-			permission := openCodePermissionMap(opts, binDir)
+			permission := openCodePermissionMap(opts, binDir, "")
 
 			command := f.command(source, binDir, rel)
 			stub := newGuardStubServer(t, []guardStubTurn{
@@ -670,7 +670,7 @@ func runOpenCodeOutsideReadRejectedProbe(t *testing.T) {
 	// No SkillPath: the allow-list holds only the worktree-relative
 	// defaults (the /tmp literals) and never outsideFile's directory.
 	opts := RunOptions{AllowedTools: []string{"Read"}, WorktreeDir: dir}
-	permission := openCodePermissionMap(opts, "")
+	permission := openCodePermissionMap(opts, "", "")
 
 	stub := newGuardStubServer(t, []guardStubTurn{
 		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"path": outsideFile}}},
@@ -731,7 +731,7 @@ func TestOpenCodeNestedDotEnvDenied(t *testing.T) {
 	}
 
 	opts := RunOptions{AllowedTools: []string{"Read"}, WorktreeDir: dir}
-	permission := openCodePermissionMap(opts, "")
+	permission := openCodePermissionMap(opts, "", "")
 
 	envLocal := filepath.Join(resolved, "apps", "web", ".env.local")
 	prodEnv := filepath.Join(resolved, "config", "prod.env.local")
@@ -806,7 +806,7 @@ func TestOpenCodeTmpDirAllowLetsAStageReadAndCatFromTmp(t *testing.T) {
 	}
 
 	opts := RunOptions{AllowedTools: []string{"Read", "Bash"}, WorktreeDir: dir}
-	permission := openCodePermissionMap(opts, "")
+	permission := openCodePermissionMap(opts, "", "")
 
 	stub := newGuardStubServer(t, []guardStubTurn{
 		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"path": automergeErr}}},
@@ -873,7 +873,7 @@ func TestOpenCodeTmpDirAllowDoesNotReachANestedFile(t *testing.T) {
 	guardWriteFile(t, sibling, "ORIGINAL\n")
 
 	opts := RunOptions{AllowedTools: []string{"Read", "Write"}, WorktreeDir: dir}
-	permission := openCodePermissionMap(opts, "")
+	permission := openCodePermissionMap(opts, "", "")
 
 	stub := newGuardStubServer(t, []guardStubTurn{
 		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"path": nested}}},

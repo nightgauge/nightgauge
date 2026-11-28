@@ -287,6 +287,7 @@ export type TerminalFailureKind =
   | "adapter_provider_no_route" // Issue #3305 — OpenCode 2.x reported error type provider.no-route: the provider config routes no model by the dispatched -m; parked
   | "adapter_provider_transport" // Issue #3305 — OpenCode 2.x reported provider.transport (a refused or dropped connection), stopped past the retry bound or as a terminal error; retryable
   | "adapter_provider_error" // Issue #3305 — any other provider.* error type OpenCode 2.x reported, such as provider.internal retried past the bound; retryable
+  | "bin_tamper" // Issue #3688 — an OpenCode stage changed its own copy of the nightgauge binary (`[bin-tamper]`); its output is discarded and the issue parks
   | "adapter_incompatible"; // Issue #1631 — the adapter's binary cannot serve the dispatch (below the compat floor or unreadable; #1627; a newer version is never refused); install a build at or above the floor
 
 /**
@@ -358,6 +359,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "adapter_provider_no_route",
   "adapter_provider_transport",
   "adapter_provider_error",
+  "bin_tamper",
   "adapter_incompatible",
 ];
 

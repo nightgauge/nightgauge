@@ -26,6 +26,21 @@
       "signal": ""
     },
     {
+      "input": "[bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[BIN-TAMPER]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -3021,6 +3036,321 @@
       "signal": ""
     },
     {
+      "input": "[bin-tamper] | attention required! cloudflare",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [host-slept]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [merge-conflict]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | merge-queue-enqueue-exhausted",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | merge-queue-infra-exhausted",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | stage_budget_exceeded:",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | network unavailable: extended github connectivity loss",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | adapter_incompatible",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [model-stream-stalled]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | stream idle timeout",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | overloaded",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | socket connection was closed",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [rate-limit-quota-exhausted]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [adapter-auth-failed]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [environment-halt]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [gate-plugin-missing]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | ai_apicallerror context_length_exceeded",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | not_found_error model",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | pipeline-start-failure issue-closed",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [blocked-dependency]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | architecture approval required",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | github-quota-low",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | github-network-outage",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | secondary rate limit",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [pr-merge-unmerged",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [stage:worktree-containment]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [not-pipeline-actionable]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [dev-produced-no-changes]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [dev-handoff-missing]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [dev-step-cap-reached]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [dev-step-progress-unproven]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [push-auth-failed]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | premature turn end",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | worktree_uncommitted",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | budget_ceiling_hit",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [runaway-progress-exceeded]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [runaway-ceiling-exceeded]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [cost-cap-exceeded]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | stage-no-output-timeout",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [stage-cap-killed]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [stall-killed]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | pipeline_budget_exceeded",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | schema validation",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [no-changes-produced]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [needs-decomposition]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [review-cap-reached]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [validation-failed]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [validation-inconclusive]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [branch-forked]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [commit-orphaned]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [adapter-permission-rejected]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [permission-denied]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | stage_context_unreadable",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | dev_build_verification_missing",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | dev_build_verification_failed",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | [dev-context-stale]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | dev_tests_failed",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | pr_merge_lookup_failed",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "[bin-tamper] | subagent crash",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
+      "input": "attention required! cloudflare | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "attention required! cloudflare | [host-slept]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -3326,6 +3656,11 @@
       "signal": "api_overloaded"
     },
     {
+      "input": "[host-slept] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[host-slept] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -3628,6 +3963,11 @@
     {
       "input": "[host-slept] | subagent crash",
       "kind": "host_slept",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -3936,6 +4276,11 @@
       "signal": ""
     },
     {
+      "input": "merge-queue-enqueue-exhausted | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "merge-queue-enqueue-exhausted | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -4238,6 +4583,11 @@
     {
       "input": "merge-queue-enqueue-exhausted | subagent crash",
       "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-infra-exhausted | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -4546,6 +4896,11 @@
       "signal": ""
     },
     {
+      "input": "stage_budget_exceeded: | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "stage_budget_exceeded: | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -4848,6 +5203,11 @@
     {
       "input": "stage_budget_exceeded: | subagent crash",
       "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -5156,6 +5516,11 @@
       "signal": ""
     },
     {
+      "input": "adapter_incompatible | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "adapter_incompatible | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -5458,6 +5823,11 @@
     {
       "input": "adapter_incompatible | subagent crash",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -5766,6 +6136,11 @@
       "signal": ""
     },
     {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[opencode-provider-failure] adapter_provider_transport | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -6068,6 +6443,11 @@
     {
       "input": "[opencode-provider-failure] adapter_provider_transport | subagent crash",
       "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_error | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -6376,6 +6756,11 @@
       "signal": ""
     },
     {
+      "input": "[model-stream-stalled] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[model-stream-stalled] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -6678,6 +7063,11 @@
     {
       "input": "[model-stream-stalled] | subagent crash",
       "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "stream idle timeout | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -6986,6 +7376,11 @@
       "signal": "stream_idle_timeout"
     },
     {
+      "input": "overloaded | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "overloaded | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -7289,6 +7684,11 @@
       "input": "overloaded | subagent crash",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
+    },
+    {
+      "input": "socket connection was closed | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
     },
     {
       "input": "socket connection was closed | attention required! cloudflare",
@@ -7596,6 +7996,11 @@
       "signal": "api_connection_lost"
     },
     {
+      "input": "[rate-limit-quota-exhausted] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[rate-limit-quota-exhausted] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -7899,6 +8304,11 @@
       "input": "[rate-limit-quota-exhausted] | subagent crash",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[adapter-auth-failed] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
     },
     {
       "input": "[adapter-auth-failed] | attention required! cloudflare",
@@ -8206,6 +8616,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[environment-halt] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[environment-halt] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -8509,6 +8924,11 @@
       "input": "[environment-halt] | subagent crash",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[gate-plugin-missing] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
     },
     {
       "input": "[gate-plugin-missing] | attention required! cloudflare",
@@ -8816,6 +9236,11 @@
       "signal": "gate_plugin_missing"
     },
     {
+      "input": "ai_apicallerror context_length_exceeded | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "ai_apicallerror context_length_exceeded | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -9118,6 +9543,11 @@
     {
       "input": "ai_apicallerror context_length_exceeded | subagent crash",
       "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -9426,6 +9856,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline-start-failure issue-closed | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "pipeline-start-failure issue-closed | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -9728,6 +10163,11 @@
     {
       "input": "pipeline-start-failure issue-closed | subagent crash",
       "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -10036,6 +10476,11 @@
       "signal": ""
     },
     {
+      "input": "architecture approval required | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "architecture approval required | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -10339,6 +10784,11 @@
       "input": "architecture approval required | subagent crash",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
+    },
+    {
+      "input": "github-quota-low | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
     },
     {
       "input": "github-quota-low | attention required! cloudflare",
@@ -10646,6 +11096,11 @@
       "signal": "github_quota_low"
     },
     {
+      "input": "github-network-outage | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "github-network-outage | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -10951,6 +11406,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "secondary rate limit | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "secondary rate limit | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -11253,6 +11713,11 @@
     {
       "input": "secondary rate limit | subagent crash",
       "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -11561,6 +12026,11 @@
       "signal": ""
     },
     {
+      "input": "[stage:worktree-containment] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[stage:worktree-containment] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -11863,6 +12333,11 @@
     {
       "input": "[stage:worktree-containment] | subagent crash",
       "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -12171,6 +12646,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-produced-no-changes] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[dev-produced-no-changes] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -12473,6 +12953,11 @@
     {
       "input": "[dev-produced-no-changes] | subagent crash",
       "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "[dev-handoff-missing] | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -12781,6 +13266,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-step-cap-reached] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[dev-step-cap-reached] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -13083,6 +13573,11 @@
     {
       "input": "[dev-step-cap-reached] | subagent crash",
       "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-progress-unproven] | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -13391,6 +13886,11 @@
       "signal": ""
     },
     {
+      "input": "[push-auth-failed] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[push-auth-failed] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -13693,6 +14193,11 @@
     {
       "input": "[push-auth-failed] | subagent crash",
       "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -14001,6 +14506,11 @@
       "signal": ""
     },
     {
+      "input": "worktree_uncommitted | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "worktree_uncommitted | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -14303,6 +14813,11 @@
     {
       "input": "worktree_uncommitted | subagent crash",
       "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -14611,6 +15126,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-progress-exceeded] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[runaway-progress-exceeded] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -14913,6 +15433,11 @@
     {
       "input": "[runaway-progress-exceeded] | subagent crash",
       "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -15221,6 +15746,11 @@
       "signal": ""
     },
     {
+      "input": "[cost-cap-exceeded] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[cost-cap-exceeded] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -15523,6 +16053,11 @@
     {
       "input": "[cost-cap-exceeded] | subagent crash",
       "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage-no-output-timeout | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -15831,6 +16366,11 @@
       "signal": ""
     },
     {
+      "input": "[stage-cap-killed] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[stage-cap-killed] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -16133,6 +16673,11 @@
     {
       "input": "[stage-cap-killed] | subagent crash",
       "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stall-killed] | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -16441,6 +16986,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline_budget_exceeded | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "pipeline_budget_exceeded | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -16743,6 +17293,11 @@
     {
       "input": "pipeline_budget_exceeded | subagent crash",
       "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "schema validation | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -17051,6 +17606,11 @@
       "signal": ""
     },
     {
+      "input": "[no-changes-produced] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[no-changes-produced] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -17353,6 +17913,11 @@
     {
       "input": "[no-changes-produced] | subagent crash",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -17661,6 +18226,11 @@
       "signal": ""
     },
     {
+      "input": "[review-cap-reached] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[review-cap-reached] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -17963,6 +18533,11 @@
     {
       "input": "[review-cap-reached] | subagent crash",
       "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -18271,6 +18846,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-inconclusive] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[validation-inconclusive] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -18573,6 +19153,11 @@
     {
       "input": "[validation-inconclusive] | subagent crash",
       "kind": "validation_inconclusive",
+      "signal": ""
+    },
+    {
+      "input": "[branch-forked] | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -18881,6 +19466,11 @@
       "signal": ""
     },
     {
+      "input": "[commit-orphaned] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[commit-orphaned] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -19183,6 +19773,11 @@
     {
       "input": "[commit-orphaned] | subagent crash",
       "kind": "commit_orphaned",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -19491,6 +20086,11 @@
       "signal": ""
     },
     {
+      "input": "[permission-denied] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[permission-denied] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -19793,6 +20393,11 @@
     {
       "input": "[permission-denied] | subagent crash",
       "kind": "permission_denied",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -20101,6 +20706,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_missing | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_missing | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -20403,6 +21013,11 @@
     {
       "input": "dev_build_verification_missing | subagent crash",
       "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -20711,6 +21326,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-context-stale] | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "[dev-context-stale] | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -21013,6 +21633,11 @@
     {
       "input": "[dev-context-stale] | subagent crash",
       "kind": "dev_context_stale",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {
@@ -21321,6 +21946,11 @@
       "signal": ""
     },
     {
+      "input": "pr_merge_lookup_failed | [bin-tamper]",
+      "kind": "bin_tamper",
+      "signal": ""
+    },
+    {
       "input": "pr_merge_lookup_failed | attention required! cloudflare",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -21623,6 +22253,11 @@
     {
       "input": "pr_merge_lookup_failed | subagent crash",
       "kind": "pr_merge_lookup_failed",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | [bin-tamper]",
+      "kind": "bin_tamper",
       "signal": ""
     },
     {

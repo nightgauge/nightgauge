@@ -149,6 +149,7 @@ const HALT_SKIP_PARKED: ReadonlySet<string> = new Set([
   "gate_plugin_missing",
   "review_cap_reached",
   "needs_decomposition",
+  "bin_tamper",
   "resume_no_op",
 ]);
 

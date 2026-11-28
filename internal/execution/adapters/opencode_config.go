@@ -644,6 +644,10 @@ type OpenCodeConfigInput struct {
 	// deliberately leaves it "" (see its own doc comment) — PrepareOpenCodeRun
 	// sets it from OpenCodeRunRequest.BinDir after that call returns.
 	BinDir string
+	// StageBinDir is the directory of the stage's own copy of the binary,
+	// OpenCodeStageBinDir(RunRoot) (#3688). The edit and write maps deny it;
+	// it is not on the external_directory allow-list. "" denies nothing.
+	StageBinDir string
 }
 
 // OpenCodeConfigInputFor is the input a dispatch of run gets on a machine
@@ -669,6 +673,8 @@ func OpenCodeConfigInputFor(settings config.OpenCodeConfig, run RunOptions, runR
 		RunRoot:    runRoot,
 		Lookup:     lookup,
 		Discover:   openCodeLocalDiscovery,
+		// Derived from runRoot alone, so it is as reproducible as the rest.
+		StageBinDir: OpenCodeStageBinDir(runRoot),
 		// BinDir is left empty here deliberately: this constructor is called
 		// directly by tests (and by the doctor's catalog probe) that need
 		// BuildOpenCodeConfig's output to stay reproducible across machines, which os.Executable() is not (it
@@ -1182,7 +1188,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 		a.Permissions = []openCodeRuleJSON{openCodeSubagentDeny}
 		agents[name] = a
 	}
-	permissions, err := openCodePermissionRules(openCodePermissionMap(in.Run, in.BinDir))
+	permissions, err := openCodePermissionRules(openCodePermissionMap(in.Run, in.BinDir, in.StageBinDir))
 	if err != nil {
 		return OpenCodeRunConfig{}, fmt.Errorf("opencode config: permissions: %w", err)
 	}
