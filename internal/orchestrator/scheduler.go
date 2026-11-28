@@ -967,6 +967,9 @@ type Scheduler struct {
 	// private cross-repo epics use the correct configured identity (#3700).
 	// nil → fall back to the default issueSvc.
 	clientResolver func(ctx context.Context, owner, repo string) (*gh.Client, error)
+	// applyNeedsDecompositionFn replaces the forge behind labelIfNeedsDecomposition
+	// in tests (#3684); nil means ApplyNeedsDecompositionForge over repoClient.
+	applyNeedsDecompositionFn func(ctx context.Context, repo string, issue int, detail string) error
 
 	// issueStateRead, when set, replaces the stage-boundary issue-state read
 	// (#3151). nil in production: readIssueState resolves the per-repo client.
@@ -9270,6 +9273,9 @@ func (s *Scheduler) runPipelineSeeded(ctx context.Context, item types.BoardItem,
 			if resolvedFailureKind == TerminalKindGatePluginMissing {
 				s.raiseGatePluginMissing(item.Repo, item.Number, runtime.RunID, string(stage), failText)
 			}
+			// #3684: an oversized plan stopped before feature-dev. Label the
+			// issue and post the one comment naming the counts and sizes.
+			s.labelIfNeedsDecomposition(ctx, item.Repo, item.Number, resolvedFailureKind, failText)
 			// A budget stop (#1652, ADR-004): the stage was stopped at a
 			// budget the operator set — a stage budget or a cost cap — and a
 			// stronger model re-dispatched under the same budget spends it

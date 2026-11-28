@@ -3217,9 +3217,10 @@ stops the run before feature-dev when the plan lists more than
 labelled `size:XS`, `size:S` or `size:M`. A missing or unrecognised size on
 either side never fires the size arm, and a `verify-and-close` plan is never
 stopped. The run records terminal kind `needs_decomposition` and parks: no
-retry and no failure charge. The autonomous scheduler labels the issue
-`needs-decomposition`, posts one comment that names the planned file count, the
-threshold and both sizes, and moves the issue to Backlog. Split the issue or
+retry and no failure charge. Every run stopped this way, autonomous,
+extension-started or manual, labels the issue `needs-decomposition` and posts
+one comment that names the planned file count, the threshold and both sizes;
+the autonomous scheduler also moves the issue to Backlog. Split the issue or
 relabel its size, remove the `needs-decomposition` label, then run
 `nightgauge autonomous clear-failures <owner/repo#N>`.
 

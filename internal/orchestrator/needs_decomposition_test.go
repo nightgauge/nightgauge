@@ -124,3 +124,73 @@ func TestNeedsDecompositionComment_UnknownSizesAndDisabledCount(t *testing.T) {
 		}
 	}
 }
+
+// The Scheduler funnel labels and comments a stage failure that resolves to
+// needs_decomposition, with the gate's evidence in the detail, and leaves every
+// other kind alone — another parked kind included (#3684).
+func TestSchedulerLabelIfNeedsDecomposition(t *testing.T) {
+	t.Parallel()
+	type call struct {
+		repo   string
+		issue  int
+		detail string
+	}
+	var calls []call
+	s := &Scheduler{applyNeedsDecompositionFn: func(_ context.Context, repo string, issue int, detail string) error {
+		calls = append(calls, call{repo, issue, detail})
+		return errors.New("forge down")
+	}}
+	failText := gateDetail(t)
+	kind := ResolveTerminalKind(true, gates.TerminalKindNeedsDecomposition, false, failText)
+	if kind != TerminalKindNeedsDecomposition {
+		t.Fatalf("resolved kind = %q, want %q", kind, TerminalKindNeedsDecomposition)
+	}
+
+	s.labelIfNeedsDecomposition(context.Background(), "acme/repo", 3684, kind, failText)
+	s.labelIfNeedsDecomposition(context.Background(), "acme/repo", 3685, TerminalKindReviewCapReached, "review cap")
+	s.labelIfNeedsDecomposition(context.Background(), "acme/repo", 3686, TerminalKindSubagentCrash, "crash")
+
+	if len(calls) != 1 {
+		t.Fatalf("forge action called %d times, want 1: %+v", len(calls), calls)
+	}
+	if calls[0].repo != "acme/repo" || calls[0].issue != 3684 {
+		t.Errorf("called for %s#%d, want acme/repo#3684", calls[0].repo, calls[0].issue)
+	}
+	for _, want := range []string{"planned_files=31", "max_planned_files=25", "plan_size=XL", "issue_size=S"} {
+		if !strings.Contains(calls[0].detail, want) {
+			t.Errorf("detail %q lacks %q", calls[0].detail, want)
+		}
+	}
+}
+
+// ApplyNeedsDecompositionForge with no resolvable client reports the failure
+// instead of panicking.
+func TestApplyNeedsDecompositionForge_NoClient(t *testing.T) {
+	t.Parallel()
+	if err := ApplyNeedsDecompositionForge(context.Background(), nil, "acme/repo", 1, gateDetail(t)); err == nil {
+		t.Error("want an error with no client resolver")
+	}
+}
+
+// A size token that is not a known size never reaches the public comment.
+func TestParseNeedsDecompositionDetail_RejectsUnknownSizes(t *testing.T) {
+	t.Parallel()
+	d := parseNeedsDecompositionDetail("planned_files=4 plan_size=@someone issue_size=size:s")
+	if d.PlanSize != "" || d.IssueSize != "S" {
+		t.Errorf("parsed %+v, want PlanSize empty and IssueSize S", d)
+	}
+}
+
+// The action is bounded by its own deadline under the run's context.
+func TestSchedulerLabelIfNeedsDecomposition_BoundedDeadline(t *testing.T) {
+	t.Parallel()
+	var hasDeadline bool
+	s := &Scheduler{applyNeedsDecompositionFn: func(ctx context.Context, _ string, _ int, _ string) error {
+		_, hasDeadline = ctx.Deadline()
+		return nil
+	}}
+	s.labelIfNeedsDecomposition(context.Background(), "acme/repo", 1, TerminalKindNeedsDecomposition, "x")
+	if !hasDeadline {
+		t.Error("the forge action must run under a deadline")
+	}
+}

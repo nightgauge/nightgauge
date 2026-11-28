@@ -6642,14 +6642,12 @@ func (as *AutonomousScheduler) completeRun(repo string, issue int, c runCompleti
 				as.dispatchAttention(func() { as.raiseResumeNoOp(repo, issue, title) })
 				as.goTrackedBoardOp(func(genCtx context.Context) { as.moveParkedToBacklog(genCtx, repo, issue) })
 			}
-			// #3684: an oversized plan stopped before feature-dev. The label
-			// and one comment tell the operator to split or relabel the issue;
-			// Backlog keeps it out of re-dispatch.
+			// #3684: an oversized plan stopped before feature-dev. Backlog
+			// keeps it out of re-dispatch. The label and the one comment are
+			// the Scheduler funnel's (labelIfNeedsDecomposition), which every
+			// autonomous run passes through.
 			if terminalFailureKind == TerminalKindNeedsDecomposition {
-				as.goTrackedBoardOp(func(genCtx context.Context) {
-					as.labelParkedForDecomposition(genCtx, repo, issue, detail)
-					as.moveParkedToBacklog(genCtx, repo, issue)
-				})
+				as.goTrackedBoardOp(func(genCtx context.Context) { as.moveParkedToBacklog(genCtx, repo, issue) })
 			}
 			if as.safetyRails != nil {
 				as.safetyRails.RecordNonFaultOutcome(0)

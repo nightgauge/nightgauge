@@ -359,10 +359,11 @@ cannot drift (#1753).
 - `needs_decomposition` (#3684): `FeaturePlanningGate` found the plan too large
   for its issue — more files than `pipeline.size_gate.thresholds.max_planned_files`,
   or an `L`/`XL` plan for an `XS`/`S`/`M` issue. The gate reason carries the
-  `[needs-decomposition]` marker. The autonomous path labels the issue
-  `needs-decomposition`, posts one comment and moves it to Backlog; a retry
-  would write the same plan, so split or relabel the issue and remove the label
-  before a release.
+  `[needs-decomposition]` marker. Both terminal funnels, the Go scheduler's
+  stage-failure path and the extension's `pipeline.notifyComplete`, label the
+  issue `needs-decomposition` and post one comment; the autonomous path also
+  moves it to Backlog. A retry would write the same plan, so split or relabel
+  the issue and remove the label before a release.
 - `bin_tamper` (#3688): the execution manager re-checked an OpenCode stage's
   own copy of the nightgauge binary (`NIGHTGAUGE_BIN`) after the stage was
   reaped and found its SHA-256, size, mode, device, inode or ctime, or its
