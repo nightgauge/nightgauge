@@ -29,6 +29,22 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The OpenCode bin-dir guard in `nightgauge hook careful-gate` no longer lets
+  a write into `NIGHTGAUGE_BIN`'s directory through a prefix wrapper. It now
+  skips each wrapper option's value (`env -u X`, `sudo -u root`,
+  `nice -n 5`, `timeout -k 1 5`), and still skips timeout's duration and
+  chrt's priority after `--` (`timeout -- 5 cp x "$d/gh"`). It applies
+  `env -C` and `sudo -D` as a change of directory and evaluates the
+  `env -S` string as the command. It checks `time -o` as a write target. It
+  treats the stdin item that `xargs` appends, or the operands that hold its
+  `-I` replace string, as an unknown operand, so
+  `echo "$d/gh" | xargs cp x` is refused. Long options resolve by unique
+  prefix as getopt_long does (`sudo --us root`, `nice --adj 5`). An ambiguous
+  or unknown long option (`env --bogus cp …`) leaves the command unresolved,
+  as does an `env -S` string that uses env's own `\_` escapes, so both are
+  refused when the command derives from `NIGHTGAUGE_BIN`. A here-document
+  run by a shell behind `env -C` or `env -S` is evaluated in that directory.
+  `rsync -t` is read as `--times`, not as a target directory (#3650).
 - `nightgauge hook careful-gate` now evaluates here-document bodies that a shell
   reads as its script (`bash <<EOF`, `cat <<EOF | bash`, `bash -s`, `env bash`,
   `source /dev/stdin`), so a write into `NIGHTGAUGE_BIN`'s directory inside such
