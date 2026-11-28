@@ -538,6 +538,7 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  *  - `premature_turn_end` — stage exited 0 but its post-condition gate reported no state change; agent ended its turn on a promise (#74)
  *  - `dev_produced_no_changes` — feature-dev's gate found the stage workspace empty (clean tree, branch level with base) despite the dev context reporting changed files; work was done somewhere the pipeline never reads (#202)
  *  - `dev_handoff_missing` — the inverse: the dev context is absent or empty and git finds the changed files right there; the stage did the work and ended without writing its handoff, so the work must be preserved rather than re-derived (#223)
+ *  - `needs_decomposition` — the planning gate found the plan too large for its issue (more files than max_planned_files, or an L/XL plan for an XS/S/M issue); the issue parks before feature-dev (#3684)
  *  - `review_cap_reached` — the independent review reached its round cap with findings standing; the issue parks and the repository keeps dispatching (#2865)
  *  - `resume_no_op` — a run that resumed at pr-merge found the PR already merged, did no work and left the issue open; it parks and the repository keeps dispatching (#2878)
  *  - `dev_step_cap_reached` — feature-dev ran as bounded sub-sessions and spent its session bound with plan tasks still unchecked; a retry resumes from the next unchecked task (#1651)
@@ -600,6 +601,7 @@ export const TerminalFailureKindSchema = z.enum([
   "containment_breach", // Issue #230 — the write-containment check (#129) found the stage wrote into a repository it does not own; it exits 0 and reports success, so nothing else marks it failed
   "adapter_auth_failed", // Issue #312 — adapter auth pre-flight refused to launch (probe timed out after retry, or logged out); retryable infra
   "no_changes_produced", // Issue #317 — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for
+  "needs_decomposition", // Issue #3684 — the planning gate found the plan too large for its issue; the issue parks before feature-dev
   "review_cap_reached", // Issue #2865 — the independent review reached its round cap with findings standing; the issue parks and the repository keeps dispatching
   "resume_no_op", // Issue #2878 — a run that resumed at pr-merge found the PR already merged, did no work and left the issue open; it parks and the repository keeps dispatching
   "validation_failed", // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure

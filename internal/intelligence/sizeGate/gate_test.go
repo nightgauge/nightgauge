@@ -26,6 +26,9 @@ func TestDefaultGateConfig(t *testing.T) {
 	if !cfg.RejectOnOversized {
 		t.Error("RejectOnOversized = false, want true")
 	}
+	if cfg.MaxPlannedFiles != 25 || !cfg.PlanCheckEnabled {
+		t.Errorf("MaxPlannedFiles=%d PlanCheckEnabled=%v, want 25 true", cfg.MaxPlannedFiles, cfg.PlanCheckEnabled)
+	}
 }
 
 func TestGateEvaluator_LocPattern(t *testing.T) {
@@ -573,5 +576,38 @@ func TestLoadGateConfigFromYAML_CapacityRoutes(t *testing.T) {
 	}
 	if LoadGateConfigFromYAML(path).CapacityEnabled {
 		t.Error("size_gate.enabled: false must turn the capacity check off")
+	}
+}
+
+func TestLoadGateConfigFromYAML_MaxPlannedFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	write := func(body string) GateConfig {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return LoadGateConfigFromYAML(path)
+	}
+
+	if cfg := LoadGateConfigFromYAML(filepath.Join(dir, "absent.yaml")); cfg.MaxPlannedFiles != 25 || !cfg.PlanCheckEnabled {
+		t.Errorf("absent config: MaxPlannedFiles=%d PlanCheckEnabled=%v, want 25 true",
+			cfg.MaxPlannedFiles, cfg.PlanCheckEnabled)
+	}
+	if cfg := write("pipeline:\n  size_gate:\n    thresholds:\n      max_loc_in_title: 10\n"); cfg.MaxPlannedFiles != 25 {
+		t.Errorf("unset key: MaxPlannedFiles=%d, want default 25", cfg.MaxPlannedFiles)
+	}
+	if cfg := write("pipeline:\n  size_gate:\n    thresholds:\n      max_planned_files: 0\n"); cfg.MaxPlannedFiles != 0 || !cfg.PlanCheckEnabled {
+		t.Errorf("explicit 0: MaxPlannedFiles=%d PlanCheckEnabled=%v, want 0 true",
+			cfg.MaxPlannedFiles, cfg.PlanCheckEnabled)
+	}
+	if cfg := write("pipeline:\n  size_gate:\n    thresholds:\n      max_planned_files: 40\n"); cfg.MaxPlannedFiles != 40 {
+		t.Errorf("explicit 40: MaxPlannedFiles=%d", cfg.MaxPlannedFiles)
+	}
+	if cfg := write("pipeline:\n  size_gate:\n    thresholds:\n      max_planned_files: -1\n"); cfg.MaxPlannedFiles != 25 {
+		t.Errorf("negative value: MaxPlannedFiles=%d, want the default 25 kept", cfg.MaxPlannedFiles)
+	}
+	if cfg := write("pipeline:\n  size_gate:\n    enabled: false\n"); cfg.PlanCheckEnabled {
+		t.Error("size_gate.enabled: false must turn the plan check off")
 	}
 }

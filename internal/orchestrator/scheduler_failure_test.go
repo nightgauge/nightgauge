@@ -2355,6 +2355,7 @@ func TestGateTerminalKindConstantsMirrorOrchestrator(t *testing.T) {
 		"NotPipelineActionable":       {gates.TerminalKindNotPipelineActionable, TerminalKindNotPipelineActionable},
 		"DevContextStale":             {gates.TerminalKindDevContextStale, TerminalKindDevContextStale},
 		"ReviewCapReached":            {gates.TerminalKindReviewCapReached, TerminalKindReviewCapReached},
+		"NeedsDecomposition":          {gates.TerminalKindNeedsDecomposition, TerminalKindNeedsDecomposition},
 	}
 	if gates.ReviewGateName != review.GateName || gates.ReviewCapMarker != review.CapMarker {
 		t.Errorf("gates' review mirrors drifted: %q/%q vs %q/%q",

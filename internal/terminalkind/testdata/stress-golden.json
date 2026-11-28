@@ -2431,6 +2431,36 @@
       "signal": ""
     },
     {
+      "input": "[needs-decomposition]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [needs-decomposition]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "[NEEDS-DECOMPOSITION]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "needs_decomposition",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: needs_decomposition",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "NEEDS_DECOMPOSITION",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
       "input": "[review-cap-reached]",
       "kind": "review_cap_reached",
       "signal": ""
@@ -3221,6 +3251,11 @@
       "signal": "api_overloaded"
     },
     {
+      "input": "attention required! cloudflare | [needs-decomposition]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "attention required! cloudflare | [review-cap-reached]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -3517,6 +3552,11 @@
     },
     {
       "input": "[host-slept] | [no-changes-produced]",
+      "kind": "host_slept",
+      "signal": ""
+    },
+    {
+      "input": "[host-slept] | [needs-decomposition]",
       "kind": "host_slept",
       "signal": ""
     },
@@ -3821,6 +3861,11 @@
       "signal": ""
     },
     {
+      "input": "[merge-conflict] | [needs-decomposition]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "[merge-conflict] | [review-cap-reached]",
       "kind": "merge_conflict",
       "signal": ""
@@ -4117,6 +4162,11 @@
     },
     {
       "input": "merge-queue-enqueue-exhausted | [no-changes-produced]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [needs-decomposition]",
       "kind": "merge_queue_enqueue_failed",
       "signal": ""
     },
@@ -4421,6 +4471,11 @@
       "signal": ""
     },
     {
+      "input": "merge-queue-infra-exhausted | [needs-decomposition]",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
       "input": "merge-queue-infra-exhausted | [review-cap-reached]",
       "kind": "merge_queue_infra_failed",
       "signal": ""
@@ -4717,6 +4772,11 @@
     },
     {
       "input": "stage_budget_exceeded: | [no-changes-produced]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [needs-decomposition]",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -5021,6 +5081,11 @@
       "signal": ""
     },
     {
+      "input": "network unavailable: extended github connectivity loss | [needs-decomposition]",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | [review-cap-reached]",
       "kind": "network_unavailable",
       "signal": ""
@@ -5317,6 +5382,11 @@
     },
     {
       "input": "adapter_incompatible | [no-changes-produced]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [needs-decomposition]",
       "kind": "adapter_incompatible",
       "signal": ""
     },
@@ -5621,6 +5691,11 @@
       "signal": ""
     },
     {
+      "input": "[opencode-provider-failure] adapter_provider_no_route | [needs-decomposition]",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
       "input": "[opencode-provider-failure] adapter_provider_no_route | [review-cap-reached]",
       "kind": "adapter_provider_no_route",
       "signal": ""
@@ -5917,6 +5992,11 @@
     },
     {
       "input": "[opencode-provider-failure] adapter_provider_transport | [no-changes-produced]",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[opencode-provider-failure] adapter_provider_transport | [needs-decomposition]",
       "kind": "adapter_provider_transport",
       "signal": ""
     },
@@ -6221,6 +6301,11 @@
       "signal": ""
     },
     {
+      "input": "[opencode-provider-failure] adapter_provider_error | [needs-decomposition]",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
       "input": "[opencode-provider-failure] adapter_provider_error | [review-cap-reached]",
       "kind": "adapter_provider_error",
       "signal": ""
@@ -6517,6 +6602,11 @@
     },
     {
       "input": "[model-stream-stalled] | [no-changes-produced]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [needs-decomposition]",
       "kind": "model_stream_stalled",
       "signal": ""
     },
@@ -6821,6 +6911,11 @@
       "signal": "stream_idle_timeout"
     },
     {
+      "input": "stream idle timeout | [needs-decomposition]",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
       "input": "stream idle timeout | [review-cap-reached]",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -7117,6 +7212,11 @@
     },
     {
       "input": "overloaded | [no-changes-produced]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "overloaded | [needs-decomposition]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
     },
@@ -7421,6 +7521,11 @@
       "signal": "api_connection_lost"
     },
     {
+      "input": "socket connection was closed | [needs-decomposition]",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
       "input": "socket connection was closed | [review-cap-reached]",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
@@ -7717,6 +7822,11 @@
     },
     {
       "input": "[rate-limit-quota-exhausted] | [no-changes-produced]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | [needs-decomposition]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
     },
@@ -8021,6 +8131,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[adapter-auth-failed] | [needs-decomposition]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
       "input": "[adapter-auth-failed] | [review-cap-reached]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
@@ -8317,6 +8432,11 @@
     },
     {
       "input": "[environment-halt] | [no-changes-produced]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [needs-decomposition]",
       "kind": "environment_halt",
       "signal": "environment_halt"
     },
@@ -8621,6 +8741,11 @@
       "signal": "gate_plugin_missing"
     },
     {
+      "input": "[gate-plugin-missing] | [needs-decomposition]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "[gate-plugin-missing] | [review-cap-reached]",
       "kind": "gate_plugin_missing",
       "signal": "gate_plugin_missing"
@@ -8917,6 +9042,11 @@
     },
     {
       "input": "ai_apicallerror context_length_exceeded | [no-changes-produced]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [needs-decomposition]",
       "kind": "context_window_exceeded",
       "signal": ""
     },
@@ -9221,6 +9351,11 @@
       "signal": ""
     },
     {
+      "input": "not_found_error model | [needs-decomposition]",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
       "input": "not_found_error model | [review-cap-reached]",
       "kind": "model_unavailable",
       "signal": ""
@@ -9517,6 +9652,11 @@
     },
     {
       "input": "pipeline-start-failure issue-closed | [no-changes-produced]",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | [needs-decomposition]",
       "kind": "issue_closed",
       "signal": ""
     },
@@ -9821,6 +9961,11 @@
       "signal": ""
     },
     {
+      "input": "[blocked-dependency] | [needs-decomposition]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
       "input": "[blocked-dependency] | [review-cap-reached]",
       "kind": "blocked_dependency",
       "signal": ""
@@ -10117,6 +10262,11 @@
     },
     {
       "input": "architecture approval required | [no-changes-produced]",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "architecture approval required | [needs-decomposition]",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
     },
@@ -10421,6 +10571,11 @@
       "signal": "github_quota_low"
     },
     {
+      "input": "github-quota-low | [needs-decomposition]",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
       "input": "github-quota-low | [review-cap-reached]",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
@@ -10717,6 +10872,11 @@
     },
     {
       "input": "github-network-outage | [no-changes-produced]",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "github-network-outage | [needs-decomposition]",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
     },
@@ -11021,6 +11181,11 @@
       "signal": ""
     },
     {
+      "input": "secondary rate limit | [needs-decomposition]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "secondary rate limit | [review-cap-reached]",
       "kind": "github_rate_limited",
       "signal": ""
@@ -11317,6 +11482,11 @@
     },
     {
       "input": "[pr-merge-unmerged | [no-changes-produced]",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | [needs-decomposition]",
       "kind": "pr_merge_unmerged",
       "signal": ""
     },
@@ -11621,6 +11791,11 @@
       "signal": ""
     },
     {
+      "input": "[stage:worktree-containment] | [needs-decomposition]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
       "input": "[stage:worktree-containment] | [review-cap-reached]",
       "kind": "containment_breach",
       "signal": ""
@@ -11917,6 +12092,11 @@
     },
     {
       "input": "[not-pipeline-actionable] | [no-changes-produced]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [needs-decomposition]",
       "kind": "not_pipeline_actionable",
       "signal": ""
     },
@@ -12221,6 +12401,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-produced-no-changes] | [needs-decomposition]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
       "input": "[dev-produced-no-changes] | [review-cap-reached]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -12517,6 +12702,11 @@
     },
     {
       "input": "[dev-handoff-missing] | [no-changes-produced]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[dev-handoff-missing] | [needs-decomposition]",
       "kind": "dev_handoff_missing",
       "signal": ""
     },
@@ -12821,6 +13011,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-step-cap-reached] | [needs-decomposition]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "[dev-step-cap-reached] | [review-cap-reached]",
       "kind": "dev_step_cap_reached",
       "signal": ""
@@ -13117,6 +13312,11 @@
     },
     {
       "input": "[dev-step-progress-unproven] | [no-changes-produced]",
+      "kind": "dev_step_progress_unproven",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-progress-unproven] | [needs-decomposition]",
       "kind": "dev_step_progress_unproven",
       "signal": ""
     },
@@ -13421,6 +13621,11 @@
       "signal": ""
     },
     {
+      "input": "[push-auth-failed] | [needs-decomposition]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "[push-auth-failed] | [review-cap-reached]",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -13717,6 +13922,11 @@
     },
     {
       "input": "premature turn end | [no-changes-produced]",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | [needs-decomposition]",
       "kind": "premature_turn_end",
       "signal": ""
     },
@@ -14021,6 +14231,11 @@
       "signal": ""
     },
     {
+      "input": "worktree_uncommitted | [needs-decomposition]",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
       "input": "worktree_uncommitted | [review-cap-reached]",
       "kind": "worktree_uncommitted",
       "signal": ""
@@ -14317,6 +14532,11 @@
     },
     {
       "input": "budget_ceiling_hit | [no-changes-produced]",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | [needs-decomposition]",
       "kind": "budget_ceiling_hit",
       "signal": ""
     },
@@ -14621,6 +14841,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-progress-exceeded] | [needs-decomposition]",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
       "input": "[runaway-progress-exceeded] | [review-cap-reached]",
       "kind": "runaway_progress",
       "signal": ""
@@ -14917,6 +15142,11 @@
     },
     {
       "input": "[runaway-ceiling-exceeded] | [no-changes-produced]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | [needs-decomposition]",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -15221,6 +15451,11 @@
       "signal": ""
     },
     {
+      "input": "[cost-cap-exceeded] | [needs-decomposition]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "[cost-cap-exceeded] | [review-cap-reached]",
       "kind": "budget_exceeded",
       "signal": ""
@@ -15517,6 +15752,11 @@
     },
     {
       "input": "stage-no-output-timeout | [no-changes-produced]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "stage-no-output-timeout | [needs-decomposition]",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -15821,6 +16061,11 @@
       "signal": ""
     },
     {
+      "input": "[stage-cap-killed] | [needs-decomposition]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[stage-cap-killed] | [review-cap-reached]",
       "kind": "stage_cap_kill",
       "signal": ""
@@ -16117,6 +16362,11 @@
     },
     {
       "input": "[stall-killed] | [no-changes-produced]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stall-killed] | [needs-decomposition]",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -16421,6 +16671,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline_budget_exceeded | [needs-decomposition]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "pipeline_budget_exceeded | [review-cap-reached]",
       "kind": "budget_exceeded",
       "signal": ""
@@ -16717,6 +16972,11 @@
     },
     {
       "input": "schema validation | [no-changes-produced]",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "schema validation | [needs-decomposition]",
       "kind": "validation_error",
       "signal": ""
     },
@@ -17021,6 +17281,11 @@
       "signal": ""
     },
     {
+      "input": "[no-changes-produced] | [needs-decomposition]",
+      "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
       "input": "[no-changes-produced] | [review-cap-reached]",
       "kind": "no_changes_produced",
       "signal": ""
@@ -17088,6 +17353,311 @@
     {
       "input": "[no-changes-produced] | subagent crash",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | attention required! cloudflare",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[needs-decomposition] | [host-slept]",
+      "kind": "host_slept",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | merge-queue-infra-exhausted",
+      "kind": "merge_queue_infra_failed",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [opencode-provider-failure] adapter_provider_no_route",
+      "kind": "adapter_provider_no_route",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [opencode-provider-failure] adapter_provider_transport",
+      "kind": "adapter_provider_transport",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [opencode-provider-failure] adapter_provider_error",
+      "kind": "adapter_provider_error",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "[needs-decomposition] | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[needs-decomposition] | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "[needs-decomposition] | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[needs-decomposition] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[needs-decomposition] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[needs-decomposition] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[needs-decomposition] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | not_found_error model",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | pipeline-start-failure issue-closed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [blocked-dependency]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "[needs-decomposition] | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "[needs-decomposition] | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "[needs-decomposition] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [pr-merge-unmerged",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [stage:worktree-containment]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [dev-produced-no-changes]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [dev-handoff-missing]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [dev-step-progress-unproven]",
+      "kind": "dev_step_progress_unproven",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [push-auth-failed]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | premature turn end",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | worktree_uncommitted",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | budget_ceiling_hit",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [runaway-progress-exceeded]",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [runaway-ceiling-exceeded]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | stage-no-output-timeout",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [stall-killed]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | pipeline_budget_exceeded",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | schema validation",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [no-changes-produced]",
+      "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [review-cap-reached]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [validation-failed]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [validation-inconclusive]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [branch-forked]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [commit-orphaned]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [adapter-permission-rejected]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [permission-denied]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | stage_context_unreadable",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | dev_build_verification_missing",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | dev_build_verification_failed",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | [dev-context-stale]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | dev_tests_failed",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | pr_merge_lookup_failed",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
+      "input": "[needs-decomposition] | subagent crash",
+      "kind": "needs_decomposition",
       "signal": ""
     },
     {
@@ -17323,6 +17893,11 @@
     {
       "input": "[review-cap-reached] | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [needs-decomposition]",
+      "kind": "needs_decomposition",
       "signal": ""
     },
     {
@@ -17626,6 +18201,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-failed] | [needs-decomposition]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
       "input": "[validation-failed] | [review-cap-reached]",
       "kind": "review_cap_reached",
       "signal": ""
@@ -17923,6 +18503,11 @@
     {
       "input": "[validation-inconclusive] | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[validation-inconclusive] | [needs-decomposition]",
+      "kind": "needs_decomposition",
       "signal": ""
     },
     {
@@ -18226,6 +18811,11 @@
       "signal": ""
     },
     {
+      "input": "[branch-forked] | [needs-decomposition]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
       "input": "[branch-forked] | [review-cap-reached]",
       "kind": "review_cap_reached",
       "signal": ""
@@ -18523,6 +19113,11 @@
     {
       "input": "[commit-orphaned] | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[commit-orphaned] | [needs-decomposition]",
+      "kind": "needs_decomposition",
       "signal": ""
     },
     {
@@ -18826,6 +19421,11 @@
       "signal": ""
     },
     {
+      "input": "[adapter-permission-rejected] | [needs-decomposition]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
       "input": "[adapter-permission-rejected] | [review-cap-reached]",
       "kind": "review_cap_reached",
       "signal": ""
@@ -19123,6 +19723,11 @@
     {
       "input": "[permission-denied] | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[permission-denied] | [needs-decomposition]",
+      "kind": "needs_decomposition",
       "signal": ""
     },
     {
@@ -19426,6 +20031,11 @@
       "signal": ""
     },
     {
+      "input": "stage_context_unreadable | [needs-decomposition]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
       "input": "stage_context_unreadable | [review-cap-reached]",
       "kind": "review_cap_reached",
       "signal": ""
@@ -19723,6 +20333,11 @@
     {
       "input": "dev_build_verification_missing | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [needs-decomposition]",
+      "kind": "needs_decomposition",
       "signal": ""
     },
     {
@@ -20026,6 +20641,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_failed | [needs-decomposition]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_failed | [review-cap-reached]",
       "kind": "review_cap_reached",
       "signal": ""
@@ -20323,6 +20943,11 @@
     {
       "input": "[dev-context-stale] | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[dev-context-stale] | [needs-decomposition]",
+      "kind": "needs_decomposition",
       "signal": ""
     },
     {
@@ -20626,6 +21251,11 @@
       "signal": ""
     },
     {
+      "input": "dev_tests_failed | [needs-decomposition]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
       "input": "dev_tests_failed | [review-cap-reached]",
       "kind": "review_cap_reached",
       "signal": ""
@@ -20926,6 +21556,11 @@
       "signal": ""
     },
     {
+      "input": "pr_merge_lookup_failed | [needs-decomposition]",
+      "kind": "needs_decomposition",
+      "signal": ""
+    },
+    {
       "input": "pr_merge_lookup_failed | [review-cap-reached]",
       "kind": "review_cap_reached",
       "signal": ""
@@ -21223,6 +21858,11 @@
     {
       "input": "subagent crash | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | [needs-decomposition]",
+      "kind": "needs_decomposition",
       "signal": ""
     },
     {

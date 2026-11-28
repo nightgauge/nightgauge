@@ -245,6 +245,7 @@ export type TerminalFailureKind =
   | "adapter_auth_failed" // Issue #312 — adapter auth pre-flight failed (probe timed out after retry, or definitively logged out); retryable infra
   | "no_changes_produced" // Issue #317 — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for (e.g. a dispatched human-only issue)
   | "resume_no_op" // Issue #2878 — a run that resumed at pr-merge found the PR already merged, did no work and left the issue open; one issue is parked, the repository keeps dispatching
+  | "needs_decomposition" // Issue #3684 — the planning gate found the plan too large for its issue (more files than max_planned_files, or an L/XL plan for an XS/S/M issue); the issue parks before feature-dev
   | "review_cap_reached" // Issue #2865 — the independent review reached its round cap with findings standing; one issue is parked, the repository keeps dispatching, and the work stays uncommitted in the run's worktree
   | "validation_failed" // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure, not a subagent crash
   | "branch_forked" // Issue #163 — the run's branch diverged from its remote (killed mid-push, or an operator pushed to it); every push is rejected non-fast-forward and no retry clears it
@@ -324,6 +325,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "adapter_auth_failed",
   "no_changes_produced",
   "review_cap_reached",
+  "needs_decomposition",
   "resume_no_op",
   "validation_failed",
   "branch_forked",

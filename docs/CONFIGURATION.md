@@ -3193,6 +3193,45 @@ NIGHTGAUGE_PIPELINE_SCOPE_DRIFT_GATE_BYPASS_LABEL=scope:cross-cutting
 
 ---
 
+### pipeline.size_gate
+
+The issue size gate. `nightgauge size-gate`, the scheduler's dispatch-time
+capacity check and the post-planning plan check all read this section through
+one loader.
+
+| Option                                   | Type    | Default | Description                                                                                        |
+| ---------------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------- |
+| `enabled`                                | boolean | `true`  | `false` turns every size-gate heuristic off, the plan check included                               |
+| `reject_on_oversized`                    | boolean | `true`  | Reject an oversized issue, or only report it                                                       |
+| `thresholds.max_loc_in_title`            | integer | `5000`  | LOC named in an issue title above which the issue is rejected                                      |
+| `thresholds.decomposed_items_min`        | integer | `2`     | Sub-issues a `size:L`/`size:XL` issue needs before it may run                                      |
+| `thresholds.max_planned_files`           | integer | `25`    | Planned files (create + modify) above which the run stops before feature-dev; `0` disables the arm |
+| `heuristics.loc_pattern_enabled`         | boolean | `true`  | Run the LOC-in-title heuristic                                                                     |
+| `heuristics.decomposition_check_enabled` | boolean | `true`  | Run the `size:L`/`size:XL` decomposition heuristic                                                 |
+| `routes.reject_action`                   | string  | —       | `soft-route` moves an over-capacity issue to a fallback model instead of rejecting it              |
+| `routes.capacity_fallback_models`        | list    | `[]`    | Ordered fallback models for a soft-routed over-capacity issue                                      |
+
+**Post-planning plan check (#3684).** After feature-planning, the planning gate
+stops the run before feature-dev when the plan lists more than
+`max_planned_files` files, or when the plan sizes itself `L`/`XL` for an issue
+labelled `size:XS`, `size:S` or `size:M`. A missing or unrecognised size on
+either side never fires the size arm, and a `verify-and-close` plan is never
+stopped. The run records terminal kind `needs_decomposition` and parks: no
+retry and no failure charge. The autonomous scheduler labels the issue
+`needs-decomposition`, posts one comment that names the planned file count, the
+threshold and both sizes, and moves the issue to Backlog. Split the issue or
+relabel its size, remove the `needs-decomposition` label, then run
+`nightgauge autonomous clear-failures <owner/repo#N>`.
+
+```yaml
+pipeline:
+  size_gate:
+    thresholds:
+      max_planned_files: 25 # 0 disables the file-count check
+```
+
+---
+
 ### agent_teams
 
 Dynamic subagent scaling settings for wave orchestration. Controls how the wave

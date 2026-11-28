@@ -102,6 +102,9 @@ const (
 	// TerminalKindReviewCapReached: FeatureValidateGate found the review stopped
 	// by its round cap (#2865) — one issue's outcome, not a repository's.
 	TerminalKindReviewCapReached = "review_cap_reached"
+	// TerminalKindNeedsDecomposition: FeaturePlanningGate found the plan too
+	// large for its issue (#3684) — split or relabel it before feature-dev.
+	TerminalKindNeedsDecomposition = "needs_decomposition"
 
 	// TerminalKindGitTransportAuthFailed is the kind a refused feature-validate
 	// push books (#2742); it matches internal/terminalkind's

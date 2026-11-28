@@ -301,6 +301,7 @@ describe("queue-halt policy (ConcurrentPipelineManager)", () => {
         "environment_halt",
         "gate_plugin_missing",
         "review_cap_reached",
+        "needs_decomposition",
         "resume_no_op",
       ].sort()
     );

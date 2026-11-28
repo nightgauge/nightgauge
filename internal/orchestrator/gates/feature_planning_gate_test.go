@@ -3,6 +3,7 @@ package gates
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -267,5 +268,121 @@ func TestFeaturePlanningGate_EmptyPlan(t *testing.T) {
 	})
 	if gr := (FeaturePlanningGate{}).Verify(context.Background(), 42, ws); !gr.Passed {
 		t.Fatalf("one-file plan failed: %q %v", gr.Reason, gr.Evidence)
+	}
+}
+
+// planSizeWorkspace writes a plan listing n files, sized planSize, for an
+// issue labelled issueSize, with config as .nightgauge/config.yaml (#3684).
+func planSizeWorkspace(t *testing.T, n int, approach, planSize, issueSize, config string) string {
+	t.Helper()
+	ws := t.TempDir()
+	planFile := filepath.Join(layouttest.PlansDir(t, ws), "42-thing.md")
+	writeFile(t, planFile, "# plan\n")
+	files := make([]string, n)
+	for i := range files {
+		files[i] = fmt.Sprintf("internal/f%d.go", i)
+	}
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "planning-42.json"), map[string]any{
+		"plan_file": planFile, "approach": approach, "files_to_modify": files,
+		"complexity_assessment": map[string]any{"size_label": planSize},
+	})
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "issue-42.json"), map[string]any{
+		"labels": []string{"type:feature", "size:" + issueSize},
+	})
+	if config != "" {
+		writeFile(t, filepath.Join(ws, ".nightgauge", "config.yaml"), config)
+	}
+	return ws
+}
+
+func TestFeaturePlanningGate_OversizedPlanNeedsDecomposition(t *testing.T) {
+	cases := []struct {
+		name      string
+		files     int
+		approach  string
+		planSize  string
+		issueSize string
+		config    string
+		pass      bool
+	}{
+		{"over default threshold", 26, "x", "M", "M", "", false},
+		{"at default threshold", 25, "x", "M", "M", "", true},
+		{"size mismatch", 3, "x", "L", "M", "", false},
+		{"max_planned_files 0", 500, "x", "M", "M",
+			"pipeline:\n  size_gate:\n    thresholds:\n      max_planned_files: 0\n", true},
+		{"size_gate disabled", 500, "x", "XL", "S", "pipeline:\n  size_gate:\n    enabled: false\n", true},
+		{"verify-and-close", 0, "verify-and-close", "XL", "S", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := planSizeWorkspace(t, tc.files, tc.approach, tc.planSize, tc.issueSize, tc.config)
+			gr := FeaturePlanningGate{}.Verify(context.Background(), 42, ws)
+			if gr.Passed != tc.pass {
+				t.Fatalf("passed=%v, want %v; reason=%q evidence=%v", gr.Passed, tc.pass, gr.Reason, gr.Evidence)
+			}
+			if tc.pass {
+				return
+			}
+			if gr.TerminalKind != TerminalKindNeedsDecomposition {
+				t.Errorf("TerminalKind = %q, want %q", gr.TerminalKind, TerminalKindNeedsDecomposition)
+			}
+			if !strings.HasPrefix(gr.Reason, NeedsDecompositionMarker+" ") {
+				t.Errorf("reason %q lacks the %s marker", gr.Reason, NeedsDecompositionMarker)
+			}
+			want := []string{
+				fmt.Sprintf("planned_files=%d", tc.files), "max_planned_files=25",
+				"plan_size=" + tc.planSize, "issue_size=" + tc.issueSize,
+			}
+			if strings.Join(gr.Evidence, "|") != strings.Join(want, "|") {
+				t.Errorf("evidence = %v, want %v", gr.Evidence, want)
+			}
+		})
+	}
+}
+
+// A configured threshold reaches both the verdict and the evidence.
+func TestFeaturePlanningGate_ConfiguredPlannedFilesThreshold(t *testing.T) {
+	cfg := "pipeline:\n  size_gate:\n    thresholds:\n      max_planned_files: 10\n"
+	gr := FeaturePlanningGate{}.Verify(context.Background(), 42, planSizeWorkspace(t, 11, "x", "M", "M", cfg))
+	if gr.Passed || gr.TerminalKind != TerminalKindNeedsDecomposition {
+		t.Fatalf("11 files over 10: passed=%v kind=%q", gr.Passed, gr.TerminalKind)
+	}
+	if !strings.Contains(strings.Join(gr.Evidence, "|"), "max_planned_files=10") {
+		t.Errorf("evidence %v lacks the configured threshold", gr.Evidence)
+	}
+	if gr := (FeaturePlanningGate{}).Verify(context.Background(), 42, planSizeWorkspace(t, 10, "x", "M", "M", cfg)); !gr.Passed {
+		t.Errorf("10 files at 10 failed: %q", gr.Reason)
+	}
+}
+
+func TestIssueSizeLabel(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "issue-42.json")
+	if got := issueSizeLabel(path); got != "" {
+		t.Errorf("missing file: %q, want empty", got)
+	}
+	writeFile(t, path, "{not json")
+	if got := issueSizeLabel(path); got != "" {
+		t.Errorf("malformed file: %q, want empty", got)
+	}
+	writeJSON(t, path, map[string]any{"labels": []map[string]string{{"name": "type:feature"}, {"name": "size:S"}}})
+	if got := issueSizeLabel(path); got != "S" {
+		t.Errorf("object labels: %q, want S", got)
+	}
+	writeJSON(t, path, map[string]any{"labels": []string{"size:M"}})
+	if got := issueSizeLabel(path); got != "M" {
+		t.Errorf("string labels: %q, want M", got)
+	}
+}
+
+// A missing issue context only disables the mismatch arm; the count arm
+// still stops an oversized plan.
+func TestFeaturePlanningGate_MissingIssueContext(t *testing.T) {
+	ws := planSizeWorkspace(t, 3, "x", "XL", "S", "")
+	if err := os.Remove(filepath.Join(layouttest.PipelineDir(t, ws), "issue-42.json")); err != nil {
+		t.Fatal(err)
+	}
+	if gr := (FeaturePlanningGate{}).Verify(context.Background(), 42, ws); !gr.Passed {
+		t.Errorf("no issue size must not fire the mismatch arm: %q", gr.Reason)
 	}
 }

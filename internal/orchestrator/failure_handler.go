@@ -832,6 +832,14 @@ const (
 	// TerminalKindNotPipelineActionable, whose claim is that no lap can produce
 	// the deliverable and whose path labels the issue owner-action.
 	TerminalKindReviewCapReached = "review_cap_reached"
+	// TerminalKindNeedsDecomposition: FeaturePlanningGate found the plan too
+	// large for its issue (#3684) — more files than
+	// pipeline.size_gate.thresholds.max_planned_files, or sized L/XL for an
+	// XS/S/M issue. It parks: a retry of the same issue writes the same plan,
+	// and the fault is the issue's scope, not the repository's. The autonomous
+	// path labels the issue needs-decomposition, comments once and moves it to
+	// Backlog.
+	TerminalKindNeedsDecomposition = "needs_decomposition"
 	// TerminalKindResumeNoOp: a run resumed at pr-merge, found the PR
 	// already merged, did no work and left the issue open (#2878). A run reports
 	// the kind with success and the report parks the issue: Ready was withheld,
@@ -848,7 +856,7 @@ func TerminalKindParks(kind string) bool {
 	switch kind {
 	case TerminalKindContextWindowExceeded, TerminalKindAdapterPermissionRejected, TerminalKindAdapterIncompatible,
 		TerminalKindAdapterProviderNoRoute, TerminalKindEnvironmentHalt, TerminalKindDevContextStale, TerminalKindGatePluginMissing,
-		TerminalKindReviewCapReached, TerminalKindResumeNoOp:
+		TerminalKindReviewCapReached, TerminalKindNeedsDecomposition, TerminalKindResumeNoOp:
 		return true
 	}
 	return false
@@ -893,6 +901,10 @@ func TerminalKindRemediation(kind string) string {
 		return "the independent review reached its round cap with findings standing; the Action Center card lists " +
 			"them and says where the work is (worktree, branch, or none). Finish the fixes where the card points or narrow the issue, " +
 			parkedReleaseStep + " — a release re-runs the pipeline with a fresh round count"
+	case TerminalKindNeedsDecomposition:
+		return "the plan is too large for the issue (the failure text names the planned file count, the " +
+			"max_planned_files threshold and both sizes); split the issue into sub-issues, or relabel its size, " +
+			parkedReleaseStep + " — a retry of the same issue writes the same plan"
 	case TerminalKindResumeNoOp:
 		return "a run resumed at pr-merge and found the PR already merged, so nothing was delivered; check the " +
 			"issue's remaining acceptance criteria and its stale pr-N.json in the pipeline state directory, " +

@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/deliverable"
+	"github.com/nightgauge/nightgauge/internal/intelligence/sizeGate"
 )
 
 // FeaturePlanningGate verifies the post-conditions of feature-planning:
@@ -25,6 +27,10 @@ import (
 //     with neither, other than verify-and-close (#708), dispatches feature-dev
 //     to implement nothing; it fails as not_pipeline_actionable, quoting the
 //     approach, so the issue parks for its owner instead of halting the queue.
+//  5. The plan is not oversized for its issue (#3684): sizeGate.EvaluatePlan
+//     over the planned file count, the plan's size_label and the issue's
+//     size: label. An oversized plan fails as needs_decomposition, parking
+//     the issue before feature-dev and review rounds are paid for.
 type FeaturePlanningGate struct{}
 
 // Name implements StageGate.
@@ -49,6 +55,9 @@ func (FeaturePlanningGate) Verify(_ context.Context, issueNumber int, workspace 
 			Approach      string   `json:"approach"`
 			FilesToCreate []string `json:"files_to_create"`
 			FilesToModify []string `json:"files_to_modify"`
+			Complexity    struct {
+				SizeLabel string `json:"size_label"`
+			} `json:"complexity_assessment"`
 		}
 		if err := json.Unmarshal(data, &planCtx); err != nil {
 			reason, ev := describeDecodeFailure("planning context", err)
@@ -95,6 +104,12 @@ func (FeaturePlanningGate) Verify(_ context.Context, issueNumber int, workspace 
 				fmt.Sprintf("plan_file=%s", planCtx.PlanFile),
 			}, KindFail, TerminalKindNotPipelineActionable
 		}
+		if planCtx.Approach != verifyAndCloseApproach {
+			if ok, reason, ev := checkPlanSize(workspace, issueNumber,
+				len(planCtx.FilesToCreate)+len(planCtx.FilesToModify), planCtx.Complexity.SizeLabel); !ok {
+				return false, reason, ev, KindFail, TerminalKindNeedsDecomposition
+			}
+		}
 		return true, "planning context references non-empty plan_file", []string{
 			fmt.Sprintf("plan_file=%s", planCtx.PlanFile),
 			fmt.Sprintf("size=%d", stat.Size()),
@@ -109,6 +124,78 @@ const (
 	emptyPlanReason     = "[not-pipeline-actionable] plan lists no files to create or modify"
 	maxApproachEvidence = 300
 )
+
+// NeedsDecompositionMarker opens the gate reason of an oversized plan; the
+// terminalkind table maps it to needs_decomposition.
+const NeedsDecompositionMarker = "[needs-decomposition]"
+
+// Evidence keys of an oversized-plan verdict, written as key=value lines.
+// The autonomous needs-decomposition action parses them back (#3684).
+const (
+	EvidencePlannedFiles    = "planned_files"
+	EvidenceMaxPlannedFiles = "max_planned_files"
+	EvidencePlanSize        = "plan_size"
+	EvidenceIssueSize       = "issue_size"
+)
+
+// checkPlanSize runs sizeGate.EvaluatePlan over the plan (#3684). The config
+// is the workspace's .nightgauge/config.yaml, read by the same loader as
+// `nightgauge size-gate`; the issue size is the size: label in issue-{N}.json.
+// A missing issue context leaves the issue size unknown, which only disables
+// the mismatch arm; one that exists but cannot be read or parsed is logged. The evidence lines are key=value pairs the
+// autonomous needs-decomposition action parses.
+func checkPlanSize(workspace string, issueNumber, plannedFiles int, planSize string) (bool, string, []string) {
+	cfg := sizeGate.LoadGateConfigFromYAML(filepath.Join(workspace, ".nightgauge", "config.yaml"))
+	res := sizeGate.EvaluatePlan(cfg, sizeGate.PlanInput{
+		PlannedFiles: plannedFiles,
+		PlanSize:     planSize,
+		IssueSize:    issueSizeLabel(contextFilePath(workspace, "issue", issueNumber)),
+	})
+	if res.Allowed {
+		return true, "", nil
+	}
+	return false, NeedsDecompositionMarker + " " + res.Reason, []string{
+		fmt.Sprintf("%s=%d", EvidencePlannedFiles, plannedFiles),
+		fmt.Sprintf("%s=%d", EvidenceMaxPlannedFiles, cfg.MaxPlannedFiles),
+		EvidencePlanSize + "=" + res.PlanSize,
+		EvidenceIssueSize + "=" + res.IssueSize,
+	}
+}
+
+// issueSizeLabel is the size: label recorded in issue-{N}.json, or "" when
+// the file is unreadable or carries none. Labels are strings or {name}
+// objects.
+func issueSizeLabel(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("feature-planning gate: cannot read %s, plan-size mismatch check off: %v", path, err)
+		}
+		return ""
+	}
+	var issueCtx struct {
+		Labels []json.RawMessage `json:"labels"`
+	}
+	if err := json.Unmarshal(data, &issueCtx); err != nil {
+		log.Printf("feature-planning gate: cannot parse %s, plan-size mismatch check off: %v", path, err)
+		return ""
+	}
+	names := make([]string, 0, len(issueCtx.Labels))
+	for _, raw := range issueCtx.Labels {
+		var name string
+		if json.Unmarshal(raw, &name) != nil {
+			var obj struct {
+				Name string `json:"name"`
+			}
+			if json.Unmarshal(raw, &obj) != nil {
+				continue
+			}
+			name = obj.Name
+		}
+		names = append(names, name)
+	}
+	return sizeGate.SizeFromLabels(names)
+}
 
 // clipLine is s on one line, at most n runes.
 func clipLine(s string, n int) string {
