@@ -638,7 +638,26 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: Test (VSCode host)
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        # CI_LOCAL_STEP_LOG points the launcher's failed-window log copy
+        # (#2747) at a known path, so a merge-group failure's renderer and
+        # webview logs can be downloaded instead of guessed at (#3662).
+        # TMPDIR puts the launcher's scratch (os.tmpdir() + nightgauge-host-,
+        # launch.ts) under runner.temp too; the upload paths below name both.
+        env:
+          CI_LOCAL_STEP_LOG: ${{ runner.temp }}/vscode-host.log
+          TMPDIR: ${{ runner.temp }}
         run: xvfb-run --auto-servernum npm run -w packages/nightgauge test:host
+      - name: Upload VSCode host window logs
+        if: ${{ failure() && needs.changes.outputs.run_heavy != 'false' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vscode-host-window-logs
+          path: |
+            ${{ runner.temp }}/vscode-host.vscode-logs
+            ${{ runner.temp }}/nightgauge-host-*/transcript-*.txt
+            ${{ runner.temp }}/nightgauge-host-*/demo-events.jsonl
+          if-no-files-found: warn
+          retention-days: 14
 
   # Security & license gates. Runs on every PR, including forks — a fork cannot
   # ship a vulnerable stdlib or a copyleft/proprietary dependency into a release

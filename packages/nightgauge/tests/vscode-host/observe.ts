@@ -21,6 +21,9 @@
  */
 
 import * as vscode from "vscode";
+import type { PanelViewState } from "../launcher/panelViewState.js";
+
+export type { PanelViewState };
 
 export interface CapturedPanel {
   viewType: string;
@@ -71,6 +74,14 @@ export interface CapturedPanel {
    * set".
    */
   htmlCaptured: boolean;
+  /**
+   * The panel's `visible`/`active` state at creation, at each `html`
+   * assignment and at each `onDidChangeViewState`, in order. VS Code builds a
+   * webview's document only once the panel is laid out visible, so a panel
+   * that never posted can be told apart as "never shown" or "shown and did
+   * not load" (#3662).
+   */
+  viewStates: PanelViewState[];
 }
 
 export interface CapturedNotification {
@@ -210,9 +221,23 @@ function wrapCreateWebviewPanel(original: CreateWebviewPanel): CreateWebviewPane
       receivedAt: [],
       htmlSetAt: [],
       htmlCaptured: false,
+      viewStates: [],
     };
+    const recordViewState = (cause: PanelViewState["cause"]) => {
+      if (record.disposed) return;
+      record.viewStates.push({
+        at: Date.now(),
+        visible: panel.visible,
+        active: panel.active,
+        cause,
+      });
+    };
+    recordViewState("created");
     const webview = panel.webview;
-    record.htmlCaptured = recordHtmlAssignments(webview, record.htmlSetAt);
+    record.htmlCaptured = recordHtmlAssignments(webview, record.htmlSetAt, () =>
+      recordViewState("html")
+    );
+    panel.onDidChangeViewState(() => recordViewState("viewState"));
     const subscribe = webview.onDidReceiveMessage.bind(webview);
     (webview as { onDidReceiveMessage: unknown }).onDidReceiveMessage = (
       listener: (message: unknown) => unknown,
@@ -261,7 +286,11 @@ function wrapCreateWebviewPanel(original: CreateWebviewPanel): CreateWebviewPane
  * chain. Returns false when none is found (an API change), so the report can
  * say the assignments were not captured instead of "set 0 times".
  */
-function recordHtmlAssignments(webview: vscode.Webview, htmlSetAt: number[]): boolean {
+function recordHtmlAssignments(
+  webview: vscode.Webview,
+  htmlSetAt: number[],
+  onSet: () => void
+): boolean {
   let proto: object | null = webview;
   let descriptor: PropertyDescriptor | undefined;
   while (proto && !descriptor) {
@@ -279,6 +308,7 @@ function recordHtmlAssignments(webview: vscode.Webview, htmlSetAt: number[]): bo
     set(this: vscode.Webview, value: string) {
       htmlSetAt.push(Date.now());
       set.call(this, value);
+      onSet();
     },
   });
   return true;

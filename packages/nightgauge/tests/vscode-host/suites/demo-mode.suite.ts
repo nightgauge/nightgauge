@@ -27,6 +27,7 @@ import { PHASE_REGISTRY, type ExecutionStage } from "@nightgauge/sdk";
 import { suite, test } from "../harness.js";
 import { capturedPanels, capturedStatusBarItems, capturedTreeProviders } from "../observe.js";
 import { delay, materializeDemoWorkspace, waitFor, workspaceRoot } from "../fixture.js";
+import { viewStateLine } from "../../launcher/panelViewState.js";
 import { stripScriptBlocks, stripStyleBlocks } from "../html.js";
 import { extension } from "./activation.suite.js";
 
@@ -510,7 +511,8 @@ suite("demo mode", () => {
           at === undefined ? "never" : `${Date.now() - at}ms ago`;
         return (
           `  html set ${panel.htmlSetAt.length} times, last ${since(panel.htmlSetAt.at(-1))}; ` +
-          `last webview message ${since(panel.receivedAt.at(-1))}: ${loadVerdict()}`
+          `last webview message ${since(panel.receivedAt.at(-1))}: ${loadVerdict()}\n` +
+          viewStateLine(panel.viewStates, panel.createdAt)
         );
       };
       await waitFor(
@@ -571,6 +573,7 @@ suite("demo mode", () => {
             lastHtml === undefined ? "never" : offset(lastHtml)
           }`,
           `  ${loadVerdict()}`,
+          viewStateLine(panel.viewStates, panel.createdAt),
           `  gave up at ${offset(gaveUpAt)}`,
         ].join("\n");
       };
