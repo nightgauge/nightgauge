@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
-// RemoteRunStatus is the terminal status of a run the platform created when an
-// agent acknowledged its trigger (#3586).
+// RemoteRunStatus is the terminal status of the platform run a trigger's ack
+// returned (#3586); the daemon's start event (ReportRemoteRunStart) creates
+// that run (#3699).
 type RemoteRunStatus string
 
 const (
@@ -27,12 +29,51 @@ var ErrInvalidRemoteRunID = errors.New("remote run id is not a UUID")
 
 var errUnknownRemoteRunStatus = errors.New("unknown remote run status")
 
-// IsPermanentReportError reports whether a ReportRemoteRunTerminal error is
-// one re-sending cannot fix: an invalid run id, an unknown status, or a 4xx
+// errInvalidRemoteRunTarget is returned for a start event whose repo is not
+// owner/name or whose issue number is not positive.
+var errInvalidRemoteRunTarget = errors.New("remote run start needs an owner/name repo and a positive issue number")
+
+// IsPermanentReportError reports whether a ReportRemoteRunStart or
+// ReportRemoteRunTerminal error is one re-sending cannot fix: an invalid run
+// id, an invalid repo or issue, an unknown status, or a 4xx
 // refusal other than 429. Transport errors, 5xx and 429 are transient.
 func IsPermanentReportError(err error) bool {
 	return errors.Is(err, ErrInvalidRemoteRunID) || errors.Is(err, errUnknownRemoteRunStatus) ||
+		errors.Is(err, errInvalidRemoteRunTarget) ||
 		isPermanentEventRejection(err)
+}
+
+// ReportRemoteRunStart creates the platform run remoteRunID, which
+// ReportRemoteRunTerminal later closes (#3699). The platform materialises a
+// run row only from a start event naming repo and issue, so without it the
+// terminal report is dropped as "Pipeline run not found". The ingest contract
+// has no pipeline_start type: the run-creating event is the first
+// `stage_started`, sent here for stage issue-pickup with repo ("owner/name"),
+// issueNumber and origin local_cli. visibility is state.VisibilityPrivate for
+// a private run.
+//
+// Like the terminal report it is synchronous, unbuffered and not behind the
+// analytics send gate.
+func (c *Client) ReportRemoteRunStart(ctx context.Context, remoteRunID, repo string, issueNumber int, visibility string) error {
+	if !telemetryRunIDPattern.MatchString(remoteRunID) {
+		return ErrInvalidRemoteRunID
+	}
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok || strings.TrimSpace(owner) == "" || strings.TrimSpace(name) == "" || strings.Contains(name, "/") || issueNumber <= 0 {
+		return fmt.Errorf("%w (repo %q, issue %d)", errInvalidRemoteRunTarget, repo, issueNumber)
+	}
+	event := PipelineEvent{
+		RunID:         remoteRunID,
+		EventType:     "stage_started",
+		Stage:         "issue-pickup",
+		Repo:          repo,
+		IssueNumber:   issueNumber,
+		Origin:        "local_cli",
+		Timestamp:     time.Now(),
+		Visibility:    visibility,
+		SchemaVersion: "1",
+	}
+	return (&AnalyticsService{client: c}).emitPipelineEventSync(ctx, event)
 }
 
 // ReportRemoteRunTerminal closes the platform run remoteRunID, the run id an

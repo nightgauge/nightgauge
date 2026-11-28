@@ -4,9 +4,9 @@
 // it always has; this package only runs when nobody else would.
 //
 // A trigger is answered once: refused with a reason (acked `rejected`), or
-// acknowledged, which makes the platform create its run and return that run's
-// id. An acknowledged trigger then runs here, and exactly one terminal status
-// is reported for the platform's run id when the run ends.
+// acknowledged, which returns the platform run id. An acknowledged trigger
+// sends a start event that creates that platform run (#3699), then runs here,
+// and exactly one terminal status is reported for the run id when it ends.
 package headlesstrigger
 
 import (
@@ -35,13 +35,14 @@ const TriggerCommandType = "trigger"
 // Acker answers a trigger. *platform.CommandService implements it.
 type Acker interface {
 	// AcknowledgeAgentCommand accepts the command and returns the run id the
-	// platform created for it.
+	// platform assigned it, which the start event then creates.
 	AcknowledgeAgentCommand(ctx context.Context, agentID, commandID string) (string, error)
 	RejectAgentCommand(ctx context.Context, agentID, commandID, detail string) error
 }
 
-// Reporter closes the platform's run. *platform.Client implements it.
+// Reporter opens and closes the platform's run. *platform.Client implements it.
 type Reporter interface {
+	ReportRemoteRunStart(ctx context.Context, remoteRunID, repo string, issueNumber int, visibility string) error
 	ReportRemoteRunTerminal(ctx context.Context, remoteRunID string, status platform.RemoteRunStatus, visibility string) error
 }
 
@@ -89,11 +90,11 @@ type Config struct {
 	// remote-pin validation, returning the public refusal, or "" to accept.
 	// It is called only when the trigger names an adapter or a model.
 	ValidatePin func(repo, adapter, model string) string
-	// Timeout bounds each acknowledgement and the terminal report, retries
+	// Timeout bounds each acknowledgement, the start and the terminal report, retries
 	// included. Zero is defaultTimeout.
 	Timeout time.Duration
-	// ReportRetryDelay is the first wait before re-sending a terminal report
-	// that failed transiently; it doubles each attempt. Zero is
+	// ReportRetryDelay is the first wait before re-sending a start or terminal
+	// report that failed transiently; it doubles each attempt. Zero is
 	// defaultReportRetryDelay.
 	ReportRetryDelay time.Duration
 }
@@ -283,7 +284,27 @@ func (h *Handler) handle(agentID string, cmd platform.PendingCommand) {
 	req.RemoteRunID = runID
 	log.Printf("[nightgauge] trigger %s: %s#%d acknowledged for agent %s; running here (platform run %s)",
 		cmd.ID, req.Repo, req.IssueNumber, agentID, runID)
+	h.start(cmd.ID, req)
 	h.run(cmd.ID, req)
+}
+
+// start creates the platform run req.RemoteRunID with its start event, so the
+// terminal report has a run to close (#3699). A failure is logged and the run
+// goes ahead: the work is still done locally.
+func (h *Handler) start(commandID string, req Request) {
+	if h.cfg.Reports == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(h.ctx), h.timeout())
+	defer cancel()
+	err := h.sendWithRetry(ctx, func(ctx context.Context) error {
+		return h.cfg.Reports.ReportRemoteRunStart(ctx, req.RemoteRunID, req.Repo, req.IssueNumber, req.Visibility)
+	})
+	if err != nil {
+		log.Printf("[nightgauge] trigger %s: starting platform run %s failed: %v", commandID, req.RemoteRunID, err)
+		return
+	}
+	log.Printf("[nightgauge] trigger %s: platform run %s started", commandID, req.RemoteRunID)
 }
 
 // decide parses the trigger and applies the closed list of refusals in order.
@@ -389,7 +410,9 @@ func (h *Handler) run(commandID string, req Request) {
 				log.Printf("[nightgauge] trigger %s: no report path; platform run %s not closed", commandID, req.RemoteRunID)
 				return
 			}
-			if err := h.reportWithRetry(ctx, req, status); err != nil {
+			if err := h.sendWithRetry(ctx, func(ctx context.Context) error {
+				return h.cfg.Reports.ReportRemoteRunTerminal(ctx, req.RemoteRunID, status, req.Visibility)
+			}); err != nil {
 				log.Printf("[nightgauge] trigger %s: reporting %s for platform run %s failed: %v", commandID, status, req.RemoteRunID, err)
 				return
 			}
@@ -417,15 +440,16 @@ func (h *Handler) run(commandID string, req Request) {
 	report(Status(h.ctx, res, err))
 }
 
-// reportWithRetry sends the terminal report, re-sending a transient failure
-// with doubling backoff until it lands, the failure is permanent, or ctx ends.
-func (h *Handler) reportWithRetry(ctx context.Context, req Request, status platform.RemoteRunStatus) error {
+// sendWithRetry sends a start or terminal report, re-sending a transient
+// failure with doubling backoff until it lands, the failure is permanent, or
+// ctx ends.
+func (h *Handler) sendWithRetry(ctx context.Context, send func(context.Context) error) error {
 	delay := h.cfg.ReportRetryDelay
 	if delay <= 0 {
 		delay = defaultReportRetryDelay
 	}
 	for {
-		err := h.cfg.Reports.ReportRemoteRunTerminal(ctx, req.RemoteRunID, status, req.Visibility)
+		err := send(ctx)
 		if err == nil || platform.IsPermanentReportError(err) {
 			return err
 		}

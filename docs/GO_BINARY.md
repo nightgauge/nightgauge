@@ -413,7 +413,12 @@ fails the remote-pin validation `queue.validatePin` applies; or the issue
 already has a live or queued run here (`already-running`). Otherwise it acks
 the trigger under the addressed agent and runs the pipeline on its own
 scheduler with the adapter `run` resolves, under a fresh run id; the ack's run
-id is only the run's `remoteRunId`. When the run ends the daemon posts one
+id is only the run's `remoteRunId`. Before running, the daemon posts a
+`stage_started` event (stage `issue-pickup`, `repo`, `issueNumber`, origin
+`local_cli`) for the ack's run id: the platform creates a run row only from a
+start event naming repo and issue, so without it the terminal report is
+dropped. A failed start is logged and the run still goes ahead (#3699). When
+the run ends the daemon posts one
 `pipeline_done` for the ack's run id: `success: true`, `success: false`, or no
 `success` for a cancelled run. A redelivered trigger starts nothing. Every
 other relayed command type still expires on the platform when no extension is
