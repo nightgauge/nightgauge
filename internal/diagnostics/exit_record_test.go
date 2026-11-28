@@ -3,6 +3,8 @@ package diagnostics
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -178,6 +180,9 @@ func TestWriteStageExitRecord_ConcurrentAppendsNotInterleaved(t *testing.T) {
 	root := layouttest.Repo(t)
 	const writers = 16
 	const perWriter = 25
+	// Each write names its daily file by the UTC date at write time, so a run
+	// that straddles UTC midnight splits the records across two files.
+	start := time.Now()
 	var wg sync.WaitGroup
 	for i := 0; i < writers; i++ {
 		wg.Add(1)
@@ -198,21 +203,30 @@ func TestWriteStageExitRecord_ConcurrentAppendsNotInterleaved(t *testing.T) {
 	}
 	wg.Wait()
 
-	path := DailyFilePath(root, time.Now())
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("open: %v", err)
+	paths := []string{DailyFilePath(root, start)}
+	if end := DailyFilePath(root, time.Now()); end != paths[0] {
+		paths = append(paths, end)
 	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	count := 0
-	for scanner.Scan() {
-		var rec StageExitRecord
-		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
-			t.Fatalf("line %d not valid JSON: %v (%q)", count, err, scanner.Text())
+	for _, path := range paths {
+		f, err := os.Open(path)
+		if errors.Is(err, fs.ErrNotExist) && len(paths) > 1 {
+			continue // every write landed after midnight
 		}
-		count++
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			var rec StageExitRecord
+			if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+				f.Close()
+				t.Fatalf("line %d not valid JSON: %v (%q)", count, err, scanner.Text())
+			}
+			count++
+		}
+		f.Close()
 	}
 	if got, want := count, writers*perWriter; got != want {
 		t.Fatalf("expected %d lines, got %d", want, got)
