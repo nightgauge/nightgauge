@@ -46,3 +46,15 @@ func TestTriggerIssueBusy_RegisteredBusyCheckCounts(t *testing.T) {
 		t.Error("another issue is busy")
 	}
 }
+
+func TestTriggerIssueRunning_IgnoresRegisteredBusyChecks(t *testing.T) {
+	s, _ := newRemotePinServer(t)
+	s.AddIssueBusyCheck(func(repo string, n int) bool { return repo == "acme/api" && n == 9 })
+	if s.TriggerIssueRunning("acme/api", 9) {
+		t.Error("a registered busy check made the issue running; a waiting trigger would see itself")
+	}
+	s.scheduler.QueueAddItem(orchestrator.QueueItem{Repo: "acme/api", IssueNumber: 9})
+	if !s.TriggerIssueRunning("acme/api", 9) {
+		t.Error("a queued issue is not running")
+	}
+}

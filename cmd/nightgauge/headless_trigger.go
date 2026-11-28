@@ -29,6 +29,9 @@ type headlessTriggerHost interface {
 	TriggerIssueBusy(repo string, issueNumber int) bool
 	ValidateTriggerPin(repo, adapter, model string) string
 	AddIssueBusyCheck(check func(repo string, issueNumber int) bool)
+	// TriggerIssueRunning is TriggerIssueBusy without the registered busy
+	// checks, so a trigger that waited for a slot does not see itself (#3673).
+	TriggerIssueRunning(repo string, issueNumber int) bool
 }
 
 // newHeadlessTriggerRunner builds the runner a headless daemon executes an
@@ -54,12 +57,20 @@ func headlessTriggerRelay(host headlessTriggerHost, triggers platform.AgentComma
 }
 
 // newHeadlessTriggers builds the handler that executes a headless trigger.
+// Its runs share the daemon's headless trigger slots for workspaceRoot, so at
+// most the workspace max-concurrent, held to throttle, run at once (#3673).
 func newHeadlessTriggers(ctx context.Context, platformClient *platform.Client, host headlessTriggerHost,
-	workspaceRoot string, served func() (platform.WorkspaceDeclaration, error)) *headlesstrigger.Handler {
+	workspaceRoot string, served func() (platform.WorkspaceDeclaration, error),
+	throttle *orchestrator.DispatchThrottle) *headlesstrigger.Handler {
+	runner := boundedHeadlessTriggerRunner{
+		inner: newHeadlessTriggerRunner(workspaceRoot),
+		slots: daemonHeadlessTriggerSlots.forWorkspace(workspaceRoot, throttle),
+		busy:  host.TriggerIssueRunning,
+	}
 	h := headlesstrigger.New(ctx, headlesstrigger.Config{
 		Acks:    platform.NewCommandService(platformClient),
 		Reports: platformClient,
-		Runner:  newHeadlessTriggerRunner(workspaceRoot),
+		Runner:  runner,
 		Served: func() ([]platform.AgentRepo, error) {
 			decl, err := served()
 			return decl.Repos, err
@@ -71,6 +82,131 @@ func newHeadlessTriggers(ctx context.Context, platformClient *platform.Client, h
 	// daemon's busy checks while it runs.
 	host.AddIssueBusyCheck(h.Running)
 	return h
+}
+
+// errHeadlessTriggerDeduped is returned for a trigger whose issue started
+// running elsewhere while it waited for a slot; its run is never started.
+var errHeadlessTriggerDeduped = errors.New("already-running: the issue started running while this trigger waited for a slot")
+
+// headlessTriggerSlots bounds the headless trigger runs one daemon executes at
+// once (#3673). The ceiling is read at every acquire and wake, so a config
+// edit or a throttle change reaches runs already waiting.
+type headlessTriggerSlots struct {
+	ceiling  func() int
+	throttle *orchestrator.DispatchThrottle
+
+	mu      sync.Mutex
+	running int
+	freed   chan struct{} // closed and replaced at each release
+}
+
+func newHeadlessTriggerSlots(ceiling func() int, throttle *orchestrator.DispatchThrottle) *headlessTriggerSlots {
+	return &headlessTriggerSlots{ceiling: ceiling, throttle: throttle, freed: make(chan struct{})}
+}
+
+// limit is the configured ceiling (at least 1) held to the throttle in force;
+// a throttle of 0 holds every run.
+func (s *headlessTriggerSlots) limit() int {
+	configured := s.ceiling()
+	if configured < 1 {
+		configured = 1
+	}
+	return s.throttle.Ceiling(configured)
+}
+
+// acquire waits for a slot, or for ctx. waiting is called once, with the
+// running count and limit, when the run has to wait.
+func (s *headlessTriggerSlots) acquire(ctx context.Context, waiting func(running, limit int)) (func(), error) {
+	notified := false
+	for {
+		var changed <-chan struct{}
+		if s.throttle != nil {
+			changed = s.throttle.Changed()
+		}
+		limit := s.limit()
+		s.mu.Lock()
+		if s.running < limit {
+			s.running++
+			s.mu.Unlock()
+			var once sync.Once
+			return func() { once.Do(s.release) }, nil
+		}
+		freed, running := s.freed, s.running
+		s.mu.Unlock()
+		if !notified && waiting != nil {
+			waiting(running, limit)
+			notified = true
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-freed:
+		case <-changed:
+		}
+	}
+}
+
+func (s *headlessTriggerSlots) release() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.running--
+	close(s.freed)
+	s.freed = make(chan struct{})
+}
+
+// headlessTriggerSlotPools holds one slot pool per workspace, shared by the
+// handlers of every platform agent serving it.
+type headlessTriggerSlotPools struct {
+	mu    sync.Mutex
+	pools map[string]*headlessTriggerSlots
+}
+
+var daemonHeadlessTriggerSlots headlessTriggerSlotPools
+
+func (p *headlessTriggerSlotPools) forWorkspace(workspaceRoot string, throttle *orchestrator.DispatchThrottle) *headlessTriggerSlots {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if s, ok := p.pools[workspaceRoot]; ok {
+		return s
+	}
+	if p.pools == nil {
+		p.pools = map[string]*headlessTriggerSlots{}
+	}
+	s := newHeadlessTriggerSlots(func() int {
+		cfg, err := config.Load(workspaceRoot)
+		if err != nil {
+			return 1
+		}
+		return config.ResolvedMaxConcurrent(cfg)
+	}, throttle)
+	p.pools[workspaceRoot] = s
+	return s
+}
+
+// boundedHeadlessTriggerRunner runs inner only once it holds a slot, and not
+// at all when the issue started running elsewhere while it waited.
+type boundedHeadlessTriggerRunner struct {
+	inner headlesstrigger.Runner
+	slots *headlessTriggerSlots
+	busy  func(repo string, issueNumber int) bool
+}
+
+func (r boundedHeadlessTriggerRunner) Run(ctx context.Context, req headlesstrigger.Request) (headlesstrigger.Result, error) {
+	waited := false
+	release, err := r.slots.acquire(ctx, func(running, limit int) {
+		waited = true
+		log.Printf("[nightgauge] headless trigger %s#%d: waiting for a headless trigger slot (%d/%d running)",
+			req.Repo, req.IssueNumber, running, limit)
+	})
+	if err != nil {
+		return headlesstrigger.Result{}, err
+	}
+	defer release()
+	if waited && r.busy != nil && r.busy(req.Repo, req.IssueNumber) {
+		log.Printf("[nightgauge] headless trigger %s#%d: %v", req.Repo, req.IssueNumber, errHeadlessTriggerDeduped)
+		return headlesstrigger.Result{}, errHeadlessTriggerDeduped
+	}
+	return r.inner.Run(ctx, req)
 }
 
 // headlessTriggerRunner runs one accepted trigger on its own scheduler, built

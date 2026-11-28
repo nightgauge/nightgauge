@@ -121,9 +121,12 @@ func (s *Server) WithdrawCloudItem(item cloudqueue.Item) bool {
 // whose lease is stale still counts, so an issue is never queued twice over a
 // run that is only quiet.
 func (s *Server) issueRunningHere(repo string, issueNumber int) bool {
-	if s.runningElsewhere(repo, issueNumber) {
-		return true
-	}
+	return s.runningElsewhere(repo, issueNumber) || s.issueInRunRegistry(repo, issueNumber)
+}
+
+// issueInRunRegistry reports whether the run registry holds a run of repo's
+// issue, ignoring the registered busy checks.
+func (s *Server) issueInRunRegistry(repo string, issueNumber int) bool {
 	for _, r := range s.RunningPipelinesSnapshot(time.Now()).Runs {
 		if r.IssueNumber == issueNumber && strings.EqualFold(r.Repo, repo) {
 			return true

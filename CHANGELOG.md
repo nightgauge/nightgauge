@@ -46,6 +46,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A `serve` daemon with no extension attached now runs at most the workspace
+  `max-concurrent` headless trigger runs at once, held to the workspace
+  throttle. Further triggers are acknowledged and wait for a slot; one whose
+  issue started running meanwhile is not run (#3673).
 - A headless `nightgauge serve` trigger now creates its platform run with a start
   event (`stage_started` naming the repo and issue) before running, so the run
   appears and shows its terminal status instead of being dropped as "Pipeline

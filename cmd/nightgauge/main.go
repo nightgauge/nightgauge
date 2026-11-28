@@ -445,7 +445,7 @@ func runDaemonPlatformAgent(
 	// With no extension attached the daemon executes a trigger itself
 	// (#3586); an ext that cannot decide one keeps the relay as it is.
 	if host, ok := ext.(headlessTriggerHost); ok {
-		triggers := newHeadlessTriggers(ctx, platformClient, host, workspaceRoot, served)
+		triggers := newHeadlessTriggers(ctx, platformClient, host, workspaceRoot, served, throttle)
 		daemonHeadlessTriggers.add(triggers)
 		relay = headlessTriggerRelay(host, triggers.HandleCommand, relay)
 	}

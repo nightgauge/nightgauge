@@ -16,6 +16,17 @@ func (s *Server) TriggerIssueBusy(repo string, issueNumber int) bool {
 	return s.issueRunningHere(repo, issueNumber)
 }
 
+// TriggerIssueRunning reports whether repo's issue is in the serve queue or the
+// run registry, deliberately ignoring the registered busy checks: a headless
+// trigger that waited for a slot is itself one of those, so it re-checks here
+// to learn whether another run started meanwhile (#3673).
+func (s *Server) TriggerIssueRunning(repo string, issueNumber int) bool {
+	if s.scheduler != nil && s.scheduler.QueueHas(repo, issueNumber) {
+		return true
+	}
+	return s.issueInRunRegistry(repo, issueNumber)
+}
+
 // ValidateTriggerPin decides a trigger's requested adapter and model with the
 // validation queue.validatePin applies (#1656), and returns the public
 // refusal, or "" when this machine can serve the pair (#3586).
