@@ -417,7 +417,12 @@ id is only the run's `remoteRunId`. Before running, the daemon posts a
 `stage_started` event (stage `issue-pickup`, `repo`, `issueNumber`, origin
 `local_cli`) for the ack's run id: the platform creates a run row only from a
 start event naming repo and issue, so without it the terminal report is
-dropped. A failed start is logged and the run still goes ahead (#3699). When
+dropped. A failed start is logged and the run still goes ahead (#3699). The
+daemon runs at most the workspace's resolved max-concurrent headless trigger
+runs at once, held to the workspace throttle; a further trigger is acked and its
+start event posted, then waits for a slot, re-reading both limits as slots free
+or the throttle changes. A trigger whose issue started running while it waited
+never runs, and is reported as `success: false` (#3673). When
 the run ends the daemon posts one
 `pipeline_done` for the ack's run id: `success: true`, `success: false`, or no
 `success` for a cancelled run. A redelivered trigger starts nothing. Every

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/agentworkspace"
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -33,6 +34,7 @@ func (h triggerHost) ExecutorAttached() bool                   { return h.attach
 func (h triggerHost) TriggerIssueBusy(string, int) bool        { return false }
 func (h triggerHost) ValidateTriggerPin(_, _, _ string) string { return "" }
 func (h triggerHost) AddIssueBusyCheck(func(string, int) bool) {}
+func (h triggerHost) TriggerIssueRunning(string, int) bool     { return false }
 
 type relayRecorder struct {
 	mu       sync.Mutex
@@ -333,6 +335,7 @@ func (e headlessExt) ExecutorAttached() bool                 { return e.attached
 func (headlessExt) TriggerIssueBusy(string, int) bool        { return false }
 func (headlessExt) ValidateTriggerPin(_, _, _ string) string { return "" }
 func (headlessExt) AddIssueBusyCheck(func(string, int) bool) {}
+func (headlessExt) TriggerIssueRunning(string, int) bool     { return false }
 
 type recordingTriggerRunner struct {
 	mu   sync.Mutex
@@ -447,5 +450,189 @@ func TestRunDaemonPlatformAgent_HeadlessExecutesATrigger(t *testing.T) {
 		if ev, ok := e.Data.(ipc.AgentCommandEvent); ok && strings.Contains(string(ev.Frame), `"trigger"`) {
 			t.Errorf("a trigger was relayed to the extension: %s", ev.Frame)
 		}
+	}
+}
+
+// blockingTriggerRunner records peak concurrent runs and blocks each run
+// until release is closed.
+type blockingTriggerRunner struct {
+	mu      sync.Mutex
+	running int
+	peak    int
+	runs    int
+	release chan struct{}
+}
+
+func (r *blockingTriggerRunner) Run(ctx context.Context, _ headlesstrigger.Request) (headlesstrigger.Result, error) {
+	r.mu.Lock()
+	r.running++
+	r.runs++
+	if r.running > r.peak {
+		r.peak = r.running
+	}
+	r.mu.Unlock()
+	select {
+	case <-r.release:
+	case <-ctx.Done():
+	}
+	r.mu.Lock()
+	r.running--
+	r.mu.Unlock()
+	return headlesstrigger.Result{Completed: true}, nil
+}
+
+func (r *blockingTriggerRunner) snapshot() (running, peak, runs int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.running, r.peak, r.runs
+}
+
+func runTriggers(t *testing.T, ctx context.Context, runner headlesstrigger.Runner, n int) (*sync.WaitGroup, []error) {
+	t.Helper()
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = runner.Run(ctx, headlesstrigger.Request{Repo: "acme/api", IssueNumber: 100 + i})
+		}(i)
+	}
+	return &wg, errs
+}
+
+// Five triggers under a limit of two run two at a time, and every one runs
+// once a slot frees (#3673).
+func TestBoundedHeadlessTriggerRunner_HoldsTheConfiguredLimit(t *testing.T) {
+	inner := &blockingTriggerRunner{release: make(chan struct{})}
+	r := boundedHeadlessTriggerRunner{inner: inner, slots: newHeadlessTriggerSlots(func() int { return 2 }, nil)}
+	wg, errs := runTriggers(t, context.Background(), r, 5)
+	waitUntil(t, "two runs", func() bool { running, _, _ := inner.snapshot(); return running == 2 })
+	time.Sleep(50 * time.Millisecond)
+	if _, peak, _ := inner.snapshot(); peak != 2 {
+		t.Fatalf("peak concurrent runs = %d, want 2", peak)
+	}
+	close(inner.release)
+	wg.Wait()
+	if _, peak, runs := inner.snapshot(); peak != 2 || runs != 5 {
+		t.Fatalf("peak %d runs %d, want peak 2 and all 5 run", peak, runs)
+	}
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("trigger %d: %v", i, err)
+		}
+	}
+}
+
+// A workspace throttle lower than the configured limit holds the runs, and
+// lifting it wakes a waiting run at once (#3673).
+func TestBoundedHeadlessTriggerRunner_HeldToTheThrottle(t *testing.T) {
+	throttle := orchestrator.NewDispatchThrottle()
+	throttle.Set(&platform.WorkspaceThrottle{MaxConcurrent: 1}, true)
+	inner := &blockingTriggerRunner{release: make(chan struct{})}
+	r := boundedHeadlessTriggerRunner{inner: inner, slots: newHeadlessTriggerSlots(func() int { return 3 }, throttle)}
+	wg, _ := runTriggers(t, context.Background(), r, 3)
+	waitUntil(t, "one run", func() bool { running, _, _ := inner.snapshot(); return running == 1 })
+	time.Sleep(50 * time.Millisecond)
+	if _, peak, _ := inner.snapshot(); peak != 1 {
+		t.Fatalf("peak under a throttle of 1 = %d, want 1", peak)
+	}
+	throttle.Set(nil, true)
+	waitUntil(t, "the lifted throttle to wake the waiters", func() bool { running, _, _ := inner.snapshot(); return running == 3 })
+	close(inner.release)
+	wg.Wait()
+}
+
+// A run that waited re-checks the issue: when it started running elsewhere
+// meanwhile the trigger never runs (#3673).
+func TestBoundedHeadlessTriggerRunner_DedupesAfterTheWait(t *testing.T) {
+	inner := &blockingTriggerRunner{release: make(chan struct{})}
+	var mu sync.Mutex
+	busy := false
+	r := boundedHeadlessTriggerRunner{
+		inner: inner,
+		slots: newHeadlessTriggerSlots(func() int { return 1 }, nil),
+		busy: func(string, int) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return busy
+		},
+	}
+	first := make(chan struct{})
+	go func() {
+		defer close(first)
+		_, _ = r.Run(context.Background(), headlesstrigger.Request{Repo: "acme/api", IssueNumber: 1})
+	}()
+	waitUntil(t, "the first run", func() bool { running, _, _ := inner.snapshot(); return running == 1 })
+	second := make(chan error, 1)
+	go func() {
+		_, err := r.Run(context.Background(), headlesstrigger.Request{Repo: "acme/api", IssueNumber: 2})
+		second <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	busy = true
+	mu.Unlock()
+	close(inner.release)
+	<-first
+	if err := <-second; !errors.Is(err, errHeadlessTriggerDeduped) {
+		t.Fatalf("waited run error = %v, want the dedupe error", err)
+	}
+	if _, _, runs := inner.snapshot(); runs != 1 {
+		t.Fatalf("inner runs = %d, want 1: the deduped trigger ran", runs)
+	}
+}
+
+// Cancelling a waiting run returns the context error and leaks no slot.
+func TestHeadlessTriggerSlots_CancelWhileWaitingLeaksNoSlot(t *testing.T) {
+	slots := newHeadlessTriggerSlots(func() int { return 1 }, nil)
+	release, err := slots.acquire(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	got := make(chan error, 1)
+	go func() { _, err := slots.acquire(ctx, nil); got <- err }()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	if err := <-got; !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	release()
+	release() // idempotent
+	again, err := slots.acquire(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again()
+	slots.mu.Lock()
+	defer slots.mu.Unlock()
+	if slots.running != 0 {
+		t.Fatalf("running = %d after every release, want 0", slots.running)
+	}
+}
+
+// A workspace's pool takes its limit from the workspace concurrency config,
+// and every handler serving that workspace shares it (#3673).
+func TestHeadlessTriggerSlotPools_ForWorkspace(t *testing.T) {
+	var pools headlessTriggerSlotPools
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, ".nightgauge", "config.yaml"),
+		"owner: acme\nrepo: api\nconcurrency:\n  workspace_max: 3\n")
+	s := pools.forWorkspace(root, nil)
+	if got := s.limit(); got != 3 {
+		t.Fatalf("limit = %d, want the configured workspace_max 3", got)
+	}
+	if pools.forWorkspace(root, nil) != s {
+		t.Error("a second handler for the workspace got its own pool")
+	}
+	other := t.TempDir()
+	if pools.forWorkspace(other, nil) == s {
+		t.Error("another workspace shares this workspace's pool")
+	}
+	broken := t.TempDir()
+	writeTestFile(t, filepath.Join(broken, ".nightgauge", "config.yaml"), "concurrency: [\n")
+	if got := pools.forWorkspace(broken, nil).limit(); got != 1 {
+		t.Errorf("limit with an unreadable config = %d, want 1", got)
 	}
 }
