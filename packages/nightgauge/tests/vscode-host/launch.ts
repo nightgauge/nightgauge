@@ -276,8 +276,20 @@ async function main(): Promise<void> {
       // Experiments off: VS Code's own fetch to its experiment service shares the
       // extension host's global fetch. This only reduces that traffic; demo mode's
       // recorder filters the host (VSCODE_CORE_HOSTS), which keeps it deterministic.
+      // No startup editors (#3662): the welcome page, a walkthrough or a chat
+      // session editor opened at startup can take group One after the dashboard
+      // is created, and a webview hidden from creation never loads a document.
+      // Update checks are off for the same reason: their notices are timing noise.
       JSON.stringify(
-        { "nightgauge.backend.binaryPath": IPC_STUB, "workbench.enableExperiments": false },
+        {
+          "nightgauge.backend.binaryPath": IPC_STUB,
+          "workbench.enableExperiments": false,
+          "workbench.startupEditor": "none",
+          "workbench.welcomePage.walkthroughs.openOnInstall": false,
+          "chat.disableAIFeatures": true,
+          "update.mode": "none",
+          "extensions.autoCheckUpdates": false,
+        },
         null,
         2
       )

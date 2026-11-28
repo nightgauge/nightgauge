@@ -515,6 +515,25 @@ suite("demo mode", () => {
           viewStateLine(panel.viewStates, panel.createdAt)
         );
       };
+      // VS Code builds a webview's document only once its panel is laid out
+      // visible, and the dashboard holds every activateTab until a document has
+      // loaded (#3025). The test makes the panel visible itself instead of
+      // relying on no other editor taking group One during startup (#3662);
+      // the hold then flushes the held posts once, in order.
+      // Logged on a pass too, so a product change that leaves the dashboard
+      // hidden still shows up even though the reveal keeps the case green.
+      console.log(
+        `[demo] Dashboard before the test's reveal: ${
+          panel.panel.visible ? "visible" : "hidden"
+        }; startupEditor=${String(
+          vscode.workspace.getConfiguration("workbench").get("startupEditor")
+        )}\n${viewStateLine(panel.viewStates, panel.createdAt)}`
+      );
+      panel.panel.reveal(vscode.ViewColumn.One, true);
+      const shown = await waitFor(() => panel.panel.visible, 5_000, "the Dashboard visible").catch(
+        () => false
+      );
+      assert.ok(shown, `the Dashboard panel never became visible after reveal\n${documentLoads()}`);
       await waitFor(
         () => (activated().length >= UI_TABS.length ? true : undefined),
         20_000,
@@ -618,8 +637,9 @@ suite("demo mode", () => {
       }
     },
     // The harness's 30 s default would cut the wait off before a step's own
-    // verdict and report could print (#2747): 5 s for the panel, 20 s for the
-    // posts, then up to STEP_REPLY_CEILING_MS from the first post.
+    // verdict and report could print (#2747): 5 s for the panel, 5 s for it to
+    // be visible, 20 s for the posts, then up to STEP_REPLY_CEILING_MS from the
+    // first post.
     { timeoutMs: 150_000 }
   );
 
