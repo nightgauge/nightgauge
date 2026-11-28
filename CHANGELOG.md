@@ -20,9 +20,11 @@ changelog, and the release workflow refuses a tag that does not.
   its review rounds are paid for. The run stops when the plan lists more files
   than `pipeline.size_gate.thresholds.max_planned_files` (default 25, `0`
   disables) or sizes itself `L`/`XL` for an `XS`/`S`/`M` issue. It records
-  terminal kind `needs_decomposition` and parks the issue, which gets the
-  `needs-decomposition` label, one comment naming the counts and sizes, and a
-  move to Backlog. `pipeline.size_gate.enabled: false` turns the check off.
+  terminal kind `needs_decomposition` and parks the issue. Every run stopped
+  this way, autonomous, extension-started or manual, labels the issue
+  `needs-decomposition` and posts one comment naming the counts and sizes; an
+  autonomous run also moves it to Backlog.
+  `pipeline.size_gate.enabled: false` turns the check off.
   `pipeline.size_gate` is now in the config schema and reference.
 - The independent review's round cap is now `review.max_rounds` (default 3,
   1–6), and the cap summary and Action Center card name the cap the run

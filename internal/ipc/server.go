@@ -97,6 +97,11 @@ type Server struct {
 	// remainderCloseDepsOverride replaces the forge behind issue.closeRemainder
 	// in tests (#3487).
 	remainderCloseDepsOverride func(ctx context.Context, owner, name string) (remainderCloseForge, error)
+	// applyNeedsDecompositionOverride replaces the forge behind
+	// labelForDecomposition in tests (#3684); needsDecompositionWG tracks the
+	// background action so tests can wait on it.
+	applyNeedsDecompositionOverride func(ctx context.Context, repo string, issue int, detail string) error
+	needsDecompositionWG            sync.WaitGroup
 
 	// doctorMu serializes the doctor.* methods; doctorFixer holds the current
 	// scan and is set only by a full scan (internal/ipc/doctor.go).
@@ -4363,6 +4368,10 @@ func (s *Server) registerMethods() {
 				}
 				if kind == orchestrator.TerminalKindGatePluginMissing {
 					orchestrator.RaiseGatePluginMissing(s.attentionStore(), recordRepo, p.IssueNumber, runID, string(snap.Stage), errMsg)
+				}
+				if kind == orchestrator.TerminalKindNeedsDecomposition {
+					s.labelForDecomposition(recordRepo, p.IssueNumber,
+						needsDecompositionDetail(snap.StageGateResults[string(snap.Stage)], errMsg))
 				}
 				if kind == "" {
 					kind = orchestrator.TerminalKindSubagentCrash

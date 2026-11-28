@@ -7,8 +7,10 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/intelligence/sizeGate"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 )
 
@@ -58,9 +60,11 @@ func parseNeedsDecompositionDetail(text string) needsDecompositionDetail {
 				d.MaxPlannedFiles = n
 			}
 		case gates.EvidencePlanSize:
-			d.PlanSize = val
+			// Only a known size reaches the public comment: on the extension
+			// path the text can be caller-supplied prose.
+			d.PlanSize = sizeGate.NormalizeSize(val)
 		case gates.EvidenceIssueSize:
-			d.IssueSize = val
+			d.IssueSize = sizeGate.NormalizeSize(val)
 		}
 	}
 	return d
@@ -126,18 +130,24 @@ func applyNeedsDecomposition(ctx context.Context, ops needsDecompositionOps, rep
 	return nil
 }
 
+// NeedsDecompositionClientResolver returns the GitHub client for owner/repo.
+type NeedsDecompositionClientResolver func(ctx context.Context, owner, repo string) (*gh.Client, error)
+
 // ghNeedsDecompositionOps is needsDecompositionOps over the GitHub client the
-// scheduler resolves for the repository. It serves one issue: the client and
-// the issue's node id are resolved once and reused.
+// caller resolves for the repository. It serves one issue: the client and the
+// issue's node id are resolved once and reused.
 type ghNeedsDecompositionOps struct {
-	s      *Scheduler
-	c      *gh.Client
-	nodeID string
+	resolve NeedsDecompositionClientResolver
+	c       *gh.Client
+	nodeID  string
 }
 
 func (o *ghNeedsDecompositionOps) client(ctx context.Context, owner, repo string) (*gh.Client, error) {
 	if o.c == nil {
-		c, err := o.s.repoClient(ctx, owner, repo)
+		if o.resolve == nil {
+			return nil, fmt.Errorf("no GitHub client resolver configured for %s/%s", owner, repo)
+		}
+		c, err := o.resolve(ctx, owner, repo)
 		if err != nil {
 			return nil, err
 		}
@@ -209,16 +219,38 @@ func (o *ghNeedsDecompositionOps) AddLabel(ctx context.Context, owner, repo stri
 	return gh.NewIssueService(c).AddLabels(ctx, id, []string{l.ID})
 }
 
-// labelParkedForDecomposition applies the needs-decomposition label and
-// comment to a parked issue (#3684). It is a board op: it runs off the
-// scheduler lock and logs a failure instead of returning it.
-func (as *AutonomousScheduler) labelParkedForDecomposition(ctx context.Context, repo string, issue int, detail string) {
-	if as.scheduler == nil {
+// NeedsDecompositionTimeout bounds one label-and-comment action. It runs on a
+// failure path and never changes the run's result.
+const NeedsDecompositionTimeout = 2 * time.Minute
+
+// ApplyNeedsDecompositionForge labels the issue needs-decomposition and posts
+// the one explanatory comment through the client resolve returns (#3684).
+// detail is the gate's failure text: its key=value evidence names the planned
+// file count, the threshold and both sizes. Every terminal funnel that books a
+// needs_decomposition run calls it: the Go scheduler's stage-failure path and
+// the extension's pipeline.notifyComplete.
+func ApplyNeedsDecompositionForge(ctx context.Context, resolve NeedsDecompositionClientResolver, repo string, issue int, detail string) error {
+	return applyNeedsDecomposition(ctx, &ghNeedsDecompositionOps{resolve: resolve}, repo, issue, detail)
+}
+
+// labelIfNeedsDecomposition is the Scheduler funnel's action for a stage
+// failure: when its resolved kind is needs_decomposition, the issue is labelled
+// and commented. Best-effort: bounded by NeedsDecompositionTimeout and logged,
+// never returned, so it never changes the run's result. It keeps the run's
+// cancellation, so a shutdown cuts the wait short.
+func (s *Scheduler) labelIfNeedsDecomposition(ctx context.Context, repo string, issue int, kind, detail string) {
+	if kind != TerminalKindNeedsDecomposition {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, boardRecoveryTimeout)
+	apply := s.applyNeedsDecompositionFn
+	if apply == nil {
+		apply = func(ctx context.Context, repo string, issue int, detail string) error {
+			return ApplyNeedsDecompositionForge(ctx, s.repoClient, repo, issue, detail)
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, NeedsDecompositionTimeout)
 	defer cancel()
-	if err := applyNeedsDecomposition(ctx, &ghNeedsDecompositionOps{s: as.scheduler}, repo, issue, detail); err != nil {
-		log.Printf("autonomous: %v", err)
+	if err := apply(ctx, repo, issue, detail); err != nil {
+		log.Printf("scheduler: %v", err)
 	}
 }
