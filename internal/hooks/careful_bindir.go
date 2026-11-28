@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -64,6 +65,9 @@ type binDirEval struct {
 	forms    []string
 	mentions bool
 	depth    int
+	// xargsFed makes the next statement gain the stdin item xargs appends
+	// (set on an `xargs env -S` sub-run, consumed by its first statement).
+	xargsFed bool
 	denyVerb string
 	denyWhat string
 }
@@ -137,9 +141,9 @@ func (e *binDirEval) run(script string) bool {
 			pre.stmt(st)
 		}
 		stdinShell := false
+		var chdirs []shVal
 		for _, st := range lexShell(ch.text) {
-			if pre.readsStdinScript(st) {
-				stdinShell = true
+			if stdinShell, chdirs = pre.readsStdinScript(st); stdinShell {
 				break
 			}
 		}
@@ -148,6 +152,9 @@ func (e *binDirEval) run(script string) bool {
 		}
 		for _, body := range ch.bodies {
 			sub := pre.clone()
+			for _, c := range chdirs {
+				sub.chdirLiteral(c)
+			}
 			sub.depth++
 			if sub.run(body) {
 				e.denyVerb, e.denyWhat = sub.denyVerb, sub.denyWhat
@@ -164,8 +171,9 @@ var stdinScriptPaths = map[string]bool{
 }
 
 // readsStdinScript reports whether st runs a shell (or source) that reads its
-// script from standard input, so a heredoc on the line is executed.
-func (e *binDirEval) readsStdinScript(st shStmt) bool {
+// script from standard input, so a heredoc on the line is executed, and the
+// directories its wrappers move that shell to (`env -C DIR bash <<EOF`).
+func (e *binDirEval) readsStdinScript(st shStmt) (bool, []shVal) {
 	words := st.words
 	i := 0
 	for i < len(words) && assignRE.MatchString(words[i]) {
@@ -176,7 +184,27 @@ func (e *binDirEval) readsStdinScript(st shStmt) bool {
 	for j, w := range words {
 		argv[j] = e.expand(w)
 	}
-	argv, _ = e.stripWrappers(argv, words)
+	argv, _, info := e.stripWrappers(argv, words)
+	if s := info.split; s != nil {
+		if !s.ok || strings.Contains(s.val, `\`) {
+			return s.tainted || e.mentions, info.chdirs
+		}
+		for _, inner := range lexShell("env " + s.val + " " + strings.Join(info.splitRest, " ")) {
+			if reads, cds := e.readsStdinScript(inner); reads {
+				return true, append(slices.Clone(info.chdirs), cds...)
+			}
+		}
+		return false, nil
+	}
+	if info.xargs && !info.hasReplace && len(argv) > 0 {
+		argv = append(argv, shVal{}) // the stdin item xargs appends
+	}
+	return e.stdinScript(argv), info.chdirs
+}
+
+// stdinScript reports whether the stripped argv runs a shell (or source) that
+// reads its script from standard input.
+func (e *binDirEval) stdinScript(argv []shVal) bool {
 	if len(argv) == 0 || !argv[0].ok {
 		return false
 	}
@@ -250,6 +278,8 @@ func (e *binDirEval) deny(verb, what string) bool {
 var assignRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
 func (e *binDirEval) stmt(st shStmt) bool {
+	fed := e.xargsFed
+	e.xargsFed = false
 	for _, r := range st.redirs {
 		if e.checkTarget("a redirection", e.expand(r)) {
 			return true
@@ -274,10 +304,74 @@ func (e *binDirEval) stmt(st shStmt) bool {
 	for j, w := range words {
 		argv[j] = e.expand(w)
 	}
-	argv, rawArgs := e.stripWrappers(argv, words)
+	argv, rawArgs, info := e.stripWrappers(argv, words)
+	return e.wrapped(argv, rawArgs, info, fed)
+}
+
+// wrapped applies what the stripped wrappers do to the inner command — their
+// chdirs, output files, `env -S` string and the xargs stdin item — then
+// evaluates it. Chdirs apply to a clone, so they never leak to later
+// statements.
+func (e *binDirEval) wrapped(argv []shVal, rawArgs []string, info wrapInfo, fed bool) bool {
+	ev := e
+	if len(info.chdirs) > 0 {
+		ev = e.clone()
+	}
+	denied := func() bool {
+		if ev != e {
+			e.denyVerb, e.denyWhat = ev.denyVerb, ev.denyWhat
+		}
+		return true
+	}
+	applied := 0
+	for _, o := range info.outputs {
+		for ; applied < o.after; applied++ {
+			ev.chdirLiteral(info.chdirs[applied])
+		}
+		if ev.checkTarget(o.verb, o.val) {
+			return denied()
+		}
+	}
+	for ; applied < len(info.chdirs); applied++ {
+		ev.chdirLiteral(info.chdirs[applied])
+	}
+	xargsFed := fed || info.xargs && !info.hasReplace
+	if info.split != nil {
+		s := *info.split
+		// env -S has its own escapes (`\_` separates words); a string using
+		// them is not re-lexed as shell, so it is unresolved.
+		if !s.ok || strings.Contains(s.val, `\`) {
+			if s.tainted || e.mentions {
+				return e.deny("env -S", "an unresolved split string")
+			}
+			return false
+		}
+		// env re-parses the split words as its own argv, then the rest.
+		sub := ev.clone()
+		sub.depth++
+		sub.xargsFed = xargsFed
+		if sub.run("env " + s.val + " " + strings.Join(info.splitRest, " ")) {
+			e.denyVerb, e.denyWhat = sub.denyVerb, sub.denyWhat
+			return true
+		}
+		return false
+	}
 	if len(argv) == 0 {
 		return false
 	}
+	if xargsFed {
+		// xargs appends its stdin items: one more operand nobody can resolve.
+		argv = append(argv, shVal{})
+		rawArgs = append(rawArgs, "")
+	}
+	if ev.dispatch(argv, rawArgs) {
+		return denied()
+	}
+	return false
+}
+
+// dispatch evaluates one stripped simple command.
+func (e *binDirEval) dispatch(argv []shVal, rawArgs []string) bool {
 	if !argv[0].ok {
 		// An unresolved verb could be any write verb: deny when the command
 		// derives from NIGHTGAUGE_BIN, allow otherwise.
@@ -408,8 +502,17 @@ func (e *binDirEval) cd(args []shVal) {
 		}
 		return
 	}
-	t := ops[0]
-	if !t.ok || t.val == "-" {
+	if t := ops[0]; t.ok && t.val == "-" {
+		e.cwdOK = false
+		return
+	}
+	e.chdirLiteral(ops[0])
+}
+
+// chdirLiteral moves the cwd to t taken as a literal path (no `cd` option
+// parsing, no `-`): what `env -C DIR` and `sudo -D DIR` do.
+func (e *binDirEval) chdirLiteral(t shVal) {
+	if !t.ok {
 		e.cwdOK = false
 		e.cwdTaint = e.cwdTaint || t.tainted
 		return
@@ -443,35 +546,292 @@ var shellReserved = map[string]bool{
 	"elif": true, "while": true, "until": true, "do": true, "fi": true, "done": true,
 }
 
-// stripWrappers drops reserved words and prefix wrappers (sudo, env A=b, command, timeout N, …)
-// so the real command is argv[0]. It returns the stripped argv and raw words.
-func (e *binDirEval) stripWrappers(argv []shVal, raw []string) ([]shVal, []string) {
+// wrapperOpt is what one prefix wrapper's options mean, so stripping can skip
+// their values exactly and apply the ones that change the inner command.
+// Sources: env(1), sudo(8), doas(1), timeout(1), chrt(1), nice(1), ionice(1),
+// stdbuf(1), GNU time(1), xargs(1) (GNU and BSD), bash(1) exec. A short
+// letter missing here is skipped as a flag, which is no worse than before
+// #3650; long options resolve as getopt_long does (see long).
+type wrapperOpt struct {
+	valueShort    string   // letters taking a value: rest of the token, else the next word
+	optionalShort string   // letters taking an optional value from the rest of the token only
+	valueLong     []string // long options taking a value: `--x=V` or `--x V`
+	optionalLong  []string // long options whose value is only `--x=V`
+	flagLong      []string // long options taking no value
+	// completeLong marks the long tables as complete, so a long option that
+	// matches none of them is not a real option and fails closed.
+	completeLong bool
+	// leadingOperands are positional words before the command, even after
+	// `--` (timeout DURATION, chrt PRIORITY).
+	leadingOperands int
+	assignments     bool // NAME=value words before the command (env, sudo)
+	appendsStdin    bool // xargs: the command gains the items read from stdin
+	// Roles, by short letter or long name: chdir moves the inner command's
+	// cwd, split is `env -S` (its value is the command), replace is xargs's
+	// replace string, output a file the wrapper writes.
+	chdir, split, replace, output []string
+}
+
+const xargsDefaultReplace = "{}" // xargs -i / --replace without a value
+
+// wrapperOpts has a row for every prefixWrappers name plus exec and builtin.
+var wrapperOpts = map[string]wrapperOpt{
+	"env": {
+		valueShort:   "uCSaPLU",
+		valueLong:    []string{"unset", "chdir", "split-string", "argv0"},
+		optionalLong: []string{"block-signal", "default-signal", "ignore-signal"},
+		flagLong: []string{"ignore-environment", "null", "debug", "list-signal-handling",
+			"help", "version"},
+		completeLong: true, assignments: true,
+		chdir: []string{"C", "chdir"}, split: []string{"S", "split-string"},
+	},
+	"sudo": {
+		valueShort: "aCcDgpRrTtUu", optionalShort: "h",
+		valueLong: []string{"user", "group", "close-from", "chdir", "prompt", "chroot", "role",
+			"type", "other-user", "command-timeout", "login-class", "auth-type", "host"},
+		optionalLong: []string{"preserve-env"},
+		flagLong: []string{"askpass", "background", "bell", "edit", "set-home", "help", "login",
+			"remove-timestamp", "reset-timestamp", "list", "non-interactive",
+			"preserve-groups", "stdin", "shell", "validate", "version"},
+		completeLong: true, assignments: true, chdir: []string{"D", "chdir"},
+	},
+	"doas": {valueShort: "auC"},
+	"timeout": {
+		valueShort: "sk", valueLong: []string{"signal", "kill-after"},
+		flagLong:     []string{"preserve-status", "foreground", "verbose", "help", "version"},
+		completeLong: true, leadingOperands: 1,
+	},
+	"chrt": {
+		valueShort: "TPD",
+		valueLong:  []string{"sched-runtime", "sched-period", "sched-deadline"},
+		flagLong: []string{"all-tasks", "batch", "deadline", "fifo", "idle", "other", "rr",
+			"reset-on-fork", "max", "pid", "verbose", "help", "version"},
+		completeLong: true, leadingOperands: 1,
+	},
+	"nice": {
+		valueShort: "n", valueLong: []string{"adjustment"},
+		flagLong: []string{"help", "version"}, completeLong: true,
+	},
+	"ionice": {
+		valueShort: "cnpPu", valueLong: []string{"class", "classdata", "pid", "pgid", "uid"},
+		flagLong: []string{"ignore", "help", "version"}, completeLong: true,
+	},
+	"stdbuf": {
+		valueShort: "ioe", valueLong: []string{"input", "output", "error"},
+		flagLong: []string{"help", "version"}, completeLong: true,
+	},
+	"time": {
+		valueShort: "fo", valueLong: []string{"format", "output"},
+		flagLong:     []string{"append", "portability", "verbose", "quiet", "help", "version"},
+		completeLong: true, output: []string{"o", "output"},
+	},
+	"exec":    {valueShort: "a"},
+	"command": {},
+	"nohup":   {},
+	"setsid":  {},
+	"builtin": {},
+	"xargs": {
+		valueShort: "adEILnPsJRS", optionalShort: "iel",
+		valueLong: []string{"arg-file", "delimiter", "max-args", "max-procs", "max-chars",
+			"process-slot-var"},
+		optionalLong: []string{"eof", "replace", "max-lines"},
+		flagLong: []string{"interactive", "no-run-if-empty", "null", "open-tty", "show-limits",
+			"verbose", "exit", "help", "version"},
+		completeLong: true, appendsStdin: true, replace: []string{"I", "J", "i", "replace"},
+	},
+}
+
+// longKind is how a long option takes its value.
+type longKind int
+
+const (
+	longFlag longKind = iota
+	longValue
+	longOptional
+	longUnknown // ambiguous, or unknown to a complete table: fail closed
+)
+
+// long resolves a long option name as getopt_long does: an exact name, else
+// a unique prefix. An ambiguous prefix, or a name a complete table lacks, is
+// longUnknown; with an incomplete table an unknown name is skipped as a flag.
+func (o wrapperOpt) long(name string) (string, longKind) {
+	kinds := []struct {
+		names []string
+		kind  longKind
+	}{{o.valueLong, longValue}, {o.optionalLong, longOptional}, {o.flagLong, longFlag}}
+	for _, k := range kinds {
+		if slices.Contains(k.names, name) {
+			return name, k.kind
+		}
+	}
+	canon, kind, matches := "", longUnknown, 0
+	for _, k := range kinds {
+		for _, c := range k.names {
+			if strings.HasPrefix(c, name) {
+				canon, kind, matches = c, k.kind, matches+1
+			}
+		}
+	}
+	switch {
+	case matches == 1:
+		return canon, kind
+	case matches == 0 && !o.completeLong:
+		return name, longFlag
+	}
+	return name, longUnknown
+}
+
+// wrapOutput is a file a wrapper writes, after the first `after` chdirs.
+type wrapOutput struct {
+	verb  string
+	val   shVal
+	after int
+}
+
+// wrapInfo is what the stripped wrappers do to the inner command.
+type wrapInfo struct {
+	xargs      bool
+	hasReplace bool
+	replace    string
+	chdirs     []shVal
+	outputs    []wrapOutput
+	split      *shVal   // env -S STRING: the command is STRING then splitRest
+	splitRest  []string // raw words after the -S option
+}
+
+// role records what option key (a short letter or canonical long name) of
+// wrapper name does with its value.
+func (info *wrapInfo) role(name string, o wrapperOpt, key string, v shVal, have bool) {
+	opt := "-" + key
+	if len(key) > 1 {
+		opt = "--" + key
+	}
+	switch {
+	case slices.Contains(o.chdir, key) && have:
+		info.chdirs = append(info.chdirs, v)
+	case slices.Contains(o.output, key) && have:
+		info.outputs = append(info.outputs,
+			wrapOutput{verb: name + " " + opt, val: v, after: len(info.chdirs)})
+	case slices.Contains(o.split, key) && have:
+		info.split = &v
+	case slices.Contains(o.replace, key):
+		info.hasReplace = true
+		info.replace = xargsDefaultReplace
+		if have {
+			info.replace = v.val
+			if !v.ok {
+				info.replace = "" // unknown: every word may contain it
+			}
+		}
+	}
+}
+
+// unresolved returns a copy of vs with every value unresolved (taint kept).
+func unresolved(vs []shVal) []shVal {
+	out := make([]shVal, len(vs))
+	for i, v := range vs {
+		out[i] = shVal{tainted: v.tainted}
+	}
+	return out
+}
+
+// stripWrappers drops reserved words and prefix wrappers (sudo, env A=b,
+// command, timeout N, …) so the real command is argv[0], skipping each
+// wrapper's options with their values (wrapperOpts). It returns the stripped
+// argv, the raw words and what the wrappers do to the command (#3650).
+func (e *binDirEval) stripWrappers(argv []shVal, raw []string) ([]shVal, []string, wrapInfo) {
+	var info wrapInfo
 	for len(argv) > 0 && argv[0].ok {
 		if shellReserved[argv[0].val] {
 			argv, raw = argv[1:], raw[1:]
 			continue
 		}
 		name := filepath.Base(argv[0].val)
-		if !prefixWrappers[name] && name != "exec" && name != "builtin" {
-			return argv, raw
+		o, ok := wrapperOpts[name]
+		if !ok {
+			return argv, raw, info
 		}
 		j := 1
+	opts:
 		for j < len(argv) && argv[j].ok {
-			a := argv[j].val
-			if strings.HasPrefix(a, "-") || (name == "env" && assignRE.MatchString(a)) {
+			a := argv[j]
+			v := a.val
+			switch {
+			case v == "--":
+				j++
+				break opts
+			case o.assignments && assignRE.MatchString(v):
+				j++
+				continue
+			case !strings.HasPrefix(v, "-"):
+				break opts
+			case v == "-":
 				j++
 				continue
 			}
-			if name == "timeout" && j < len(argv) && a != "" && strings.ContainsAny(a[:1], "0123456789") {
-				j++
-				name = "" // only one duration
-				continue
+			j++
+			var key string
+			var val shVal
+			have := false
+			if strings.HasPrefix(v, "--") {
+				nm, inTok, hasEq := strings.Cut(v[2:], "=")
+				canon, kind := o.long(nm)
+				switch kind {
+				case longUnknown:
+					return unresolved(argv[j-1:]), raw[j-1:], info
+				case longValue:
+					if hasEq {
+						val, have = shVal{val: inTok, ok: true, tainted: a.tainted}, true
+					} else if j < len(argv) {
+						val, have = argv[j], true
+						j++
+					}
+				case longOptional:
+					if hasEq {
+						val, have = shVal{val: inTok, ok: true, tainted: a.tainted}, true
+					}
+				}
+				key = canon
+			} else {
+				letter, inTok, needNext, _ := scanShortCluster(v, o.valueShort+o.optionalShort)
+				if letter == 0 {
+					continue
+				}
+				switch {
+				case strings.IndexByte(o.optionalShort, letter) >= 0:
+					if inTok != "" {
+						val, have = shVal{val: inTok, ok: true, tainted: a.tainted}, true
+					}
+				case !needNext:
+					val, have = shVal{val: inTok, ok: true, tainted: a.tainted}, true
+				case j < len(argv):
+					val, have = argv[j], true
+					j++
+				}
+				key = string(letter)
 			}
-			break
+			info.role(name, o, key, val, have)
+			if info.split != nil {
+				info.splitRest = raw[j:]
+				return argv[j:], raw[j:], info
+			}
 		}
+		j = min(j+o.leadingOperands, len(argv))
 		argv, raw = argv[j:], raw[j:]
+		if o.appendsStdin {
+			info.xargs = true
+			if info.hasReplace {
+				marked := slices.Clone(argv)
+				for k, w := range marked {
+					if !w.ok || strings.Contains(w.val, info.replace) {
+						marked[k] = shVal{tainted: w.tainted}
+					}
+				}
+				argv = marked
+			}
+		}
 	}
-	return argv, raw
+	return argv, raw, info
 }
 
 // Short options that take a value, per `curl --help all` and `wget --help`.
@@ -538,7 +898,7 @@ func writeTargets(verb string, args []shVal) []shVal {
 		}
 		if opts && a.ok && strings.HasPrefix(v, "-") && v != "-" {
 			switch verb {
-			case "cp", "mv", "ln", "install", "rsync":
+			case "cp", "mv", "ln", "install": // rsync -t is --times
 				if v == "-t" || v == "--target-directory" {
 					takeNext = true
 				} else if strings.HasPrefix(v, "--target-directory=") {

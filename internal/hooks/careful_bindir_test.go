@@ -227,3 +227,164 @@ func TestBinDirHeredocReasonNamesVerb(t *testing.T) {
 		t.Errorf("deep nesting reason = %q, want a named verb", r)
 	}
 }
+
+// TestCarefulGateBinDirWrappers covers wrapper options that take values or
+// change the inner command: env -u/-C/-S, sudo -u/-D, timeout and chrt
+// leading operands after `--`, and the stdin item xargs appends (#3650).
+func TestCarefulGateBinDirWrappers(t *testing.T) {
+	_, cwd := binDirFixture(t)
+	const d = `d="$(dirname "$NIGHTGAUGE_BIN")"; `
+	cases := []struct {
+		cmd  string
+		deny bool
+	}{
+		// env value options (AC1) and chdir/split (AC2).
+		{`env -u X cp x "$d/gh"`, true},
+		{`env -uX cp x "$d/gh"`, true},
+		{`env --unset X cp x "$d/gh"`, true},
+		{`env --unset=X cp x "$d/gh"`, true},
+		{`env --uns X cp x "$d/gh"`, true},
+		{`env -i -u X cp x "$d/gh"`, true},
+		{`env -C /tmp cp x "$d/gh"`, true},
+		{`env -C "$d" cp x gh`, true},
+		{`env --chdir="$d" cp x gh`, true},
+		{`env --chdir "$d" cp x gh`, true},
+		{`env -C"$d" cp x gh`, true},
+		{`env -C -L cp x "$d/gh"`, true},
+		{`env -P /bin cp x "$d/gh"`, true},
+		{`env -L u cp x "$d/gh"`, true},
+		{`env -U u cp x "$d/gh"`, true},
+		{`env -S "cp x $d/gh"`, true},
+		{`env -S"cp x $d/gh"`, true},
+		{`env --split-string="cp x $d/gh"`, true},
+		{`env -S "cp x" "$d/gh"`, true},
+		{`env -S "$(cat f)"`, true},
+		{`env -C "$d" env -S 'cp x gh'`, true},
+		{`env -- cp x "$d/gh"`, true},
+		{`env --bogus-opt cp x "$d/gh"`, true},
+		// sudo and the other wrappers.
+		{`sudo -u root cp x "$d/gh"`, true},
+		{`sudo -D "$d" cp x gh`, true},
+		{`sudo --chdir="$d" cp x gh`, true},
+		{`sudo env -C "$d" cp x gh`, true},
+		{`sudo -u root -- cp x "$d/gh"`, true},
+		{`doas -u root cp x "$d/gh"`, true},
+		{`doas -a style cp x "$d/gh"`, true},
+		{`nice -n 5 cp x "$d/gh"`, true},
+		{`nice --adjustment 5 cp x "$d/gh"`, true},
+		{`ionice -c 2 -n 0 cp x "$d/gh"`, true},
+		{`stdbuf --output L cp x "$d/gh"`, true},
+		{`timeout -k 1 5 cp x "$d/gh"`, true},
+		{`timeout --kill-after 1 5 cp x "$d/gh"`, true},
+		{`time -o "$d/gh" true`, true},
+		{`env -C "$d" time -o gh true`, true},
+		// AC4: `--` still leaves the duration and the priority.
+		{`timeout -- 5 cp x "$d/gh"`, true},
+		{`chrt -- 10 cp x "$d/gh"`, true},
+		{`timeout -s KILL -- 5 cp x "$d/gh"`, true},
+		{`chrt -f -- 10 cp x "$d/gh"`, true},
+		{`chrt -f 10 cp x "$d/gh"`, true},
+		// AC3: the stdin item xargs appends.
+		{`echo "$d/gh" | xargs cp x`, true},
+		{`echo "$d/gh" | xargs rm`, true},
+		{`echo "$d/gh" | xargs sed -i s/a/b/`, true},
+		{`echo "$d" | xargs cp x -t`, true},
+		{`echo "$d" | xargs cp x --target-directory`, true},
+		{`echo "$d/gh" | xargs -n1 cp x`, true},
+		{`echo "$d/gh" | xargs -d '\n' cp x`, true},
+		{`echo "$d/gh" | xargs -I{} cp x {}`, true},
+		{`echo "$d/gh" | xargs -i cp x {}`, true},
+		{`echo "$d/gh" | xargs -iR cp x R`, true},
+		{`echo "$d/gh" | xargs --replace=R cp x R`, true},
+		{`echo cp | xargs -I{} {} x "$d/gh"`, true},
+		{`echo cp | xargs --r {} x "$d/gh"`, true},
+		{`echo "$d" | xargs -I{} env -C {} cp x gh`, true},
+		{`echo "$d/gh" | xargs -I{} sh -c 'cp x {}'`, true},
+		{`echo "cp x $d/gh" | xargs sh -c`, true},
+		{`echo "$d/gh" | xargs env -S "cp x"`, true},
+		{`echo "$d/gh" | xargs -es cp x`, true},
+		{`echo "$d/gh" | xargs --max cp x`, true},
+		{`echo "$d/gh" | xargs rsync -t x`, true},
+		{`rsync -t x "$d/gh"`, true},
+		{`echo "$d/gh" | sudo -u root xargs cp x`, true},
+		// getopt_long abbreviations and sudo assignments.
+		{`sudo --us root cp x "$d/gh"`, true},
+		{`sudo --chd "$d" cp x gh`, true},
+		{`sudo A=b cp x "$d/gh"`, true},
+		{`nice --adj 5 cp x "$d/gh"`, true},
+		{`stdbuf --out L cp x "$d/gh"`, true},
+		{`ionice --cl 2 cp x "$d/gh"`, true},
+		{`chrt --sched-run 5 -f 10 cp x "$d/gh"`, true},
+		{`env time --out "$d/gh" true`, true},
+		// env -S escapes are not shell: unresolved, so refused here.
+		{`env -S 'cp\_x\_'"$d"'/gh'`, true},
+		{`env -C "$d" env -S 'cp\_x\_gh'`, true},
+		// Here-documents run by a shell behind a wrapper.
+		{"env -C \"$d\" bash <<EOF\ncp x gh\nEOF", true},
+		{"sudo -D \"$d\" bash <<EOF\ncp x gh\nEOF", true},
+		{"env -S 'bash' <<EOF\ncp x $d/gh\nEOF", true},
+		{"env -C \"$d\" env -S 'bash -s' <<EOF\ncp x gh\nEOF", true},
+		{"xargs bash <<EOF\ncp x $d/gh\nEOF", true},
+		// Allowed.
+		{"env -C /tmp bash <<EOF\ncp x gh\nEOF", false},
+		{`env --uns X ls`, false},
+		{`env --ch /tmp cp x y`, false},
+		{`sudo --preserve-env ls`, false},
+		{`sudo --preserve-g ls`, false},
+		{`sudo --pres cp x "$d/gh"`, true},
+		{`env -C "$d" true; cp x gh`, false},
+		{`time -o gh env -C "$d" true`, false},
+		{`env A=b git status`, false},
+		{`env -u X ls`, false},
+		{`env -C /tmp cp x y`, false},
+		{`env -C "$d" ls`, false},
+		{`env -S "echo hi"`, false},
+		{`timeout -- 5 ls`, false},
+		{`chrt -- 10 ls`, false},
+		{`timeout 5 cp x /tmp/y`, false},
+		{`sudo -u root ls "$d"`, false},
+		{`echo "$d" | xargs -I R cp x /tmp/y`, false},
+		{`echo "$d" | xargs ls`, false},
+	}
+	for _, tc := range cases {
+		cmd := d + tc.cmd
+		t.Run(tc.cmd, func(t *testing.T) {
+			got := EvaluateCarefulGate(carefulPayload(t, cwd, cmd))
+			if (got.Decision == "block") != tc.deny {
+				t.Fatalf("%s: deny=%v want %v (reason %q)", cmd, got.Decision == "block", tc.deny, got.Reason)
+			}
+		})
+	}
+	// No NIGHTGAUGE_BIN mention: an unresolved xargs item stays allowed (ADR-002).
+	for _, cmd := range []string{
+		`find . -name '*.o' | xargs rm`, `echo a | xargs cp x /tmp/y`, `echo a | xargs cp x`,
+		`env -S "$(cat f)"`, `nice --frobnicate 5 ls`,
+	} {
+		if got := EvaluateCarefulGate(carefulPayload(t, cwd, cmd)); got.Decision == "block" {
+			t.Errorf("%s: blocked without naming %s: %q", cmd, "NIGHTGAUGE_BIN", got.Reason)
+		}
+	}
+}
+
+// Every prefix wrapper the shared tokenizer knows has an option row, so the
+// two lists cannot drift.
+func TestWrapperOptsCoverPrefixWrappers(t *testing.T) {
+	for name := range prefixWrappers {
+		if _, ok := wrapperOpts[name]; !ok {
+			t.Errorf("prefixWrappers has %q but wrapperOpts has no row", name)
+		}
+	}
+}
+
+// A deny behind a chdir clone or an env -S sub-run names the inner verb.
+func TestBinDirWrapperReasonNamesVerb(t *testing.T) {
+	bin, cwd := binDirFixture(t)
+	for _, cmd := range []string{
+		`d="$(dirname "$NIGHTGAUGE_BIN")"; env -C "$d" cp x gh`,
+		`d="$(dirname "$NIGHTGAUGE_BIN")"; env -S "cp x $d/gh"`,
+	} {
+		if r := binDirWriteReason(cmd, cwd, bin); !strings.Contains(r, "cp writes") {
+			t.Errorf("%s: reason = %q, want the inner cp", cmd, r)
+		}
+	}
+}
