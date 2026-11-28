@@ -21,10 +21,18 @@ var unlinkedModulePrefixes = []string{
 	"github.com/cloudflare/circl",
 }
 
-// TestReleaseCLIDoesNotLinkGoGitOrSQLite lists the linux/amd64 release CLI's
+// unlinkedPackages are exact import paths the release CLI must not link.
+// go/types (with go/constant, go/version and the packages only it imports)
+// cost over 1 MiB stripped and pushed linux/amd64 past the limit, for one
+// ExprString call that a package-local printer now does (#3675).
+var unlinkedPackages = []string{
+	"go/types",
+}
+
+// TestReleaseCLIDoesNotLinkGoGitSQLiteOrGoTypes lists the linux/amd64 release CLI's
 // package dependencies and fails, naming the importer, if any of them comes
-// from a module the release must not link.
-func TestReleaseCLIDoesNotLinkGoGitOrSQLite(t *testing.T) {
+// from a module, or is a package, the release must not link.
+func TestReleaseCLIDoesNotLinkGoGitSQLiteOrGoTypes(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Fatalf("HARNESS ERROR: go not on PATH; the link-set guard checked nothing: %v", err)
 	}
@@ -54,7 +62,7 @@ func TestReleaseCLIDoesNotLinkGoGitOrSQLite(t *testing.T) {
 
 // linkedOffenders parses `go list -deps -f '{{.ImportPath}}\t{{join .Imports " "}}'`
 // output and returns one "importer -> package" line per import of a package
-// under unlinkedModulePrefixes.
+// under unlinkedModulePrefixes or listed in unlinkedPackages.
 func linkedOffenders(listing string) []string {
 	var offenders []string
 	for _, line := range strings.Split(listing, "\n") {
@@ -62,6 +70,11 @@ func linkedOffenders(listing string) []string {
 		for _, imp := range strings.Fields(imports) {
 			for _, prefix := range unlinkedModulePrefixes {
 				if strings.HasPrefix(imp, prefix) {
+					offenders = append(offenders, pkg+" -> "+imp)
+				}
+			}
+			for _, exact := range unlinkedPackages {
+				if imp == exact {
 					offenders = append(offenders, pkg+" -> "+imp)
 				}
 			}
@@ -74,11 +87,13 @@ func TestLinkedOffendersNamesTheImporter(t *testing.T) {
 	listing := "example.com/a\tfmt github.com/go-git/go-git/v5\n" +
 		"github.com/go-git/go-git/v5\tgithub.com/ProtonMail/go-crypto/openpgp\n" +
 		"example.com/b\tmodernc.org/sqlite os\n" +
-		"example.com/c\tstrings\n"
+		"example.com/c\tstrings go/typesx\n" +
+		"example.com/d\tgo/types\n"
 	got := strings.Join(linkedOffenders(listing), "|")
 	want := "example.com/a -> github.com/go-git/go-git/v5|" +
 		"github.com/go-git/go-git/v5 -> github.com/ProtonMail/go-crypto/openpgp|" +
-		"example.com/b -> modernc.org/sqlite"
+		"example.com/b -> modernc.org/sqlite|" +
+		"example.com/d -> go/types"
 	if got != want {
 		t.Errorf("linkedOffenders = %q, want %q", got, want)
 	}
