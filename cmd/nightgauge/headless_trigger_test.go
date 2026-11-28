@@ -133,6 +133,10 @@ func (a *countingAcks) agents() []string {
 
 type noReports struct{}
 
+func (noReports) ReportRemoteRunStart(context.Context, string, string, int, string) error {
+	return nil
+}
+
 func (noReports) ReportRemoteRunTerminal(context.Context, string, platform.RemoteRunStatus, string) error {
 	return nil
 }
@@ -422,7 +426,7 @@ func TestRunDaemonPlatformAgent_HeadlessExecutesATrigger(t *testing.T) {
 	waitUntil(t, "the terminal report", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		return len(events) >= 1
+		return len(events) >= 2
 	})
 	waitUntil(t, "the relayed pause", func() bool { return len(side.relayed()) >= 1 })
 	mu.Lock()
@@ -433,7 +437,10 @@ func TestRunDaemonPlatformAgent_HeadlessExecutesATrigger(t *testing.T) {
 	if reqs := runner.all(); len(reqs) != 1 || reqs[0].RemoteRunID != platformRun || reqs[0].Repo != "acme/api" || reqs[0].IssueNumber != 51 {
 		t.Errorf("runs = %+v, want one of acme/api#51 serving %s", reqs, platformRun)
 	}
-	if e := events[0]; e["type"] != "pipeline_done" || e["runId"] != platformRun || e["success"] != true {
+	if e := events[0]; e["type"] != "stage_started" || e["runId"] != platformRun || e["repo"] != "acme/api" || e["issueNumber"] != float64(51) {
+		t.Errorf("start = %v, want stage_started for %s naming acme/api#51", e, platformRun)
+	}
+	if e := events[1]; e["type"] != "pipeline_done" || e["runId"] != platformRun || e["success"] != true {
 		t.Errorf("report = %v, want pipeline_done success for %s", e, platformRun)
 	}
 	for _, e := range side.relayed() {

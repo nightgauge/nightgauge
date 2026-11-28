@@ -46,6 +46,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A headless `nightgauge serve` trigger now creates its platform run with a start
+  event (`stage_started` naming the repo and issue) before running, so the run
+  appears and shows its terminal status instead of being dropped as "Pipeline
+  run not found" (#3699).
+
 - The Linux amd64 release CLI no longer links `go/types`, which put it over the
   30 MiB stripped limit (30.07 MiB, now 28.97 MiB). A test fails if it returns
   (#3675).

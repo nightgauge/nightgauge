@@ -68,18 +68,68 @@ type report struct {
 	ctxErr error
 }
 
+type start struct {
+	runID, repo, visibility string
+	issue                   int
+}
+
+// events is the order of starts, runs and terminal reports across fakes.
+type events struct {
+	mu  sync.Mutex
+	seq []string
+}
+
+func (e *events) add(s string) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	e.seq = append(e.seq, s)
+	e.mu.Unlock()
+}
+
+func (e *events) all() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.seq...)
+}
+
 type fakeReports struct {
 	mu      sync.Mutex
 	reports []report
+	starts  []start
+	// startErrs are returned by successive start calls, then nil.
+	startErrs []error
+	events    *events
 	// errs are returned by successive calls, then nil.
 	errs  []error
 	tries int
+}
+
+func (f *fakeReports) ReportRemoteRunStart(_ context.Context, id, repo string, issue int, vis string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events.add("start")
+	if len(f.startErrs) > 0 {
+		err := f.startErrs[0]
+		f.startErrs = f.startErrs[1:]
+		return err
+	}
+	f.starts = append(f.starts, start{id, repo, vis, issue})
+	return nil
+}
+
+func (f *fakeReports) allStarts() []start {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]start(nil), f.starts...)
 }
 
 func (f *fakeReports) ReportRemoteRunTerminal(ctx context.Context, id string, status platform.RemoteRunStatus, vis string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.tries++
+	f.events.add("terminal")
 	if len(f.errs) > 0 {
 		err := f.errs[0]
 		f.errs = f.errs[1:]
@@ -101,11 +151,13 @@ type fakeRunner struct {
 	res  Result
 	err  error
 	// block, when set, holds every run until it is closed.
-	block chan struct{}
-	panic bool
+	block  chan struct{}
+	panic  bool
+	events *events
 }
 
 func (f *fakeRunner) Run(ctx context.Context, req Request) (Result, error) {
+	f.events.add("run")
 	f.mu.Lock()
 	f.reqs = append(f.reqs, req)
 	block := f.block
@@ -569,5 +621,86 @@ func TestHandler_TerminalReportStopsOnAPermanentFailure(t *testing.T) {
 	f.h.Wait()
 	if f.reports.tries != 1 {
 		t.Errorf("attempts = %d, want 1", f.reports.tries)
+	}
+}
+
+func newOrderedFixture(t *testing.T) (*fixture, *events) {
+	t.Helper()
+	f := newFixture(t, context.Background())
+	ev := &events{}
+	f.reports.events, f.runner.events = ev, ev
+	f.h.cfg.ReportRetryDelay = time.Millisecond
+	return f, ev
+}
+
+func TestHandler_StartIsSentBeforeTheRun(t *testing.T) {
+	f, ev := newOrderedFixture(t)
+	f.h.HandleCommand(context.Background(), agentID, trigger("cmd-s",
+		`{"owner":"acme","repo":"widgets","issueNumber":7,"visibility":"private"}`))
+	f.h.Wait()
+	if got := ev.all(); strings.Join(got, ",") != "start,run,terminal" {
+		t.Fatalf("order = %v, want start,run,terminal", got)
+	}
+	want := start{ackRun, "Acme/Widgets", state.VisibilityPrivate, 7}
+	if s := f.reports.allStarts(); len(s) != 1 || s[0] != want {
+		t.Errorf("starts = %+v, want %+v", s, want)
+	}
+}
+
+func TestHandler_UndispatchedRunIsStartedThenFailed(t *testing.T) {
+	f, ev := newOrderedFixture(t)
+	f.runner.res = Result{TerminalKind: "blocked"}
+	f.h.HandleCommand(context.Background(), agentID, trigger("cmd-nd", okPayload))
+	f.h.Wait()
+	if got := ev.all(); strings.Join(got, ",") != "start,run,terminal" {
+		t.Fatalf("order = %v, want start,run,terminal", got)
+	}
+	reps := f.reports.all()
+	if s := f.reports.allStarts(); len(s) != 1 || s[0].runID != ackRun {
+		t.Errorf("starts = %+v, want one for %s", s, ackRun)
+	}
+	if len(reps) != 1 || reps[0].runID != ackRun || reps[0].status != platform.RemoteRunFailure {
+		t.Errorf("reports = %+v, want one failure for %s", reps, ackRun)
+	}
+}
+
+func TestHandler_FailedStartStillRunsAndReports(t *testing.T) {
+	f, ev := newOrderedFixture(t)
+	// Any permanent error will do; this one stops the retry after one attempt.
+	f.reports.startErrs = []error{fmt.Errorf("wrapped: %w", platform.ErrInvalidRemoteRunID)}
+	f.h.HandleCommand(context.Background(), agentID, trigger("cmd-fs", okPayload))
+	f.h.Wait()
+	if got := ev.all(); strings.Join(got, ",") != "start,run,terminal" {
+		t.Fatalf("order = %v, want one start attempt, run, terminal", got)
+	}
+	if n := len(f.runner.all()); n != 1 {
+		t.Errorf("runs = %d, want 1", n)
+	}
+	if reps := f.reports.all(); len(reps) != 1 || reps[0].status != platform.RemoteRunSuccess {
+		t.Errorf("reports = %+v, want one success", reps)
+	}
+}
+
+func TestHandler_StartRetriesATransientFailure(t *testing.T) {
+	f, ev := newOrderedFixture(t)
+	f.reports.startErrs = []error{errors.New("503"), errors.New("connection reset")}
+	f.h.HandleCommand(context.Background(), agentID, trigger("cmd-sr", okPayload))
+	f.h.Wait()
+	if got := ev.all(); strings.Join(got, ",") != "start,start,start,run,terminal" {
+		t.Fatalf("order = %v, want three start attempts, run, terminal", got)
+	}
+	if n := len(f.reports.allStarts()); n != 1 {
+		t.Errorf("recorded starts = %d, want 1", n)
+	}
+}
+
+func TestHandler_NoStartForAnUnansweredOrRefusedTrigger(t *testing.T) {
+	f := newFixture(t, context.Background())
+	f.acks.ackErr = platform.ErrAgentCommandAlreadyAcked
+	f.h.HandleCommand(context.Background(), agentID, trigger("cmd-aa", okPayload))
+	f.h.HandleCommand(context.Background(), agentID, trigger("cmd-bad", `{"owner":"acme"}`))
+	f.h.Wait()
+	if s := f.reports.allStarts(); len(s) != 0 {
+		t.Errorf("starts = %+v, want none", s)
 	}
 }
